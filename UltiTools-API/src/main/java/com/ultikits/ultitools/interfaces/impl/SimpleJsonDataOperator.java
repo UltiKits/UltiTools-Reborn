@@ -1,0 +1,225 @@
+package com.ultikits.ultitools.interfaces.impl;
+
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.io.file.FileNameUtil;
+import cn.hutool.db.sql.Condition;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.Cached;
+import com.ultikits.ultitools.interfaces.DataOperator;
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperator<T>, Cached {
+    private final String storeLocation;
+    private final Class<T> type;
+    private final Map<Object, T> cache = new ConcurrentHashMap<>();
+
+    public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
+        this.storeLocation = storeLocation;
+        this.type = type;
+        synchronized (this) {
+            File file = new File(storeLocation);
+            File[] files = file.listFiles();
+            if (files != null) {
+                for (File dataFile : files) {
+                    try {
+                        JSON json = JSONUtil.readJSON(dataFile, Charset.defaultCharset());
+                        cache.put(FileNameUtil.mainName(dataFile), json.toBean(type));
+                    } catch (Exception e) {
+                        Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public boolean exist(T object) {
+        return cache.containsValue(object);
+    }
+
+    @Override
+    public boolean exist(WhereCondition... whereConditions) {
+        return getAll(whereConditions).size() > 0;
+    }
+
+    @Override
+    public T getById(Object id) {
+        return cache.get(id);
+    }
+
+    @Override
+    public Collection<T> getAll() {
+        return cache.values();
+    }
+
+    @Override
+    public Collection<T> getAll(WhereCondition... whereConditions) {
+        Collection<T> results = new ArrayList<>();
+        for (WhereCondition condition : whereConditions) {
+            if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
+                throw new RuntimeException("Query value is not serializable");
+            }
+            Collection<T> collection = new ArrayList<>();
+            for (T each : cache.values()) {
+                JSON parse = JSONUtil.parse(each);
+                Object byPath = parse.getByPath(condition.getColumn());
+                if (byPath == null) {
+                    continue;
+                }
+                if (JSONObject.toJSONString(byPath).equals(JSONObject.toJSONString(condition.getValue()))) {
+                    collection.add(each);
+                }
+            }
+            if (results.size() == 0) {
+                results.addAll(collection);
+            } else {
+                results.removeIf(a -> !collection.contains(a));
+            }
+        }
+        return results;
+    }
+
+    @Override
+    public List<T> getLike(String column, String value, Condition.LikeType likeType) {
+        List<T> res = new ArrayList<>();
+        for (T each : cache.values()) {
+            JSON parse = JSONUtil.parse(each);
+            String byPath = parse.getByPath(column, String.class);
+            switch (likeType) {
+                case EndWith:
+                    if (byPath.endsWith(value)) {
+                        res.add(each);
+                    }
+                    break;
+                case StartWith:
+                    if (byPath.startsWith(value)) {
+                        res.add(each);
+                    }
+                    break;
+                case Contains:
+                    if (byPath.contains(value)) {
+                        res.add(each);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return res;
+    }
+
+    @Override
+    public synchronized void insert(T obj) {
+        cache.putIfAbsent(obj.getId(), obj);
+    }
+
+    @Override
+    public synchronized void del(WhereCondition... whereConditions) {
+        Collection<Map.Entry<Object, T>> results = new ArrayList<>();
+        for (WhereCondition condition : whereConditions) {
+            if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
+                throw new RuntimeException("Query value is not serializable");
+            }
+            Collection<Map.Entry<Object, T>> collection = new ArrayList<>();
+            Set<Map.Entry<Object, T>> values = cache.entrySet();
+            for (Map.Entry<Object, T> next : values) {
+                JSON parse = JSONUtil.parse(next.getValue());
+                Object byPath = parse.getByPath(condition.getColumn());
+                if (byPath == null) {
+                    continue;
+                }
+                if (JSONObject.toJSONString(byPath).equals(JSONObject.toJSONString(condition.getValue()))) {
+                    collection.add(next);
+                }
+            }
+            if (results.size() == 0) {
+                results.addAll(collection);
+            } else {
+                results.removeIf(a -> !collection.contains(a));
+            }
+        }
+        for (Map.Entry<Object, T> each : results) {
+            cache.remove(each.getKey(), each.getValue());
+        }
+    }
+
+    @Override
+    public synchronized void delById(Object id) {
+        cache.remove(id);
+    }
+
+    @Override
+    public synchronized void update(String column, Object value, Object id) {
+        if (!Serializable.class.isAssignableFrom(value.getClass())) {
+            throw new RuntimeException("Query value is not serializable");
+        }
+        T obj = cache.get(id);
+        JSON parse = JSONUtil.parse(obj);
+        parse.putByPath(column, value);
+        T newObj = parse.toBean(type);
+        cache.put(id, newObj);
+    }
+
+    @Override
+    public synchronized void update(T obj) {
+        T old = cache.get(obj.getId());
+        BeanUtil.copyProperties(obj, old, "id");
+        cache.put(old.getId(), old);
+    }
+
+    @Override
+    public synchronized void flush() {
+        cache.forEach((key, value) -> {
+            try {
+                File file = new File(storeLocation + File.separator + key + ".json");
+                FileUtil.touch(file);
+                FileWriter writer = new FileWriter(file);
+//                writer.write(value.toString());
+                writer.write(value.toString());
+                writer.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    @Override
+    public void gc() {
+        File folder = new File(storeLocation);
+        File[] files = folder.listFiles((file) -> file.getName().endsWith(".json"));
+        if (files == null) {
+            return;
+        }
+        List<File> rubbishBin = new ArrayList<>();
+        for (File file : files) {
+            String id = FileNameUtil.mainName(file);
+            boolean recycle = true;
+            for (Object key : cache.keySet()) {
+                if (key.toString().equals(id)) {
+                    recycle = false;
+                }
+            }
+            if (recycle) {
+                rubbishBin.add(file);
+            }
+        }
+        for (File file : rubbishBin) {
+            FileUtil.del(file);
+        }
+    }
+}

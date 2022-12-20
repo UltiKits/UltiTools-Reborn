@@ -1,0 +1,6 @@
+name: UltiTools
+version: '${project.version}'
+main: com.ultikits.ultitools.UltiTools
+api-version: 1.19
+prefix: UltiTools
+authors: [ wisdomme ]

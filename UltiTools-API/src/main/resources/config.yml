@@ -1,0 +1,4 @@
+datasource:
+  type: "json"
+
+language: "en"
