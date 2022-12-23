@@ -23,15 +23,13 @@ public class HomeCommands extends AbstractPlayerCommandExecutor {
             throw new RuntimeException("未找到家服务！");
         }
         HomeService homeService = service.get();
+        if (strings.length == 0){
+            return false;
+        }
         switch (strings[0]) {
             case "list":
                 Inventory itemStacks = HomeListView.setUp(player);
                 player.openInventory(itemStacks);
-                List<HomeEntity> homeList = homeService.getHomeList(player.getUniqueId());
-                List<String> homeListString = new ArrayList<>();
-                homeList.forEach(home -> homeListString.add(home.getName()));
-                player.sendMessage(ChatColor.YELLOW + PluginMain.getPluginMain().i18n("====家列表===="));
-                player.sendMessage(homeListString.toString());
                 break;
             case "create":
                 boolean created = homeService.createHome(player, strings[1]);
@@ -47,6 +45,8 @@ public class HomeCommands extends AbstractPlayerCommandExecutor {
             case "tp":
                 homeService.goHome(player, strings[1]);
                 break;
+            default:
+                return false;
         }
         return true;
     }

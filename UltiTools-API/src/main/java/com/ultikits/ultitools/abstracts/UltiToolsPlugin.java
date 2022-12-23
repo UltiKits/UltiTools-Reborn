@@ -8,6 +8,7 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
 import lombok.SneakyThrows;
+import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.*;
 import java.net.URL;
@@ -34,6 +35,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         for (String fileName : fileList) {
             saveResource(UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName(), fileName, fileName);
         }
+    }
+
+    protected String getConfigFolder(){
+        return UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
+    }
+
+    protected File getConfigFile(String path){
+        return new File(getConfigFolder() + "/" + path);
+    }
+
+    public YamlConfiguration getConfig(String path){
+        return YamlConfiguration.loadConfiguration(getConfigFile(path));
     }
 
     @SneakyThrows

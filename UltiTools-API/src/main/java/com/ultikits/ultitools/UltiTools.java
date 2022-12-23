@@ -1,6 +1,7 @@
 package com.ultikits.ultitools;
 
 import cn.hutool.core.io.FileUtil;
+import com.ultikits.api.VersionWrapper;
 import com.ultikits.ultitools.commands.ReloadPluginsCommand;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -11,8 +12,7 @@ import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
-import com.ultikits.ultitools.utils.versions.VersionWrapper;
-import com.ultikits.ultitools.utils.versions.impl.VersionWrapperImpl;
+import com.ultikits.utils.VersionAdaptor;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
@@ -44,7 +44,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        this.versionWrapper = new VersionWrapperImpl();
+        this.versionWrapper = new VersionAdaptor().match();
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
         InputStream in = getResource(lanPath);
         String result = new BufferedReader(new InputStreamReader(in))

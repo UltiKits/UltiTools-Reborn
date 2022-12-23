@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.services.impl;
 
+import com.ultikits.enums.Sounds;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.Bukkit;
@@ -11,13 +12,14 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 public class InMemeryTeleportService implements TeleportService {
     private final static Map<UUID, Boolean> teleportingPlayers = new HashMap<>();
     private final static Map<UUID, String> locationMap = new HashMap<>();
 
-    private final static Map<UUID, Location>
+    private final static Map<UUID, Location> inMemoryLocationRecord = new HashMap<>();
 
     static {
         new BukkitRunnable() {
@@ -49,7 +51,9 @@ public class InMemeryTeleportService implements TeleportService {
 
     @Override
     public void teleport(Player player, Location location) {
-
+        inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
+        player.teleport(location);
+        player.playSound(player.getLocation(), UltiTools.getInstance().getVersionWrapper().getSound(Sounds.ENTITY_ENDERMAN_TELEPORT), 1, 0);
     }
 
     @Override
@@ -70,19 +74,25 @@ public class InMemeryTeleportService implements TeleportService {
                     return;
                 }
                 if (time == 0) {
+                    inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
                     player.teleport(location);
-                    player.playSound(player.getLocation(), UltiTools.getInstance().getVersionWrapper().getSound("ENTITY_ENDERMAN_TELEPORT"), 1, 0);
+                    player.playSound(player.getLocation(), UltiTools.getInstance().getVersionWrapper().getSound(Sounds.ENTITY_ENDERMAN_TELEPORT), 1, 0);
                     player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送成功！"), "", 10, 50, 20);
                     teleportingPlayers.put(player.getUniqueId(), false);
                     this.cancel();
                     return;
                 }
                 if ((time / 0.5 % 2) == 0) {
-                    player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送中..."), String.format(UltiTools.getInstance().i18n("传送正在冷却！"), (int) time), 10, 70, 20);
+                    player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送中..."), String.format(UltiTools.getInstance().i18n("离传送还有%d秒"), (int) time), 10, 70, 20);
                 }
                 time -= 0.5;
             }
         }.runTaskTimer(UltiTools.getInstance(), 0, 10L);
+    }
+
+    @Override
+    public Optional<Location> getLastTeleportLocation(UUID uuid) {
+        return Optional.ofNullable(inMemoryLocationRecord.get(uuid));
     }
 
     @Override

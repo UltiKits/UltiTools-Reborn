@@ -64,7 +64,7 @@ public class HomeListView {
             lore.add(xyz);
             Random random = new Random();
             int i = random.nextInt(beds.size());
-            ItemStackManager itemStackManager = new ItemStackManager(UltiTools.getInstance().getVersionWrapper().getItemStack("LIME_BED"), lore, homeName);
+            ItemStackManager itemStackManager = new ItemStackManager(UltiTools.getInstance().getVersionWrapper().getBed(beds.get(i)), lore, homeName);
             itemStackManagers.add(itemStackManager);
         }
         return itemStackManagers;

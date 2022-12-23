@@ -1,18 +1,17 @@
 package com.ultikits.services;
 
 
-import com.ultikits.entity.HomeEntity;
 import com.ultikits.PluginMain;
+import com.ultikits.entity.HomeEntity;
 import com.ultikits.entity.WorldLocation;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.*;
 
@@ -37,6 +36,10 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public boolean createHome(Player player, String name) {
+        if (!isPlayerCanSetHome(player)) {
+            player.sendMessage(ChatColor.RED + PluginMain.getPluginMain().i18n("你没法创建更多的家！"));
+            return false;
+        }
         boolean exist = dataOperator.exist(WhereCondition.builder().column("playerId").value(player.getUniqueId()).build(),
                 WhereCondition.builder().column("name").value(name).build());
         if (exist) {
@@ -66,8 +69,10 @@ public class HomeServiceImpl implements HomeService {
         Location location = homeByName.getHomeLocation();
         Optional<TeleportService> teleportService = PluginManager.getService(TeleportService.class);
         if (teleportService.isPresent()) {
-            teleportService.get().delayTeleport(player, location, 5);
-        }else {
+            YamlConfiguration config = PluginMain.getPluginMain().getConfig("res/config/config.yml");
+            int delayTime = config.getInt("home_tpwait");
+            teleportService.get().delayTeleport(player, location, delayTime);
+        } else {
             player.teleport(location);
         }
     }
@@ -90,5 +95,20 @@ public class HomeServiceImpl implements HomeService {
     @Override
     public int getVersion() {
         return 1;
+    }
+
+    private boolean isPlayerCanSetHome(Player player) {
+        if (player.hasPermission("ultikits.tools.admin")) return true;
+        YamlConfiguration homeConfig = PluginMain.getPluginMain().getConfig("res/config/config.yml");
+        if (player.hasPermission("ultikits.tools.level1")) {
+            if (homeConfig.getInt("home_pro") == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_pro");
+        } else if (player.hasPermission("ultikits.tools.level2")) {
+            if (homeConfig.getInt("home_ultimate") == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_ultimate");
+        } else {
+            if (homeConfig.getInt("home_normal") == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_normal");
+        }
     }
 }
