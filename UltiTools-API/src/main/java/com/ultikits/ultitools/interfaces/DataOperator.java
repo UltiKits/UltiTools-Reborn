@@ -9,6 +9,10 @@ import java.util.List;
 
 public interface DataOperator<T extends DataEntity> {
 
+    /**
+     * @param object
+     * @return
+     */
     boolean exist(T object);
 
     boolean exist(WhereCondition... whereConditions);

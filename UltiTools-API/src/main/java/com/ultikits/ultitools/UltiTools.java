@@ -8,6 +8,7 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DataStoreManager;
+import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
@@ -25,6 +26,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private DataStore dataStore;
     private VersionWrapper versionWrapper;
     private Language language;
+    private final ListenerManager listenerManager = new ListenerManager();
+    private final CommandManager commandManager = new CommandManager();
 
     public static UltiTools getInstance() {
         return ultiTools;
@@ -51,7 +54,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 .lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
-        CommandManager.registerCommand(this, new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
+        getCommandManager().registerCommand(new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }
@@ -82,5 +85,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     public String i18n(String str) {
         return this.language.getLocalizedText(str);
+    }
+
+    public ListenerManager getListenerManager() {
+        return listenerManager;
+    }
+
+    public CommandManager getCommandManager() {
+        return commandManager;
     }
 }

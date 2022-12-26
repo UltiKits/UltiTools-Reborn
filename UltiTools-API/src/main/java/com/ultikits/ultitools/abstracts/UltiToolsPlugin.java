@@ -7,6 +7,8 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ListenerManager;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -140,4 +142,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return this.getLanguage().getLocalizedText(str);
     }
 
+    public ListenerManager getListenerManager(){
+        return UltiTools.getInstance().getListenerManager();
+    }
+
+    public CommandManager getCommandManager(){
+        return UltiTools.getInstance().getCommandManager();
+    }
 }

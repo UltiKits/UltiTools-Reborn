@@ -14,19 +14,17 @@ import java.util.Arrays;
 
 public class CommandManager {
 
-    private CommandManager(){}
-
-    public static void registerCommand(Plugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
-        PluginCommand command = getCommand(aliases[0], plugin);
+    public void registerCommand(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+        PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
 
         command.setAliases(Arrays.asList(aliases));
-        //command.setPermission(permission);
+        command.setPermission(permission);
         command.setDescription(description);
-        getCommandMap().register(plugin.getDescription().getName(), command);
+        getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
         command.setExecutor(commandExecutor);
     }
 
-    private static PluginCommand getCommand(String name, Plugin plugin) {
+    private PluginCommand getCommand(String name, Plugin plugin) {
         PluginCommand command = null;
 
         try {
@@ -41,7 +39,7 @@ public class CommandManager {
         return command;
     }
 
-    private static CommandMap getCommandMap() {
+    private CommandMap getCommandMap() {
         CommandMap commandMap = null;
 
         try {
