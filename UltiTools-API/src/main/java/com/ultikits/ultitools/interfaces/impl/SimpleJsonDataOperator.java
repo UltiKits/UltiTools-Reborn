@@ -63,11 +63,6 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
     }
 
     @Override
-    public Collection<T> getAll() {
-        return cache.values();
-    }
-
-    @Override
     public Collection<T> getAll(WhereCondition... whereConditions) {
         Collection<T> results = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
