@@ -1,0 +1,8 @@
+{
+  "gamemode_changed": "Your game mode has been set to %s",
+  "gamemode_0": "Survival",
+  "gamemode_1": "Creative",
+  "gamemode_2": "Adventure",
+  "gamemode_3": "Spectator",
+  "no_permission": "You don't have permission to do that!"
+}
