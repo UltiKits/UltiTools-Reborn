@@ -5,6 +5,8 @@
 *.ipr
 *.iws
 
+*.sh
+
 # IntelliJ
 out/
 
@@ -111,3 +113,5 @@ buildNumber.properties
 
 # Common working directory
 run/
+/Home/bin/
+/Home/bin/
