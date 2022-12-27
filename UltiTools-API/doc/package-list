@@ -1,0 +1,12 @@
+com.ultikits.ultitools
+com.ultikits.ultitools.abstracts
+com.ultikits.ultitools.annotations
+com.ultikits.ultitools.commands
+com.ultikits.ultitools.entities
+com.ultikits.ultitools.interfaces
+com.ultikits.ultitools.interfaces.impl
+com.ultikits.ultitools.manager
+com.ultikits.ultitools.services
+com.ultikits.ultitools.services.impl
+com.ultikits.ultitools.services.registers
+com.ultikits.ultitools.utils
