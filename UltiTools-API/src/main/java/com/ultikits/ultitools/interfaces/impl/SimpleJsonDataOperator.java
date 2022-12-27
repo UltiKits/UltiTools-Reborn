@@ -23,6 +23,13 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
+/**
+ * 简单Json存储操作类
+ *
+ * @param <T> 必须继承数据实体类
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperator<T>, Cached {
     private final String storeLocation;
     private final Class<T> type;
@@ -76,9 +83,9 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
                 if (byPath == null) {
                     continue;
                 }
-                if (JSONObject.toJSONString(byPath).equals(JSONObject.toJSONString(condition.getValue()))) {
-                    collection.add(each);
-                }
+                String data = JSONObject.toJSONString(byPath);
+                String value = JSONObject.toJSONString(condition.getValue());
+                if (conditionCal(data, value, condition)) collection.add(each);
             }
             if (results.size() == 0) {
                 results.addAll(collection);
@@ -138,9 +145,9 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
                 if (byPath == null) {
                     continue;
                 }
-                if (JSONObject.toJSONString(byPath).equals(JSONObject.toJSONString(condition.getValue()))) {
-                    collection.add(next);
-                }
+                String data = JSONObject.toJSONString(byPath);
+                String value = JSONObject.toJSONString(condition.getValue());
+                if (conditionCal(data, value, condition)) collection.add(next);
             }
             if (results.size() == 0) {
                 results.addAll(collection);
@@ -184,7 +191,6 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
                 File file = new File(storeLocation + File.separator + key + ".json");
                 FileUtil.touch(file);
                 FileWriter writer = new FileWriter(file);
-//                writer.write(value.toString());
                 writer.write(value.toString());
                 writer.close();
             } catch (IOException e) {
@@ -215,6 +221,37 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
         }
         for (File file : rubbishBin) {
             FileUtil.del(file);
+        }
+    }
+
+    private boolean conditionCal(String data, String value, WhereCondition condition) {
+        switch (condition.getComparison()) {
+            case EQUAL:
+                return data.equals(value);
+            case INCLUDE:
+                return data.contains(value);
+            case STARTSWITH:
+                return (data.startsWith(value));
+            case ENDSWITH:
+                return (data.endsWith(value));
+            case LESS:
+                try {
+                    double dataDig = Double.parseDouble(data);
+                    double valueDig = Double.parseDouble(value);
+                    return (dataDig < valueDig);
+                } catch (Exception e) {
+                    return (data.compareTo(value) < 0);
+                }
+            case GREATER:
+                try {
+                    double dataDig = Double.parseDouble(data);
+                    double valueDig = Double.parseDouble(value);
+                    return (dataDig > valueDig);
+                } catch (Exception e) {
+                    return (data.compareTo(value) > 0);
+                }
+            default:
+                return false;
         }
     }
 }

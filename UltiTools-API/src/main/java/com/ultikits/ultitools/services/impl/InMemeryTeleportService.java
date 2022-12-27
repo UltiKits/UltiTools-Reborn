@@ -15,6 +15,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * 传送服务实现类
+ *
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public class InMemeryTeleportService implements TeleportService {
     private final static Map<UUID, Boolean> teleportingPlayers = new HashMap<>();
     private final static Map<UUID, String> locationMap = new HashMap<>();

@@ -14,7 +14,7 @@ public interface Cached {
     void flush();
 
     /**
-     * 回收缓存内容
+     * 对比本地与缓存，删除本地持久化文件
      */
     void gc();
 }

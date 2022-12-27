@@ -23,11 +23,11 @@ import java.util.stream.Collectors;
 
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
+    private final ListenerManager listenerManager = new ListenerManager();
+    private final CommandManager commandManager = new CommandManager();
     private DataStore dataStore;
     private VersionWrapper versionWrapper;
     private Language language;
-    private final ListenerManager listenerManager = new ListenerManager();
-    private final CommandManager commandManager = new CommandManager();
 
     public static UltiTools getInstance() {
         return ultiTools;

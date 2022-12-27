@@ -18,7 +18,7 @@ public class ListenerManager {
         listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
         List<Listener> listeners = listenerListMap.get(plugin);
-        if (!listeners.contains(listener)){
+        if (!listeners.contains(listener)) {
             listeners.add(listener);
         }
     }

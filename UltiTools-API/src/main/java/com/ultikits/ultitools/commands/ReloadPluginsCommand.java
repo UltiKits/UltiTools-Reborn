@@ -7,6 +7,12 @@ import org.bukkit.command.CommandSender;
 
 import java.io.IOException;
 
+/**
+ * 重载UltiTools-API的指令
+ *
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public class ReloadPluginsCommand extends AbstractConsoleCommandExecutor {
     @Override
     protected boolean onConsoleCommand(CommandSender commandSender, Command command, String[] strings) {

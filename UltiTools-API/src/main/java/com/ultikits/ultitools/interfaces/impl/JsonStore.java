@@ -16,6 +16,12 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Json存储方式抽象类
+ *
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public class JsonStore implements DataStore {
     private static final Map<Class<?>, Cached> dataOperatorMap = new ConcurrentHashMap<>();
 

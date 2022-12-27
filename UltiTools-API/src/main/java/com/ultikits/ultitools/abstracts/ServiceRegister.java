@@ -6,6 +6,13 @@ import org.bukkit.Bukkit;
 
 import java.util.logging.Level;
 
+/**
+ * 服务注册器抽象类
+ *
+ * @param <T> 必须继承{@link Registrable}
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public abstract class ServiceRegister<T extends Registrable> {
     private final Class<T> api;
     private final Registrable registrable;

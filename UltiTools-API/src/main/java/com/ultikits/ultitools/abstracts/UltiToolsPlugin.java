@@ -23,6 +23,12 @@ import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+/**
+ * 插件模块抽象类
+ *
+ * @author wisdomme
+ * @version 1.0.0
+ */
 public abstract class UltiToolsPlugin implements IPlugin, Localized {
     private static final DataStore dataStore = UltiTools.getInstance().getDataStore();
     private final Language language;
@@ -39,15 +45,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         }
     }
 
-    protected String getConfigFolder(){
+    protected String getConfigFolder() {
         return UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
     }
 
-    protected File getConfigFile(String path){
+    protected File getConfigFile(String path) {
         return new File(getConfigFolder() + "/" + path);
     }
 
-    public YamlConfiguration getConfig(String path){
+    public YamlConfiguration getConfig(String path) {
         return YamlConfiguration.loadConfiguration(getConfigFile(path));
     }
 
@@ -142,11 +148,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return this.getLanguage().getLocalizedText(str);
     }
 
-    public ListenerManager getListenerManager(){
+    public ListenerManager getListenerManager() {
         return UltiTools.getInstance().getListenerManager();
     }
 
-    public CommandManager getCommandManager(){
+    public CommandManager getCommandManager() {
         return UltiTools.getInstance().getCommandManager();
     }
 }

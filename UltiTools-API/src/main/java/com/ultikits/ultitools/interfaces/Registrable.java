@@ -14,7 +14,7 @@ public interface Registrable {
      *
      * @return 服务资源文件夹的名字
      */
-    default String getResourceFolderName(){
+    default String getResourceFolderName() {
         return this.getName();
     }
 
