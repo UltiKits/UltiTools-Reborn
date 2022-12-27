@@ -6,7 +6,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /*
- CMChanger-游戏模式切换模块
+ GMChanger-游戏模式切换模块
  @author qianmo
 */
 
