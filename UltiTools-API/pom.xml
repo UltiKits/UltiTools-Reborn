@@ -85,31 +85,31 @@
                 </executions>
             </plugin>
             <!-- 发布到本地spigot服务器插件文件夹 -->
-            <plugin>
-                <artifactId>exec-maven-plugin</artifactId>
-                <groupId>org.codehaus.mojo</groupId>
-                <version>1.6.0</version>
-                <executions>
-                    <execution>
-                        <id>Version Calculation</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>exec</goal>
-                        </goals>
-                        <configuration>
-                            <executable>/bin/bash</executable>
-                            <arguments>
-                                <argument>
-                                    ${basedir}/bin/deploy.sh
-                                </argument>
-                                <argument>
-                                    ${project.version}
-                                </argument>
-                            </arguments>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
+<!--            <plugin>-->
+<!--                <artifactId>exec-maven-plugin</artifactId>-->
+<!--                <groupId>org.codehaus.mojo</groupId>-->
+<!--                <version>1.6.0</version>-->
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <id>Version Calculation</id>-->
+<!--                        <phase>package</phase>-->
+<!--                        <goals>-->
+<!--                            <goal>exec</goal>-->
+<!--                        </goals>-->
+<!--                        <configuration>-->
+<!--                            <executable>/bin/bash</executable>-->
+<!--                            <arguments>-->
+<!--                                <argument>-->
+<!--                                    ${basedir}/bin/deploy.sh-->
+<!--                                </argument>-->
+<!--                                <argument>-->
+<!--                                    ${project.version}-->
+<!--                                </argument>-->
+<!--                            </arguments>-->
+<!--                        </configuration>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+<!--            </plugin>-->
         </plugins>
         <resources>
             <resource>
@@ -153,6 +153,11 @@
             <artifactId>UltiCoreAPI</artifactId>
             <version>2.0.0-SNAPSHOT</version>
             <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.24</version>
         </dependency>
     </dependencies>
 

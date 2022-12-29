@@ -61,9 +61,9 @@ public interface DataOperator<T extends DataEntity> {
     /**
      * 按照条件删除记录
      *
-     * @param whereCondition 删除条件参数
+     * @param whereConditions 删除条件参数
      */
-    void del(WhereCondition... whereCondition);
+    void del(WhereCondition... whereConditions);
 
     /**
      * 按照ID删除记录

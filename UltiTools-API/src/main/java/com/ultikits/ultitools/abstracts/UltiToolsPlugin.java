@@ -14,14 +14,12 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.*;
 import java.net.URL;
-import java.net.URLConnection;
 import java.nio.file.Files;
 import java.security.CodeSource;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.stream.Collectors;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * 插件模块抽象类
@@ -33,16 +31,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
     private static final DataStore dataStore = UltiTools.getInstance().getDataStore();
     private final Language language;
 
+    @SneakyThrows
     public UltiToolsPlugin() {
         String lanPath = "lang/" + this.getLanguageCode() + ".json";
         InputStream in = getResource(lanPath);
         String result = new BufferedReader(new InputStreamReader(in))
                 .lines().collect(Collectors.joining(""));
         language = new Language(result);
-        List<String> fileList = getFileList();
-        for (String fileName : fileList) {
-            saveResource(UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName(), fileName, fileName);
-        }
+        saveResources();
     }
 
     protected String getConfigFolder() {
@@ -58,70 +54,43 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
     }
 
     @SneakyThrows
-    private List<String> getFileList() {
-        List<String> filePaths = new ArrayList<>();
+    private void saveResources() {
+        String filePath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        if (src != null) {
-            URL jar = src.getLocation();
-            ZipInputStream zip = new ZipInputStream(jar.openStream());
-            while (true) {
-                ZipEntry e = zip.getNextEntry();
-                if (e == null)
-                    break;
-                String name = e.getName();
-                if (name.startsWith("res")) {
-                    filePaths.add(name);
+        URL jar = src.getLocation();
+        JarFile jarFile = new JarFile(jar.getPath().substring(1));
+        Enumeration<JarEntry> entries = jarFile.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry jarEntry = entries.nextElement();
+            String fileName = jarEntry.getName();
+            if (fileName.startsWith("res") && fileName.contains(".")) {
+                InputStream inputStream = jarFile.getInputStream(jarEntry);
+                if (inputStream == null) {
+                    throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
+                }
+                File outFile = new File(filePath, fileName);
+                try {
+                    if (!outFile.exists()) {
+                        FileUtil.touch(outFile);
+                        OutputStream out = Files.newOutputStream(outFile.toPath());
+                        byte[] buf = new byte[1024];
+                        int len;
+                        while ((len = inputStream.read(buf)) > 0) {
+                            out.write(buf, 0, len);
+                        }
+                        out.close();
+                        inputStream.close();
+                    }
+                } catch (IOException ex) {
+                    System.out.println("Could not save " + outFile.getName() + " to " + outFile);
                 }
             }
-            zip.close();
-        }
-        return filePaths;
-    }
-
-    private void saveResource(String filePath, String resourcePath, String outFileName) {
-        if (!outFileName.contains(".")) {
-            return;
-        }
-        if (resourcePath.equals("")) {
-            throw new IllegalArgumentException("ResourcePath cannot be null or empty");
-        }
-
-        resourcePath = resourcePath.replace('\\', '/');
-        InputStream in = getResource(resourcePath);
-        if (in == null) {
-            throw new IllegalArgumentException("The embedded resource '" + resourcePath + "' cannot be found in " + resourcePath);
-        }
-
-        File outFile = new File(filePath, outFileName);
-
-        try {
-            if (!outFile.exists()) {
-                FileUtil.touch(outFile);
-                OutputStream out = Files.newOutputStream(outFile.toPath());
-                byte[] buf = new byte[1024];
-                int len;
-                while ((len = in.read(buf)) > 0) {
-                    out.write(buf, 0, len);
-                }
-                out.close();
-                in.close();
-            }
-        } catch (IOException ex) {
-            System.out.println("Could not save " + outFile.getName() + " to " + outFile);
         }
     }
 
     private InputStream getResource(String filename) {
         try {
-            URL url = this.getClass().getClassLoader().getResource(filename);
-
-            if (url == null) {
-                return null;
-            }
-
-            URLConnection connection = url.openConnection();
-            connection.setUseCaches(false);
-            return connection.getInputStream();
+            return this.getClass().getClassLoader().getResource(filename).openStream();
         } catch (IOException ex) {
             return null;
         }

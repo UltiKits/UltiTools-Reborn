@@ -67,9 +67,9 @@ public class PluginManager {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
                 success += 1;
-                Bukkit.getLogger().log(Level.INFO, String.format("第%d个插件加载成功！", i + 1));
+                Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！", plugin.pluginName()));
             } else {
-                Bukkit.getLogger().log(Level.WARNING, String.format("第%d个插件加载失败！", i + 1));
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
             }
         }
         Bukkit.getLogger().log(Level.INFO, String.format("成功加载%d个插件！失败%d个！", success, pluginList.size() - success));
