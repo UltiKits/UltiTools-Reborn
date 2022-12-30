@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import com.ultikits.ultitools.annotations.Column;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -12,5 +13,6 @@ import java.io.Serializable;
  */
 @Data
 public abstract class DataEntity implements Serializable {
+    @Column("id")
     private Object id;
 }

@@ -2,6 +2,7 @@ package com.ultikits.plugins.home.entity;
 
 
 import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -13,11 +14,15 @@ import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = false)
-@Table("res/home")
+@Table("home")
 public class HomeEntity extends DataEntity {
+    @Column("id")
     private Long id = new Date().getTime();
+    @Column("playerId")
     private UUID playerId;
+    @Column("name")
     private String name;
+    @Column(value = "location", type = "JSON")
     private WorldLocation location;
 
     public Location getHomeLocation() {

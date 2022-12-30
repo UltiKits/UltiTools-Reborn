@@ -43,11 +43,14 @@ public class PluginManager {
                     // 获取JarEntry对象
                     JarEntry entry = entryEnumeration.nextElement();
                     // 获取当前JarEntry对象的路径+文件名
-                    if (entry.getName().contains(".class")) {
-                        Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
-                        if (IPlugin.class.isAssignableFrom(aClass)) {
-                            UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
-                            pluginList.add(plugin);
+                    if (entry.getName().contains(".class") && !entry.getName().contains("META-INF")) {
+                        try {
+                            Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
+                            if (IPlugin.class.isAssignableFrom(aClass)) {
+                                UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
+                                pluginList.add(plugin);
+                            }
+                        }catch (NoClassDefFoundError ignored){
                         }
                     }
                 }
@@ -64,11 +67,16 @@ public class PluginManager {
         for (int i = 0; i < pluginList.size(); i++) {
             Bukkit.getLogger().log(Level.INFO, String.format("正在加载第%d个插件...", i + 1));
             IPlugin plugin = pluginList.get(i);
-            boolean registerSelf = plugin.registerSelf();
-            if (registerSelf) {
-                success += 1;
-                Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！", plugin.pluginName()));
-            } else {
+            try {
+                boolean registerSelf = plugin.registerSelf();
+                if (registerSelf) {
+                    success += 1;
+                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！", plugin.pluginName()));
+                } else {
+                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
+                }
+            }catch (Exception e){
+                e.printStackTrace();
                 Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
             }
         }

@@ -4,7 +4,6 @@ import cn.hutool.core.io.FileUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.manager.CommandManager;
@@ -28,7 +27,6 @@ import java.util.stream.Collectors;
  * @version 1.0.0
  */
 public abstract class UltiToolsPlugin implements IPlugin, Localized {
-    private static final DataStore dataStore = UltiTools.getInstance().getDataStore();
     private final Language language;
 
     @SneakyThrows
@@ -97,7 +95,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
     }
 
     public <T extends DataEntity> DataOperator<T> getDataOperator(Class<T> dataClazz) {
-        return dataStore.getOperator(this, dataClazz);
+        return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
     }
 
     public String getLanguageCode() {

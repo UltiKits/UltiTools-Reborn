@@ -13,6 +13,7 @@ import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
+import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.utils.VersionAdaptor;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -40,6 +41,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
         saveDefaultConfig();
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
+        if (dataStore == null){
+            new DataStoreWaitingTask().runTaskTimerAsynchronously(this, 20L, 20L);
+            dataStore = DataStoreManager.getDatastore("json");
+        }
         File file = new File(getDataFolder() + File.separator + "plugins");
         FileUtil.mkdir(file);
         try {
@@ -93,5 +98,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     public CommandManager getCommandManager() {
         return commandManager;
+    }
+
+    public void setDataStore(DataStore dataStore){
+        this.dataStore = dataStore;
     }
 }

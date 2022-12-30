@@ -4,9 +4,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.bukkit.Location;
 
+import java.io.Serializable;
+
 @Data
 @NoArgsConstructor
-public class WorldLocation {
+public class WorldLocation implements Serializable {
     private String world;
     private double x;
     private double y;
