@@ -70,7 +70,7 @@ public class MysqlDataStore implements DataStore {
 
     @Override
     public void destroyAllOperators() {
-
+        dataSource.close();
     }
 
     public HikariDataSource getDataSource() {

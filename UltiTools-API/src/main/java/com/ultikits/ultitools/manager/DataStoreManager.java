@@ -25,8 +25,10 @@ public class DataStoreManager {
 
     public static void close() {
         Bukkit.getLogger().log(Level.INFO, "正在注销所有数据操作器...");
-        Iterator<DataStore> iterator = dataMap.values().iterator();
-        iterator.forEachRemaining(DataStoreManager::unregister);
+        for (DataStore dataStore : dataMap.values()){
+            dataStore.destroyAllOperators();
+        }
+        dataMap.clear();
     }
 
     public static DataStore getDatastore(String type) {

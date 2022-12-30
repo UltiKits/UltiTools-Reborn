@@ -1,6 +1,5 @@
 package com.ultikits.plugins.home.entity;
 
-
 import com.ultikits.ultitools.abstracts.DataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;

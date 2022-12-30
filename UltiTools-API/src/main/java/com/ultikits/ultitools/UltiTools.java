@@ -42,7 +42,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
         if (dataStore == null){
-            new DataStoreWaitingTask().runTaskTimerAsynchronously(this, 20L, 20L);
+            new DataStoreWaitingTask().runTaskTimerAsynchronously(this, 0L, 20L);
             dataStore = DataStoreManager.getDatastore("json");
         }
         File file = new File(getDataFolder() + File.separator + "plugins");
