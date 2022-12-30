@@ -1,0 +1,5 @@
+{
+  "heal_function": "指令治愈功能",
+  "heal_player": "已恢复生命值与饥饿值",
+  "no_permission": "你没有权限执行这个操作"
+}
