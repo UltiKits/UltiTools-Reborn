@@ -1,0 +1,17 @@
+{
+  "tpa_function": "TPA function",
+  "tpa_player_not_found": "The target player was not found, cannot request teleporting!",
+  "tpa_rejected": "Rejected!",
+  "tpa_tp_send_successfully": "You have sent TP request to %s!",
+  "tpa_tp_enquire": "%s requests teleporting to your location",
+  "tpa_accept_tip": "§7Type §c[/tpa accept] §7to §baccept §7the teleport, or press §c[shift+left mouse] §7to §baccept",
+  "tpa_reject_tip": "§7Enter §c[/tpa reject] §7to §breject §7the teleport, or press §c[shift+right mouse] §7to §breject",
+  "tpa_no_request": "No player sent you a teleport request!",
+  "tpa_teleport_rejected": "He/She rejected your teleport request :(",
+  "tpa_request_timeout": "He/She did not accept your teleport request for a long time and has been automatically rejected",
+  "tpa_teleport_success": "Successfully teleported!",
+  "tpa_target_busy": "This player is dealing with another tpa request!",
+  "tpahere_enquire": "%s requests teleport you to his location",
+  "tpahere_accept_tip": "§7Type §c[/tpahere accept] §7to §baccept §7the teleport, or press §c[shift+left mouse] §7to §baccept",
+  "tpahere_reject_tip": "§7Enter §c[/tpahere reject] §7to §breject §7the teleport, or press §c[shift+right mouse] §7to §breject"
+}
