@@ -2,3 +2,13 @@ datasource:
   type: "json"
 
 language: "en"
+
+web-editor:
+  enable: true
+  port: 4567
+  https:
+    enable: false
+    keystore-file-path: ""
+    keystore-password: ""
+    truststore-file-path: ""
+    truststore-password: ""

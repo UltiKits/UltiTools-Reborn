@@ -24,7 +24,7 @@ public class HomeListView {
     private static final HomeService home;
 
     static {
-        Optional<HomeService> service = PluginManager.getService(HomeService.class);
+        Optional<HomeService> service = PluginMain.getPluginMain().getPluginManager().getService(HomeService.class);
         if (!service.isPresent()) {
             throw new RuntimeException("未找到家服务！");
         }

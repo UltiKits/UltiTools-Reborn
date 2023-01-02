@@ -1,6 +1,7 @@
 package com.ultikits.plugins.home;
 
 import com.ultikits.plugins.home.commands.HomeCommands;
+import com.ultikits.plugins.home.config.HomeConfig;
 import com.ultikits.plugins.home.listeners.HomeListPageListener;
 import com.ultikits.plugins.home.services.HomeService;
 import com.ultikits.plugins.home.services.HomeServiceImpl;
@@ -22,8 +23,9 @@ public class PluginMain extends UltiToolsPlugin {
     public boolean registerSelf() {
         pluginMain = this;
         homeServiceRegister = new HomeServiceRegister(HomeService.class, new HomeServiceImpl());
-        getCommandManager().registerCommand(new HomeCommands(), "ultikits.home.command.all", this.i18n("家功能"), "home");
-        getListenerManager().registerListener(this, new HomeListPageListener());
+        getCommandManager().register(new HomeCommands(), "ultikits.home.command.all", this.i18n("家功能"), "home");
+        getListenerManager().register(this, new HomeListPageListener());
+        getConfigManager().register(this, new HomeConfig());
         return true;
     }
 

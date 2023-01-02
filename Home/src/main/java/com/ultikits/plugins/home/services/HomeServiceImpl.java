@@ -2,6 +2,7 @@ package com.ultikits.plugins.home.services;
 
 
 import com.ultikits.plugins.home.PluginMain;
+import com.ultikits.plugins.home.config.HomeConfig;
 import com.ultikits.plugins.home.entity.HomeEntity;
 import com.ultikits.plugins.home.entity.WorldLocation;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -69,10 +70,10 @@ public class HomeServiceImpl implements HomeService {
             return;
         }
         Location location = homeByName.getHomeLocation();
-        Optional<TeleportService> teleportService = PluginManager.getService(TeleportService.class);
+        Optional<TeleportService> teleportService = PluginMain.getPluginMain().getPluginManager().getService(TeleportService.class);
         if (teleportService.isPresent()) {
-            YamlConfiguration config = PluginMain.getPluginMain().getConfig("res/config/config.yml");
-            int delayTime = config.getInt("home_tpwait");
+            HomeConfig config = PluginMain.getPluginMain().getConfig(HomeConfig.class);
+            int delayTime = config.getHomeTpWait();
             teleportService.get().delayTeleport(player, location, delayTime);
         } else {
             player.teleport(location);
@@ -101,16 +102,16 @@ public class HomeServiceImpl implements HomeService {
 
     private boolean isPlayerCanSetHome(Player player) {
         if (player.hasPermission("ultikits.tools.admin")) return true;
-        YamlConfiguration homeConfig = PluginMain.getPluginMain().getConfig("res/config/config.yml");
+        HomeConfig homeConfig = PluginMain.getPluginMain().getConfig(HomeConfig.class);
         if (player.hasPermission("ultikits.tools.level1")) {
-            if (homeConfig.getInt("home_pro") == 0) return true;
-            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_pro");
+            if (homeConfig.getHomePro() == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getHomePro();
         } else if (player.hasPermission("ultikits.tools.level2")) {
-            if (homeConfig.getInt("home_ultimate") == 0) return true;
-            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_ultimate");
+            if (homeConfig.getHomeUltimate() == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getHomeUltimate();
         } else {
-            if (homeConfig.getInt("home_normal") == 0) return true;
-            return getHomeList(player.getUniqueId()).size() < homeConfig.getInt("home_normal");
+            if (homeConfig.getHomeNormal() == 0) return true;
+            return getHomeList(player.getUniqueId()).size() < homeConfig.getHomeNormal();
         }
     }
 }

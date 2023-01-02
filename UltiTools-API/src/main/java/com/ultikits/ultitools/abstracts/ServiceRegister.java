@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.Registrable;
 import com.ultikits.ultitools.manager.PluginManager;
 import org.bukkit.Bukkit;
@@ -24,11 +25,11 @@ public abstract class ServiceRegister<T extends Registrable> {
     }
 
     private boolean load() {
-        return PluginManager.register(api, registrable);
+        return UltiTools.getInstance().getPluginManager().register(api, registrable);
     }
 
     public void unload() {
-        PluginManager.unregister(api, registrable);
+        UltiTools.getInstance().getPluginManager().unregister(api, registrable);
     }
 
     public void sendMessageToConsole(Level level, String message) {

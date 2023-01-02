@@ -8,7 +8,6 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.manager.DataStoreManager;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,33 +17,20 @@ public class MysqlDataStore implements DataStore {
     private HikariDataSource dataSource;
 
     public MysqlDataStore() {
-        YamlConfiguration mysqlConfig = MysqlConnector.getMysqlConnector().getConfig("res/config/config.yml");
-        String host = mysqlConfig.getString("host");
-        String port = mysqlConfig.getString("port");
-        String database = mysqlConfig.getString("database");
-        String username = mysqlConfig.getString("username");
-        String password = mysqlConfig.getString("password");
-        long connectionTimeout = mysqlConfig.getLong("connectionTimeout");
-        long keepaliveTime = mysqlConfig.getLong("keepaliveTime");
-        long maxLifetime = mysqlConfig.getLong("maxLifetime");
-        String connectionTestQuery = mysqlConfig.getString("connectionTestQuery");
-        int maximumPoolSize = mysqlConfig.getInt("maximumPoolSize");
-        String cachePrepStmts = mysqlConfig.getString("cachePrepStmts");
-        String prepStmtCacheSize = mysqlConfig.getString("prepStmtCacheSize");
-        String prepStmtCacheSqlLimit = mysqlConfig.getString("prepStmtCacheSqlLimit");
+        MysqlConfig mysqlConfig = MysqlConnector.getMysqlConnector().getConfig(MysqlConfig.class);
 
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database);
-        config.setUsername(username);
-        config.setPassword(password);
-        config.addDataSourceProperty("cachePrepStmts", cachePrepStmts);
-        config.addDataSourceProperty("prepStmtCacheSize", prepStmtCacheSize);
-        config.addDataSourceProperty("prepStmtCacheSqlLimit", prepStmtCacheSqlLimit);
-        config.setConnectionTimeout(connectionTimeout);
-        config.setKeepaliveTime(keepaliveTime);
-        config.setMaxLifetime(maxLifetime);
-        config.setConnectionTestQuery(connectionTestQuery);
-        config.setMaximumPoolSize(maximumPoolSize);
+        config.setJdbcUrl("jdbc:mysql://" + mysqlConfig.getHost() + ":" + mysqlConfig.getPort() + "/" + mysqlConfig.getDatabase());
+        config.setUsername(mysqlConfig.getUsername());
+        config.setPassword(mysqlConfig.getPassword());
+        config.addDataSourceProperty("cachePrepStmts", mysqlConfig.isCachePrepStmts());
+        config.addDataSourceProperty("prepStmtCacheSize", mysqlConfig.getPrepStmtCacheSize());
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", mysqlConfig.getPrepStmtCacheSqlLimit());
+        config.setConnectionTimeout(mysqlConfig.getConnectionTimeout());
+        config.setKeepaliveTime(mysqlConfig.getKeepaliveTime());
+        config.setMaxLifetime(mysqlConfig.getMaxLifetime());
+        config.setConnectionTestQuery(mysqlConfig.getConnectionTestQuery());
+        config.setMaximumPoolSize(mysqlConfig.getMaximumPoolSize());
         dataSource = new HikariDataSource(config);
 
         DataStoreManager.register(this);

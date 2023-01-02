@@ -7,9 +7,10 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import lombok.SneakyThrows;
-import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.*;
 import java.net.URL;
@@ -47,8 +48,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return new File(getConfigFolder() + "/" + path);
     }
 
-    public YamlConfiguration getConfig(String path) {
-        return YamlConfiguration.loadConfiguration(getConfigFile(path));
+    public <T extends ConfigEntity> T getConfig(Class<T> configType) {
+        return getConfigManager().getConfigEntity(this, configType);
+    }
+
+    public <T extends ConfigEntity> void saveConfig(Class<T> configType) throws IOException {
+        getConfigManager().getConfigEntity(this, configType).save();
+    }
+
+    public ConfigManager getConfigManager(){
+        return UltiTools.getInstance().getConfigManager();
     }
 
     @SneakyThrows
@@ -121,5 +130,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
 
     public CommandManager getCommandManager() {
         return UltiTools.getInstance().getCommandManager();
+    }
+
+    public PluginManager getPluginManager(){
+        return UltiTools.getInstance().getPluginManager();
     }
 }

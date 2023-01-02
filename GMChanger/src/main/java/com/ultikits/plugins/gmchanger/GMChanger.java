@@ -16,7 +16,7 @@ public class GMChanger extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         gmChanger = this;
-        getCommandManager().registerCommand(new CmdExecutor(), "ultikits.tools.command.gm", this.i18n("游戏模式切换功能"), "gm");
+        getCommandManager().register(new CmdExecutor(), "ultikits.tools.command.gm", this.i18n("游戏模式切换功能"), "gm");
         return true;
     }
 

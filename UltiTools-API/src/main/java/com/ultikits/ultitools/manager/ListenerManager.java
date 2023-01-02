@@ -14,7 +14,7 @@ import java.util.Map;
 public class ListenerManager {
     private final Map<UltiToolsPlugin, List<Listener>> listenerListMap = new HashMap<>();
 
-    public void registerListener(UltiToolsPlugin plugin, Listener listener) {
+    public void register(UltiToolsPlugin plugin, Listener listener) {
         listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
         List<Listener> listeners = listenerListMap.get(plugin);
@@ -23,7 +23,7 @@ public class ListenerManager {
         }
     }
 
-    public void unregisterListener(Listener listener) {
+    public void unregister(Listener listener) {
         HandlerList.unregisterAll(listener);
     }
 
@@ -31,7 +31,7 @@ public class ListenerManager {
         List<Listener> listeners = listenerListMap.get(plugin);
         if (listeners == null) return;
         for (Listener listener : listeners) {
-            unregisterListener(listener);
+            unregister(listener);
         }
     }
 }

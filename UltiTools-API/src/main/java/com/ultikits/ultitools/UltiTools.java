@@ -6,29 +6,43 @@ import com.ultikits.ultitools.commands.ReloadPluginsCommand;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.manager.CommandManager;
-import com.ultikits.ultitools.manager.DataStoreManager;
-import com.ultikits.ultitools.manager.ListenerManager;
-import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.utils.VersionAdaptor;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.SneakyThrows;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
+
+import static spark.Spark.port;
+import static spark.Spark.secure;
 
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
+    @Getter
     private final ListenerManager listenerManager = new ListenerManager();
+    @Getter
     private final CommandManager commandManager = new CommandManager();
+    @Setter
+    @Getter
     private DataStore dataStore;
+    @Getter
     private VersionWrapper versionWrapper;
+    @Getter
     private Language language;
+    @Getter
+    private PluginManager pluginManager;
+    @Getter
+    private ConfigManager configManager;
 
     public static UltiTools getInstance() {
         return ultiTools;
@@ -39,6 +53,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Plugin startup logic
         ultiTools = this;
         saveDefaultConfig();
+        initEmbedWebServer();
+        configManager = new ConfigManager();
+
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
         if (dataStore == null){
@@ -48,7 +65,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         File file = new File(getDataFolder() + File.separator + "plugins");
         FileUtil.mkdir(file);
         try {
-            PluginManager.init();
+            pluginManager = new PluginManager();
+            pluginManager.init();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -59,7 +77,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 .lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
-        getCommandManager().registerCommand(new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
+        getCommandManager().register(new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }
@@ -67,20 +85,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
-        PluginManager.close();
+        pluginManager.close();
         DataStoreManager.close();
+        getConfigManager().saveAll();
     }
 
     public void reloadPlugins() throws IOException {
-        PluginManager.reload();
-    }
-
-    public DataStore getDataStore() {
-        return dataStore;
-    }
-
-    public VersionWrapper getVersionWrapper() {
-        return versionWrapper;
+        pluginManager.reload();
     }
 
     @Override
@@ -92,15 +103,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return this.language.getLocalizedText(str);
     }
 
-    public ListenerManager getListenerManager() {
-        return listenerManager;
+    private void initEmbedWebServer(){
+        if (getConfig().getBoolean("web-editor.enable")){
+            int port = getConfig().getInt("web-editor.port");
+            port(port);
+            if (getConfig().getBoolean("web-editor.https.enable")){
+                String keystoreFilePath = getConfig().getString("web-editor.https.keystore-file-path");
+                String keystorePassword = getConfig().getString("web-editor.https.keystore-password");
+                String truststoreFilePath = getConfig().getString("web-editor.https.truststore-file-path");
+                String truststorePassword = getConfig().getString("web-editor.https.truststore-password");
+                secure(keystoreFilePath, keystorePassword, truststoreFilePath, truststorePassword);
+            }
+        }
     }
 
-    public CommandManager getCommandManager() {
-        return commandManager;
-    }
-
-    public void setDataStore(DataStore dataStore){
-        this.dataStore = dataStore;
-    }
 }

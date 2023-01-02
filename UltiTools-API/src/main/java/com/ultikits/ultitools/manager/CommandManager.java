@@ -14,7 +14,7 @@ import java.util.Arrays;
 
 public class CommandManager {
 
-    public void registerCommand(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+    public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
 
         command.setAliases(Arrays.asList(aliases));

@@ -13,7 +13,7 @@ public class Heal extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         heal = this;
-        new CommandManager().registerCommand(new CmdExecutor(), "ultikits.tools.command.heal", i18n("heal_function"), "heal", "h");
+        new CommandManager().register(new CmdExecutor(), "ultikits.tools.command.heal", i18n("heal_function"), "heal", "h");
         return true;
     }
 

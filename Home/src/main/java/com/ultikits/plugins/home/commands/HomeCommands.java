@@ -15,7 +15,7 @@ import java.util.Optional;
 public class HomeCommands extends AbstractPlayerCommandExecutor {
     @Override
     protected boolean onPlayerCommand(Command command, String[] strings, Player player) {
-        Optional<HomeService> service = PluginManager.getService(HomeService.class);
+        Optional<HomeService> service = PluginMain.getPluginMain().getPluginManager().getService(HomeService.class);
         if (!service.isPresent()){
             throw new RuntimeException("未找到家服务！");
         }

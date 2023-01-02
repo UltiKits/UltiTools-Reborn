@@ -15,10 +15,10 @@ import java.util.jar.JarFile;
 import java.util.logging.Level;
 
 public class PluginManager {
-    private static final Map<String, List<Registrable>> registeredService = new HashMap<>();
-    private static final List<UltiToolsPlugin> pluginList = new ArrayList<>();
+    private final Map<String, List<Registrable>> registeredService = new HashMap<>();
+    private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
-    public static void init() throws IOException {
+    public void init() throws IOException {
         Bukkit.getLogger().log(Level.INFO, "正在加载UltiTools拓展插件...");
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
@@ -83,7 +83,7 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, String.format("成功加载%d个插件！失败%d个！", success, pluginList.size() - success));
     }
 
-    public static void close() {
+    public void close() {
         Bukkit.getLogger().log(Level.INFO, "正在注销所有插件...");
         for (UltiToolsPlugin plugin : pluginList) {
             plugin.unregisterSelf();
@@ -92,7 +92,7 @@ public class PluginManager {
         registeredService.clear();
     }
 
-    public static void reload() {
+    public void reload() {
         Bukkit.getLogger().log(Level.INFO, "正在重载所有插件...");
         for (UltiToolsPlugin plugin : pluginList) {
             plugin.reloadSelf();
@@ -101,7 +101,7 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.WARNING, "此重载仅用于重载插件模块配置，若卸载或添加请重新启动服务器！");
     }
 
-    public static synchronized boolean register(Class<? extends Registrable> api, Registrable impl) {
+    public synchronized boolean register(Class<? extends Registrable> api, Registrable impl) {
         if (!registeredService.containsKey(api.getName())) {
             List<Registrable> registrables = new ArrayList<>();
             registeredService.put(api.getName(), registrables);
@@ -114,7 +114,7 @@ public class PluginManager {
         return true;
     }
 
-    public static synchronized void unregister(Class<? extends Registrable> api, Registrable impl) {
+    public synchronized void unregister(Class<? extends Registrable> api, Registrable impl) {
         if (!registeredService.containsKey(api.getName())) {
             List<Registrable> registrables = new ArrayList<>();
             registeredService.put(api.getName(), registrables);
@@ -125,17 +125,17 @@ public class PluginManager {
         registeredService.put(api.getName(), classes);
     }
 
-    public static <T extends Registrable> Optional<T> getService(Class<T> service) {
+    public <T extends Registrable> Optional<T> getService(Class<T> service) {
         return getService(service, 0);
     }
 
-    public static <T extends Registrable> Optional<T> getService(Class<T> service, int index) {
+    public <T extends Registrable> Optional<T> getService(Class<T> service, int index) {
         List<Registrable> registrables = registeredService.get(service.getName());
         Registrable registrable = registrables.get(index);
         return Optional.of(service.cast(registrable));
     }
 
-    public static <T extends Registrable> Optional<T> getService(Class<T> service, String clazzName) {
+    public <T extends Registrable> Optional<T> getService(Class<T> service, String clazzName) {
         List<Registrable> registrables = registeredService.get(service.getName());
         for (Registrable registrable : registrables) {
             if (registrable.getClass().getName().equals(clazzName)) {
