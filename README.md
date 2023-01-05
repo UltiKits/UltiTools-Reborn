@@ -8,6 +8,7 @@
 ![bStats Players](https://img.shields.io/bstats/players/8652)
 ![bStats Servers](https://img.shields.io/bstats/servers/8652)
 ![CodeFactor Grade](https://img.shields.io/codefactor/grade/github/wisdommen/ultitools?label=Code%20Quality)
+[![wakatime](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg)](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469)
 
 ## 给各位服主的介绍
 
