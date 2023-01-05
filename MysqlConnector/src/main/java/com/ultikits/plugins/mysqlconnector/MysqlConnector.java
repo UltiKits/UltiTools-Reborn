@@ -17,8 +17,8 @@ public final class MysqlConnector extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         mysqlConnector = this;
-        getConfigManager().register(this, new MysqlConfig());
-        if (MysqlConnector.getMysqlConnector().getConfig(MysqlConfig.class).isEnable()) {
+        getConfigManager().register(this, new MysqlConfig("res/config/config.yml"));
+        if (MysqlConnector.getMysqlConnector().getConfig("res/config/config.yml", MysqlConfig.class).isEnable()) {
             DataStoreManager.register(new MysqlDataStore());
         }
         return true;
@@ -32,6 +32,11 @@ public final class MysqlConnector extends UltiToolsPlugin {
     @Override
     public String pluginName() {
         return "UltiTools-MysqlConnector";
+    }
+
+    @Override
+    public int minUltiToolsVersion() {
+        return 600;
     }
 
     @Override

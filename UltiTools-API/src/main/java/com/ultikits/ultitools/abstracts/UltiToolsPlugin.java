@@ -48,15 +48,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return new File(getConfigFolder() + "/" + path);
     }
 
-    public <T extends ConfigEntity> T getConfig(Class<T> configType) {
-        return getConfigManager().getConfigEntity(this, configType);
+    public <T extends ConfigEntity> T getConfig(String path, Class<T> configType) {
+        return getConfigManager().getConfigEntity(this, path, configType);
     }
 
-    public <T extends ConfigEntity> void saveConfig(Class<T> configType) throws IOException {
-        getConfigManager().getConfigEntity(this, configType).save();
+    public <T extends ConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
+        getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
-    public ConfigManager getConfigManager(){
+    public ConfigManager getConfigManager() {
         return UltiTools.getInstance().getConfigManager();
     }
 
@@ -132,7 +132,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return UltiTools.getInstance().getCommandManager();
     }
 
-    public PluginManager getPluginManager(){
+    public PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
     }
 }

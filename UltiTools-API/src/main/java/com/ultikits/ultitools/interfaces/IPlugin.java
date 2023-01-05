@@ -31,4 +31,6 @@ public interface IPlugin {
      * @return 插件名称
      */
     String pluginName();
+
+    int minUltiToolsVersion();
 }

@@ -1,14 +1,12 @@
 package com.ultikits.plugins.mysqlconnector;
 
 import com.ultikits.ultitools.abstracts.ConfigEntity;
-import com.ultikits.ultitools.annotations.Config;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
-@Config(name = "config", filePath = "res/config/config.yml")
 public class MysqlConfig extends ConfigEntity {
     @ConfigEntry(path = "enable", comment = "")
     private boolean enable = false;
@@ -38,4 +36,8 @@ public class MysqlConfig extends ConfigEntity {
     private int prepStmtCacheSize = 250;
     @ConfigEntry(path = "prepStmtCacheSqlLimit", comment = "")
     private int prepStmtCacheSqlLimit = 2048;
+
+    public MysqlConfig(String configFilePath) {
+        super(configFilePath);
+    }
 }

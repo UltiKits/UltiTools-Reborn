@@ -10,5 +10,7 @@ web-editor:
     enable: false
     keystore-file-path: ""
     keystore-password: ""
-    truststore-file-path: ""
-    truststore-password: ""
+
+account:
+  username: ""
+  password: ""

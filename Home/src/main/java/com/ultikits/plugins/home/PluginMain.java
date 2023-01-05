@@ -25,7 +25,7 @@ public class PluginMain extends UltiToolsPlugin {
         homeServiceRegister = new HomeServiceRegister(HomeService.class, new HomeServiceImpl());
         getCommandManager().register(new HomeCommands(), "ultikits.home.command.all", this.i18n("家功能"), "home");
         getListenerManager().register(this, new HomeListPageListener());
-        getConfigManager().register(this, new HomeConfig());
+        getConfigManager().register(this, new HomeConfig("res/config/config.yml"));
         return true;
     }
 
@@ -33,6 +33,11 @@ public class PluginMain extends UltiToolsPlugin {
     public void unregisterSelf() {
         homeServiceRegister.unload();
         getListenerManager().unregisterAll(this);
+    }
+
+    @Override
+    public int minUltiToolsVersion() {
+        return 600;
     }
 
     @Override

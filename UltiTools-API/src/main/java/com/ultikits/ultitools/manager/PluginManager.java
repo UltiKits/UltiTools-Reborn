@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Registrable;
@@ -48,7 +49,9 @@ public class PluginManager {
                             Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                             if (IPlugin.class.isAssignableFrom(aClass)) {
                                 UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
-                                pluginList.add(plugin);
+                                if (plugin.pluginName() != null) {
+                                    pluginList.add(plugin);
+                                }
                             }
                         }catch (NoClassDefFoundError ignored){
                         }
@@ -67,6 +70,10 @@ public class PluginManager {
         for (int i = 0; i < pluginList.size(); i++) {
             Bukkit.getLogger().log(Level.INFO, String.format("正在加载第%d个插件...", i + 1));
             IPlugin plugin = pluginList.get(i);
+            if (plugin.minUltiToolsVersion() > UltiTools.getPluginVersion()){
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.pluginName()));
+                continue;
+            }
             try {
                 boolean registerSelf = plugin.registerSelf();
                 if (registerSelf) {

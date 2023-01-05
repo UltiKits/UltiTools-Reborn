@@ -1,10 +1,9 @@
 package com.ultikits.plugins.home.commands;
 
-import com.ultikits.plugins.home.PluginMain;
 import com.ultikits.abstracts.AbstractPlayerCommandExecutor;
+import com.ultikits.plugins.home.PluginMain;
 import com.ultikits.plugins.home.gui.HomeListView;
 import com.ultikits.plugins.home.services.HomeService;
-import com.ultikits.ultitools.manager.PluginManager;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
@@ -16,11 +15,11 @@ public class HomeCommands extends AbstractPlayerCommandExecutor {
     @Override
     protected boolean onPlayerCommand(Command command, String[] strings, Player player) {
         Optional<HomeService> service = PluginMain.getPluginMain().getPluginManager().getService(HomeService.class);
-        if (!service.isPresent()){
+        if (!service.isPresent()) {
             throw new RuntimeException("未找到家服务！");
         }
         HomeService homeService = service.get();
-        if (strings.length == 0){
+        if (strings.length == 0) {
             return false;
         }
         switch (strings[0]) {

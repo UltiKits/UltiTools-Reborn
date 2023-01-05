@@ -25,6 +25,11 @@ public final class JoinWelcome extends UltiToolsPlugin {
     }
 
     @Override
+    public int minUltiToolsVersion() {
+        return 600;
+    }
+
+    @Override
     public List<String> supported() {
         return Arrays.asList("zh", "en");
     }

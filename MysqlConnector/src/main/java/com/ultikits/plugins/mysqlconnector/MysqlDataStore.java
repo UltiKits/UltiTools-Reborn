@@ -17,7 +17,7 @@ public class MysqlDataStore implements DataStore {
     private HikariDataSource dataSource;
 
     public MysqlDataStore() {
-        MysqlConfig mysqlConfig = MysqlConnector.getMysqlConnector().getConfig(MysqlConfig.class);
+        MysqlConfig mysqlConfig = MysqlConnector.getMysqlConnector().getConfig("res/config/config.yml", MysqlConfig.class);
 
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:mysql://" + mysqlConfig.getHost() + ":" + mysqlConfig.getPort() + "/" + mysqlConfig.getDatabase());

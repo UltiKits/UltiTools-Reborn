@@ -7,11 +7,9 @@ import com.ultikits.plugins.home.entity.HomeEntity;
 import com.ultikits.plugins.home.entity.WorldLocation;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 
 import java.util.*;
@@ -72,7 +70,7 @@ public class HomeServiceImpl implements HomeService {
         Location location = homeByName.getHomeLocation();
         Optional<TeleportService> teleportService = PluginMain.getPluginMain().getPluginManager().getService(TeleportService.class);
         if (teleportService.isPresent()) {
-            HomeConfig config = PluginMain.getPluginMain().getConfig(HomeConfig.class);
+            HomeConfig config = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
             int delayTime = config.getHomeTpWait();
             teleportService.get().delayTeleport(player, location, delayTime);
         } else {
@@ -102,7 +100,7 @@ public class HomeServiceImpl implements HomeService {
 
     private boolean isPlayerCanSetHome(Player player) {
         if (player.hasPermission("ultikits.tools.admin")) return true;
-        HomeConfig homeConfig = PluginMain.getPluginMain().getConfig(HomeConfig.class);
+        HomeConfig homeConfig = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
         if (player.hasPermission("ultikits.tools.level1")) {
             if (homeConfig.getHomePro() == 0) return true;
             return getHomeList(player.getUniqueId()).size() < homeConfig.getHomePro();
