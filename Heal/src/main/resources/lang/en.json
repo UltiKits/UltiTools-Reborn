@@ -1,0 +1,5 @@
+{
+  "heal_function": "Heal Function",
+  "heal_player": "Your health and hunger level have been set to the maximum",
+  "no_permission": "You don't have permission to do that!"
+}
