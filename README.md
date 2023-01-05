@@ -7,7 +7,7 @@
 ![Spigot Rating](https://img.shields.io/spiget/rating/85214?label=SpigotMC)
 ![bStats Players](https://img.shields.io/bstats/players/8652)
 ![bStats Servers](https://img.shields.io/bstats/servers/8652)
-![CodeFactor Grade](https://img.shields.io/codefactor/grade/github/wisdommen/ultitools?label=Code%20Quality)
+[![CodeFactor](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge)](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn)
 [![wakatime](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg)](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469)
 
 ## 给各位服主的介绍
