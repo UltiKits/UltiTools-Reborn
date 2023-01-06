@@ -65,7 +65,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         String filePath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
-        JarFile jarFile = new JarFile(jar.getPath().substring(1));
+        JarFile jarFile = new JarFile(jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1));
         Enumeration<JarEntry> entries = jarFile.entries();
         while (entries.hasMoreElements()) {
             JarEntry jarEntry = entries.nextElement();

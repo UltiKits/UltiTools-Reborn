@@ -1,6 +1,7 @@
 package com.ultikits.ultitools;
 
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.net.NetUtil;
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
@@ -151,26 +152,47 @@ public final class UltiTools extends JavaPlugin implements Localized {
             json.write(new FileWriter(dataFile));
         }
 
+        String username = getConfig().getString("account.username");
+        String password = getConfig().getString("account.password");
+        if (username == null || password == null || username.equals("") || password.equals("")) {
+            return;
+        }
+
         Map<String, Object> paramMap = new HashMap<>();
-        paramMap.put("username", getConfig().getString("account.username"));
-        paramMap.put("password", getConfig().getString("account.password"));
+        paramMap.put("username", username);
+        paramMap.put("password", password);
         String tokenJson = HttpUtil.post("https://api.v2.ultikits.com/user/getToken", paramMap);
         TokenEntity token = JSONObject.parseObject(tokenJson, TokenEntity.class);
         HttpResponse uuidResponse = HttpRequest.get("https://api.v2.ultikits.com/server/getByUUID?uuid=" + json.getByPath("uuid"))
                 .bearerAuth(token.getAccess_token())
                 .execute();
-        System.out.println(uuidResponse.body());
+        int port = getConfig().getInt("web-editor.port");
+        if (!NetUtil.isUsableLocalPort(port)) {
+            Bukkit.getLogger().log(Level.WARNING, "网页配置编辑器服务器端口不可用！");
+            return;
+        }
         if (uuidResponse.getStatus() == 404) {
             ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                     .uuid(json.getByPath("uuid").toString())
                     .name("MC Server")
-                    .port(getConfig().getInt("web-editor.port"))
+                    .port(port)
                     .build();
             HttpResponse registerResponse = HttpRequest.post("https://api.v2.ultikits.com/editor/register?id=" + token.getId())
                     .bearerAuth(token.getAccess_token())
                     .body(serverEntityVO.toString())
                     .execute();
-            System.out.println(registerResponse.body());
+            if (!registerResponse.isOk()) {
+                Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
+            }
+        } else {
+            ServerEntityVO serverEntityVO = ServerEntityVO.builder()
+                    .uuid(json.getByPath("uuid").toString())
+                    .port(port)
+                    .build();
+            HttpResponse registerResponse = HttpRequest.post("https://api.v2.ultikits.com/editor/updateServer?id=" + token.getId())
+                    .bearerAuth(token.getAccess_token())
+                    .body(serverEntityVO.toString())
+                    .execute();
             if (!registerResponse.isOk()) {
                 Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
             }
