@@ -4,6 +4,8 @@ import com.ultikits.ultitools.webserver.service.ConfigEditorService;
 import com.ultikits.ultitools.webserver.service.impl.ConfigEditorServiceImpl;
 import com.ultikits.ultitools.webserver.wrapper.ResultWrapper;
 
+import java.util.Set;
+
 import static spark.Spark.*;
 
 public class ConfigEditorController {
@@ -13,6 +15,10 @@ public class ConfigEditorController {
         path("/config", () -> {
             before("/*", (request, response) -> {
                 System.out.println(request.ip());
+                Set<String> headers = request.headers();
+                for (String header : headers){
+                    System.out.println(header+": "+request.headers(header));
+                }
                 if (!request.ip().equals("47.242.179.141")){
                     halt("Access Denied!");
                 }
@@ -29,7 +35,7 @@ public class ConfigEditorController {
                     configEditorService.getCommentMapString()
             );
             after("/*", (request, response) -> {
-                response.type("text/json");
+                response.type("text/json; charset=utf-8");
             });
         });
     }

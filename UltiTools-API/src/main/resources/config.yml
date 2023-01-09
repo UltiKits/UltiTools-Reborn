@@ -10,6 +10,7 @@ web-editor:
     enable: false
     keystore-file-path: ""
     keystore-password: ""
+  trustIp: []
 
 account:
   username: ""

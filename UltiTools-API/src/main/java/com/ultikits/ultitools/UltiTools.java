@@ -27,7 +27,10 @@ import lombok.Getter;
 import lombok.Setter;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.Contract;
+import spark.Spark;
+import spark.utils.SparkUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -80,8 +83,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         configManager = new ConfigManager();
 
-        new ConfigEditorController().init();
-
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
         if (dataStore == null) {
@@ -111,10 +112,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
+        stop();
+        awaitStop();
         pluginManager.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
-        stop();
     }
 
     public void reloadPlugins() throws IOException {
@@ -133,7 +135,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private void initEmbedWebServer() {
         if (getConfig().getBoolean("web-editor.enable")) {
             int port = getConfig().getInt("web-editor.port");
-            port(port);
+            if (NetUtil.isUsableLocalPort(port)){
+                port(port);
+                init();
+                awaitInitialization();
+                new ConfigEditorController().init();
+            }
             if (getConfig().getBoolean("web-editor.https.enable")) {
                 String keystoreFilePath = getConfig().getString("web-editor.https.keystore-file-path");
                 String keystorePassword = getConfig().getString("web-editor.https.keystore-password");
@@ -167,10 +174,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 .bearerAuth(token.getAccess_token())
                 .execute();
         int port = getConfig().getInt("web-editor.port");
-        if (!NetUtil.isUsableLocalPort(port)) {
-            Bukkit.getLogger().log(Level.WARNING, "网页配置编辑器服务器端口不可用！");
-            return;
-        }
         if (uuidResponse.getStatus() == 404) {
             ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                     .uuid(json.getByPath("uuid").toString())

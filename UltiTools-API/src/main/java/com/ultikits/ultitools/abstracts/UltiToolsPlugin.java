@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -10,10 +11,12 @@ import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import lombok.Getter;
 import lombok.SneakyThrows;
 
 import java.io.*;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.CodeSource;
 import java.util.Enumeration;
@@ -29,15 +32,39 @@ import java.util.stream.Collectors;
  */
 public abstract class UltiToolsPlugin implements IPlugin, Localized {
     private final Language language;
+    @Getter
+    private final String resourceFolderPath;
 
     @SneakyThrows
     public UltiToolsPlugin() {
-        String lanPath = "lang/" + this.getLanguageCode() + ".json";
-        InputStream in = getResource(lanPath);
-        String result = new BufferedReader(new InputStreamReader(in))
-                .lines().collect(Collectors.joining(""));
-        language = new Language(result);
+        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
+        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode()+".json");
+        if (!file.exists()) {
+            String lanPath = "lang/" + this.getLanguageCode() + ".json";
+            InputStream in = getResource(lanPath);
+            String result = new BufferedReader(new InputStreamReader(in))
+                    .lines().collect(Collectors.joining(""));
+            language = new Language(result);
+        } else {
+            language = new Language(file);
+        }
         saveResources();
+    }
+
+    public static ConfigManager getConfigManager() {
+        return UltiTools.getInstance().getConfigManager();
+    }
+
+    public static ListenerManager getListenerManager() {
+        return UltiTools.getInstance().getListenerManager();
+    }
+
+    public static CommandManager getCommandManager() {
+        return UltiTools.getInstance().getCommandManager();
+    }
+
+    public static PluginManager getPluginManager() {
+        return UltiTools.getInstance().getPluginManager();
     }
 
     protected String getConfigFolder() {
@@ -56,13 +83,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
-    public ConfigManager getConfigManager() {
-        return UltiTools.getInstance().getConfigManager();
-    }
-
     @SneakyThrows
     private void saveResources() {
-        String filePath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
         JarFile jarFile = new JarFile(jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1));
@@ -70,12 +92,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         while (entries.hasMoreElements()) {
             JarEntry jarEntry = entries.nextElement();
             String fileName = jarEntry.getName();
-            if (fileName.startsWith("res") && fileName.contains(".")) {
+            if ((fileName.startsWith("res") || fileName.startsWith("lang")) && fileName.contains(".")) {
                 InputStream inputStream = jarFile.getInputStream(jarEntry);
                 if (inputStream == null) {
                     throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
                 }
-                File outFile = new File(filePath, fileName);
+                File outFile = new File(resourceFolderPath, fileName);
                 try {
                     if (!outFile.exists()) {
                         FileUtil.touch(outFile);
@@ -122,17 +144,5 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
     @Override
     public final String i18n(String code, String str) {
         return this.getLanguage().getLocalizedText(str);
-    }
-
-    public ListenerManager getListenerManager() {
-        return UltiTools.getInstance().getListenerManager();
-    }
-
-    public CommandManager getCommandManager() {
-        return UltiTools.getInstance().getCommandManager();
-    }
-
-    public PluginManager getPluginManager() {
-        return UltiTools.getInstance().getPluginManager();
     }
 }
