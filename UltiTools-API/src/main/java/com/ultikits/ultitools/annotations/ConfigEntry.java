@@ -9,5 +9,6 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigEntry {
     String path() default "";
+
     String comment() default "";
 }

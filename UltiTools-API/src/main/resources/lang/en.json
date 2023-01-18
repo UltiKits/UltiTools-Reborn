@@ -3,5 +3,16 @@
   "传送成功！": "Teleport Succeed!",
   "传送失败！": "Teleport Failed!",
   "请勿移动！": "Please Do Not Move!",
-  "离传送还有%d秒": "Teleport in %d ..."
+  "离传送还有%d秒": "Teleport in %d ...",
+  "只有游戏内可以执行这个指令！": "This command can only be performed in GAME!",
+  "只可以在后台执行这个指令！": "This command can only be performed in CONSOLE!",
+  "第%d页": "Page %d",
+  "上一页": "Previous",
+  "下一页": "Next",
+  "返回": "Back",
+  "退出": "Quit",
+  "确认": "OK",
+  "取消": "Cancel",
+  "清空": "Clear",
+  "你没有权限！": "You don't have permission to do that!"
 }

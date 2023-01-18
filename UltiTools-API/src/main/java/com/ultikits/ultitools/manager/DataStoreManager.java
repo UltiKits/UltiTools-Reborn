@@ -7,7 +7,6 @@ import org.bukkit.Bukkit;
 
 import java.io.File;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.logging.Level;
 
@@ -25,7 +24,7 @@ public class DataStoreManager {
 
     public static void close() {
         Bukkit.getLogger().log(Level.INFO, "正在注销所有数据操作器...");
-        for (DataStore dataStore : dataMap.values()){
+        for (DataStore dataStore : dataMap.values()) {
             dataStore.destroyAllOperators();
         }
         dataMap.clear();

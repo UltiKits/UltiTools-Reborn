@@ -2,7 +2,7 @@ package com.ultikits.ultitools.interfaces.impl;
 
 import cn.hutool.core.annotation.AnnotationUtil;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -46,7 +46,7 @@ public class JsonStore implements DataStore {
     }
 
     @Override
-    public <T extends DataEntity> DataOperator<T> getOperator(IPlugin plugin, Class<T> dataEntity) {
+    public <T extends AbstractDataEntity> DataOperator<T> getOperator(IPlugin plugin, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }

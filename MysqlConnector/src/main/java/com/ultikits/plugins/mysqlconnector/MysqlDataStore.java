@@ -1,6 +1,6 @@
 package com.ultikits.plugins.mysqlconnector;
 
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -42,7 +42,7 @@ public class MysqlDataStore implements DataStore {
     }
 
     @Override
-    public <T extends DataEntity> DataOperator<T> getOperator(IPlugin plugin, Class<T> dataEntity) {
+    public <T extends AbstractDataEntity> DataOperator<T> getOperator(IPlugin plugin, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }

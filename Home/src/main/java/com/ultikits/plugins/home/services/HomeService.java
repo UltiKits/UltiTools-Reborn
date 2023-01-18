@@ -26,6 +26,8 @@ public interface HomeService extends Registrable {
      */
     List<HomeEntity> getHomeList(UUID playerId);
 
+    List<String> getHomeNames(UUID playerId);
+
     /**
      * 使用玩家实体和家的名字创建一个家对象，家的名字不可重复
      *

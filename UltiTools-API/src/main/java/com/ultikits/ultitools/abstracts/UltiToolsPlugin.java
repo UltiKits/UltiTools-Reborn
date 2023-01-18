@@ -1,22 +1,18 @@
 package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.io.FileUtil;
-import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.manager.CommandManager;
-import com.ultikits.ultitools.manager.ConfigManager;
-import com.ultikits.ultitools.manager.ListenerManager;
-import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.manager.*;
 import lombok.Getter;
 import lombok.SneakyThrows;
 
 import java.io.*;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.CodeSource;
 import java.util.Enumeration;
@@ -38,7 +34,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
     @SneakyThrows
     public UltiToolsPlugin() {
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
-        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode()+".json");
+        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");
         if (!file.exists()) {
             String lanPath = "lang/" + this.getLanguageCode() + ".json";
             InputStream in = getResource(lanPath);
@@ -67,19 +63,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return UltiTools.getInstance().getPluginManager();
     }
 
-    protected String getConfigFolder() {
+    public static ViewManager getViewManager() {
+        return UltiTools.getInstance().getViewManager();
+    }
+
+    public static VersionWrapper getVersionWrapper() {
+        return UltiTools.getInstance().getVersionWrapper();
+    }
+
+    protected final String getConfigFolder() {
         return UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.pluginName();
     }
 
-    protected File getConfigFile(String path) {
+    protected final File getConfigFile(String path) {
         return new File(getConfigFolder() + "/" + path);
     }
 
-    public <T extends ConfigEntity> T getConfig(String path, Class<T> configType) {
+    public <T extends AbstractConfigEntity> T getConfig(String path, Class<T> configType) {
         return getConfigManager().getConfigEntity(this, path, configType);
     }
 
-    public <T extends ConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
+    public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
@@ -125,15 +129,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         }
     }
 
-    public <T extends DataEntity> DataOperator<T> getDataOperator(Class<T> dataClazz) {
+    public final <T extends AbstractDataEntity> DataOperator<T> getDataOperator(Class<T> dataClazz) {
         return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
     }
 
-    public String getLanguageCode() {
+    public final String getLanguageCode() {
         return UltiTools.getInstance().getConfig().getString("language");
     }
 
-    public Language getLanguage() {
+    public final Language getLanguage() {
         return language;
     }
 

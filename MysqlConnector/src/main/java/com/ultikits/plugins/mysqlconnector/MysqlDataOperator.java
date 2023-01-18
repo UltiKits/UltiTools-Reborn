@@ -1,12 +1,14 @@
 package com.ultikits.plugins.mysqlconnector;
 
 import cn.hutool.core.annotation.AnnotationUtil;
+import cn.hutool.core.util.ClassUtil;
 import cn.hutool.core.util.ReflectUtil;
 import cn.hutool.db.Db;
 import cn.hutool.db.Entity;
 import cn.hutool.db.sql.Condition;
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -21,7 +23,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
-public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> {
+public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
     private final Class<T> type;
     private final DataSource dataSource;
     private final String tableName;
@@ -46,10 +48,7 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
 
     @Override
     public boolean exist(WhereCondition... whereConditions) {
-        Entity entity = Entity.create(tableName);
-        for (WhereCondition whereCondition : whereConditions) {
-            entity.set(whereCondition.getColumn(), whereCondition.getValue().toString());
-        }
+        Entity entity = creatQueryEntity(whereConditions);
         try {
             return Db.use(dataSource).find(entity).size() > 0;
         } catch (SQLException e) {
@@ -71,10 +70,7 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
 
     @Override
     public Collection<T> getAll(WhereCondition... whereConditions) {
-        Entity entity = Entity.create(tableName);
-        for (WhereCondition whereCondition : whereConditions) {
-            entity.set(whereCondition.getColumn(), whereCondition.getValue().toString());
-        }
+        Entity entity = creatQueryEntity(whereConditions);
         Collection<T> collection = new ArrayList<>();
         try {
             List<Entity> entities = Db.use(dataSource).find(entity);
@@ -91,6 +87,7 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
         }
         return collection;
     }
+
 
     @Override
     public List<T> getLike(String column, String value, Condition.LikeType likeType) {
@@ -109,15 +106,7 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
     @SneakyThrows
     @Override
     public void insert(T obj) {
-        Entity entity = Entity.create(tableName);
-        Field[] declaredFields = obj.getClass().getDeclaredFields();
-        for (Field field : declaredFields) {
-            if (field.isAnnotationPresent(Column.class)) {
-                field.setAccessible(true);
-                Column column = field.getAnnotation(Column.class);
-                entity.set(column.value(), field.get(obj).toString());
-            }
-        }
+        Entity entity = copyEntity(obj);
         try {
             Db.use(dataSource).insert(entity);
         } catch (SQLException e) {
@@ -127,10 +116,7 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
 
     @Override
     public void del(WhereCondition... whereConditions) {
-        Entity entity = Entity.create(tableName);
-        for (WhereCondition whereCondition : whereConditions) {
-            entity.set(whereCondition.getColumn(), whereCondition.getValue().toString());
-        }
+        Entity entity = creatQueryEntity(whereConditions);
         try {
             Db.use(dataSource).del(entity);
         } catch (SQLException e) {
@@ -151,6 +137,9 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
 
     @Override
     public void update(String column, Object value, Object id) {
+        if (!ClassUtil.isBasicType(value.getClass())) {
+            value = JSON.toJSONString(value);
+        }
         try {
             Db.use(dataSource).update(
                     Entity.create(tableName).set(column, value),
@@ -162,15 +151,38 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
     }
 
     @Override
-    public void update(T obj) {
+    public void update(T obj) throws IllegalAccessException {
+        Entity entity = copyEntity(obj);
         try {
             Db.use(dataSource).update(
-                    Entity.create(tableName).parseBean(obj),
+                    entity,
                     Entity.create(tableName).set("id", obj.getId())
             );
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private Entity copyEntity(T obj) throws IllegalAccessException {
+        Entity entity = Entity.create(tableName);
+        Field[] declaredFields = obj.getClass().getDeclaredFields();
+        for (Field field : declaredFields) {
+            if (field.isAnnotationPresent(Column.class)) {
+                field.setAccessible(true);
+                Column column = field.getAnnotation(Column.class);
+                if (ClassUtil.isBasicType(field.getType())) {
+                    entity.set(column.value(), field.get(obj));
+                } else {
+                    String jsonString = JSON.toJSONString(field.get(obj));
+                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")){
+                        jsonString = jsonString.substring(1);
+                        jsonString = jsonString.substring(0, jsonString.lastIndexOf("\""));
+                    }
+                    entity.set(column.value(), jsonString);
+                }
+            }
+        }
+        return entity;
     }
 
     private String createTableSqlFromClazz(Class<T> type) {
@@ -193,5 +205,17 @@ public class MysqlDataOperator<T extends DataEntity> implements DataOperator<T> 
         }
         stringBuilder.append("PRIMARY KEY (`id`))ENGINE=InnoDB DEFAULT CHARSET=utf8");
         return stringBuilder.toString();
+    }
+
+    private Entity creatQueryEntity(WhereCondition[] whereConditions) {
+        Entity entity = Entity.create(tableName);
+        for (WhereCondition whereCondition : whereConditions) {
+            if (ClassUtil.isBasicType(whereCondition.getValue().getClass())) {
+                entity.set(whereCondition.getColumn(), whereCondition.getValue());
+            } else {
+                entity.set(whereCondition.getColumn(), whereCondition.getValue().toString());
+            }
+        }
+        return entity;
     }
 }

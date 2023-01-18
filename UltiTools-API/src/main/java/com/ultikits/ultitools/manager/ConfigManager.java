@@ -1,10 +1,9 @@
 package com.ultikits.ultitools.manager;
 
-import cn.hutool.core.bean.BeanUtil;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.TypeReference;
-import com.ultikits.ultitools.abstracts.ConfigEntity;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import java.io.IOException;
@@ -17,11 +16,11 @@ import java.util.Map;
  */
 public class ConfigManager {
 
-    private final Map<UltiToolsPlugin, Map<String, ConfigEntity>> pluginConfigMap = new HashMap<>();
+    private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap = new HashMap<>();
 
-    public void register(UltiToolsPlugin ultiToolsPlugin, ConfigEntity configEntity) {
+    public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) {
         configEntity.init(ultiToolsPlugin);
-        Map<String, ConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
         if (configMap == null) {
             configMap = new HashMap<>();
             configMap.put(configEntity.getConfigFilePath(), configEntity);
@@ -32,12 +31,12 @@ public class ConfigManager {
         pluginConfigMap.put(configEntity.getUltiToolsPlugin(), configMap);
     }
 
-    public <T extends ConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
-        Map<String, ConfigEntity> configMap = pluginConfigMap.get(plugin);
+    public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
         }
-        ConfigEntity configEntity = configMap.get(path);
+        AbstractConfigEntity configEntity = configMap.get(path);
         if (configEntity == null) {
             return null;
         }
@@ -45,8 +44,8 @@ public class ConfigManager {
     }
 
     public void saveAll() {
-        for (Map<String, ConfigEntity> configMap : pluginConfigMap.values()) {
-            for (ConfigEntity config : configMap.values()) {
+        for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
+            for (AbstractConfigEntity config : configMap.values()) {
                 try {
                     config.save();
                 } catch (IOException e) {
@@ -56,11 +55,11 @@ public class ConfigManager {
         }
     }
 
-    public final String getComments(){
+    public final String getComments() {
         Map<String, Map<String, JSONObject>> res = new HashMap<>();
-        for (Map.Entry<UltiToolsPlugin, Map<String, ConfigEntity>> entry : pluginConfigMap.entrySet()) {
+        for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
             Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().pluginName(), k -> new HashMap<>());
-            for (Map.Entry<String, ConfigEntity> entityEntry : entry.getValue().entrySet()){
+            for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().getComments());
             }
             res.put(entry.getKey().pluginName(), stringStringMap);
@@ -70,9 +69,9 @@ public class ConfigManager {
 
     public final String toJson() {
         Map<String, Map<String, JSONObject>> res = new HashMap<>();
-        for (Map.Entry<UltiToolsPlugin, Map<String, ConfigEntity>> entry : pluginConfigMap.entrySet()) {
+        for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
             Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().pluginName(), k -> new HashMap<>());
-            for (Map.Entry<String, ConfigEntity> entityEntry : entry.getValue().entrySet()){
+            for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().toJsonObject());
             }
             res.put(entry.getKey().pluginName(), stringStringMap);
@@ -80,21 +79,21 @@ public class ConfigManager {
         return JSON.toJSONString(res);
     }
 
-    public final void loadFromJson(String json){
+    public final void loadFromJson(String json) {
         Map<String, Map<String, JSONObject>> parseObject = JSONObject.parseObject(json, new TypeReference<Map<String, Map<String, JSONObject>>>() {
         });
-        for (String pluginName : parseObject.keySet()){
-            for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()){
+        for (String pluginName : parseObject.keySet()) {
+            for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()) {
                 if (!ultiToolsPlugin.pluginName().equals(pluginName)) {
                     continue;
                 }
-                Map<String, ConfigEntity> configEntityMap = pluginConfigMap.get(ultiToolsPlugin);
-                for (String configPath : configEntityMap.keySet()){
-                    for (String pathName : parseObject.get(pluginName).keySet()){
+                Map<String, AbstractConfigEntity> configEntityMap = pluginConfigMap.get(ultiToolsPlugin);
+                for (String configPath : configEntityMap.keySet()) {
+                    for (String pathName : parseObject.get(pluginName).keySet()) {
                         if (!configPath.equals(pathName)) {
                             continue;
                         }
-                        ConfigEntity config = configEntityMap.get(configPath);
+                        AbstractConfigEntity config = configEntityMap.get(configPath);
                         config.updateProperties(parseObject.get(pluginName).get(pathName));
                         configEntityMap.put(configPath, config);
                         break;

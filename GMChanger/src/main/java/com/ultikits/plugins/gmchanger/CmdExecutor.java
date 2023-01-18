@@ -11,7 +11,7 @@ import static com.ultikits.utils.MessagesUtils.warning;
 
 public class CmdExecutor extends AbstractPlayerCommandExecutor {
     @Override
-    protected boolean onPlayerCommand(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
+    protected boolean onPlayerCommand(Command command, String[] strings, Player player) {
         if (
                    player.hasPermission("ultikits.tools.command.gm.all")
                 || player.hasPermission("ultikits.tools.command.gm.0")

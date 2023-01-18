@@ -1,80 +1,92 @@
 package com.ultikits.ultitools;
 
-import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.net.NetUtil;
-import cn.hutool.core.util.IdUtil;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import cn.hutool.http.HttpUtil;
-import cn.hutool.json.JSON;
-import cn.hutool.json.JSONUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.api.VersionWrapper;
+
 import com.ultikits.ultitools.commands.ReloadPluginsCommand;
 import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.entities.TokenEntity;
-import com.ultikits.ultitools.entities.vo.ServerEntityVO;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.listeners.InventoryListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
-import com.ultikits.ultitools.webserver.ConfigEditorController;
-import com.ultikits.utils.VersionAdaptor;
-import lombok.Getter;
-import lombok.Setter;
+import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitRunnable;
-import org.jetbrains.annotations.Contract;
-import spark.Spark;
-import spark.utils.SparkUtils;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-import static spark.Spark.*;
+import static com.ultikits.ultitools.utils.PluginInitiationUtils.*;
 
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
-    @Getter
     private final ListenerManager listenerManager = new ListenerManager();
-    @Getter
     private final CommandManager commandManager = new CommandManager();
-    @Setter
-    @Getter
     private DataStore dataStore;
-    @Getter
     private VersionWrapper versionWrapper;
-    @Getter
     private Language language;
-    @Getter
     private PluginManager pluginManager;
-    @Getter
     private ConfigManager configManager;
+    private ViewManager viewManager;
+    private boolean restartRequired;
 
     public static UltiTools getInstance() {
         return ultiTools;
     }
 
-    @Contract(pure = true)
     public static int getPluginVersion() {
         return 600;
+    }
+
+    public DataStore getDataStore() {
+        return dataStore;
+    }
+
+    public void setDataStore(DataStore dataStore) {
+        this.dataStore = dataStore;
+    }
+
+    public VersionWrapper getVersionWrapper() {
+        return versionWrapper;
+    }
+
+    public Language getLanguage() {
+        return language;
+    }
+
+    public PluginManager getPluginManager() {
+        return pluginManager;
+    }
+
+    public ConfigManager getConfigManager() {
+        return configManager;
+    }
+
+    @Override
+    public void onLoad() {
+        saveDefaultConfig();
+        restartRequired = downloadRequiredDependencies();
+        if (restartRequired) {
+//            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
+        }
     }
 
     @Override
     public void onEnable() {
         // Plugin startup logic
         ultiTools = this;
-        saveDefaultConfig();
+        this.versionWrapper = new SpigotVersionManager().match();
+        if (this.versionWrapper == null) {
+            Bukkit.getLogger().log(Level.SEVERE, "Your server version isn't supported in UltiTools-API!");
+            return;
+        }
         initEmbedWebServer();
         try {
             loginAccount();
@@ -82,6 +94,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new RuntimeException(e);
         }
         configManager = new ConfigManager();
+        viewManager = new ViewManager();
 
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
@@ -89,22 +102,26 @@ public final class UltiTools extends JavaPlugin implements Localized {
             new DataStoreWaitingTask().runTaskTimerAsynchronously(this, 0L, 20L);
             dataStore = DataStoreManager.getDatastore("json");
         }
+
         File file = new File(getDataFolder() + File.separator + "plugins");
-        FileUtil.mkdir(file);
+        if (!file.exists()) {
+            file.mkdirs();
+        }
         try {
             pluginManager = new PluginManager();
             pluginManager.init();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        this.versionWrapper = new VersionAdaptor().match();
+
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
-        InputStream in = getResource(lanPath);
+        InputStream in = getFileResource(lanPath);
         String result = new BufferedReader(new InputStreamReader(in))
                 .lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
         getCommandManager().register(new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
+        Bukkit.getServer().getPluginManager().registerEvents(new InventoryListener(), this);
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }
@@ -112,8 +129,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
-        stop();
-        awaitStop();
+        if (restartRequired) {
+            return;
+        }
+        stopEmbedWebServer();
         pluginManager.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
@@ -132,74 +151,63 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return this.language.getLocalizedText(str);
     }
 
-    private void initEmbedWebServer() {
-        if (getConfig().getBoolean("web-editor.enable")) {
-            int port = getConfig().getInt("web-editor.port");
-            if (NetUtil.isUsableLocalPort(port)){
-                port(port);
-                init();
-                awaitInitialization();
-                new ConfigEditorController().init();
-            }
-            if (getConfig().getBoolean("web-editor.https.enable")) {
-                String keystoreFilePath = getConfig().getString("web-editor.https.keystore-file-path");
-                String keystorePassword = getConfig().getString("web-editor.https.keystore-password");
-                secure(keystoreFilePath, keystorePassword, null, null);
-            }
+    private InputStream getFileResource(String filename) {
+        try {
+            return this.getClass().getClassLoader().getResource(filename).openStream();
+        } catch (IOException ex) {
+            return null;
         }
     }
 
-    private void loginAccount() throws IOException {
-        File dataFile = new File(getDataFolder(), "data.json");
-        JSON json = new cn.hutool.json.JSONObject();
-        if (dataFile.exists()) {
-            json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
-        } else {
-            json.putByPath("uuid", IdUtil.simpleUUID());
-            json.write(new FileWriter(dataFile));
-        }
-
-        String username = getConfig().getString("account.username");
-        String password = getConfig().getString("account.password");
-        if (username == null || password == null || username.equals("") || password.equals("")) {
-            return;
-        }
-
-        Map<String, Object> paramMap = new HashMap<>();
-        paramMap.put("username", username);
-        paramMap.put("password", password);
-        String tokenJson = HttpUtil.post("https://api.v2.ultikits.com/user/getToken", paramMap);
-        TokenEntity token = JSONObject.parseObject(tokenJson, TokenEntity.class);
-        HttpResponse uuidResponse = HttpRequest.get("https://api.v2.ultikits.com/server/getByUUID?uuid=" + json.getByPath("uuid"))
-                .bearerAuth(token.getAccess_token())
-                .execute();
-        int port = getConfig().getInt("web-editor.port");
-        if (uuidResponse.getStatus() == 404) {
-            ServerEntityVO serverEntityVO = ServerEntityVO.builder()
-                    .uuid(json.getByPath("uuid").toString())
-                    .name("MC Server")
-                    .port(port)
-                    .build();
-            HttpResponse registerResponse = HttpRequest.post("https://api.v2.ultikits.com/editor/register?id=" + token.getId())
-                    .bearerAuth(token.getAccess_token())
-                    .body(serverEntityVO.toString())
-                    .execute();
-            if (!registerResponse.isOk()) {
-                Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
-            }
-        } else {
-            ServerEntityVO serverEntityVO = ServerEntityVO.builder()
-                    .uuid(json.getByPath("uuid").toString())
-                    .port(port)
-                    .build();
-            HttpResponse registerResponse = HttpRequest.post("https://api.v2.ultikits.com/editor/updateServer?id=" + token.getId())
-                    .bearerAuth(token.getAccess_token())
-                    .body(serverEntityVO.toString())
-                    .execute();
-            if (!registerResponse.isOk()) {
-                Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
-            }
-        }
+    public ListenerManager getListenerManager() {
+        return listenerManager;
     }
 
+    public CommandManager getCommandManager() {
+        return commandManager;
+    }
+
+    private boolean downloadRequiredDependencies() {
+        List<String> dependencies = Arrays.asList(
+                "fastjson-1.2.79.jar",
+                "hutool-all-5.8.11.jar",
+                "jetty-server-9.4.48.v20220622.jar",
+                "javax.servlet-api-3.1.0.jar",
+                "jetty-http-9.4.48.v20220622.jar",
+                "jetty-util-9.4.48.v20220622.jar",
+                "jetty-io-9.4.48.v20220622.jar",
+                "jetty-webapp-9.4.48.v20220622.jar",
+                "jetty-xml-9.4.48.v20220622.jar",
+                "jetty-servlet-9.4.48.v20220622.jar",
+                "jetty-security-9.4.48.v20220622.jar",
+                "jetty-util-ajax-9.4.48.v20220622.jar",
+                "websocket-server-9.4.48.v20220622.jar",
+                "websocket-common-9.4.48.v20220622.jar",
+                "websocket-client-9.4.48.v20220622.jar",
+                "jetty-client-9.4.48.v20220622.jar",
+                "websocket-servlet-9.4.48.v20220622.jar",
+                "websocket-api-9.4.48.v20220622.jar",
+                "spark-core-2.9.4.jar",
+                "slf4j-api-1.7.25.jar"
+        );
+        boolean restartRequired = false;
+        for (String name : dependencies) {
+            File file = new File(getDataFolder() + "/lib", name);
+            if (!file.exists()) {
+                if (!restartRequired) {
+                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件必要库缺失，正在尝试在线下载...");
+                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]若下载失败或多次重启均无法启动，请尝试下载包含依赖的版本。");
+                }
+                restartRequired = true;
+                String url = "http://192.168.0.159:9000/ultitools/lib/" + name;
+                Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载"+url);
+                HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
+            }
+        }
+        return restartRequired;
+    }
+
+    public ViewManager getViewManager() {
+        return viewManager;
+    }
 }

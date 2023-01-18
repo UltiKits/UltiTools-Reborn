@@ -1,10 +1,9 @@
-package com.ultikits.ultitools.webserver;
+package com.ultikits.ultitools.webserver.controller;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.webserver.service.ConfigEditorService;
 import com.ultikits.ultitools.webserver.service.impl.ConfigEditorServiceImpl;
 import com.ultikits.ultitools.webserver.wrapper.ResultWrapper;
-
-import java.util.Set;
 
 import static spark.Spark.*;
 
@@ -14,12 +13,9 @@ public class ConfigEditorController {
     public void init() {
         path("/config", () -> {
             before("/*", (request, response) -> {
-                System.out.println(request.ip());
-                Set<String> headers = request.headers();
-                for (String header : headers){
-                    System.out.println(header+": "+request.headers(header));
-                }
-                if (!request.ip().equals("47.242.179.141")){
+                if (!request.ip().equals("47.242.179.141") &&
+                        !UltiTools.getInstance().getConfig().getStringList("web-editor.trustIp")
+                                .contains(request.ip())) {
                     halt("Access Denied!");
                 }
             });

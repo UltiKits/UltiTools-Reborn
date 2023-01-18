@@ -8,9 +8,10 @@ web-editor:
   port: 4567
   https:
     enable: false
+    domain: ""
     keystore-file-path: ""
     keystore-password: ""
-  trustIp: []
+  trustIp: [ ]
 
 account:
   username: ""

@@ -34,6 +34,16 @@ public class HomeServiceImpl implements HomeService {
     }
 
     @Override
+    public List<String> getHomeNames(UUID playerId) {
+        List<HomeEntity> homeList = getHomeList(playerId);
+        List<String> names = new ArrayList<>();
+        for (HomeEntity entity : homeList){
+            names.add(entity.getName());
+        }
+        return names;
+    }
+
+    @Override
     public boolean createHome(Player player, String name) {
         if (!isPlayerCanSetHome(player)) {
             player.sendMessage(ChatColor.RED + PluginMain.getPluginMain().i18n("你没法创建更多的家！"));

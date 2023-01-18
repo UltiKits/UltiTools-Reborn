@@ -1,8 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.bean.copier.CopyOptions;
 import com.alibaba.fastjson.JSONObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
@@ -12,16 +10,15 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.Map;
 import java.util.Set;
 
 @Getter
-public abstract class ConfigEntity {
+public abstract class AbstractConfigEntity {
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
     private String configFilePath;
 
-    public ConfigEntity(String configFilePath) {
+    public AbstractConfigEntity(String configFilePath) {
         this.configFilePath = configFilePath;
     }
 
@@ -57,7 +54,7 @@ public abstract class ConfigEntity {
     }
 
     @SneakyThrows
-    public void updateProperties(JSONObject jsonObject){
+    public void updateProperties(JSONObject jsonObject) {
         for (Field field : this.getClass().getDeclaredFields()) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
@@ -87,8 +84,8 @@ public abstract class ConfigEntity {
     public JSONObject getComments() {
         JSONObject jsonObject = new JSONObject();
         Field[] declaredFields = this.getClass().getDeclaredFields();
-        for (Field field : declaredFields){
-            if (field.isAnnotationPresent(ConfigEntry.class)){
+        for (Field field : declaredFields) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
                 jsonObject.put(annotation.path(), annotation.comment());
             }

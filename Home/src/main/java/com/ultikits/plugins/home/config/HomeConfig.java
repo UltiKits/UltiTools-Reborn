@@ -1,13 +1,13 @@
 package com.ultikits.plugins.home.config;
 
-import com.ultikits.ultitools.abstracts.ConfigEntity;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
-public class HomeConfig extends ConfigEntity {
+public class HomeConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "home_normal", comment = "")
     private int homeNormal = 3;
     @ConfigEntry(path = "home_pro", comment = "")

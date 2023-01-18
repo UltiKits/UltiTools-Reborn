@@ -7,7 +7,7 @@ import cn.hutool.db.sql.Condition;
 import cn.hutool.json.JSON;
 import cn.hutool.json.JSONUtil;
 import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -30,7 +30,7 @@ import java.util.logging.Level;
  * @author wisdomme
  * @version 1.0.0
  */
-public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperator<T>, Cached {
+public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements DataOperator<T>, Cached {
     private final String storeLocation;
     private final Class<T> type;
     private final Map<Object, T> cache = new ConcurrentHashMap<>();

@@ -1,6 +1,6 @@
 package com.ultikits.plugins.joinwelcome.config;
 
-import com.ultikits.ultitools.abstracts.ConfigEntity;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
@@ -9,7 +9,7 @@ import java.util.List;
 
 @Getter
 @Setter
-public class Config extends ConfigEntity {
+public class Config extends AbstractConfigEntity {
 
     @ConfigEntry(path = "sendMessageDelay", comment = "x秒后发送入服欢迎")
     private int sendMessageDelay;

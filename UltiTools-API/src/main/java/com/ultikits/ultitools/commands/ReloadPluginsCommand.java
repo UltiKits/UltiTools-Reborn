@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.commands;
 
-import com.ultikits.abstracts.AbstractConsoleCommandExecutor;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConsoleCommandExecutor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 

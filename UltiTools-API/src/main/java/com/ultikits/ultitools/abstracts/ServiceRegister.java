@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.Registrable;
-import com.ultikits.ultitools.manager.PluginManager;
 import org.bukkit.Bukkit;
 
 import java.util.logging.Level;

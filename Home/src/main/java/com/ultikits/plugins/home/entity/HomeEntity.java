@@ -1,6 +1,6 @@
 package com.ultikits.plugins.home.entity;
 
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import lombok.Data;
@@ -14,7 +14,7 @@ import java.util.UUID;
 @Data
 @EqualsAndHashCode(callSuper = false)
 @Table("home")
-public class HomeEntity extends DataEntity {
+public class HomeEntity extends AbstractDataEntity {
     @Column("id")
     private Long id = new Date().getTime();
     @Column("playerId")

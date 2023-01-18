@@ -1,13 +1,13 @@
 package com.ultikits.ultitools.interfaces;
 
 import cn.hutool.db.sql.Condition;
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface DataOperator<T extends DataEntity> {
+public interface DataOperator<T extends AbstractDataEntity> {
 
     /**
      * 查询记录数据是否存在。
@@ -86,5 +86,5 @@ public interface DataOperator<T extends DataEntity> {
      *
      * @param obj 数据记录
      */
-    void update(T obj);
+    void update(T obj) throws IllegalAccessException;
 }
