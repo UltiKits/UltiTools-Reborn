@@ -199,7 +199,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                     Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]若下载失败或多次重启均无法启动，请尝试下载包含依赖的版本。");
                 }
                 restartRequired = true;
-                String url = "http://192.168.0.159:9000/ultitools/lib/" + name;
+                String url = "http://47.101.63.43:9000/ultitools/lib/" + name;
                 Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载"+url);
                 HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
             }
