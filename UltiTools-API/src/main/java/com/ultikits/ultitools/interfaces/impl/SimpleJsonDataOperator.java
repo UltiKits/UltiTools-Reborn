@@ -179,7 +179,11 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
 
     @Override
     public synchronized void update(T obj) {
-        T old = cache.get(obj.getId());
+        Object id = obj.getId();
+        T old = cache.get(id);
+        if (old == null){
+            old = cache.get(id.toString());
+        }
         BeanUtil.copyProperties(obj, old, "id");
         cache.put(old.getId(), old);
     }
@@ -191,7 +195,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
                 File file = new File(storeLocation + File.separator + key + ".json");
                 FileUtil.touch(file);
                 FileWriter writer = new FileWriter(file);
-                writer.write(value.toString());
+                writer.write(com.alibaba.fastjson.JSON.toJSONString(value));
                 writer.close();
             } catch (IOException e) {
                 throw new RuntimeException(e);

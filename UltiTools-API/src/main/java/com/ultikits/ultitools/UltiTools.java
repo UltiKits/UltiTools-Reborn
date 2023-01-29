@@ -1,7 +1,7 @@
 package com.ultikits.ultitools;
 
 
-import com.ultikits.ultitools.commands.ReloadPluginsCommand;
+import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
@@ -120,7 +120,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 .lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
-        getCommandManager().register(new ReloadPluginsCommand(), "", "Reload Plugins", "replugins", "rps");
+        getCommandManager().register(new UltiToolsCommands(), "", "UltiTools Commands", "ul", "ultitools", "ulti");
         Bukkit.getServer().getPluginManager().registerEvents(new InventoryListener(), this);
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());

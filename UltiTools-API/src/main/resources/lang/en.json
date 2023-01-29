@@ -14,5 +14,7 @@
   "确认": "OK",
   "取消": "Cancel",
   "清空": "Clear",
-  "你没有权限！": "You don't have permission to do that!"
+  "你没有权限！": "You don't have permission to do that!",
+  "指令执行错误，请使用/%s %s获取帮助": "Command execution error, please enter /%s %s for help",
+  "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n================": "=== UltiTools Commands ===\n/ul reload Reload modules\n================"
 }
