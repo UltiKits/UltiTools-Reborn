@@ -8,13 +8,13 @@ import lombok.Setter;
 @Getter
 @Setter
 public class HomeConfig extends AbstractConfigEntity {
-    @ConfigEntry(path = "home_normal", comment = "")
+    @ConfigEntry(path = "home_normal", comment = "默认玩家权限可以创建的家数量")
     private int homeNormal = 3;
-    @ConfigEntry(path = "home_pro", comment = "")
+    @ConfigEntry(path = "home_pro", comment = "pro权限可以创建的家数量")
     private int homePro = 5;
-    @ConfigEntry(path = "home_ultimate", comment = "")
+    @ConfigEntry(path = "home_ultimate", comment = "ultimate权限可以创建的家数量")
     private int homeUltimate = 10;
-    @ConfigEntry(path = "home_tpwait", comment = "")
+    @ConfigEntry(path = "home_tpwait", comment = "家传送等待时间（秒）")
     private int homeTpWait = 3;
 
     public HomeConfig(String configFilePath) {

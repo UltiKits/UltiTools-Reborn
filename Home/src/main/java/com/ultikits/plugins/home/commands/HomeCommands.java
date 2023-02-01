@@ -6,6 +6,7 @@ import com.ultikits.plugins.home.services.HomeService;
 import com.ultikits.ultitools.abstracts.AbstractTabExecutor;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
@@ -22,6 +23,7 @@ public class HomeCommands extends AbstractTabExecutor {
         }
         HomeService homeService = service.get();
         if (strings.length == 0) {
+            player.sendMessage();
             return false;
         }
         switch (strings[0]) {
@@ -29,6 +31,9 @@ public class HomeCommands extends AbstractTabExecutor {
                 player.openInventory(HomeListView.setUp(player).getInventory());
                 break;
             case "create":
+                if (strings.length < 2){
+                    return false;
+                }
                 boolean created = homeService.createHome(player, strings[1]);
                 if (created) {
                     player.sendMessage(ChatColor.YELLOW + PluginMain.getPluginMain().i18n("已创建！"));
@@ -37,9 +42,15 @@ public class HomeCommands extends AbstractTabExecutor {
                 }
                 break;
             case "del":
+                if (strings.length < 2){
+                    return false;
+                }
                 homeService.deleteHome(player.getUniqueId(), strings[1]);
                 break;
             case "tp":
+                if (strings.length < 2){
+                    return false;
+                }
                 homeService.goHome(player, strings[1]);
                 break;
             default:
@@ -65,5 +76,19 @@ public class HomeCommands extends AbstractTabExecutor {
             default:
                 return new ArrayList<>();
         }
+    }
+
+    /**
+     * @param sender
+     */
+    @Override
+    protected void sendHelpMessage(CommandSender sender) {
+        String help = "=== 家功能 ===\n" +
+                "/home list 打开家列表界面\n" +
+                "/home create [家名字] 创建一个家\n" +
+                "/home del [家名字] 删除一个家\n" +
+                "/home tp [家名字] 传送到一个家\n" +
+                "===========";
+        sender.sendMessage(PluginMain.getPluginMain().i18n(help));
     }
 }
