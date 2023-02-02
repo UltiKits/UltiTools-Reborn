@@ -18,10 +18,7 @@ import lombok.SneakyThrows;
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
     private final Class<T> type;
@@ -62,6 +59,9 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
             Entity entity = Db.use(dataSource).get(
                     Entity.create(tableName).set("id", id)
             );
+            if (entity == null) {
+                return null;
+            }
             return entity.toBean(type);
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -165,8 +165,13 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
 
     private Entity copyEntity(T obj) throws IllegalAccessException {
         Entity entity = Entity.create(tableName);
-        Field[] declaredFields = obj.getClass().getDeclaredFields();
-        for (Field field : declaredFields) {
+        List<Field> fieldList = new ArrayList<>();
+        Class tempClass = obj.getClass();
+        while (tempClass != null) {
+            fieldList.addAll(Arrays.asList(tempClass.getDeclaredFields()));
+            tempClass = tempClass.getSuperclass();
+        }
+        for (Field field : fieldList) {
             if (field.isAnnotationPresent(Column.class)) {
                 field.setAccessible(true);
                 Column column = field.getAnnotation(Column.class);
@@ -174,7 +179,7 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
                     entity.set(column.value(), field.get(obj));
                 } else {
                     String jsonString = JSON.toJSONString(field.get(obj));
-                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")){
+                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
                         jsonString = jsonString.substring(1);
                         jsonString = jsonString.substring(0, jsonString.lastIndexOf("\""));
                     }
