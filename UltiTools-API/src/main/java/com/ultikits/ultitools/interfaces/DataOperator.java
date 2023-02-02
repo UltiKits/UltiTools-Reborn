@@ -85,6 +85,7 @@ public interface DataOperator<T extends AbstractDataEntity> {
      * 使用实体更新记录。不会更新传入实体没有的字段。
      *
      * @param obj 数据记录
+     * @throws IllegalAccessException 请查阅{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
 }

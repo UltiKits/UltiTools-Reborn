@@ -92,6 +92,7 @@ public class ViewManager {
      * Open inventory for player.
      *
      * @param player the player
+     * @param inventoryProxy the inventoryProxy
      */
     public void openView(Player player, InventoryProxy inventoryProxy) {
         if (inventoryProxy == null){

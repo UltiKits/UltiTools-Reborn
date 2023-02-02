@@ -76,6 +76,7 @@ public interface InventoryAPI {
      * 你可以使用这个方法向一个界面中添加物品。物品会自动堆叠如果物品属性相同。
      *
      * @param item the item
+     * @return 因空间不足无法被添加的物品
      */
     Map<Integer, ItemStack> addItem(ItemStack item);
 
@@ -87,6 +88,7 @@ public interface InventoryAPI {
      * 详见 addItem(ItemStack item)
      *
      * @param itemStackProxy the item stack manager
+     * @return 因空间不足无法被添加的物品
      */
     Map<Integer, ItemStack> addItem(ItemStackProxy itemStackProxy);
 

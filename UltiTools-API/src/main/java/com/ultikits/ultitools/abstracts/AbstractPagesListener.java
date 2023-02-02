@@ -92,6 +92,7 @@ public abstract class AbstractPagesListener implements Listener {
      * @param player           Player who clicked the item
      * @param inventoryProxy The InventoryProxy that response to this inventory
      * @param clickedItem      the item that been clicked
+     * @return 是否需要被取消点击事件 {@link CancelResult}
      */
     public abstract CancelResult onItemClick(InventoryClickEvent event, Player player, InventoryProxy inventoryProxy, ItemStack clickedItem);
 
