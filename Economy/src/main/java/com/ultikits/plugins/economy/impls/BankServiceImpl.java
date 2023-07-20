@@ -55,12 +55,14 @@ public class BankServiceImpl implements BankService {
                     .name(name)
                     .owner(player.toString())
                     .build();
+            accountEntity.setId(UUID.randomUUID().toString());
             accountEntityDataOperator.insert(accountEntity);
-            UltiEconomy.getInstance().getDataOperator(AccountPlayerEntity.class)
-                    .insert(AccountPlayerEntity.builder()
-                            .accountId(accountEntity.getId())
-                            .playerId(player.toString())
-                            .build());
+            AccountPlayerEntity accountPlayerEntity = AccountPlayerEntity.builder()
+                    .accountId(accountEntity.getId().toString())
+                    .playerId(player.toString())
+                    .build();
+            accountPlayerEntity.setId(UUID.randomUUID().toString());
+            UltiEconomy.getInstance().getDataOperator(AccountPlayerEntity.class).insert(accountPlayerEntity);
         } catch (Exception e) {
             e.printStackTrace();
             return false;
@@ -75,7 +77,11 @@ public class BankServiceImpl implements BankService {
                 .getAll(WhereCondition.builder().column("playerId").value(player.toString()).build());
         List<AccountEntity> accountEntities = new ArrayList<>();
         for (AccountPlayerEntity accountPlayerEntity : accountPlayerEntities) {
-            accountEntities.add(dataOperator.getById(accountPlayerEntity.getAccountId()));
+            AccountEntity byId = dataOperator.getById(accountPlayerEntity.getAccountId());
+            if (byId == null) {
+                continue;
+            }
+            accountEntities.add(byId);
         }
         return accountEntities;
     }
@@ -148,7 +154,7 @@ public class BankServiceImpl implements BankService {
             return false;
         }
         accountPlayerEntityDataOperator.insert(AccountPlayerEntity.builder()
-                .accountId(accountEntity.getId())
+                .accountId(accountEntity.getId().toString())
                 .playerId(member.toString())
                 .build());
         return true;
@@ -200,7 +206,7 @@ public class BankServiceImpl implements BankService {
         if (accountEntity == null) {
             return null;
         }
-        return getAccountMembers(accountEntity.getId());
+        return getAccountMembers(accountEntity.getId().toString());
     }
 
     @Override

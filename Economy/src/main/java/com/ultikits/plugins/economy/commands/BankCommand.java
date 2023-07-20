@@ -203,7 +203,7 @@ public class BankCommand extends AbstractTabExecutor {
                             return true;
                         }
                         AccountEntity toAccount = bank.getAccountByName(player.getUniqueId(), strings[2]);
-                        boolean transfer = bank.accountBalanceTransfer(player.getUniqueId(), fromAccount.getId(), toAccount.getId(), transferAmount);
+                        boolean transfer = bank.accountBalanceTransfer(player.getUniqueId(), fromAccount.getId().toString(), toAccount.getId().toString(), transferAmount);
                         if (transfer) {
                             player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功从银行账户 %s 向银行账户 %s 转账 %f", strings[1], strings[2], transferAmount)));
                         } else {
@@ -267,9 +267,9 @@ public class BankCommand extends AbstractTabExecutor {
         BankService bank = UltiEconomy.getBank();
         Economy vault = UltiEconomy.getVault();
         switch (strings.length) {
-            case 0:
-                return Arrays.asList("create", "deposit", "withdraw", "transfer", "balance", "members", "close", "list", "help", "member");
             case 1:
+                return Arrays.asList("create", "deposit", "withdraw", "transfer", "balance", "members", "close", "list", "help", "member");
+            case 2:
                 switch (strings[0]) {
                     case "create":
                         return Collections.singletonList(UltiEconomy.getInstance().i18n("[银行名称]"));
@@ -291,7 +291,7 @@ public class BankCommand extends AbstractTabExecutor {
                     default:
                         return Collections.emptyList();
                 }
-            case 2:
+            case 3:
                 switch (strings[0]) {
                     case "deposit":
                         return Collections.singletonList(
@@ -320,7 +320,7 @@ public class BankCommand extends AbstractTabExecutor {
                     default:
                         return Collections.emptyList();
                 }
-            case 3:
+            case 4:
                 switch (strings[0]) {
                     case "transfer":
                         return Collections.singletonList(UltiEconomy.getInstance().i18n("[数额]"));
