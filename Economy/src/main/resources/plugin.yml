@@ -1,0 +1,5 @@
+name: UltiEconomy
+version: '${project.version}'
+main: com.ultikits.plugins.economy.UltiEconomy
+api-version: 600
+authors: [ wisdomme ]
