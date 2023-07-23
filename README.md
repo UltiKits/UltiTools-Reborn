@@ -9,6 +9,7 @@
 ![bStats Servers](https://img.shields.io/bstats/servers/8652)
 [![CodeFactor](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge)](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn)
 [![wakatime](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg)](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469)
+![wakatime timeline](https://wakatime.com/share/@wisdomme/0a9b3a30-f210-4be9-91f2-1b2e94ff403b.svg)
 
 ## 给各位服主的介绍
 
