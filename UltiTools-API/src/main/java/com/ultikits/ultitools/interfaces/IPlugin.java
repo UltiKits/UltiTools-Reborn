@@ -26,11 +26,4 @@ public interface IPlugin {
      */
     default void reloadSelf() {
     }
-
-    /**
-     * @return 插件名称
-     */
-    String pluginName();
-
-    int minUltiToolsVersion();
 }

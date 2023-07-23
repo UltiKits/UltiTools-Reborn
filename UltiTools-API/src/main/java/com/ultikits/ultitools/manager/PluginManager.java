@@ -5,9 +5,12 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Registrable;
 import org.bukkit.Bukkit;
+import org.bukkit.configuration.file.YamlConfiguration;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.net.JarURLConnection;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.*;
@@ -49,7 +52,7 @@ public class PluginManager {
                             Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                             if (IPlugin.class.isAssignableFrom(aClass)) {
                                 UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
-                                if (plugin.pluginName() != null) {
+                                if (plugin.getPluginName() != null) {
                                     pluginList.add(plugin);
                                 }
                             }
@@ -69,22 +72,22 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, String.format("发现%d个UltiTools拓展插件！", pluginList.size()));
         for (int i = 0; i < pluginList.size(); i++) {
             Bukkit.getLogger().log(Level.INFO, String.format("正在加载第%d个插件...", i + 1));
-            IPlugin plugin = pluginList.get(i);
-            if (plugin.minUltiToolsVersion() > UltiTools.getPluginVersion()) {
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.pluginName()));
+            UltiToolsPlugin plugin = pluginList.get(i);
+            if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.getPluginName()));
                 continue;
             }
             try {
                 boolean registerSelf = plugin.registerSelf();
                 if (registerSelf) {
                     success += 1;
-                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！", plugin.pluginName()));
+                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！版本%s。", plugin.getPluginName(), plugin.getVersion()));
                 } else {
-                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
+                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！版本%s。", plugin.getPluginName(), plugin.getVersion()));
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.getPluginName()));
             }
         }
         Bukkit.getLogger().log(Level.INFO, String.format("成功加载%d个插件！失败%d个！", success, pluginList.size() - success));

@@ -21,7 +21,7 @@ public class SpigotVersionManager {
         VersionWrapper versionWrapper = null;
         File file = new File(UltiTools.getInstance().getDataFolder(), "/versions/" + serverVersion + ".jar");
         if (!file.exists()) {
-            HttpDownloadUtils.download("http://47.101.63.43:9000/ultitools/versions/" + serverVersion + ".jar", serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
+            HttpDownloadUtils.download("https://ultitools.oss-cn-shanghai.aliyuncs.com/versions/" + serverVersion + ".jar", serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
         }
         URL url = file.toURI().toURL();
         URL[] urls = new URL[1];

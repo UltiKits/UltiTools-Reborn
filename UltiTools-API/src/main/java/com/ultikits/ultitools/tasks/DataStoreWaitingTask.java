@@ -16,6 +16,11 @@ public class DataStoreWaitingTask extends BukkitRunnable {
 
     @Override
     public void run() {
+        if (UltiTools.getInstance().getDataStore()!=null
+                && UltiTools.getInstance().getDataStore().getStoreType().equals(storeType)){
+            this.cancel();
+            return;
+        }
         if (timer == 120) {
             System.out.println("[UltiToolsAPI] 仍未能获取到配置的数据存储方式！当前配置的存储方式为" + storeType + "。请检查是否安装相应的数据存储模块！已激活自带的Json本地文件存储。");
             this.cancel();

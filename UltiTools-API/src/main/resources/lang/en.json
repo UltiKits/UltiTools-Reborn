@@ -16,5 +16,12 @@
   "清空": "Clear",
   "你没有权限！": "You don't have permission to do that!",
   "指令执行错误，请使用/%s %s获取帮助": "Command execution error, please enter /%s %s for help",
-  "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n================": "=== UltiTools Commands ===\n/ul reload Reload modules\n================"
+  "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n================": "=== UltiTools Commands ===\n/ul reload Reload modules\n================",
+  "========|可用插件列表|========\n": "========|Available Plugin List|========\n",
+  ". 名字：": ". Name:",
+  "   安装命令：/upm install ": "   Install Command：/upm install ",
+  "   简介：": "   Intro:",
+  "========  第%d页  ========": "========  Page %d  ========",
+  "安装失败！": "Install Failed!",
+  "安装成功！请重启服务器！": "Installed! Please restart the server!"
 }

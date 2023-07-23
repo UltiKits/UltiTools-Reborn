@@ -1,6 +1,7 @@
 package com.ultikits.ultitools;
 
 
+import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -121,6 +122,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         this.language = new Language(result);
 
         getCommandManager().register(new UltiToolsCommands(), "", "UltiTools Commands", "ul", "ultitools", "ulti");
+        getCommandManager().register(new PluginInstallCommands(), "", "UltiTools Plugin Management Commands", "upm");
         Bukkit.getServer().getPluginManager().registerEvents(new InventoryListener(), this);
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
@@ -199,7 +201,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                     Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]若下载失败或多次重启均无法启动，请尝试下载包含依赖的版本。");
                 }
                 restartRequired = true;
-                String url = "http://47.101.63.43:9000/ultitools/lib/" + name;
+                String url = "https://ultitools.oss-cn-shanghai.aliyuncs.com/lib/" + name;
                 Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载"+url);
                 HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
             }

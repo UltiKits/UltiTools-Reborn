@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 public interface DataStore {
     /**
@@ -16,7 +17,7 @@ public interface DataStore {
      * @param <T>        必须继承{@link AbstractDataEntity}
      * @return 数据操作实体类
      */
-    <T extends AbstractDataEntity> DataOperator<T> getOperator(IPlugin plugin, Class<T> dataEntity);
+    <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
 
     /**
      * 保存所有可能的缓存并销毁所有的数据操作类

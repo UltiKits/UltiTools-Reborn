@@ -58,11 +58,11 @@ public class ConfigManager {
     public final String getComments() {
         Map<String, Map<String, JSONObject>> res = new HashMap<>();
         for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().pluginName(), k -> new HashMap<>());
+            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
             for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().getComments());
             }
-            res.put(entry.getKey().pluginName(), stringStringMap);
+            res.put(entry.getKey().getPluginName(), stringStringMap);
         }
         return JSON.toJSONString(res);
     }
@@ -70,11 +70,11 @@ public class ConfigManager {
     public final String toJson() {
         Map<String, Map<String, JSONObject>> res = new HashMap<>();
         for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().pluginName(), k -> new HashMap<>());
+            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
             for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().toJsonObject());
             }
-            res.put(entry.getKey().pluginName(), stringStringMap);
+            res.put(entry.getKey().getPluginName(), stringStringMap);
         }
         return JSON.toJSONString(res);
     }
@@ -84,7 +84,7 @@ public class ConfigManager {
         });
         for (String pluginName : parseObject.keySet()) {
             for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()) {
-                if (!ultiToolsPlugin.pluginName().equals(pluginName)) {
+                if (!ultiToolsPlugin.getPluginName().equals(pluginName)) {
                     continue;
                 }
                 Map<String, AbstractConfigEntity> configEntityMap = pluginConfigMap.get(ultiToolsPlugin);
