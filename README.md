@@ -9,6 +9,7 @@
 ![bStats Servers](https://img.shields.io/bstats/servers/8652)
 [![CodeFactor](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge)](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn)
 [![wakatime](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg)](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469)
+
 ![wakatime timeline](https://wakatime.com/share/@wisdomme/0a9b3a30-f210-4be9-91f2-1b2e94ff403b.svg)
 
 ## 给各位服主的介绍
@@ -41,3 +42,7 @@ UltiTools包含了不少实用的API，方便你快速的开发自己的插件�
 | 拾柒          | 美工                                               |
 ## 发现问题？想提建议？
 [点击这里提交开启一个Issue！](https://github.com/wisdommen/UltiTools/issues/new/choose)
+
+
+![wakatime week](https://wakatime.com/share/@wisdomme/bf0d9440-52ee-41b6-9df9-03fae3ae86dc.svg)
+
