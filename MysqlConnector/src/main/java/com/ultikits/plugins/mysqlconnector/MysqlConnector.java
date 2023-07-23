@@ -1,5 +1,6 @@
 package com.ultikits.plugins.mysqlconnector;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.manager.DataStoreManager;
 
@@ -27,16 +28,6 @@ public final class MysqlConnector extends UltiToolsPlugin {
     @Override
     public void unregisterSelf() {
 
-    }
-
-    @Override
-    public String pluginName() {
-        return "UltiTools-MysqlConnector";
-    }
-
-    @Override
-    public int minUltiToolsVersion() {
-        return 600;
     }
 
     @Override
