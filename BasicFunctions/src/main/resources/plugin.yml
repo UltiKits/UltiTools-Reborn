@@ -1,0 +1,5 @@
+name: BasicFunctions
+version: '${project.version}'
+main: com.ultikits.plugins.BasicFunctions
+api-version: 600
+authors: [ 'wisdomme' ]
