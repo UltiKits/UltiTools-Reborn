@@ -1,0 +1,5 @@
+name: UltiTools-SidebarPlugin
+version: '${project.version}'
+main: com.ultikits.plugins.sidebar.SidebarPlugin
+api-version: 600
+authors: [ wisdomme ]
