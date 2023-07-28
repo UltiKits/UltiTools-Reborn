@@ -31,6 +31,19 @@ public class ConfigManager {
         pluginConfigMap.put(configEntity.getUltiToolsPlugin(), configMap);
     }
 
+    public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, Class<T> type) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
+        if (configMap == null) {
+            return null;
+        }
+        for (AbstractConfigEntity configEntity : configMap.values()) {
+            if (type.isInstance(configEntity)) {
+                return type.cast(configEntity);
+            }
+        }
+        return null;
+    }
+
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {

@@ -109,6 +109,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized {
         return new File(getConfigFolder() + "/" + path);
     }
 
+    public <T extends AbstractConfigEntity> T getConfig(Class<T> configType) {
+        return getConfigManager().getConfigEntity(this, configType);
+    }
+
     public <T extends AbstractConfigEntity> T getConfig(String path, Class<T> configType) {
         return getConfigManager().getConfigEntity(this, path, configType);
     }

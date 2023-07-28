@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.annotation.AnnotationUtil;
+import cn.hutool.core.util.ObjectUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
@@ -10,6 +11,8 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 @Getter
@@ -36,12 +39,22 @@ public abstract class AbstractConfigEntity {
                 field.setAccessible(true);
                 ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
                 String path = annotation.path();
-                if (path.equals("")) {
+                if (path.isEmpty()) {
                     path = field.getName();
                 }
                 Object configValue = config.get(path);
                 if (configValue != null) {
-                    field.set(this, configValue);
+                    if (configValue instanceof List){
+                        List<String> list = new ArrayList<>();
+                        for (Object o : (List<?>) configValue) {
+                            list.add(o.toString());
+                        }
+                        field.set(this, list);
+                    } else if (ObjectUtil.isBasicType(configValue) || configValue instanceof String) {
+                        field.set(this, configValue);
+                    } else {
+                        field.set(this, JSONObject.parseObject(configValue.toString(), field.getType()));
+                    }
                 } else {
                     upToDate = false;
                     config.set(path, field.get(this));
