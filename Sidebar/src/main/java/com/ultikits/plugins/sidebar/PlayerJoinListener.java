@@ -12,20 +12,15 @@ public class PlayerJoinListener implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
-
         FastBoard board = new FastBoard(player);
-
-        board.updateTitle(ChatColor.AQUA + "Welcome");
-
+        board.updateTitle(ChatColor.translateAlternateColorCodes('&', SidebarPlugin.getInstance().getConfig(SidebarConfig.class).getTitle()));
         SidebarPlugin.getInstance().getBoards().put(player.getUniqueId(), board);
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
         Player player = e.getPlayer();
-
         FastBoard board = SidebarPlugin.getInstance().getBoards().remove(player.getUniqueId());
-
         if (board != null) {
             board.delete();
         }

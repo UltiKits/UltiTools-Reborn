@@ -1,8 +1,11 @@
 # 侧边栏标题
 scoreBoardTitle: 欢迎加入服务器
 
+# 侧边栏更新间隔（单位：Tick）推荐20（每秒更新一次），最低1，更低会导致性能问题
+scoreBoardUpdateInterval: 20
+
 # 侧边栏内容（最多15行）
-sidebar_content:
+sidebarContent:
   - '&a在线人数: &e%server_online%'
   - '&a延迟: &e%player_ping%'
   - '&a时间: &e%localtime_time%'

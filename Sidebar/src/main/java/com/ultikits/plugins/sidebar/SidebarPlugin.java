@@ -6,6 +6,7 @@ import fr.mrmicky.fastboard.FastBoard;
 import lombok.Getter;
 import me.clip.placeholderapi.PlaceholderAPI;
 
+import org.bukkit.ChatColor;
 import org.bukkit.Statistic;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -25,8 +26,10 @@ public class SidebarPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() throws IOException {
         instance = this;
+        getConfigManager().register(this, new SidebarConfig("res/config/config.yml"));
         getListenerManager().register(this, new PlayerJoinListener());
-        new UpdateTask().runTaskTimer(UltiTools.getInstance(), 0, 20);
+        int updateInterval = getConfig(SidebarConfig.class).getUpdateInterval();
+        new UpdateTask().runTaskTimerAsynchronously(UltiTools.getInstance(), 0, Math.max(updateInterval, 1));
         return true;
     }
 
@@ -40,13 +43,10 @@ public class SidebarPlugin extends UltiToolsPlugin {
     }
 
     protected void updateBoard(FastBoard board) {
-        board.updateLines(
-                "",
-                "Players: " + getServer().getOnlinePlayers().size(),
-                "",
-                PlaceholderAPI.setPlaceholders(board.getPlayer(), "坐标: %player_x% &e%player_y% &e%player_z%"),
-                "",
-                PlaceholderAPI.setPlaceholders(board.getPlayer(), "%localtime_time%")
-        );
+        List<String> list = new ArrayList<>();
+        for (String s : getConfig(SidebarConfig.class).getContent()) {
+            list.add(ChatColor.translateAlternateColorCodes('&', PlaceholderAPI.setPlaceholders(board.getPlayer(), s)));
+        }
+        board.updateLines(list);
     }
 }
