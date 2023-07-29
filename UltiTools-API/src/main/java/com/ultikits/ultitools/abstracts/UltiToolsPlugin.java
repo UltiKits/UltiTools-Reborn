@@ -3,10 +3,7 @@ package com.ultikits.ultitools.abstracts;
 import cn.hutool.core.io.FileUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.IPlugin;
-import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.*;
 import com.ultikits.ultitools.manager.*;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -29,7 +26,7 @@ import java.util.stream.Collectors;
  * @author wisdomme
  * @version 1.0.0
  */
-public abstract class UltiToolsPlugin implements IPlugin, Localized {
+public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
     private final Language language;
     @Getter
     private final String resourceFolderPath;

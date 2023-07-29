@@ -1,16 +1,14 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Registrable;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
 
-import java.io.*;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.net.JarURLConnection;
+import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.*;
@@ -78,6 +76,10 @@ public class PluginManager {
                 continue;
             }
             try {
+                List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();
+                for (AbstractConfigEntity configEntity : allConfigs) {
+                    UltiToolsPlugin.getConfigManager().register(plugin, configEntity);
+                }
                 boolean registerSelf = plugin.registerSelf();
                 if (registerSelf) {
                     success += 1;

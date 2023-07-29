@@ -9,6 +9,10 @@ public class MessageUtils {
         return chatColor + message;
     }
 
+    public static String coloredMsg(String message){
+        return ChatColor.translateAlternateColorCodes('&', message);
+    }
+
     public static String info(String message){
         return ChatColor.AQUA + message;
     }
@@ -19,10 +23,5 @@ public class MessageUtils {
 
     public static String error(String message){
         return ChatColor.DARK_RED + message;
-    }
-
-    public static void broadcast(String message){
-        // TODO 加上permission
-        Bukkit.broadcast(ChatColor.YELLOW + message, "sb");
     }
 }
