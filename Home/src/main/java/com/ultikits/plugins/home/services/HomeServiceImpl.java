@@ -37,7 +37,7 @@ public class HomeServiceImpl implements HomeService {
     public List<String> getHomeNames(UUID playerId) {
         List<HomeEntity> homeList = getHomeList(playerId);
         List<String> names = new ArrayList<>();
-        for (HomeEntity entity : homeList){
+        for (HomeEntity entity : homeList) {
             names.add(entity.getName());
         }
         return names;
@@ -78,7 +78,7 @@ public class HomeServiceImpl implements HomeService {
             return;
         }
         Location location = homeByName.getHomeLocation();
-        Optional<TeleportService> teleportService = PluginMain.getPluginMain().getPluginManager().getService(TeleportService.class);
+        Optional<TeleportService> teleportService = PluginMain.getPluginManager().getService(TeleportService.class);
         if (teleportService.isPresent()) {
             HomeConfig config = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
             int delayTime = config.getHomeTpWait();

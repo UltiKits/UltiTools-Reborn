@@ -1,6 +1,7 @@
 package com.ultikits.plugins.sidebar;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import fr.mrmicky.fastboard.FastBoard;
 import lombok.Getter;
@@ -9,6 +10,8 @@ import org.bukkit.ChatColor;
 
 import java.io.IOException;
 import java.util.*;
+
+import static com.ultikits.ultitools.utils.MessageUtils.coloredMsg;
 
 public class SidebarPlugin extends UltiToolsPlugin {
     @Getter
@@ -19,7 +22,6 @@ public class SidebarPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() throws IOException {
         instance = this;
-        getConfigManager().register(this, new SidebarConfig("res/config/config.yml"));
         getListenerManager().register(this, new PlayerJoinListener());
         int updateInterval = getConfig(SidebarConfig.class).getUpdateInterval();
         new UpdateTask().runTaskTimerAsynchronously(UltiTools.getInstance(), 0, Math.max(updateInterval, 1));
@@ -35,10 +37,17 @@ public class SidebarPlugin extends UltiToolsPlugin {
         return Arrays.asList("zh", "en");
     }
 
+    @Override
+    public List<AbstractConfigEntity> getAllConfigs() {
+        return Arrays.asList(
+                new SidebarConfig("res/config/config.yml")
+        );
+    }
+
     protected void updateBoard(FastBoard board) {
         List<String> list = new ArrayList<>();
         for (String s : getConfig(SidebarConfig.class).getContent()) {
-            list.add(ChatColor.translateAlternateColorCodes('&', PlaceholderAPI.setPlaceholders(board.getPlayer(), s)));
+            list.add(coloredMsg(PlaceholderAPI.setPlaceholders(board.getPlayer(), s)));
         }
         board.updateLines(list);
     }

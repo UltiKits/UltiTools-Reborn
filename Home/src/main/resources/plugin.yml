@@ -1,0 +1,5 @@
+name: UltiTools-Home
+version: '${project.version}'
+main: com.ultikits.plugins.home.PluginMain
+api-version: 600
+authors: [ wisdomme ]

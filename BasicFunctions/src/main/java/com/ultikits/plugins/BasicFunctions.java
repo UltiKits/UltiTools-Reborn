@@ -2,11 +2,15 @@ package com.ultikits.plugins;
 
 import com.ultikits.plugins.commands.GMChangeCommand;
 import com.ultikits.plugins.commands.HealCommand;
+import com.ultikits.plugins.config.JoinWelcomeConfig;
+import com.ultikits.plugins.listeners.JoinWelcomeListener;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.manager.CommandManager;
 import lombok.Getter;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 public class BasicFunctions extends UltiToolsPlugin {
@@ -17,7 +21,8 @@ public class BasicFunctions extends UltiToolsPlugin {
         instance = this;
         getCommandManager().register(new HealCommand(), "ultikits.tools.command.heal", i18n("指令治愈功能"), "heal", "h");
         getCommandManager().register(new GMChangeCommand(), "ultikits.tools.command.gm", this.i18n("游戏模式切换功能"), "gm");
-        return false;
+        getListenerManager().register(this, new JoinWelcomeListener());
+        return true;
     }
 
     @Override
@@ -35,4 +40,10 @@ public class BasicFunctions extends UltiToolsPlugin {
         return super.supported();
     }
 
+    @Override
+    public List<AbstractConfigEntity> getAllConfigs() {
+        return Arrays.asList(
+                new JoinWelcomeConfig("res/config/join.yml")
+        );
+    }
 }

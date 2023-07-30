@@ -60,6 +60,8 @@ public class UltiEconomyExpansion extends PlaceholderExpansion {
                 return String.format("%.2f", economy.getBalance(player));
             case "bank_total":
                 return String.format("%.2f", bankService.getAccounts(player.getUniqueId()).stream().mapToDouble(AccountEntity::getBalance).sum());
+            case "money_bank_total":
+                return String.format("%.2f", economy.getBalance(player) + bankService.getAccounts(player.getUniqueId()).stream().mapToDouble(AccountEntity::getBalance).sum());
             default:
                 return null;
         }
