@@ -7,5 +7,6 @@
   "冒险模式": "Adventure mode",
   "旁观模式": "Spectator mode",
   "你的游戏模式已设置为%s": "Your game mode has been set to %s",
-  "游戏模式切换功能": "Game mode switching function"
+  "游戏模式切换功能": "Game mode switching function",
+  "/back 返回死亡地点": "/back Return to death location"
 }
