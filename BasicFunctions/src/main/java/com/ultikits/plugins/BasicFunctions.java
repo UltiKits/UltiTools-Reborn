@@ -1,9 +1,6 @@
 package com.ultikits.plugins;
 
-import com.ultikits.plugins.commands.BackCommands;
-import com.ultikits.plugins.commands.GMChangeCommand;
-import com.ultikits.plugins.commands.HealCommand;
-import com.ultikits.plugins.commands.RandomTpCommands;
+import com.ultikits.plugins.commands.*;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
 import com.ultikits.plugins.listeners.BackListener;
 import com.ultikits.plugins.listeners.JoinWelcomeListener;
@@ -26,6 +23,7 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().register(new GMChangeCommand(), "ultikits.tools.command.gm", i18n("游戏模式切换功能"), "gm");
         getCommandManager().register(new BackCommands(), "ultikits.tools.command.back", i18n("快捷返回功能"), "back");
         getCommandManager().register(new RandomTpCommands(), "ultikits.tools.command.wild", i18n("随机传送功能"), "wild");
+        getCommandManager().register(new FlyCommands(), "ultikits.tools.command.fly", i18n("飞行功能"), "fly");
         getListenerManager().register(this, new JoinWelcomeListener());
         getListenerManager().register(this, new BackListener());
         return true;

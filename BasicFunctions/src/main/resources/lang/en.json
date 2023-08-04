@@ -13,5 +13,9 @@
   "这个世界禁止使用随机传送！": "Random teleportation is prohibited in this world!",
   "随机传送中...": "Random teleportation...",
   "随机传送成功！": "Random teleportation successful!",
-  "随机传送到一个安全的地方": "Random teleport to a safe place"
+  "随机传送到一个安全的地方": "Random teleport to a safe place",
+  "已打开飞行": "Flying has been turned on",
+  "已关闭飞行": "Flying has been turned off",
+  "飞行功能": "Flying function",
+  "用法：/fly": "Usage: /fly"
 }
