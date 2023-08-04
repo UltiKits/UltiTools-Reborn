@@ -3,6 +3,7 @@ package com.ultikits.plugins;
 import com.ultikits.plugins.commands.BackCommands;
 import com.ultikits.plugins.commands.GMChangeCommand;
 import com.ultikits.plugins.commands.HealCommand;
+import com.ultikits.plugins.commands.RandomTpCommands;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
 import com.ultikits.plugins.listeners.BackListener;
 import com.ultikits.plugins.listeners.JoinWelcomeListener;
@@ -22,8 +23,9 @@ public class BasicFunctions extends UltiToolsPlugin {
     public boolean registerSelf() throws IOException {
         instance = this;
         getCommandManager().register(new HealCommand(), "ultikits.tools.command.heal", i18n("指令治愈功能"), "heal", "h");
-        getCommandManager().register(new GMChangeCommand(), "ultikits.tools.command.gm", this.i18n("游戏模式切换功能"), "gm");
-        getCommandManager().register(new BackCommands(), "ultikits.tools.command.back", this.i18n("快捷返回功能"), "back");
+        getCommandManager().register(new GMChangeCommand(), "ultikits.tools.command.gm", i18n("游戏模式切换功能"), "gm");
+        getCommandManager().register(new BackCommands(), "ultikits.tools.command.back", i18n("快捷返回功能"), "back");
+        getCommandManager().register(new RandomTpCommands(), "ultikits.tools.command.wild", i18n("随机传送功能"), "wild");
         getListenerManager().register(this, new JoinWelcomeListener());
         getListenerManager().register(this, new BackListener());
         return true;

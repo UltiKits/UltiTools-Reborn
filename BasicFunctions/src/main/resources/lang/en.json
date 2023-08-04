@@ -8,5 +8,10 @@
   "旁观模式": "Spectator mode",
   "你的游戏模式已设置为%s": "Your game mode has been set to %s",
   "游戏模式切换功能": "Game mode switching function",
-  "/back 返回死亡地点": "/back Return to death location"
+  "/back 返回死亡地点": "/back Return to death location",
+  "随机传送功能": "Random teleportation function",
+  "这个世界禁止使用随机传送！": "Random teleportation is prohibited in this world!",
+  "随机传送中...": "Random teleportation...",
+  "随机传送成功！": "Random teleportation successful!",
+  "随机传送到一个安全的地方": "Random teleport to a safe place"
 }
