@@ -11,7 +11,7 @@ sidebarContent:
   - '&a时间: &e%localtime_time%'
   - '&a玩家名: &e%player_name%'
   - '&a等级: &e%player_level%'
-  - '&a经验: &e%player_exp%/%player_exp_to_level%'
+  - '&a经验: &e%math_0_{player_exp}*{player_exp_to_level}%/%player_exp_to_level%'
   - '&a生命值: &e%player_health_rounded%/%player_max_health_rounded%'
   - '&a现金: &e%vault_eco_balance%'
   - '&a世界: &e%player_world%'

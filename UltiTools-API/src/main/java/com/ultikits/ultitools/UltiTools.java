@@ -171,26 +171,50 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     private boolean downloadRequiredDependencies() {
         List<String> dependencies = Arrays.asList(
-                "fastjson-1.2.79.jar",
-                "hutool-all-5.8.11.jar",
-                "jetty-server-9.4.48.v20220622.jar",
+                "bukkit-1.13.1-R0.1-SNAPSHOT.jar",
+                "bungeecord-chat-1.16-R0.4.jar",
+                "checker-qual-2.5.8.jar",
+                "commons-lang-2.6.jar",
+                "error_prone_annotations-2.11.0.jar",
+                "failureaccess-1.0.1.jar",
+                "fastjson-1.2.83.jar",
+                "gson-2.10.jar",
+                "guava-31.1-jre.jar",
+                "hamcrest-core-1.1.jar",
+                "hutool-all-5.8.20.jar",
+                "j2objc-annotations-1.3.jar",
                 "javax.servlet-api-3.1.0.jar",
+                "jetty-client-9.4.48.v20220622.jar",
                 "jetty-http-9.4.48.v20220622.jar",
-                "jetty-util-9.4.48.v20220622.jar",
                 "jetty-io-9.4.48.v20220622.jar",
+                "jetty-security-9.4.48.v20220622.jar",
+                "jetty-server-9.4.48.v20220622.jar",
+                "jetty-servlet-9.4.48.v20220622.jar",
+                "jetty-util-9.4.48.v20220622.jar",
+                "jetty-util-ajax-9.4.48.v20220622.jar",
                 "jetty-webapp-9.4.48.v20220622.jar",
                 "jetty-xml-9.4.48.v20220622.jar",
-                "jetty-servlet-9.4.48.v20220622.jar",
-                "jetty-security-9.4.48.v20220622.jar",
-                "jetty-util-ajax-9.4.48.v20220622.jar",
-                "websocket-server-9.4.48.v20220622.jar",
-                "websocket-common-9.4.48.v20220622.jar",
-                "websocket-client-9.4.48.v20220622.jar",
-                "jetty-client-9.4.48.v20220622.jar",
-                "websocket-servlet-9.4.48.v20220622.jar",
-                "websocket-api-9.4.48.v20220622.jar",
+                "json-simple-1.1.1.jar",
+                "jsr305-3.0.2.jar",
+                "junit-4.10.jar",
+                "listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar",
+                "lombok-1.18.24.jar",
+                "mysql-connector-j-8.0.33.jar",
+                "protobuf-java-3.21.9.jar",
+                "slf4j-api-1.7.25.jar",
+                "snakeyaml-1.33.jar",
                 "spark-core-2.9.4.jar",
-                "slf4j-api-1.7.25.jar"
+                "spigot-api-1.19.3-R0.1-SNAPSHOT.jar",
+                "text-adapter-bukkit-3.0.6.jar",
+                "text-api-3.0.4.jar",
+                "text-serializer-gson-3.0.4.jar",
+                "text-serializer-legacy-3.0.4.jar",
+                "VaultAPI-1.7.jar",
+                "websocket-api-9.4.48.v20220622.jar",
+                "websocket-client-9.4.48.v20220622.jar",
+                "websocket-common-9.4.48.v20220622.jar",
+                "websocket-server-9.4.48.v20220622.jar",
+                "websocket-servlet-9.4.48.v20220622.jar"
         );
         boolean restartRequired = false;
         for (String name : dependencies) {
@@ -202,7 +226,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 }
                 restartRequired = true;
                 String url = "https://ultitools.oss-cn-shanghai.aliyuncs.com/lib/" + name;
-                Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载"+url);
+                Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载" + url);
                 HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
             }
         }

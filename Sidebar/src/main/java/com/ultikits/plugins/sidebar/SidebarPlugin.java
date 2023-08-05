@@ -6,7 +6,6 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import fr.mrmicky.fastboard.FastBoard;
 import lombok.Getter;
 import me.clip.placeholderapi.PlaceholderAPI;
-import org.bukkit.ChatColor;
 
 import java.io.IOException;
 import java.util.*;
@@ -50,5 +49,10 @@ public class SidebarPlugin extends UltiToolsPlugin {
             list.add(coloredMsg(PlaceholderAPI.setPlaceholders(board.getPlayer(), s)));
         }
         board.updateLines(list);
+    }
+
+    @Override
+    public void reloadSelf() {
+        UltiToolsPlugin.getConfigManager().register(this, new SidebarConfig("res/config/config.yml"));
     }
 }
