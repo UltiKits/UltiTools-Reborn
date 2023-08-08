@@ -7,13 +7,14 @@ import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
-import com.ultikits.ultitools.listeners.InventoryListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
+import mc.obliviate.inventory.InventoryAPI;
+import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -34,8 +35,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private Language language;
     private PluginManager pluginManager;
     private ConfigManager configManager;
-    private ViewManager viewManager;
     private boolean restartRequired;
+    private BukkitAudiences adventure;
 
     public static UltiTools getInstance() {
         return ultiTools;
@@ -83,6 +84,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public void onEnable() {
         // Plugin startup logic
         ultiTools = this;
+        this.adventure = BukkitAudiences.create(this);
+        new InventoryAPI(this).init();
         this.versionWrapper = new SpigotVersionManager().match();
         if (this.versionWrapper == null) {
             Bukkit.getLogger().log(Level.SEVERE, "Your server version isn't supported in UltiTools-API!");
@@ -95,7 +98,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new RuntimeException(e);
         }
         configManager = new ConfigManager();
-        viewManager = new ViewManager();
 
         String storeType = getConfig().getString("datasource.type");
         dataStore = DataStoreManager.getDatastore(storeType);
@@ -123,7 +125,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         getCommandManager().register(new UltiToolsCommands(), "", "UltiTools Commands", "ul", "ultitools", "ulti");
         getCommandManager().register(new PluginInstallCommands(), "", "UltiTools Plugin Management Commands", "upm");
-        Bukkit.getServer().getPluginManager().registerEvents(new InventoryListener(), this);
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }
@@ -131,6 +132,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
+        if (this.adventure != null) {
+            this.adventure.close();
+            this.adventure = null;
+        }
         if (restartRequired) {
             return;
         }
@@ -169,13 +174,37 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return commandManager;
     }
 
+    public BukkitAudiences adventure() {
+        if (this.adventure == null) {
+            throw new IllegalStateException("Tried to access Adventure when the plugin was disabled!");
+        }
+        return this.adventure;
+    }
+
     private boolean downloadRequiredDependencies() {
         List<String> dependencies = Arrays.asList(
+                "advancedslot-4.1.13.jar",
+                "adventure-api-4.13.0.jar",
+                "adventure-key-4.13.0.jar",
+                "adventure-nbt-4.13.0.jar",
+                "adventure-platform-api-4.3.0.jar",
+                "adventure-platform-bukkit-4.3.0.jar",
+                "adventure-platform-facet-4.3.0.jar",
+                "adventure-platform-viaversion-4.3.0.jar",
+                "adventure-text-serializer-bungeecord-4.3.0.jar",
+                "adventure-text-serializer-gson-4.13.0.jar",
+                "adventure-text-serializer-gson-legacy-impl-4.13.0.jar",
+                "adventure-text-serializer-legacy-4.13.0.jar",
+                "annotations-24.0.1.jar",
                 "bukkit-1.13.1-R0.1-SNAPSHOT.jar",
                 "bungeecord-chat-1.16-R0.4.jar",
-                "checker-qual-2.5.8.jar",
+                "checker-qual-3.12.0.jar",
                 "commons-lang-2.6.jar",
+                "configurablegui-4.1.13.jar",
+                "core-4.1.13.jar",
                 "error_prone_annotations-2.11.0.jar",
+                "examination-api-1.3.0.jar",
+                "examination-string-1.3.0.jar",
                 "failureaccess-1.0.1.jar",
                 "fastjson-1.2.83.jar",
                 "gson-2.10.jar",
@@ -200,16 +229,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 "listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar",
                 "lombok-1.18.24.jar",
                 "mysql-connector-j-8.0.33.jar",
+                "obliviate-invs-4.1.13.jar",
+                "obliviate-utils-2.0.5.jar",
+                "pagination-4.1.13.jar",
+                "placeholder-2.0.5.jar",
                 "protobuf-java-3.21.9.jar",
                 "slf4j-api-1.7.25.jar",
                 "snakeyaml-1.33.jar",
                 "spark-core-2.9.4.jar",
                 "spigot-api-1.19.3-R0.1-SNAPSHOT.jar",
-                "text-adapter-bukkit-3.0.6.jar",
-                "text-api-3.0.4.jar",
-                "text-serializer-gson-3.0.4.jar",
-                "text-serializer-legacy-3.0.4.jar",
+                "string-2.0.5.jar",
                 "VaultAPI-1.7.jar",
+                "version-detection-2.0.5.jar",
                 "websocket-api-9.4.48.v20220622.jar",
                 "websocket-client-9.4.48.v20220622.jar",
                 "websocket-common-9.4.48.v20220622.jar",
@@ -233,7 +264,4 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return restartRequired;
     }
 
-    public ViewManager getViewManager() {
-        return viewManager;
-    }
 }

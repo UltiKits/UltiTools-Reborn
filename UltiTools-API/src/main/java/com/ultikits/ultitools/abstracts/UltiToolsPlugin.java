@@ -90,10 +90,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return UltiTools.getInstance().getPluginManager();
     }
 
-    public static ViewManager getViewManager() {
-        return UltiTools.getInstance().getViewManager();
-    }
-
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
     }

@@ -1,7 +1,7 @@
 package com.ultikits.plugins.home.commands;
 
 import com.ultikits.plugins.home.PluginMain;
-import com.ultikits.plugins.home.gui.HomeListView;
+import com.ultikits.plugins.home.gui.HomeListGui;
 import com.ultikits.plugins.home.services.HomeService;
 import com.ultikits.ultitools.abstracts.AbstractTabExecutor;
 import org.bukkit.ChatColor;
@@ -28,10 +28,11 @@ public class HomeCommands extends AbstractTabExecutor {
         }
         switch (strings[0]) {
             case "list":
-                player.openInventory(HomeListView.setUp(player).getInventory());
+                HomeListGui homeListGui = new HomeListGui(player);
+                homeListGui.open();
                 break;
             case "create":
-                if (strings.length < 2){
+                if (strings.length < 2) {
                     return false;
                 }
                 boolean created = homeService.createHome(player, strings[1]);
@@ -42,13 +43,13 @@ public class HomeCommands extends AbstractTabExecutor {
                 }
                 break;
             case "del":
-                if (strings.length < 2){
+                if (strings.length < 2) {
                     return false;
                 }
                 homeService.deleteHome(player.getUniqueId(), strings[1]);
                 break;
             case "tp":
-                if (strings.length < 2){
+                if (strings.length < 2) {
                     return false;
                 }
                 homeService.goHome(player, strings[1]);
