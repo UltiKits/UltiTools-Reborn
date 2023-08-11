@@ -56,6 +56,16 @@ public class ConfigManager {
         return type.cast(configEntity);
     }
 
+    public void reloadConfigs(UltiToolsPlugin plugin) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
+        if (configMap == null) {
+            return;
+        }
+        for (AbstractConfigEntity configEntity : configMap.values()) {
+            configEntity.init(plugin);
+        }
+    }
+
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
             for (AbstractConfigEntity config : configMap.values()) {

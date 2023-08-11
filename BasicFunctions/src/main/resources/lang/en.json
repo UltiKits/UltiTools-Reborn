@@ -17,5 +17,16 @@
   "已打开飞行": "Flying has been turned on",
   "已关闭飞行": "Flying has been turned off",
   "飞行功能": "Flying function",
-  "用法：/fly": "Usage: /fly"
+  "用法：/fly": "Usage: /fly",
+  "----白名单系统帮助----": "----Whitelist system help----",
+  "/wl help 白名单帮助": "/wl help Whitelist help",
+  "/wl list 白名单列表": "/wl list Whitelist list",
+  "/wl add [玩家名] 添加玩家到白名单": "/wl add [player] Add player to whitelist",
+  "/wl remove [玩家名] 将玩家移出白名单": "/wl remove [player] Remove player from whitelist",
+  "白名单列表有：": "Whitelist list:",
+  "已将%s加入白名单！": "%s has been added to the whitelist!",
+  "已将%s移出白名单！": "%s has been removed from the whitelist!",
+  "你不在白名单上哦！": "You are not on the whitelist!",
+  "[玩家名]": "[player]",
+  "白名单功能": "Whitelist function"
 }

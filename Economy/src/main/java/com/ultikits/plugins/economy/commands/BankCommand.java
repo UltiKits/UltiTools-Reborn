@@ -58,44 +58,44 @@ public class BankCommand extends AbstractTabExecutor {
                 switch (strings[0]) {
                     case "create":
                         if (bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你已经有一个名为 %s 的银行账户了", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你已经有一个名为 %s 的银行账户了"), strings[1]));
                             return true;
                         }
                         if (bank.createAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功创建银行账户 %s", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功创建银行账户 %s"), strings[1]));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("创建银行账户 %s 失败", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("创建银行账户 %s 失败"), strings[1]));
                         }
                         return true;
                     case "close":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         if (bank.closeAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功删除银行账户 %s", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功删除银行账户 %s"), strings[1]));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("删除银行账户 %s 失败", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("删除银行账户 %s 失败"), strings[1]));
                         }
                         return true;
                     case "balance":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
-                        player.sendMessage(UltiEconomy.getInstance().i18n(String.format("银行账户 %s 的余额为 %s", strings[1], bank.checkAccountBalance(player.getUniqueId(), strings[1]))));
+                        player.sendMessage(String.format(UltiEconomy.getInstance().i18n("银行账户 %s 的余额为 %s"), strings[1], bank.checkAccountBalance(player.getUniqueId(), strings[1])));
                         return true;
                     case "members":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[0])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         List<UUID> members = bank.getAccountMembers(player.getUniqueId(), strings[1]);
                         if (members.isEmpty()) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("银行账户 %s 没有任何成员", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("银行账户 %s 没有任何成员"), strings[1]));
                             return true;
                         }
-                        player.sendMessage(UltiEconomy.getInstance().i18n(String.format("银行账户 %s 的成员列表:", strings[1])));
+                        player.sendMessage(String.format(UltiEconomy.getInstance().i18n("银行账户 %s 的成员列表:"), strings[1]));
                         for (UUID member : members) {
                             player.sendMessage(" - " + Bukkit.getOfflinePlayer(member).getName());
                         }
@@ -109,7 +109,7 @@ public class BankCommand extends AbstractTabExecutor {
                 switch (strings[0]) {
                     case "deposit":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         double depositAmount = -1;
@@ -126,14 +126,14 @@ public class BankCommand extends AbstractTabExecutor {
                         response = vault.withdrawPlayer(player, depositAmount);
                         if (response.transactionSuccess()) {
                             bank.addMoneyToAccount(player.getUniqueId(), strings[1], depositAmount);
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功向银行账户 %s 存入 %s", strings[1], depositAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功向银行账户 %s 存入 %s"), strings[1], depositAmount));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("向银行账户 %s 存入 %s 失败", strings[1], depositAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("向银行账户 %s 存入 %s 失败"), strings[1], depositAmount));
                         }
                         return true;
                     case "withdraw":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         double withdrawAmount = -1;
@@ -150,14 +150,14 @@ public class BankCommand extends AbstractTabExecutor {
                         boolean reduced = bank.reduceMoneyFromAccount(player.getUniqueId(), strings[1], withdrawAmount);
                         if (reduced) {
                             vault.depositPlayer(player, withdrawAmount);
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功从银行账户 %s 取出 %s", strings[1], withdrawAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功从银行账户 %s 取出 %s"), strings[1], withdrawAmount));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("从银行账户 %s 取出 %s 失败", strings[1], withdrawAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("从银行账户 %s 取出 %s 失败"), strings[1], withdrawAmount));
                         }
                         return true;
                     case "del":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         if (!strings[2].equals("confirm")) {
@@ -166,9 +166,9 @@ public class BankCommand extends AbstractTabExecutor {
                         }
                         boolean closeAccount = bank.closeAccount(player.getUniqueId(), strings[1]);
                         if (closeAccount) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功删除银行账户 %s", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功删除银行账户 %s"), strings[1]));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("删除银行账户 %s 失败，", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("删除银行账户 %s 失败，"), strings[1]));
                             player.sendMessage(UltiEconomy.getInstance().i18n("请确保银行账户没有和其他人共享, 且余额为 0"));
                         }
                         return true;
@@ -179,11 +179,11 @@ public class BankCommand extends AbstractTabExecutor {
                 switch (strings[0]) {
                     case "transfer":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[2])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[2])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[2]));
                             return true;
                         }
                         double transferAmount = -1;
@@ -199,20 +199,20 @@ public class BankCommand extends AbstractTabExecutor {
                         }
                         AccountEntity fromAccount = bank.getAccountByName(player.getUniqueId(), strings[1]);
                         if (fromAccount.getBalance() < transferAmount) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("银行账户 %s 的余额不足", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("银行账户 %s 的余额不足"), strings[1]));
                             return true;
                         }
                         AccountEntity toAccount = bank.getAccountByName(player.getUniqueId(), strings[2]);
                         boolean transfer = bank.accountBalanceTransfer(player.getUniqueId(), fromAccount.getId().toString(), toAccount.getId().toString(), transferAmount);
                         if (transfer) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功从银行账户 %s 向银行账户 %s 转账 %f", strings[1], strings[2], transferAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功从银行账户 %s 向银行账户 %s 转账 %f"), strings[1], strings[2], transferAmount));
                         } else {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("从银行账户 %s 向银行账户 %s 转账 %f 失败", strings[1], strings[2], transferAmount)));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("从银行账户 %s 向银行账户 %s 转账 %f 失败"), strings[1], strings[2], transferAmount));
                         }
                         return true;
                     case "member":
                         if (!bank.playerHasAccount(player.getUniqueId(), strings[1])) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("你没有名为 %s 的银行账户", strings[1])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), strings[1]));
                             return true;
                         }
                         if (!strings[2].equals("add") && !strings[2].equals("remove")) {
@@ -221,24 +221,24 @@ public class BankCommand extends AbstractTabExecutor {
                         }
                         OfflinePlayer member = Bukkit.getOfflinePlayer(strings[3]);
                         if (member == null) {
-                            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("玩家 %s 不存在", strings[3])));
+                            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("玩家 %s 不存在"), strings[3]));
                             return true;
                         }
                         switch (strings[2]) {
                             case "add":
                                 boolean add = bank.addAccountMember(player.getUniqueId(), strings[1], member.getUniqueId());
                                 if (add) {
-                                    player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功将玩家 %s 添加到银行账户 %s", strings[3], strings[1])));
+                                    player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功将玩家 %s 添加到银行账户 %s"), strings[3], strings[1]));
                                 } else {
-                                    player.sendMessage(UltiEconomy.getInstance().i18n(String.format("将玩家 %s 添加到银行账户 %s 失败", strings[3], strings[1])));
+                                    player.sendMessage(String.format(UltiEconomy.getInstance().i18n("将玩家 %s 添加到银行账户 %s 失败"), strings[3], strings[1]));
                                 }
                                 return true;
                             case "remove":
                                 boolean remove = bank.removeAccountMember(player.getUniqueId(), strings[1], member.getUniqueId());
                                 if (remove) {
-                                    player.sendMessage(UltiEconomy.getInstance().i18n(String.format("成功将玩家 %s 从银行账户 %s 删除", strings[3], strings[1])));
+                                    player.sendMessage(String.format(UltiEconomy.getInstance().i18n("成功将玩家 %s 从银行账户 %s 删除"), strings[3], strings[1]));
                                 } else {
-                                    player.sendMessage(UltiEconomy.getInstance().i18n(String.format("将玩家 %s 从银行账户 %s 删除失败", strings[3], strings[1])));
+                                    player.sendMessage(String.format(UltiEconomy.getInstance().i18n("将玩家 %s 从银行账户 %s 删除失败"), strings[3], strings[1]));
                                 }
                                 return true;
                             default:
@@ -295,15 +295,15 @@ public class BankCommand extends AbstractTabExecutor {
                 switch (strings[0]) {
                     case "deposit":
                         return Collections.singletonList(
-                                UltiEconomy.getInstance().i18n(
-                                        String.format("[数额] 最高 %.2f", vault.getBalance(player))
+                                String.format(UltiEconomy.getInstance().i18n(
+                                        "[数额] 最高 %.2f"), vault.getBalance(player)
                                 )
                         );
                     case "withdraw":
                         return Collections.singletonList(
-                                UltiEconomy.getInstance().i18n(
-                                        String.format("[数额] 最高 %.2f",
-                                                bank.getAccountByName(player.getUniqueId(), strings[1]).getBalance())
+                                String.format(UltiEconomy.getInstance().i18n(
+                                                "[数额] 最高 %.2f"),
+                                        bank.getAccountByName(player.getUniqueId(), strings[1]).getBalance()
                                 )
                         );
                     case "transfer":

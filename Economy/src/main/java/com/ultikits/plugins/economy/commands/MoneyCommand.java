@@ -17,10 +17,10 @@ public class MoneyCommand extends AbstractTabExecutor {
         double balance = UltiEconomy.getVault().getBalance(player);
         BankService bank = UltiEconomy.getBank();
         List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
-        player.sendMessage(UltiEconomy.getInstance().i18n(String.format("现金: %.2f", balance)));
+        player.sendMessage(String.format(UltiEconomy.getInstance().i18n("现金: %.2f"), balance));
         player.sendMessage(UltiEconomy.getInstance().i18n("你的账户:"));
         for (AccountEntity account : accounts) {
-            player.sendMessage(UltiEconomy.getInstance().i18n(String.format("  %s: %.2f", account.getName(), account.getBalance())));
+            player.sendMessage(String.format(UltiEconomy.getInstance().i18n("  %s: %.2f"), account.getName(), account.getBalance()));
         }
         return true;
     }

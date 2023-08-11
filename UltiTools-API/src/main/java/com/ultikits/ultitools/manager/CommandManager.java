@@ -24,6 +24,11 @@ public class CommandManager {
         command.setExecutor(commandExecutor);
     }
 
+    public void unregister(String name) {
+        PluginCommand command = getCommand(name, UltiTools.getInstance());
+        command.unregister(getCommandMap());
+    }
+
     private PluginCommand getCommand(String name, Plugin plugin) {
         PluginCommand command = null;
 

@@ -28,7 +28,7 @@ public class HomeListGui extends PagingPage {
         super(
                 player,
                 "Home-list",
-                Component.text(player.getDisplayName() + "的家列表")
+                Component.text(player.getDisplayName() + PluginMain.getPluginMain().i18n("的家列表"))
                         .color(TextColor.color(0xFF00A6)),
                 3
         );

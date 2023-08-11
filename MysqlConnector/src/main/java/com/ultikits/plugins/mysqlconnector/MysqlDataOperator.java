@@ -70,9 +70,14 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
     }
 
     @Override
-    public Collection<T> getAll(WhereCondition... whereConditions) {
+    public List<T> getAll() {
+        return getAll(WhereCondition.empty());
+    }
+
+    @Override
+    public List<T> getAll(WhereCondition... whereConditions) {
         Entity entity = creatQueryEntity(whereConditions);
-        Collection<T> collection = new ArrayList<>();
+        List<T> collection = new ArrayList<>();
         try {
             List<Entity> entities = Db.use(dataSource).find(entity);
             for (Entity res : entities) {
@@ -97,6 +102,26 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
             List<Entity> like = Db.use(dataSource).findLike(tableName, column, value, likeType);
             for (Entity entity : like) {
                 collection.add(entity.toBean(type));
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+        return collection;
+    }
+
+    @Override
+    public List<T> page(int page, int size, WhereCondition... whereConditions) {
+        Entity entity = creatQueryEntity(whereConditions);
+        List<T> collection = new ArrayList<>();
+        try {
+            List<Entity> entities = Db.use(dataSource).page(entity, page, size);
+            for (Entity res : entities) {
+                JSONObject jsonObject = new JSONObject();
+                Set<String> fieldNames = res.getFieldNames();
+                for (String field : fieldNames) {
+                    jsonObject.put(field, res.get(field));
+                }
+                collection.add(jsonObject.toJavaObject(type));
             }
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -216,6 +241,9 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
     private Entity creatQueryEntity(WhereCondition[] whereConditions) {
         Entity entity = Entity.create(tableName);
         for (WhereCondition whereCondition : whereConditions) {
+            if (whereCondition.isEmpty()){
+                return entity;
+            }
             if (ClassUtil.isBasicType(whereCondition.getValue().getClass())) {
                 entity.set(whereCondition.getColumn(), whereCondition.getValue());
             } else {

@@ -8,6 +8,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 
+import java.io.IOException;
 import java.util.List;
 
 public class PluginInstallCommands implements CommandExecutor {
@@ -64,7 +65,7 @@ public class PluginInstallCommands implements CommandExecutor {
                 boolean success;
                 if (strings.length == 2) {
                     success = PluginInstallUtils.installLatestPlugin(strings[1]);
-                }else {
+                } else {
                     success = PluginInstallUtils.installPlugin(strings[1], strings[2]);
                 }
                 if (!success) {
@@ -102,6 +103,23 @@ public class PluginInstallCommands implements CommandExecutor {
                 }
                 commandSender.sendMessage(stringBuilder1.toString());
                 break;
+            case "uninstall":
+                if (strings.length > 2) {
+                    sendErrorMessage(commandSender, command);
+                    return false;
+                }
+                try {
+                    if (PluginInstallUtils.uninstallPlugin(strings[1])) {
+                        commandSender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！请手动删除本地文件，否则重启之后还会启用！"));
+                        commandSender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                    } else {
+                        commandSender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
+                    }
+                } catch (IOException e) {
+                    commandSender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
+                    commandSender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                }
+                break;
         }
         return true;
     }
@@ -112,6 +130,7 @@ public class PluginInstallCommands implements CommandExecutor {
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm install [插件] - 安装最新插件"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm install [插件] [版本] - 安装某版本插件"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm versions [插件] - 查看插件版本列表"));
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm uninstall [插件] - 删除插件"));
     }
 
     private void sendErrorMessage(CommandSender sender, Command command) {

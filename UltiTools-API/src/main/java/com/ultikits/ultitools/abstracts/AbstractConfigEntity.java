@@ -17,9 +17,9 @@ import java.util.Set;
 
 @Getter
 public abstract class AbstractConfigEntity {
+    private final String configFilePath;
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
-    private String configFilePath;
 
     public AbstractConfigEntity(String configFilePath) {
         this.configFilePath = configFilePath;
@@ -44,7 +44,7 @@ public abstract class AbstractConfigEntity {
                 }
                 Object configValue = config.get(path);
                 if (configValue != null) {
-                    if (configValue instanceof List){
+                    if (configValue instanceof List) {
                         List<String> list = new ArrayList<>();
                         for (Object o : (List<?>) configValue) {
                             list.add(o.toString());

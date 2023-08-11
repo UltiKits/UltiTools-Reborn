@@ -72,6 +72,7 @@ public abstract class PagingPage extends Gui {
         });
         this.addItem(getLastSlot() - 3, next);
         this.addItem(getLastSlot() - 5, last);
+        updateItems();
     }
 
     public void updateItems() {

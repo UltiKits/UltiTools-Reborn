@@ -4,7 +4,10 @@ import cn.hutool.core.io.FileUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.*;
-import com.ultikits.ultitools.manager.*;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -59,6 +62,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         loadAfter = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion = pluginConfig.getInt("api-version");
         mainClass = pluginConfig.getString("mainClass");
+        inputStream.close();
+        reader.close();
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
         File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");

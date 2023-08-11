@@ -70,13 +70,21 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     }
 
     @Override
-    public Collection<T> getAll(WhereCondition... whereConditions) {
-        Collection<T> results = new ArrayList<>();
+    public List<T> getAll() {
+        return getAll(WhereCondition.empty());
+    }
+
+    @Override
+    public List<T> getAll(WhereCondition... whereConditions) {
+        List<T> results = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
+            if (condition.isEmpty()) {
+                return new ArrayList<>(cache.values());
+            }
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new RuntimeException("Query value is not serializable");
             }
-            Collection<T> collection = new ArrayList<>();
+            List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
                 JSON parse = JSONUtil.parse(each);
                 Object byPath = parse.getByPath(condition.getColumn());
@@ -123,6 +131,20 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
             }
         }
         return res;
+    }
+
+    @Override
+    public List<T> page(int page, int size, WhereCondition... whereConditions) {
+        List<T> all = new ArrayList<>(getAll(whereConditions));
+        int start = (page - 1) * size;
+        int end = page * size;
+        if (start > all.size()) {
+            return new ArrayList<>();
+        }
+        if (end > all.size()) {
+            end = all.size();
+        }
+        return all.subList(start, end);
     }
 
     @Override
@@ -181,7 +203,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     public synchronized void update(T obj) {
         Object id = obj.getId();
         T old = cache.get(id);
-        if (old == null){
+        if (old == null) {
             old = cache.get(id.toString());
         }
         BeanUtil.copyProperties(obj, old, "id");

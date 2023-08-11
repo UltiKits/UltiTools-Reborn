@@ -8,11 +8,16 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
-import com.ultikits.ultitools.entities.PluginVersionEntity;
+import org.bukkit.configuration.file.YamlConfiguration;
 
+import java.io.*;
+import java.net.JarURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class PluginInstallUtils {
 
@@ -35,7 +40,7 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/" + plugin.getId() + "/"+version+"/download");
+        HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/" + plugin.getId() + "/" + version + "/download");
         HttpResponse httpResponse = get.execute();
         if (!httpResponse.isOk()) {
             return null;
@@ -129,5 +134,33 @@ public class PluginInstallUtils {
                 pluginVersionDownloadLink.substring(pluginVersionDownloadLink.lastIndexOf("/") + 1),
                 UltiTools.getInstance().getDataFolder() + "/plugins");
         return true;
+    }
+
+    public static boolean uninstallPlugin(String name) throws IOException {
+        AtomicReference<UltiToolsPlugin> ultiToolsPluginAtomicReference = new AtomicReference<>();
+        UltiTools.getInstance().getPluginManager().getPluginList().stream().filter(plugin -> plugin.getPluginName().equals(name)).forEach(plugin -> {
+            ultiToolsPluginAtomicReference.set(plugin);
+            plugin.unregisterSelf();
+        });
+        UltiTools.getInstance().getPluginManager().getPluginList().remove(ultiToolsPluginAtomicReference.get());
+        File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
+        if (folder.listFiles() == null) {
+            return false;
+        }
+        for (File file : folder.listFiles()) {
+            URL url = new URL("jar:file:" + file.getAbsolutePath() + "!/plugin.yml");
+            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+            InputStream inputStream = jarConnection.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+            YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
+            String pluginName = pluginConfig.getString("name");
+            if (name.equals(pluginName)) {
+                inputStream.close();
+                reader.close();
+                file.delete();
+                return true;
+            }
+        }
+        return false;
     }
 }

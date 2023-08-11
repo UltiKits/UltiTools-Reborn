@@ -15,6 +15,10 @@ import lombok.Setter;
 @Builder
 public class WhereCondition {
     /**
+     * 是否为空
+     */
+    private boolean empty;
+    /**
      * 需要查询的字段
      */
     private String column;
@@ -27,4 +31,8 @@ public class WhereCondition {
      */
     @Builder.Default
     private Comparison comparison = Comparison.EQUAL;
+
+    public static WhereCondition empty() {
+        return WhereCondition.builder().empty(true).build();
+    }
 }

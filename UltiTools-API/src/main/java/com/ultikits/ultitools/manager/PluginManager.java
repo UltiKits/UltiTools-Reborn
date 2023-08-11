@@ -5,6 +5,7 @@ import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Registrable;
+import lombok.Getter;
 import org.bukkit.Bukkit;
 
 import java.io.File;
@@ -18,6 +19,7 @@ import java.util.logging.Level;
 
 public class PluginManager {
     private final Map<String, List<Registrable>> registeredService = new HashMap<>();
+    @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     public void init() throws IOException {

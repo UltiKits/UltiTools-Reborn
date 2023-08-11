@@ -4,7 +4,6 @@ import cn.hutool.db.sql.Condition;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 
-import java.util.Collection;
 import java.util.List;
 
 public interface DataOperator<T extends AbstractDataEntity> {
@@ -34,12 +33,19 @@ public interface DataOperator<T extends AbstractDataEntity> {
     T getById(Object id);
 
     /**
+     * 查询所有记录
+     *
+     * @return 符合条件的数据集
+     */
+    List<T> getAll();
+
+    /**
      * 查询所有符合条件的记录
      *
      * @param whereConditions 条件参数
      * @return 符合条件的数据集
      */
-    Collection<T> getAll(WhereCondition... whereConditions);
+    List<T> getAll(WhereCondition... whereConditions);
 
     /**
      * 模糊查询
@@ -50,6 +56,16 @@ public interface DataOperator<T extends AbstractDataEntity> {
      * @return 符合条件的数据列表
      */
     List<T> getLike(String column, String value, Condition.LikeType likeType);
+
+    /**
+     * 分页查询
+     *
+     * @param page            页数
+     * @param size            每页大小
+     * @param whereConditions 条件参数
+     * @return 符合条件的数据列表
+     */
+    List<T> page(int page, int size, WhereCondition... whereConditions);
 
     /**
      * 新增记录
