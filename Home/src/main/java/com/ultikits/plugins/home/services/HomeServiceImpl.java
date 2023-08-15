@@ -34,6 +34,16 @@ public class HomeServiceImpl implements HomeService {
     }
 
     @Override
+    public List<String> getHomeNames(UUID playerId) {
+        List<HomeEntity> homeList = getHomeList(playerId);
+        List<String> names = new ArrayList<>();
+        for (HomeEntity entity : homeList) {
+            names.add(entity.getName());
+        }
+        return names;
+    }
+
+    @Override
     public boolean createHome(Player player, String name) {
         if (!isPlayerCanSetHome(player)) {
             player.sendMessage(ChatColor.RED + PluginMain.getPluginMain().i18n("你没法创建更多的家！"));
@@ -68,7 +78,7 @@ public class HomeServiceImpl implements HomeService {
             return;
         }
         Location location = homeByName.getHomeLocation();
-        Optional<TeleportService> teleportService = PluginMain.getPluginMain().getPluginManager().getService(TeleportService.class);
+        Optional<TeleportService> teleportService = PluginMain.getPluginManager().getService(TeleportService.class);
         if (teleportService.isPresent()) {
             HomeConfig config = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
             int delayTime = config.getHomeTpWait();

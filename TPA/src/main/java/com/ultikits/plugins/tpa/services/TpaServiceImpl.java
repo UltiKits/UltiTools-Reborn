@@ -143,7 +143,7 @@ public class TpaServiceImpl implements TpaService{
 
     @Override
     @Nullable
-    public List<String> getTpTabList(@NotNull String[] strings) {
+    public List<String> getTpTabList(String[] strings) {
         List<String> tabCommands = new ArrayList<>();
         if (strings.length == 1) {
             tabCommands.add("accept");

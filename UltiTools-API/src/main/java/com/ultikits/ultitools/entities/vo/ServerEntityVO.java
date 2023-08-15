@@ -9,6 +9,8 @@ public class ServerEntityVO {
     private String name;
     private String uuid;
     private int port;
+    private String domain;
+    private boolean ssl;
 
     @Override
     public String toString() {
@@ -19,6 +21,10 @@ public class ServerEntityVO {
                 + uuid + '\"'
                 + ",\"port\":"
                 + port
+                + ",\"domain\":\""
+                + domain + '\"'
+                + ",\"ssl\":"
+                + ssl
                 + "}";
     }
 }

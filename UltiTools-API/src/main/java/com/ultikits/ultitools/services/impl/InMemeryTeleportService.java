@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.services.impl;
 
-import com.ultikits.enums.Sounds;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Sounds;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;

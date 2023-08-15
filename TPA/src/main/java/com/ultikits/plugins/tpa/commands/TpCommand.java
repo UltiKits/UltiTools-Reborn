@@ -26,7 +26,7 @@ public class TpCommand extends AbstractTabExecutor {
     }
 
     @Override
-    protected boolean onPlayerCommand(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
+    protected boolean onPlayerCommand(Command command, String[] strings, Player player) {
         switch (strings.length) {
             case 1:
                 switch (strings[0]) {
@@ -71,7 +71,7 @@ public class TpCommand extends AbstractTabExecutor {
 
     @Nullable
     @Override
-    protected List<String> onPlayerTabComplete(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
+    protected List<String> onPlayerTabComplete(Command command, String[] strings, Player player) {
         return tpaService.getTpTabList(strings);
     }
 }

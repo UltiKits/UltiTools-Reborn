@@ -1,9 +1,11 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Registrable;
+import lombok.Getter;
 import org.bukkit.Bukkit;
 
 import java.io.File;
@@ -17,6 +19,7 @@ import java.util.logging.Level;
 
 public class PluginManager {
     private final Map<String, List<Registrable>> registeredService = new HashMap<>();
+    @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     public void init() throws IOException {
@@ -49,11 +52,11 @@ public class PluginManager {
                             Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                             if (IPlugin.class.isAssignableFrom(aClass)) {
                                 UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
-                                if (plugin.pluginName() != null) {
+                                if (plugin.getPluginName() != null) {
                                     pluginList.add(plugin);
                                 }
                             }
-                        }catch (NoClassDefFoundError ignored){
+                        } catch (NoClassDefFoundError ignored) {
                         }
                     }
                 }
@@ -69,22 +72,26 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, String.format("发现%d个UltiTools拓展插件！", pluginList.size()));
         for (int i = 0; i < pluginList.size(); i++) {
             Bukkit.getLogger().log(Level.INFO, String.format("正在加载第%d个插件...", i + 1));
-            IPlugin plugin = pluginList.get(i);
-            if (plugin.minUltiToolsVersion() > UltiTools.getPluginVersion()){
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.pluginName()));
+            UltiToolsPlugin plugin = pluginList.get(i);
+            if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.getPluginName()));
                 continue;
             }
             try {
+                List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();
+                for (AbstractConfigEntity configEntity : allConfigs) {
+                    UltiToolsPlugin.getConfigManager().register(plugin, configEntity);
+                }
                 boolean registerSelf = plugin.registerSelf();
                 if (registerSelf) {
                     success += 1;
-                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！", plugin.pluginName()));
+                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！版本%s。", plugin.getPluginName(), plugin.getVersion()));
                 } else {
-                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
+                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！版本%s。", plugin.getPluginName(), plugin.getVersion()));
                 }
-            }catch (Exception e){
+            } catch (Exception e) {
                 e.printStackTrace();
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.pluginName()));
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.getPluginName()));
             }
         }
         Bukkit.getLogger().log(Level.INFO, String.format("成功加载%d个插件！失败%d个！", success, pluginList.size() - success));

@@ -9,7 +9,7 @@ public interface IPlugin {
 
     /**
      * UltiTools主体实例化插件时会调用此方法，类比{@link JavaPlugin#onEnable()}
-     * <p></p>
+     * <br><br>
      *
      * @return 插件是否启动成功
      * @throws IOException 可能返回的IO操作错误
@@ -26,11 +26,4 @@ public interface IPlugin {
      */
     default void reloadSelf() {
     }
-
-    /**
-     * @return 插件名称
-     */
-    String pluginName();
-
-    int minUltiToolsVersion();
 }

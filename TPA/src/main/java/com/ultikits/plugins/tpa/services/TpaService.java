@@ -98,5 +98,5 @@ public interface TpaService extends Registrable {
      * @param strings 命令参数
      * @return 补全列表
      */
-    List<String> getTpTabList(@NotNull String[] strings);
+    List<String> getTpTabList(String[] strings);
 }

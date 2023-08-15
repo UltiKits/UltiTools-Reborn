@@ -1,0 +1,5 @@
+name: UltiTools-MysqlConnector
+version: '${project.version}'
+main: com.ultikits.plugins.mysqlconnector.MysqlConnector
+api-version: 600
+authors: [ wisdomme ]

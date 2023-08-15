@@ -10,11 +10,11 @@ public class ResultWrapper<T> {
     private String msg;
     private T data;
 
-    public static ResultWrapper<String> success(){
+    public static ResultWrapper<String> success() {
         return new ResultWrapper<>(200, "ok", null);
     }
 
-    public static <T> ResultWrapper<T> success(T data){
+    public static <T> ResultWrapper<T> success(T data) {
         return new ResultWrapper<>(200, "ok", data);
     }
 }

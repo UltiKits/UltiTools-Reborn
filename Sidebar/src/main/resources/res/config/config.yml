@@ -1,0 +1,18 @@
+# 侧边栏标题
+scoreBoardTitle: 欢迎加入服务器
+
+# 侧边栏更新间隔（单位：Tick）推荐20（每秒更新一次），最低1，更低会导致性能问题
+scoreBoardUpdateInterval: 20
+
+# 侧边栏内容（最多15行）
+sidebarContent:
+  - '&a在线人数: &e%server_online%'
+  - '&a延迟: &e%player_ping%'
+  - '&a时间: &e%localtime_time%'
+  - '&a玩家名: &e%player_name%'
+  - '&a等级: &e%player_level%'
+  - '&a经验: &e%math_0_{player_exp}*{player_exp_to_level}%/%player_exp_to_level%'
+  - '&a生命值: &e%player_health_rounded%/%player_max_health_rounded%'
+  - '&a现金: &e%vault_eco_balance%'
+  - '&a世界: &e%player_world%'
+  - '&a坐标: &e%player_x% &e%player_y% &e%player_z%'

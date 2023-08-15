@@ -17,7 +17,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0-SNAPSHOT</version>
+            <version>6.0.0.202308112144</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -27,18 +27,14 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>com.github.wisdommen</groupId>
-            <artifactId>UltiCoreAPI</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.24</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
 
     <repositories>
-        <repository>
-            <id>ultikits</id>
-            <url>https://maven.wisdommee.com/repository/ultikits-dev/</url>
-        </repository>
         <repository>
             <id>spigotmc-repo</id>
             <url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
@@ -51,33 +47,25 @@
 
     <build>
         <plugins>
-            <!-- 发布到本地spigot服务器插件文件夹 -->
-<!--            <plugin>-->
-<!--                <artifactId>exec-maven-plugin</artifactId>-->
-<!--                <groupId>org.codehaus.mojo</groupId>-->
-<!--                <version>1.6.0</version>-->
-<!--                <executions>-->
-<!--                    <execution>-->
-<!--                        <id>Version Calculation</id>-->
-<!--                        <phase>package</phase>-->
-<!--                        <goals>-->
-<!--                            <goal>exec</goal>-->
-<!--                        </goals>-->
-<!--                        <configuration>-->
-<!--                            <executable>/bin/bash</executable>-->
-<!--                            <arguments>-->
-<!--                                <argument>-->
-<!--                                    ${basedir}/bin/deploy.sh-->
-<!--                                </argument>-->
-<!--                                <argument>-->
-<!--                                    ${project.version}-->
-<!--                                </argument>-->
-<!--                            </arguments>-->
-<!--                        </configuration>-->
-<!--                    </execution>-->
-<!--                </executions>-->
-<!--            </plugin>-->
+            <plugin>
+                <groupId>com.ultikits</groupId>
+                <artifactId>ultitools-maven-plugin</artifactId>
+                <version>1.0.0</version>
+                <configuration>
+                    <name>UltiTools-Home</name>
+                    <identifyString>UltiTools-Home</identifyString>
+                    <shortDescription>A Home Plugin</shortDescription>
+                    <accessKeyFile>access_key.txt</accessKeyFile>
+                    <pluginFolder>F:\SpigotServers\Servers\1.19.4\plugins\UltiTools\plugins</pluginFolder>
+                </configuration>
+            </plugin>
         </plugins>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
     </build>
 
 </project>

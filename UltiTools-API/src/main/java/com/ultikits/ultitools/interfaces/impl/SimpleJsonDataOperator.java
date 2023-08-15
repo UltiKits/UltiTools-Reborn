@@ -7,7 +7,7 @@ import cn.hutool.db.sql.Condition;
 import cn.hutool.json.JSON;
 import cn.hutool.json.JSONUtil;
 import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.abstracts.DataEntity;
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -30,7 +30,7 @@ import java.util.logging.Level;
  * @author wisdomme
  * @version 1.0.0
  */
-public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperator<T>, Cached {
+public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements DataOperator<T>, Cached {
     private final String storeLocation;
     private final Class<T> type;
     private final Map<Object, T> cache = new ConcurrentHashMap<>();
@@ -70,13 +70,21 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
     }
 
     @Override
-    public Collection<T> getAll(WhereCondition... whereConditions) {
-        Collection<T> results = new ArrayList<>();
+    public List<T> getAll() {
+        return getAll(WhereCondition.empty());
+    }
+
+    @Override
+    public List<T> getAll(WhereCondition... whereConditions) {
+        List<T> results = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
+            if (condition.isEmpty()) {
+                return new ArrayList<>(cache.values());
+            }
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new RuntimeException("Query value is not serializable");
             }
-            Collection<T> collection = new ArrayList<>();
+            List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
                 JSON parse = JSONUtil.parse(each);
                 Object byPath = parse.getByPath(condition.getColumn());
@@ -123,6 +131,20 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
             }
         }
         return res;
+    }
+
+    @Override
+    public List<T> page(int page, int size, WhereCondition... whereConditions) {
+        List<T> all = new ArrayList<>(getAll(whereConditions));
+        int start = (page - 1) * size;
+        int end = page * size;
+        if (start > all.size()) {
+            return new ArrayList<>();
+        }
+        if (end > all.size()) {
+            end = all.size();
+        }
+        return all.subList(start, end);
     }
 
     @Override
@@ -179,7 +201,11 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
 
     @Override
     public synchronized void update(T obj) {
-        T old = cache.get(obj.getId());
+        Object id = obj.getId();
+        T old = cache.get(id);
+        if (old == null) {
+            old = cache.get(id.toString());
+        }
         BeanUtil.copyProperties(obj, old, "id");
         cache.put(old.getId(), old);
     }
@@ -191,7 +217,7 @@ public class SimpleJsonDataOperator<T extends DataEntity> implements DataOperato
                 File file = new File(storeLocation + File.separator + key + ".json");
                 FileUtil.touch(file);
                 FileWriter writer = new FileWriter(file);
-                writer.write(value.toString());
+                writer.write(com.alibaba.fastjson.JSON.toJSONString(value));
                 writer.close();
             } catch (IOException e) {
                 throw new RuntimeException(e);
