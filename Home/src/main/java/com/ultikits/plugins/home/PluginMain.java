@@ -39,7 +39,7 @@ public class PluginMain extends UltiToolsPlugin {
     @Override
     public List<AbstractConfigEntity> getAllConfigs() {
         return Arrays.asList(
-                new HomeConfig("res/config/config.yml")
+                new HomeConfig("config/config.yml")
         );
     }
 }

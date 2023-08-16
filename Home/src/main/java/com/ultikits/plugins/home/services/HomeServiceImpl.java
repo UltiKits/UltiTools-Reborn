@@ -80,7 +80,7 @@ public class HomeServiceImpl implements HomeService {
         Location location = homeByName.getHomeLocation();
         Optional<TeleportService> teleportService = PluginMain.getPluginManager().getService(TeleportService.class);
         if (teleportService.isPresent()) {
-            HomeConfig config = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
+            HomeConfig config = PluginMain.getPluginMain().getConfig("config/config.yml", HomeConfig.class);
             int delayTime = config.getHomeTpWait();
             teleportService.get().delayTeleport(player, location, delayTime);
         } else {
@@ -110,7 +110,7 @@ public class HomeServiceImpl implements HomeService {
 
     private boolean isPlayerCanSetHome(Player player) {
         if (player.hasPermission("ultikits.tools.admin")) return true;
-        HomeConfig homeConfig = PluginMain.getPluginMain().getConfig("res/config/config.yml", HomeConfig.class);
+        HomeConfig homeConfig = PluginMain.getPluginMain().getConfig("config/config.yml", HomeConfig.class);
         if (player.hasPermission("ultikits.tools.level1")) {
             if (homeConfig.getHomePro() == 0) return true;
             return getHomeList(player.getUniqueId()).size() < homeConfig.getHomePro();

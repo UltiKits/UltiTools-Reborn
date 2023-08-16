@@ -60,7 +60,7 @@ public final class UltiEconomy extends UltiToolsPlugin {
     @Override
     public List<AbstractConfigEntity> getAllConfigs() {
         return Arrays.asList(
-                new EcoConfig("res/config/config.yml")
+                new EcoConfig("config/config.yml")
         );
     }
 }

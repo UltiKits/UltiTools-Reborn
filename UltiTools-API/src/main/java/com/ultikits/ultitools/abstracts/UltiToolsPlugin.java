@@ -128,7 +128,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         while (entries.hasMoreElements()) {
             JarEntry jarEntry = entries.nextElement();
             String fileName = jarEntry.getName();
-            if ((fileName.startsWith("res") || fileName.startsWith("lang")) && fileName.contains(".")) {
+            if ((fileName.startsWith("res") || fileName.startsWith("lang") || fileName.startsWith("config")) && fileName.contains(".")) {
                 InputStream inputStream = jarFile.getInputStream(jarEntry);
                 if (inputStream == null) {
                     throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);

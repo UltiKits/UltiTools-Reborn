@@ -45,6 +45,10 @@ public class BasicFunctions extends UltiToolsPlugin {
         if (configEntity.isEnableJoinWelcome()) {
             getListenerManager().register(this, new JoinWelcomeListener());
         }
+        if (configEntity.isEnableTpa()) {
+            getCommandManager().register(new TpaCommands(), "ultikits.tools.command.tpa", i18n("传送请求功能"), "tpa");
+            getCommandManager().register(new TpaHereCommands(), "ultikits.tools.command.tphere", i18n("请求传送到此功能"), "tphere");
+        }
         return true;
     }
 
@@ -56,6 +60,8 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().unregister("wild");
         getCommandManager().unregister("fly");
         getCommandManager().unregister("wl");
+        getCommandManager().unregister("tpa");
+        getCommandManager().unregister("tphere");
         getListenerManager().unregisterAll(this);
     }
 
@@ -72,8 +78,8 @@ public class BasicFunctions extends UltiToolsPlugin {
     @Override
     public List<AbstractConfigEntity> getAllConfigs() {
         return Arrays.asList(
-                new BasicConfig("res/config/config.yml"),
-                new JoinWelcomeConfig("res/config/join.yml")
+                new BasicConfig("config/config.yml"),
+                new JoinWelcomeConfig("config/join.yml")
         );
     }
 }

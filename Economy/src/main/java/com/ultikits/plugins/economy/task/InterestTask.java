@@ -23,7 +23,7 @@ public class InterestTask extends BukkitRunnable {
                 continue;
             }
             for (AccountEntity account : accounts) {
-                double interest = account.getBalance() * (UltiEconomy.getInstance().getConfig("res/config/config.yml", EcoConfig.class).getInterestRate());
+                double interest = account.getBalance() * (UltiEconomy.getInstance().getConfig(EcoConfig.class).getInterestRate());
                 bank.addMoneyToAccount(account.getId().toString(), interest);
             }
             player.sendMessage(UltiEconomy.getInstance().i18n("你收到了来自银行的利息！"));

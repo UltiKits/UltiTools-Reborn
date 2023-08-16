@@ -39,7 +39,7 @@ public class SidebarPlugin extends UltiToolsPlugin {
     @Override
     public List<AbstractConfigEntity> getAllConfigs() {
         return Arrays.asList(
-                new SidebarConfig("res/config/config.yml")
+                new SidebarConfig("config/config.yml")
         );
     }
 
@@ -53,6 +53,6 @@ public class SidebarPlugin extends UltiToolsPlugin {
 
     @Override
     public void reloadSelf() {
-        UltiToolsPlugin.getConfigManager().register(this, new SidebarConfig("res/config/config.yml"));
+        UltiToolsPlugin.getConfigManager().register(this, new SidebarConfig("config/config.yml"));
     }
 }
