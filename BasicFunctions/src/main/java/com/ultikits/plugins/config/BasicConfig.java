@@ -24,6 +24,8 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableJoinWelcome = true;
     @ConfigEntry(path = "enableTpa", comment = "是否启用传送请求")
     private boolean enableTpa = true;
+    @ConfigEntry(path = "enableSpeed", comment = "是否启用速度设置")
+    private boolean enableSpeed = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

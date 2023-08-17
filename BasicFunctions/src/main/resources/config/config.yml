@@ -14,3 +14,5 @@ enableRandomTeleport: true
 enableJoinWelcome: true
 # 是否启用TPA功能
 enableTpa: true
+# 是否启用速度设置功能
+enableSpeed: true

@@ -49,6 +49,9 @@ public class BasicFunctions extends UltiToolsPlugin {
             getCommandManager().register(new TpaCommands(), "ultikits.tools.command.tpa", i18n("传送请求功能"), "tpa");
             getCommandManager().register(new TpaHereCommands(), "ultikits.tools.command.tphere", i18n("请求传送到此功能"), "tphere");
         }
+        if (configEntity.isEnableSpeed()){
+            getCommandManager().register(new SpeedCommands(), "ultikits.tools.command.speed", i18n("速度设置功能"), "speed");
+        }
         return true;
     }
 

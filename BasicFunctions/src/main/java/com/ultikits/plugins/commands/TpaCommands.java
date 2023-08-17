@@ -25,6 +25,10 @@ public class TpaCommands extends AbstractTabExecutor {
 
     @Override
     protected boolean onPlayerCommand(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
+        if (!player.isOp() && !player.hasPermission("ultikits.tools.command.tpa")) {
+            player.sendMessage(warning(BasicFunctions.getInstance().i18n("你没有权限使用此指令！")));
+            return false;
+        }
         switch (strings.length) {
             case 1:
                 switch (strings[0]) {
