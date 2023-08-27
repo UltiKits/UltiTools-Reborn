@@ -23,7 +23,7 @@ public class MessageUtils {
     }
 
     /**
-     * 给玩家发送一个带有颜色的消息，使用&作为颜色代码
+     * 给玩家发送一个带有颜色的消息，使用{@literal &}作为颜色代码
      *
      * @param player the player
      * @param msg    the msg
@@ -56,7 +56,7 @@ public class MessageUtils {
     }
 
     /**
-     * 获取一个带有颜色的字符串，使用&作为颜色代码
+     * 获取一个带有颜色的字符串，使用{@literal &}作为颜色代码
      *
      * @param message the message
      * @return the string

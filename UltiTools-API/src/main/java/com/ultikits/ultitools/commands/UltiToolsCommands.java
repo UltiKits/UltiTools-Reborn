@@ -25,7 +25,7 @@ public class UltiToolsCommands extends AbstractConsoleCommandExecutor {
     }
 
     /**
-     * @param sender
+     * @param sender 命令发送者
      */
     @Override
     protected void sendHelpMessage(CommandSender sender) {

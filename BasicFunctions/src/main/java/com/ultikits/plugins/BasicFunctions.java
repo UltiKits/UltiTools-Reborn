@@ -65,6 +65,7 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().unregister("wl");
         getCommandManager().unregister("tpa");
         getCommandManager().unregister("tphere");
+        getCommandManager().unregister("speed");
         getListenerManager().unregisterAll(this);
     }
 
