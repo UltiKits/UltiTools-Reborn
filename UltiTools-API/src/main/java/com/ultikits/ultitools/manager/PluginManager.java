@@ -65,7 +65,7 @@ public class PluginManager {
         }
         urlClassLoader.close();
         int success = 0;
-        if (pluginList.size() == 0) {
+        if (pluginList.isEmpty()) {
             Bukkit.getLogger().log(Level.INFO, "未发现任何UltiTools拓展插件！");
             return;
         }

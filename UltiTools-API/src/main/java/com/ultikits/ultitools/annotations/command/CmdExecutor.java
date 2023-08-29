@@ -1,4 +1,4 @@
-package com.ultikits.ultitools.annotations;
+package com.ultikits.ultitools.annotations.command;
 
 import java.lang.annotation.*;
 
@@ -12,23 +12,24 @@ import java.lang.annotation.*;
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface CmdExecutor {
-    /**
-     * @return 归属的功能
-     */
-    String function() default "";
 
     /**
      * @return 权限
      */
-    String permission();
+    String permission() default "";
 
     /**
      * @return 描述
      */
-    String description();
+    String description() default "";
 
     /**
      * @return 别名
      */
-    String alias();
+    String[] alias();
+
+    /**
+     * @return 是否要求OP
+     */
+    boolean requireOp() default false;
 }
