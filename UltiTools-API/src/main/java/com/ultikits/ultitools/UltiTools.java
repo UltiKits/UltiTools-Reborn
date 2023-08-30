@@ -123,8 +123,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 .lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
-        getCommandManager().register(new UltiToolsCommands(), "", "UltiTools Commands", "ul", "ultitools", "ulti");
-        getCommandManager().register(new PluginInstallCommands(), "", "UltiTools Plugin Management Commands", "upm");
+        getCommandManager().register(new UltiToolsCommands());
+        getCommandManager().register(new PluginInstallCommands());
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }

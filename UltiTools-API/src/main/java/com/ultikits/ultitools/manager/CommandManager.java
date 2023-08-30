@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
@@ -27,6 +28,17 @@ public class CommandManager {
     public void unregister(String name) {
         PluginCommand command = getCommand(name, UltiTools.getInstance());
         command.unregister(getCommandMap());
+    }
+
+    public void register(CommandExecutor commendExecutor) {
+        Class<? extends CommandExecutor> clazz = commendExecutor.getClass();
+
+        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
+            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
+            register(commendExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
+        } else {
+            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
+        }
     }
 
     private PluginCommand getCommand(String name, Plugin plugin) {
