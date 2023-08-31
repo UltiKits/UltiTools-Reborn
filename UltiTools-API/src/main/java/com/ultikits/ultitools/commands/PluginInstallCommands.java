@@ -2,10 +2,7 @@ package com.ultikits.ultitools.commands;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
-import com.ultikits.ultitools.annotations.command.CmdExecutor;
-import com.ultikits.ultitools.annotations.command.CmdMapping;
-import com.ultikits.ultitools.annotations.command.CmdParam;
-import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import org.bukkit.ChatColor;
@@ -18,7 +15,7 @@ import java.util.List;
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class PluginInstallCommands extends AbstractCommendExecutor {
     @CmdMapping(format = "list <page>")
-    public void listPlugins(CommandSender sender, @CmdParam("page") String page) {
+    public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
         int pageInt = 1;
         if (page != null && !page.isEmpty()) {
             try {
@@ -51,12 +48,12 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "list")
-    public void listPlugins(CommandSender sender) {
+    public void listPlugins(@CmdSender CommandSender sender) {
         listPlugins(sender, "1");
     }
 
     @CmdMapping(format = "install <plugin> <version>")
-    public void installPlugin(CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
+    public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
         if (PluginInstallUtils.installPlugin(plugin, version)) {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！"));
         } else {
@@ -65,7 +62,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "install <plugin>")
-    public void installPlugin(CommandSender sender, @CmdParam("plugin") String plugin) {
+    public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         if (PluginInstallUtils.installLatestPlugin(plugin)) {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！"));
         } else {
@@ -74,7 +71,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "versions <plugin>")
-    public void listVersions(CommandSender sender, @CmdParam("plugin") String plugin) {
+    public void listVersions(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         List<String> pluginVersions = PluginInstallUtils.getPluginVersions(plugin);
         if (pluginVersions == null) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
@@ -101,7 +98,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "uninstall <plugin>")
-    public void uninstallPlugin(CommandSender sender, @CmdParam("plugin") String plugin) {
+    public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
             if (PluginInstallUtils.uninstallPlugin(plugin)) {
                 sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！请手动删除本地文件，否则重启之后还会启用！"));
