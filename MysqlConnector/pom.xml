@@ -21,7 +21,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0.202308170020</version>
+            <version>6.0.0.202310040039</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -84,7 +84,7 @@
             <plugin>
                 <groupId>com.ultikits</groupId>
                 <artifactId>ultitools-maven-plugin</artifactId>
-                <version>1.0-SNAPSHOT</version>
+                <version>1.0.0</version>
                 <configuration>
                     <name>MysqlConnector</name>
                     <identifyString>MysqlConnector</identifyString>
