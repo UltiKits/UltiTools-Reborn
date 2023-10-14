@@ -13,9 +13,11 @@ import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
+import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
@@ -30,10 +32,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
     private final ListenerManager listenerManager = new ListenerManager();
     private final CommandManager commandManager = new CommandManager();
+    @Getter
     private DataStore dataStore;
+    @Getter
     private VersionWrapper versionWrapper;
+    @Getter
     private Language language;
+    @Getter
     private PluginManager pluginManager;
+    @Getter
     private ConfigManager configManager;
     private boolean restartRequired;
     private BukkitAudiences adventure;
@@ -46,28 +53,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return 600;
     }
 
-    public DataStore getDataStore() {
-        return dataStore;
-    }
-
     public void setDataStore(DataStore dataStore) {
         this.dataStore = dataStore;
-    }
-
-    public VersionWrapper getVersionWrapper() {
-        return versionWrapper;
-    }
-
-    public Language getLanguage() {
-        return language;
-    }
-
-    public PluginManager getPluginManager() {
-        return pluginManager;
-    }
-
-    public ConfigManager getConfigManager() {
-        return configManager;
     }
 
     @Override
@@ -75,8 +62,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         saveDefaultConfig();
         restartRequired = downloadRequiredDependencies();
         if (restartRequired) {
-//            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
         }
     }
 
@@ -127,6 +113,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         getCommandManager().register(new PluginInstallCommands());
 
         new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
+        Bukkit.getServicesManager().register(PluginManager.class, this.pluginManager, this, ServicePriority.Normal);
     }
 
     @Override
@@ -143,6 +130,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         pluginManager.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
+        Bukkit.getServicesManager().unregisterAll(this);
     }
 
     public void reloadPlugins() throws IOException {

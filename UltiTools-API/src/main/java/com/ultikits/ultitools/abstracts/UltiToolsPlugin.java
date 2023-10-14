@@ -61,7 +61,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         authors = pluginConfig.getStringList("authors");
         loadAfter = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion = pluginConfig.getInt("api-version");
-        mainClass = pluginConfig.getString("mainClass");
+        mainClass = pluginConfig.getString("main");
         inputStream.close();
         reader.close();
 
