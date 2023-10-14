@@ -304,6 +304,9 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             return;
         }
         CmdCD cmdCD = method.getAnnotation(CmdCD.class);
+        if (cmdCD == null) {
+            return;
+        }
         if (cmdCD.value() == 0) {
             return;
         }
@@ -330,13 +333,22 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     }
 
     protected List<String> suggest(String[] strings) {
-        List<String> suggestions = new ArrayList<>();
+        List<String> completions = new ArrayList<>();
 
-        for (String format : mappings.keySet()) {
-            String arg = format.split(" ")[strings.length - 1];
-            suggestions.add(arg);
+        if (strings.length == 0) {
+            for (String format : mappings.keySet()) {
+                String arg = format.split(" ")[0];
+                completions.add(arg);
+            }
+        } else {
+            String partialCommand = strings[strings.length - 1];
+            for (String cmd : mappings.keySet()) {
+                if (cmd.startsWith(partialCommand)) {
+                    completions.add(cmd);
+                }
+            }
         }
-        return suggestions;
+        return completions;
     }
 
     protected String getHelpCommand(){
