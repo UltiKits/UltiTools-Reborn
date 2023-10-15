@@ -7,12 +7,7 @@ import java.lang.annotation.Target;
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
-public @interface UsageLimit {
-    LimitType value();
-    boolean ContainConsole() default false;
-    enum LimitType {
-        NONE,
-        SENDER,
-        ALL
-    }
+public @interface CmdTimeout {
+    boolean enable() default true;
+    int timeout() default 10;
 }

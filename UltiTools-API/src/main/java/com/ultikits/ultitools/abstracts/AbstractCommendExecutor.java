@@ -17,12 +17,13 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.*;
+import java.util.concurrent.*;
 
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
     private final BiMap<UUID, Method> SenderLock = HashBiMap.create();
+    private final BiMap<UUID, Method> ServerLock = HashBiMap.create();
     private final BiMap<UUID, Method> CmdCoolDown = HashBiMap.create();
-    private boolean ServerLock = false;
 
     public AbstractCommendExecutor() {
         scanCommandMappings();
@@ -195,18 +196,28 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     }
 
     private boolean checkLock(CommandSender sender, Method method) {
-        if (method.isAnnotationPresent(UsageLimit.class)) {
-            if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
-                if (sender instanceof Player) {
-                    sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"));
-                    return SenderLock.get(((Player) sender).getUniqueId()).equals(method);
-                }
+        if (!method.isAnnotationPresent(UsageLimit.class)) {
+            return false;
+        }
+        if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
+            if (!(sender instanceof Player || method.getAnnotation(UsageLimit.class).ContainConsole())) {
                 return false;
             }
-            if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
-                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"));
-                return ServerLock;
+            if (sender instanceof Player && SenderLock.get(((Player) sender).getUniqueId()).equals(method)) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"));
+                return true;
             }
+            return false;
+        }
+        if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
+            if (!(sender instanceof Player || method.getAnnotation(UsageLimit.class).ContainConsole())) {
+                return false;
+            }
+            if (sender instanceof Player && ServerLock.get(((Player) sender).getUniqueId()).equals(method)) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"));
+                return true;
+            }
+            return false;
         }
         return false;
     }
@@ -326,6 +337,26 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, 20L);
     }
 
+    private void setTimeout(BukkitRunnable bukkitRunnable, Method method, CommandSender commandSender) {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        if (!method.isAnnotationPresent(CmdTimeout.class)) {
+            executor.schedule(() -> {
+                bukkitRunnable.cancel(); // 取消任务
+                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
+            }, 3, TimeUnit.SECONDS);
+            executor.shutdown();
+        }
+        CmdTimeout cmdTimeout = method.getAnnotation(CmdTimeout.class);
+        if (cmdTimeout.enable()) {
+            executor.schedule(bukkitRunnable::cancel, cmdTimeout.timeout(), TimeUnit.SECONDS);
+            executor.schedule(() -> {
+                bukkitRunnable.cancel(); // 取消任务
+                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
+            }, 3, TimeUnit.SECONDS);
+            executor.shutdown();
+        }
+    }
+
     abstract protected void handleHelp(CommandSender sender);
 
     protected void sendErrorMessage(CommandSender sender, Command command) {
@@ -388,7 +419,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             public void run() {
                 if (method.isAnnotationPresent(UsageLimit.class)) {
                     if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
-                        ServerLock = true;
+                        ServerLock.put(((Player) commandSender).getUniqueId(), method);
                     }
                     if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
                         if (commandSender instanceof Player) {
@@ -405,7 +436,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 } finally {
                     if (method.isAnnotationPresent(UsageLimit.class)) {
                         if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
-                            ServerLock = false;
+                            ServerLock.remove(((Player) commandSender).getUniqueId());
                         }
                         if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
                             if (commandSender instanceof Player) {
@@ -421,6 +452,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         } else {
             bukkitRunnable.runTask(UltiTools.getInstance());
         }
+        setTimeout(bukkitRunnable, method, commandSender);
         return true;
     }
 

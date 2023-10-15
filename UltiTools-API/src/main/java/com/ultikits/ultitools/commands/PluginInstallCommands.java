@@ -7,6 +7,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.scheduler.BukkitRunnable;
 
 import java.io.IOException;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.List;
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class PluginInstallCommands extends AbstractCommendExecutor {
     @CmdMapping(format = "list <page>")
+    @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
         int pageInt = 1;
         if (page != null && !page.isEmpty()) {
@@ -44,10 +46,16 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
             i++;
         }
         stringBuilder.append(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt));
-        sender.sendMessage(stringBuilder.toString());
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                sender.sendMessage(stringBuilder.toString());
+            }
+        }.runTask(UltiTools.getInstance());
     }
 
     @CmdMapping(format = "list")
+    @RunAsync
     public void listPlugins(@CmdSender CommandSender sender) {
         listPlugins(sender, "1");
     }
