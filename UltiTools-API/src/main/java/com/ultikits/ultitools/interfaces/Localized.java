@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.interfaces;
 
+import com.ultikits.ultitools.annotations.I18n;
+
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public interface Localized {
@@ -16,7 +19,13 @@ public interface Localized {
      * @return 支持的语言代码 Supported language codes
      */
     default List<String> supported() {
-        return new ArrayList<>();
+        Class<? extends Localized> clazz = this.getClass();
+        if (clazz.isAnnotationPresent(I18n.class)) {
+            I18n i18n = clazz.getAnnotation(I18n.class);
+            return Arrays.asList(i18n.value());
+        } else {
+            return new ArrayList<>();
+        }
     }
 
     /**
