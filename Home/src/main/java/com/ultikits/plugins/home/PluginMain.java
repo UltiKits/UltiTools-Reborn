@@ -7,11 +7,13 @@ import com.ultikits.plugins.home.services.HomeServiceImpl;
 import com.ultikits.plugins.home.services.HomeServiceRegister;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.I18n;
 import lombok.Getter;
 
 import java.util.Arrays;
 import java.util.List;
 
+@I18n({"zh", "en"})
 public class PluginMain extends UltiToolsPlugin {
     @Getter
     private static PluginMain pluginMain;
@@ -29,11 +31,6 @@ public class PluginMain extends UltiToolsPlugin {
     public void unregisterSelf() {
         homeServiceRegister.unload();
         getListenerManager().unregisterAll(this);
-    }
-
-    @Override
-    public List<String> supported() {
-        return Arrays.asList("zh", "en");
     }
 
     @Override

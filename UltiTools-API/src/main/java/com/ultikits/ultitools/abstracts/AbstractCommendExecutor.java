@@ -348,7 +348,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
         CmdTimeout cmdTimeout = method.getAnnotation(CmdTimeout.class);
         if (cmdTimeout.enable()) {
-            executor.schedule(bukkitRunnable::cancel, cmdTimeout.timeout(), TimeUnit.SECONDS);
             executor.schedule(() -> {
                 bukkitRunnable.cancel(); // 取消任务
                 commandSender.sendMessage(ChatColor.RED + "命令执行超时");
