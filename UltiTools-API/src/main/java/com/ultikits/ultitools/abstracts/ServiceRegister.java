@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.Registrable;
+import com.ultikits.ultitools.utils.InjectUtils;
 import org.bukkit.Bukkit;
 
 import java.util.logging.Level;
@@ -20,6 +21,16 @@ public abstract class ServiceRegister<T extends Registrable> {
     public ServiceRegister(Class<T> api, Registrable service) {
         this.api = api;
         this.registrable = service;
+        InjectUtils.injectService(service);
+        if (!this.load()) throw new RuntimeException(registrable.getName() + "插件加载失败!");
+    }
+
+    public ServiceRegister(UltiToolsPlugin plugin, Class<T> api, Registrable service) {
+        this.api = api;
+        this.registrable = service;
+        InjectUtils.injectDataOperator(plugin, service);
+        InjectUtils.injectConfigEntity(plugin, service);
+        InjectUtils.injectService(service);
         if (!this.load()) throw new RuntimeException(registrable.getName() + "插件加载失败!");
     }
 

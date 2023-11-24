@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.utils.InjectUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
@@ -15,6 +16,9 @@ public class ListenerManager {
     private final Map<UltiToolsPlugin, List<Listener>> listenerListMap = new HashMap<>();
 
     public void register(UltiToolsPlugin plugin, Listener listener) {
+        InjectUtils.injectDataOperator(plugin, listener);
+        InjectUtils.injectConfigEntity(plugin, listener);
+        InjectUtils.injectService(listener);
         listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
         List<Listener> listeners = listenerListMap.get(plugin);

@@ -23,7 +23,7 @@ public class PluginMain extends UltiToolsPlugin {
     public boolean registerSelf() {
         pluginMain = this;
         homeServiceRegister = new HomeServiceRegister(HomeService.class, new HomeServiceImpl());
-        getCommandManager().register(new HomeCommands(), "ultikits.home.command.all", this.i18n("家功能"), "home");
+        getCommandManager().register(this, new HomeCommands());
         return true;
     }
 

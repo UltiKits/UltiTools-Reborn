@@ -337,24 +337,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, 20L);
     }
 
-    private void setTimeout(BukkitRunnable bukkitRunnable, Method method, CommandSender commandSender) {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
-        if (!method.isAnnotationPresent(CmdTimeout.class)) {
-            executor.schedule(() -> {
-                bukkitRunnable.cancel(); // 取消任务
-                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
-            }, 3, TimeUnit.SECONDS);
-            executor.shutdown();
-        }
-        CmdTimeout cmdTimeout = method.getAnnotation(CmdTimeout.class);
-        if (cmdTimeout.enable()) {
-            executor.schedule(() -> {
-                bukkitRunnable.cancel(); // 取消任务
-                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
-            }, 3, TimeUnit.SECONDS);
-            executor.shutdown();
-        }
-    }
 
     abstract protected void handleHelp(CommandSender sender);
 
@@ -362,7 +344,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("指令执行错误，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
     }
 
-    protected List<String> suggest(String[] strings) {
+    protected List<String> suggest(Player player, String[] strings) {
         List<String> completions = new ArrayList<>();
 
         if (strings.length == 0) {
@@ -451,7 +433,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         } else {
             bukkitRunnable.runTask(UltiTools.getInstance());
         }
-        setTimeout(bukkitRunnable, method, commandSender);
         return true;
     }
 
@@ -469,6 +450,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE)) {
             return null;
         }
-        return suggest(strings);
+        return suggest((Player) commandSender, strings);
     }
 }
