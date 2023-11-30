@@ -14,6 +14,7 @@ import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
@@ -120,6 +121,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         getCommandManager().register(new UltiToolsCommands());
         getCommandManager().register(new PluginInstallCommands());
+      
+        Bukkit.getServicesManager().register(PluginManager.class, this.pluginManager, this, ServicePriority.Normal);
     }
 
     @Override
@@ -137,6 +140,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         context.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
+        Bukkit.getServicesManager().unregisterAll(this);
     }
 
     public void reloadPlugins() throws IOException {

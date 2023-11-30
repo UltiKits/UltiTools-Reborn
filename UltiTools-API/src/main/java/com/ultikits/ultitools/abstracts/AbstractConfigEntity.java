@@ -73,7 +73,7 @@ public abstract class AbstractConfigEntity {
                 field.setAccessible(true);
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
                 String path = annotation.path();
-                Object configValue = jsonObject.get(path);
+                Object configValue = jsonObject.getObject(path, field.getType());
                 if (configValue != null) {
                     field.set(this, configValue);
                     config.set(path, configValue);
