@@ -3,9 +3,6 @@ package com.ultikits.plugins.home.services;
 import com.ultikits.plugins.home.PluginMain;
 import com.ultikits.plugins.home.config.HomeConfig;
 import com.ultikits.plugins.home.entity.HomeEntity;
-import com.ultikits.ultitools.annotations.Autowired;
-import com.ultikits.ultitools.annotations.ConfigEntity;
-import com.ultikits.ultitools.annotations.DataCRUD;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.entities.common.WorldLocation;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -13,16 +10,21 @@ import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.springframework.stereotype.Service;
 
 import java.util.*;
 
+@Service
 public class HomeServiceImpl implements HomeService {
-    @DataCRUD
-    DataOperator<HomeEntity> dataOperator;
-    @ConfigEntity("config/config.yml")
-    HomeConfig homeConfig;
-    @Autowired
-    TeleportService teleportService;
+    private final HomeConfig homeConfig;
+    private final DataOperator<HomeEntity> dataOperator;
+    private final TeleportService teleportService;
+
+    public HomeServiceImpl(HomeConfig homeConfig, DataOperator<HomeEntity> dataOperator, TeleportService teleportService) {
+        this.homeConfig = homeConfig;
+        this.dataOperator = dataOperator;
+        this.teleportService = teleportService;
+    }
 
     @Override
     public HomeEntity getHomeByName(UUID playerId, String name) {
@@ -91,9 +93,10 @@ public class HomeServiceImpl implements HomeService {
             return;
         }
         Location location = homeByName.getHomeLocation();
+        int delayTime = homeConfig.getHomeTpWait();
         try {
-            teleportService.teleport(player, location);
-        } catch (Exception ignored) {
+            teleportService.delayTeleport(player, location, delayTime);
+        } catch (Exception ignore) {
             player.teleport(location);
         }
     }

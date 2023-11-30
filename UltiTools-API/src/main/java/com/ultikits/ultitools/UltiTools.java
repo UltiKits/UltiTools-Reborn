@@ -1,6 +1,6 @@
 package com.ultikits.ultitools;
 
-
+import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Language;
@@ -8,15 +8,14 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.*;
-import com.ultikits.ultitools.services.TeleportService;
-import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
-import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
+import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
 import java.util.Arrays;
@@ -30,44 +29,33 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
     private final ListenerManager listenerManager = new ListenerManager();
     private final CommandManager commandManager = new CommandManager();
+    @Getter
     private DataStore dataStore;
+    @Getter
     private VersionWrapper versionWrapper;
+    @Getter
     private Language language;
+    @Getter
     private PluginManager pluginManager;
+    @Getter
     private ConfigManager configManager;
+    @Getter
+    private ClassLoader pluginClassLoader;
     private boolean restartRequired;
     private BukkitAudiences adventure;
+    private AnnotationConfigApplicationContext context;
 
     public static UltiTools getInstance() {
         return ultiTools;
     }
-
     public static int getPluginVersion() {
         return 600;
     }
-
-    public DataStore getDataStore() {
-        return dataStore;
-    }
-
     public void setDataStore(DataStore dataStore) {
         this.dataStore = dataStore;
     }
-
-    public VersionWrapper getVersionWrapper() {
-        return versionWrapper;
-    }
-
-    public Language getLanguage() {
-        return language;
-    }
-
-    public PluginManager getPluginManager() {
-        return pluginManager;
-    }
-
-    public ConfigManager getConfigManager() {
-        return configManager;
+    public AnnotationConfigApplicationContext getContext() {
+        return context;
     }
 
     @Override
@@ -75,7 +63,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         saveDefaultConfig();
         restartRequired = downloadRequiredDependencies();
         if (restartRequired) {
-//            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
+//          Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
         }
     }
@@ -106,27 +94,32 @@ public final class UltiTools extends JavaPlugin implements Localized {
             dataStore = DataStoreManager.getDatastore("json");
         }
 
+        String lanPath = "lang/" + getConfig().getString("language") + ".json";
+        InputStream in = getFileResource(lanPath);
+        String result  = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
+        this.language  = new Language(result);
+
+        pluginClassLoader = getClassLoader();
+        pluginManager     = new PluginManager();
+        context           = new AnnotationConfigApplicationContext();
+
+        context.setClassLoader(pluginClassLoader);
+        context.register(ContextConfig.class);
+        context.refresh();
+        context.registerShutdownHook();
+
         File file = new File(getDataFolder() + File.separator + "plugins");
         if (!file.exists()) {
             file.mkdirs();
         }
         try {
-            pluginManager = new PluginManager();
             pluginManager.init();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
 
-        String lanPath = "lang/" + getConfig().getString("language") + ".json";
-        InputStream in = getFileResource(lanPath);
-        String result = new BufferedReader(new InputStreamReader(in))
-                .lines().collect(Collectors.joining(""));
-        this.language = new Language(result);
-
         getCommandManager().register(new UltiToolsCommands());
         getCommandManager().register(new PluginInstallCommands());
-
-        new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
     }
 
     @Override
@@ -141,6 +134,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         stopEmbedWebServer();
         pluginManager.close();
+        context.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
     }
@@ -252,12 +246,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
             File file = new File(getDataFolder() + "/lib", name);
             if (!file.exists()) {
                 if (!restartRequired) {
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件必要库缺失，正在尝试在线下载...");
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]若下载失败或多次重启均无法启动，请尝试下载包含依赖的版本。");
+                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]Missing required libraries，trying to download...");
+                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]If have problems in downloading，you can download full version.");
                 }
                 restartRequired = true;
                 String url = "https://ultitools.oss-cn-shanghai.aliyuncs.com/lib/" + name;
-                Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载" + url);
+                Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + url);
                 HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
             }
         }

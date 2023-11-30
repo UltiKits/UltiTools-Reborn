@@ -6,6 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 @Retention(RetentionPolicy.RUNTIME)
-@Target(ElementType.FIELD)
-public @interface Autowired {
+@Target(ElementType.TYPE)
+public @interface ContextEntry {
+    Class<?> value();
 }

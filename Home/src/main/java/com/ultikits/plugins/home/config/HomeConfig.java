@@ -1,12 +1,14 @@
 package com.ultikits.plugins.home.config;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
+@ConfigEntity("config/config.yml")
 public class HomeConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "home_normal", comment = "默认玩家权限可以创建的家数量")
     private int homeNormal = 3;

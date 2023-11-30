@@ -5,10 +5,14 @@ import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.TypeReference;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.utils.PackageScanUtils;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * @author wisdomme
@@ -29,6 +33,26 @@ public class ConfigManager {
         }
         configMap.put(configEntity.getConfigFilePath(), configEntity);
         pluginConfigMap.put(configEntity.getUltiToolsPlugin(), configMap);
+    }
+
+    public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
+        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
+                ConfigEntity.class,
+                packageName,
+                classLoader
+        );
+        for (Class<?> clazz : classes) {
+            String path = clazz.getAnnotation(ConfigEntity.class).value();
+            try {
+                AbstractConfigEntity configEntity =
+                        (AbstractConfigEntity) clazz.getDeclaredConstructor(String.class).newInstance(path);
+                register(plugin, configEntity);
+            } catch (InstantiationException    |
+                     InvocationTargetException |
+                     IllegalAccessException    |
+                     NoSuchMethodException ignored) {
+            }
+        }
     }
 
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, Class<T> type) {

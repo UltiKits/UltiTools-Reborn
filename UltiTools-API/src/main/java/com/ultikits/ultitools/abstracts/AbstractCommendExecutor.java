@@ -4,7 +4,9 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
@@ -17,7 +19,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.*;
-import java.util.concurrent.*;
 
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
@@ -60,6 +61,9 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     private Method matchMethod(String[] args) {
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             String format = entry.getKey();
+            if (format.isEmpty() && args.length == 0) {
+                return entry.getValue();
+            }
             String[] formatArgs = format.split(" ");
             String lastArg = formatArgs[formatArgs.length - 1];
             boolean match;
@@ -275,6 +279,22 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                                     cmdParam.value(), value, parameter.getType().getName()
                             ));
                     return null;
+                }
+                if (parameter.getType() == OfflinePlayer.class) {
+                    ParamList.add(Bukkit.getOfflinePlayer(value));
+                    continue;
+                }
+                if (parameter.getType() == Player.class) {
+                    Player player = Bukkit.getPlayerExact(value);
+                    if (player == null) {
+                        commandSender.sendMessage(
+                                ChatColor.RED + String.format(
+                                        UltiTools.getInstance().i18n("玩家 \"%s\" 未找到"),
+                                        cmdParam.value(), value, parameter.getType().getName()
+                                ));
+                        return null;
+                    }
+                    ParamList.add(player);
                 }
                 ParamList.add(value);
             } else {

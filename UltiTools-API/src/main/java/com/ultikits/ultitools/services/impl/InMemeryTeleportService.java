@@ -9,6 +9,7 @@ import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,6 +22,7 @@ import java.util.UUID;
  * @author wisdomme
  * @version 1.0.0
  */
+@Service
 public class InMemeryTeleportService implements TeleportService {
     private final static Map<UUID, Boolean> teleportingPlayers = new HashMap<>();
     private final static Map<UUID, String> locationMap = new HashMap<>();

@@ -6,6 +6,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 @Retention(RetentionPolicy.RUNTIME)
-@Target(ElementType.FIELD)
-public @interface DataCRUD {
+@Target(ElementType.TYPE)
+public @interface EnableAutoRegister {
+    String scanPackage() default "";
+    boolean eventListener() default true;
+    boolean cmdExecutor() default true;
+    boolean config() default true;
 }
