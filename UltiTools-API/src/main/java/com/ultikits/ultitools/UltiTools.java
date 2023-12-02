@@ -9,11 +9,12 @@ import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
-import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -21,6 +22,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import java.io.*;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -62,22 +64,25 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onLoad() {
         saveDefaultConfig();
+        ultiTools = this;
         restartRequired = downloadRequiredDependencies();
         if (restartRequired) {
-//          Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] Libraries downloaded, please restart the server or reload UltiTools!");
+//          Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
         }
     }
 
     @Override
     public void onEnable() {
+        if (restartRequired) {
+            return;
+        }
         // Plugin startup logic
-        ultiTools = this;
         this.adventure = BukkitAudiences.create(this);
         new InventoryAPI(this).init();
         this.versionWrapper = new SpigotVersionManager().match();
         if (this.versionWrapper == null) {
-            Bukkit.getLogger().log(Level.SEVERE, "Your server version isn't supported in UltiTools-API!");
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] Your server version isn't supported in UltiTools-API!");
             return;
         }
         initEmbedWebServer();
@@ -127,13 +132,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onDisable() {
+        if (restartRequired) {
+            return;
+        }
         // Plugin shutdown logic
         if (this.adventure != null) {
             this.adventure.close();
             this.adventure = null;
-        }
-        if (restartRequired) {
-            return;
         }
         stopEmbedWebServer();
         pluginManager.close();
@@ -179,87 +184,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return this.adventure;
     }
 
-    private boolean downloadRequiredDependencies() {
-        List<String> dependencies = Arrays.asList(
-                "advancedslot-4.1.13.jar",
-                "adventure-api-4.13.0.jar",
-                "adventure-key-4.13.0.jar",
-                "adventure-nbt-4.13.0.jar",
-                "adventure-platform-api-4.3.0.jar",
-                "adventure-platform-bukkit-4.3.0.jar",
-                "adventure-platform-facet-4.3.0.jar",
-                "adventure-platform-viaversion-4.3.0.jar",
-                "adventure-text-serializer-bungeecord-4.3.0.jar",
-                "adventure-text-serializer-gson-4.13.0.jar",
-                "adventure-text-serializer-gson-legacy-impl-4.13.0.jar",
-                "adventure-text-serializer-legacy-4.13.0.jar",
-                "annotations-24.0.1.jar",
-                "bukkit-1.13.1-R0.1-SNAPSHOT.jar",
-                "bungeecord-chat-1.16-R0.4.jar",
-                "checker-qual-3.12.0.jar",
-                "commons-lang-2.6.jar",
-                "configurablegui-4.1.13.jar",
-                "core-4.1.13.jar",
-                "error_prone_annotations-2.11.0.jar",
-                "examination-api-1.3.0.jar",
-                "examination-string-1.3.0.jar",
-                "failureaccess-1.0.1.jar",
-                "fastjson-1.2.83.jar",
-                "gson-2.10.jar",
-                "guava-31.1-jre.jar",
-                "hamcrest-core-1.1.jar",
-                "hutool-all-5.8.20.jar",
-                "j2objc-annotations-1.3.jar",
-                "javax.servlet-api-3.1.0.jar",
-                "jetty-client-9.4.48.v20220622.jar",
-                "jetty-http-9.4.48.v20220622.jar",
-                "jetty-io-9.4.48.v20220622.jar",
-                "jetty-security-9.4.48.v20220622.jar",
-                "jetty-server-9.4.48.v20220622.jar",
-                "jetty-servlet-9.4.48.v20220622.jar",
-                "jetty-util-9.4.48.v20220622.jar",
-                "jetty-util-ajax-9.4.48.v20220622.jar",
-                "jetty-webapp-9.4.48.v20220622.jar",
-                "jetty-xml-9.4.48.v20220622.jar",
-                "json-simple-1.1.1.jar",
-                "jsr305-3.0.2.jar",
-                "junit-4.10.jar",
-                "listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar",
-                "lombok-1.18.24.jar",
-                "mysql-connector-j-8.0.33.jar",
-                "obliviate-invs-4.1.13.jar",
-                "obliviate-utils-2.0.5.jar",
-                "pagination-4.1.13.jar",
-                "placeholder-2.0.5.jar",
-                "protobuf-java-3.21.9.jar",
-                "slf4j-api-1.7.25.jar",
-                "snakeyaml-1.33.jar",
-                "spark-core-2.9.4.jar",
-                "spigot-api-1.19.3-R0.1-SNAPSHOT.jar",
-                "string-2.0.5.jar",
-                "VaultAPI-1.7.jar",
-                "version-detection-2.0.5.jar",
-                "websocket-api-9.4.48.v20220622.jar",
-                "websocket-client-9.4.48.v20220622.jar",
-                "websocket-common-9.4.48.v20220622.jar",
-                "websocket-server-9.4.48.v20220622.jar",
-                "websocket-servlet-9.4.48.v20220622.jar"
-        );
-        boolean restartRequired = false;
-        for (String name : dependencies) {
-            File file = new File(getDataFolder() + "/lib", name);
-            if (!file.exists()) {
-                if (!restartRequired) {
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]Missing required libraries，trying to download...");
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]If have problems in downloading，you can download full version.");
-                }
-                restartRequired = true;
-                String url = "https://ultitools.oss-cn-shanghai.aliyuncs.com/lib/" + name;
-                Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + url);
-                HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
-            }
+    public static YamlConfiguration getEnv() {
+        YamlConfiguration config = new YamlConfiguration();
+        try {
+            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
+        } catch (IOException | InvalidConfigurationException e) {
+            throw new RuntimeException(e);
         }
-        return restartRequired;
+        return config;
     }
-
 }

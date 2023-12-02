@@ -26,7 +26,7 @@ public class PluginManager {
     private URLClassLoader urlClassLoader;
 
     public void init() throws IOException {
-        Bukkit.getLogger().log(Level.INFO, "Starting to load UltiTools plugins...");
+        Bukkit.getLogger().log(Level.INFO, "Initiating UltiTools plugins...");
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);

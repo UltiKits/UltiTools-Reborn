@@ -23,7 +23,7 @@ public class DataStoreManager {
     }
 
     public static void close() {
-        Bukkit.getLogger().log(Level.INFO, "正在注销所有数据操作器...");
+        Bukkit.getLogger().log(Level.INFO, "Unregistering all data operators...");
         for (DataStore dataStore : dataMap.values()) {
             dataStore.destroyAllOperators();
         }

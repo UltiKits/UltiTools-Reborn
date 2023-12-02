@@ -96,7 +96,7 @@ public class ConfigManager {
                 try {
                     config.save();
                 } catch (IOException e) {
-                    System.out.println("配置保存失败！文件位置：" + config.getConfigFilePath());
+                    System.out.println("Configuration save failed！File path：" + config.getConfigFilePath());
                 }
             }
         }
