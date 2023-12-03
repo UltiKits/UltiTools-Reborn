@@ -1,7 +1,10 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
@@ -11,7 +14,10 @@ import org.bukkit.plugin.SimplePluginManager;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
+import java.util.Objects;
+import java.util.Set;
 
 public class CommandManager {
 
@@ -30,12 +36,32 @@ public class CommandManager {
         command.unregister(getCommandMap());
     }
 
-    public void register(CommandExecutor commendExecutor) {
-        Class<? extends CommandExecutor> clazz = commendExecutor.getClass();
+    public void registerAll(UltiToolsPlugin plugin, String packageName) {
+        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
+                CmdExecutor.class,
+                packageName,
+                Objects.requireNonNull(plugin.getContext().getClassLoader())
+        );
+        for (Class<?> clazz : classes) {
+            try {
+                AbstractCommendExecutor commandExecutor =
+                        (AbstractCommendExecutor) clazz.getDeclaredConstructor().newInstance();
+                plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
+                register(commandExecutor);
+            } catch (InstantiationException    |
+                     InvocationTargetException |
+                     IllegalAccessException    |
+                     NoSuchMethodException ignored) {
+            }
+        }
+    }
+
+    public void register(CommandExecutor commandExecutor) {
+        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
 
         if (clazz.isAnnotationPresent(CmdExecutor.class)) {
             CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
-            register(commendExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
+            register(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
         } else {
             Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         }

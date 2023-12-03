@@ -11,6 +11,7 @@ import com.ultikits.ultitools.manager.PluginManager;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
 import java.net.JarURLConnection;
@@ -45,23 +46,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private final int minUltiToolsVersion;
     @Getter
     private final String mainClass;
+    @Getter
+    private final AnnotationConfigApplicationContext context;
 
     @SneakyThrows
     public UltiToolsPlugin() {
-        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        URL jar = src.getLocation();
-        String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        URL url = new URL("jar:file:" + path + "!/plugin.yml");
-        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-        InputStream inputStream = jarConnection.getInputStream();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+        InputStream inputStream        = getInputStream();
+        BufferedReader reader          = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-        version = pluginConfig.getString("version");
-        pluginName = pluginConfig.getString("name");
-        authors = pluginConfig.getStringList("authors");
-        loadAfter = pluginConfig.getStringList("loadAfter");
-        minUltiToolsVersion = pluginConfig.getInt("api-version");
-        mainClass = pluginConfig.getString("main");
+        version                        = pluginConfig.getString("version");
+        pluginName                     = pluginConfig.getString("name");
+        authors                        = pluginConfig.getStringList("authors");
+        loadAfter                      = pluginConfig.getStringList("loadAfter");
+        minUltiToolsVersion            = pluginConfig.getInt("api-version");
+        mainClass                      = pluginConfig.getString("mainClass");
+
         inputStream.close();
         reader.close();
 
@@ -77,6 +76,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             language = new Language(file);
         }
         saveResources();
+
+        this.context = new AnnotationConfigApplicationContext();
+    }
+
+    private InputStream getInputStream() throws IOException {
+        CodeSource src                 = this.getClass().getProtectionDomain().getCodeSource();
+        URL jar                        = src.getLocation();
+        String path                    = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
+        URL url                        = new URL("jar:file:" + path + "!/plugin.yml");
+        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+        return jarConnection.getInputStream();
     }
 
     public static ConfigManager getConfigManager() {

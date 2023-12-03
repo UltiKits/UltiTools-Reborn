@@ -14,7 +14,6 @@ import java.util.UUID;
 
 public class BankServiceImpl implements BankService {
 
-
     @Override
     public String getName() {
         return "Economy-Bank-Service";

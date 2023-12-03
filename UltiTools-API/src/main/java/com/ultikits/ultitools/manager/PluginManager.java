@@ -3,13 +3,15 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ContextEntry;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.interfaces.IPlugin;
-import com.ultikits.ultitools.interfaces.Registrable;
 import lombok.Getter;
 import org.bukkit.Bukkit;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.*;
@@ -18,12 +20,13 @@ import java.util.jar.JarFile;
 import java.util.logging.Level;
 
 public class PluginManager {
-    private final Map<String, List<Registrable>> registeredService = new HashMap<>();
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
+    private URLClassLoader urlClassLoader;
+
     public void init() throws IOException {
-        Bukkit.getLogger().log(Level.INFO, "正在加载UltiTools拓展插件...");
+        Bukkit.getLogger().log(Level.INFO, "Initiating UltiTools plugins...");
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -39,7 +42,7 @@ public class PluginManager {
         }
 
         // 将jar文件组成数组，来创建一个URLClassLoader
-        URLClassLoader urlClassLoader = new URLClassLoader(urls, PluginManager.class.getClassLoader());
+        urlClassLoader = new URLClassLoader(urls, UltiTools.getInstance().getPluginClassLoader());
         for (File file : plugins) {
             try (JarFile jarFile = new JarFile(file)) {
                 Enumeration<JarEntry> entryEnumeration = jarFile.entries();
@@ -47,115 +50,126 @@ public class PluginManager {
                     // 获取JarEntry对象
                     JarEntry entry = entryEnumeration.nextElement();
                     // 获取当前JarEntry对象的路径+文件名
-                    if (entry.getName().contains(".class") && !entry.getName().contains("META-INF")) {
-                        try {
-                            Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
-                            if (IPlugin.class.isAssignableFrom(aClass)) {
-                                UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.newInstance();
-                                if (plugin.getPluginName() != null) {
-                                    pluginList.add(plugin);
-                                }
-                            }
-                        } catch (NoClassDefFoundError ignored) {
+                    if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
+                        continue;
+                    }
+                    try {
+                        Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
+                        if (!IPlugin.class.isAssignableFrom(aClass)) {
+                            continue;
                         }
+                        UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.getDeclaredConstructor().newInstance();
+                        if (plugin.getPluginName() != null) {
+                            pluginList.add(plugin);
+                        }
+                    } catch (NoClassDefFoundError | InvocationTargetException | NoSuchMethodException ignored) {
                     }
                 }
             } catch (ClassNotFoundException | InstantiationException | IllegalAccessException ignored) {
             }
         }
-        urlClassLoader.close();
         int success = 0;
         if (pluginList.isEmpty()) {
-            Bukkit.getLogger().log(Level.INFO, "未发现任何UltiTools拓展插件！");
+            Bukkit.getLogger().log(Level.INFO, "No UltiTools plugins found.");
             return;
         }
-        Bukkit.getLogger().log(Level.INFO, String.format("发现%d个UltiTools拓展插件！", pluginList.size()));
+        Bukkit.getLogger().log(Level.INFO, String.format("%d UltiTools plugins found.", pluginList.size()));
         for (int i = 0; i < pluginList.size(); i++) {
-            Bukkit.getLogger().log(Level.INFO, String.format("正在加载第%d个插件...", i + 1));
+            Bukkit.getLogger().log(Level.INFO, String.format("Now loading plugin %d", i + 1));
             UltiToolsPlugin plugin = pluginList.get(i);
             if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！UltiTools版本过旧！", plugin.getPluginName()));
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！UltiTools version is outdated！", plugin.getPluginName()));
                 continue;
             }
             try {
-                List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();
-                for (AbstractConfigEntity configEntity : allConfigs) {
-                    UltiToolsPlugin.getConfigManager().register(plugin, configEntity);
+                EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
+                if (annotation != null && annotation.config()) {
+                    UltiTools.getInstance().getConfigManager().registerAll(
+                            plugin,
+                            annotation.scanPackage().isEmpty() ?
+                                    plugin.getClass().getPackage().getName() :
+                                    annotation.scanPackage(),
+                            urlClassLoader
+                    );
+                } else {
+                    List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();
+                    for (AbstractConfigEntity configEntity : allConfigs) {
+                        UltiToolsPlugin.getConfigManager().register(plugin, configEntity);
+                    }
                 }
+                initPluginContext(plugin);
                 boolean registerSelf = plugin.registerSelf();
+                initAutoRegister(plugin);
                 if (registerSelf) {
                     success += 1;
-                    Bukkit.getLogger().log(Level.INFO, String.format("%s插件加载成功！版本%s。", plugin.getPluginName(), plugin.getVersion()));
+                    Bukkit.getLogger().log(Level.INFO, String.format("%s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
                 } else {
-                    Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！版本%s。", plugin.getPluginName(), plugin.getVersion()));
+                    plugin.getContext().close();
+                    Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
                 }
             } catch (Exception e) {
-                e.printStackTrace();
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s插件加载失败！", plugin.getPluginName()));
+                Bukkit.getLogger().log(Level.WARNING, e, String::new);
+                Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！", plugin.getPluginName()));
             }
         }
-        Bukkit.getLogger().log(Level.INFO, String.format("成功加载%d个插件！失败%d个！", success, pluginList.size() - success));
+        Bukkit.getLogger().log(Level.INFO, String.format("Successfully loaded %d plugins! Failed %d!", success, pluginList.size() - success));
     }
 
     public void close() {
-        Bukkit.getLogger().log(Level.INFO, "正在注销所有插件...");
+        Bukkit.getLogger().log(Level.INFO, "Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
+            UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
             plugin.unregisterSelf();
+            plugin.getContext().close();
         }
         pluginList.clear();
-        registeredService.clear();
+        try {
+            urlClassLoader.close();
+        } catch (IOException ignored) {
+        }
     }
 
     public void reload() {
-        Bukkit.getLogger().log(Level.INFO, "正在重载所有插件...");
+        Bukkit.getLogger().log(Level.INFO, "Reloading all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
             plugin.reloadSelf();
         }
-        Bukkit.getLogger().log(Level.INFO, "重载所有插件完成！");
-        Bukkit.getLogger().log(Level.WARNING, "此重载仅用于重载插件模块配置，若卸载或添加请重新启动服务器！");
+        Bukkit.getLogger().log(Level.INFO, "All plugins reloaded.");
+        Bukkit.getLogger().log(Level.WARNING, "This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!");
     }
 
-    public synchronized boolean register(Class<? extends Registrable> api, Registrable impl) {
-        if (!registeredService.containsKey(api.getName())) {
-            List<Registrable> registrables = new ArrayList<>();
-            registeredService.put(api.getName(), registrables);
+    private void initPluginContext(UltiToolsPlugin plugin) {
+        plugin.getContext().setParent(UltiTools.getInstance().getContext());
+        plugin.getContext().registerShutdownHook();
+        plugin.getContext().setClassLoader(urlClassLoader);
+        if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
+            Class<?> contextEntry = plugin.getClass().getAnnotation(ContextEntry.class).value();
+            plugin.getContext().register(contextEntry);
+            plugin.getContext().refresh();
+            plugin.getContext().getAutowireCapableBeanFactory().autowireBean(plugin);
         }
-        List<Registrable> classes = registeredService.get(api.getName());
-        if (!classes.contains(impl)) {
-            classes.add(impl);
-        }
-        registeredService.put(api.getName(), classes);
-        return true;
     }
 
-    public synchronized void unregister(Class<? extends Registrable> api, Registrable impl) {
-        if (!registeredService.containsKey(api.getName())) {
-            List<Registrable> registrables = new ArrayList<>();
-            registeredService.put(api.getName(), registrables);
+    private void initAutoRegister(UltiToolsPlugin plugin) {
+        if (!plugin.getClass().isAnnotationPresent(EnableAutoRegister.class)) {
             return;
         }
-        List<Registrable> classes = registeredService.get(api.getName());
-        classes.remove(impl);
-        registeredService.put(api.getName(), classes);
-    }
-
-    public <T extends Registrable> Optional<T> getService(Class<T> service) {
-        return getService(service, 0);
-    }
-
-    public <T extends Registrable> Optional<T> getService(Class<T> service, int index) {
-        List<Registrable> registrables = registeredService.get(service.getName());
-        Registrable registrable = registrables.get(index);
-        return Optional.of(service.cast(registrable));
-    }
-
-    public <T extends Registrable> Optional<T> getService(Class<T> service, String clazzName) {
-        List<Registrable> registrables = registeredService.get(service.getName());
-        for (Registrable registrable : registrables) {
-            if (registrable.getClass().getName().equals(clazzName)) {
-                return Optional.of(service.cast(registrable));
-            }
+        EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
+        if (annotation.cmdExecutor()) {
+            UltiTools.getInstance().getCommandManager().registerAll(
+                    plugin,
+                    annotation.scanPackage().isEmpty() ?
+                            plugin.getClass().getPackage().getName() :
+                            annotation.scanPackage()
+            );
         }
-        return Optional.empty();
+        if (annotation.eventListener()) {
+            UltiTools.getInstance().getListenerManager().registerAll(
+                    plugin,
+                    annotation.scanPackage().isEmpty() ?
+                            plugin.getClass().getPackage().getName() :
+                            annotation.scanPackage()
+            );
+        }
     }
 }

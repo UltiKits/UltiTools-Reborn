@@ -1,4 +1,4 @@
-package com.ultikits.plugins.home.entity;
+package com.ultikits.ultitools.entities.common;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;

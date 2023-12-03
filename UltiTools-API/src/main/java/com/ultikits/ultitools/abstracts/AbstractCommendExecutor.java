@@ -4,7 +4,9 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
@@ -17,7 +19,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.*;
-import java.util.concurrent.*;
 
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
@@ -60,6 +61,9 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     private Method matchMethod(String[] args) {
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             String format = entry.getKey();
+            if (format.isEmpty() && args.length == 0) {
+                return entry.getValue();
+            }
             String[] formatArgs = format.split(" ");
             String lastArg = formatArgs[formatArgs.length - 1];
             boolean match;
@@ -276,6 +280,22 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                             ));
                     return null;
                 }
+                if (parameter.getType() == OfflinePlayer.class) {
+                    ParamList.add(Bukkit.getOfflinePlayer(value));
+                    continue;
+                }
+                if (parameter.getType() == Player.class) {
+                    Player player = Bukkit.getPlayerExact(value);
+                    if (player == null) {
+                        commandSender.sendMessage(
+                                ChatColor.RED + String.format(
+                                        UltiTools.getInstance().i18n("玩家 \"%s\" 未找到"),
+                                        cmdParam.value(), value, parameter.getType().getName()
+                                ));
+                        return null;
+                    }
+                    ParamList.add(player);
+                }
                 ParamList.add(value);
             } else {
                 ParamList.add(null);
@@ -337,24 +357,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, 20L);
     }
 
-    private void setTimeout(BukkitRunnable bukkitRunnable, Method method, CommandSender commandSender) {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
-        if (!method.isAnnotationPresent(CmdTimeout.class)) {
-            executor.schedule(() -> {
-                bukkitRunnable.cancel(); // 取消任务
-                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
-            }, 3, TimeUnit.SECONDS);
-            executor.shutdown();
-        }
-        CmdTimeout cmdTimeout = method.getAnnotation(CmdTimeout.class);
-        if (cmdTimeout.enable()) {
-            executor.schedule(() -> {
-                bukkitRunnable.cancel(); // 取消任务
-                commandSender.sendMessage(ChatColor.RED + "命令执行超时");
-            }, 3, TimeUnit.SECONDS);
-            executor.shutdown();
-        }
-    }
 
     abstract protected void handleHelp(CommandSender sender);
 
@@ -362,7 +364,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("指令执行错误，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
     }
 
-    protected List<String> suggest(String[] strings) {
+    protected List<String> suggest(Player player, String[] strings) {
         List<String> completions = new ArrayList<>();
 
         if (strings.length == 0) {
@@ -451,7 +453,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         } else {
             bukkitRunnable.runTask(UltiTools.getInstance());
         }
-        setTimeout(bukkitRunnable, method, commandSender);
         return true;
     }
 
@@ -469,6 +470,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE)) {
             return null;
         }
-        return suggest(strings);
+        return suggest((Player) commandSender, strings);
     }
 }

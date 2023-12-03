@@ -1,6 +1,6 @@
 package com.ultikits.ultitools.services;
 
-import com.ultikits.ultitools.interfaces.Registrable;
+import com.ultikits.ultitools.interfaces.BaseService;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
@@ -13,7 +13,7 @@ import java.util.UUID;
  * @author wisdomme
  * @version 1.0.0
  */
-public interface TeleportService extends Registrable {
+public interface TeleportService extends BaseService {
     /**
      * 立即传送玩家
      *
