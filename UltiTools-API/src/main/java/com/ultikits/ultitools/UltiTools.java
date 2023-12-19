@@ -1,5 +1,8 @@
 package com.ultikits.ultitools;
 
+import cn.hutool.core.util.IdUtil;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
@@ -20,6 +23,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -126,7 +130,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         getCommandManager().register(new UltiToolsCommands());
         getCommandManager().register(new PluginInstallCommands());
-      
+
         Bukkit.getServicesManager().register(PluginManager.class, this.pluginManager, this, ServicePriority.Normal);
     }
 
@@ -192,5 +196,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new RuntimeException(e);
         }
         return config;
+    }
+
+    public static String getUltiToolsUUID() throws IOException {
+        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
+        JSON json = new cn.hutool.json.JSONObject();
+        if (dataFile.exists()) {
+            json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
+        } else {
+            json.putByPath("uuid", IdUtil.simpleUUID());
+            json.write(new FileWriter(dataFile));
+        }
+        return json.getByPath("uuid").toString();
     }
 }

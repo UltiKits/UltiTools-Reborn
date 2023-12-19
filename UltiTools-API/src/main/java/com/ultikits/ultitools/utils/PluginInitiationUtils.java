@@ -35,7 +35,7 @@ public class PluginInitiationUtils {
                 Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] If have problems in downloading，you can download full version.");
             }
             restartRequired = true;
-            String url = env.getString("url") + env.getString("lib-path") + name;
+            String url = env.getString("oss-url") + env.getString("lib-path") + name;
             Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + url);
             HttpDownloadUtils.download(url, name, UltiTools.getInstance().getDataFolder() + "/lib");
         }
@@ -43,15 +43,6 @@ public class PluginInitiationUtils {
     }
 
     public static void loginAccount() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        JSON json = new cn.hutool.json.JSONObject();
-        if (dataFile.exists()) {
-            json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
-        } else {
-            json.putByPath("uuid", IdUtil.simpleUUID());
-            json.write(new FileWriter(dataFile));
-        }
-
         String username = UltiTools.getInstance().getConfig().getString("account.username");
         String password = UltiTools.getInstance().getConfig().getString("account.password");
         boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
@@ -60,7 +51,7 @@ public class PluginInitiationUtils {
         }
 
         TokenEntity token = HttpRequestUtils.getToken(username, password);
-        String uuid = json.getByPath("uuid").toString();
+        String uuid = UltiTools.getUltiToolsUUID();
         HttpResponse uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token);
         int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
         String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
@@ -69,11 +60,13 @@ public class PluginInitiationUtils {
             if (!registerResponse.isOk()) {
                 Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
             }
+            registerResponse.close();
         } else {
             HttpResponse registerResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token);
             if (!registerResponse.isOk()) {
                 Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
             }
+            registerResponse.close();
         }
     }
 

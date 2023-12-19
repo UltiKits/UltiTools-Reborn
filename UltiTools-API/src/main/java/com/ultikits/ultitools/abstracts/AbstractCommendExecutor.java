@@ -231,7 +231,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             return false;
         }
         Player player = (Player) sender;
-        if(CmdCoolDown.containsKey(player.getUniqueId())) {
+        if (CmdCoolDown.containsKey(player.getUniqueId())) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("操作频繁，请稍后再试"));
             return true;
         }
@@ -246,7 +246,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
         List<Object> ParamList = new ArrayList<>();
         for (Parameter parameter : parameters) {
-            if (parameter.getType().equals(Player.class) ) {
+            if (parameter.getType().equals(Player.class)) {
                 Player player = (Player) commandSender;
                 ParamList.add(parameter.isAnnotationPresent(CmdSender.class) ? player : null);
                 continue;
@@ -275,7 +275,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 } catch (NumberFormatException e) {
                     commandSender.sendMessage(
                             ChatColor.RED + String.format(
-                                    UltiTools.getInstance().i18n("参数 \"%s\" 格式错误：\"%s\" 不是一个有效的 %s 类型"),
+                                    UltiTools.getInstance().i18n("参数 '%s' 格式错误：'%s' 不是一个有效的 %s 类型"),
                                     cmdParam.value(), value, parameter.getType().getName()
                             ));
                     return null;
@@ -345,6 +345,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         CmdCoolDown.put(player.getUniqueId(), method);
         new BukkitRunnable() {
             int time = cmdCD.value();
+
             @Override
             public void run() {
                 if (time > 0) {
@@ -383,13 +384,13 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return completions;
     }
 
-    protected String getHelpCommand(){
+    protected String getHelpCommand() {
         return "help";
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender commandSender, @NotNull Command command, @NotNull String s, @NotNull String[] strings) {
-        if (strings.length == 1 && getHelpCommand().equals(strings[0])){
+        if (strings.length == 1 && getHelpCommand().equals(strings[0])) {
             handleHelp(commandSender);
             return true;
         }
@@ -399,13 +400,13 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             handleHelp(commandSender);
             return true;
         }
-        if (!checkSender(commandSender) && !checkSender(commandSender, method)) {
+        if (!checkSender(commandSender) || !checkSender(commandSender, method)) {
             return true;
         }
-        if (!checkPermission(commandSender) && !checkPermission(commandSender, method)) {
+        if (!checkPermission(commandSender) || !checkPermission(commandSender, method)) {
             return true;
         }
-        if (!checkOp(commandSender) && !checkOp(commandSender, method)) {
+        if (!checkOp(commandSender) || !checkOp(commandSender, method)) {
             return true;
         }
         if (checkLock(commandSender, method)) {

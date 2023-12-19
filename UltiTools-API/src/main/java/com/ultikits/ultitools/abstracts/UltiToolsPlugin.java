@@ -50,7 +50,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private final AnnotationConfigApplicationContext context;
 
     @SneakyThrows
-    public UltiToolsPlugin() {
+    public UltiToolsPlugin(){
         InputStream inputStream        = getInputStream();
         BufferedReader reader          = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
@@ -60,7 +60,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         loadAfter                      = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion            = pluginConfig.getInt("api-version");
         mainClass                      = pluginConfig.getString("mainClass");
-
         inputStream.close();
         reader.close();
 
@@ -72,6 +71,34 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             String result = new BufferedReader(new InputStreamReader(in))
                     .lines().collect(Collectors.joining(""));
             language = new Language(result);
+        } else {
+            language = new Language(file);
+        }
+        saveResources();
+
+        this.context = new AnnotationConfigApplicationContext();
+    }
+
+    @SneakyThrows
+    public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
+        this.pluginName = pluginName;
+        this.version = version;
+        this.authors = authors;
+        this.loadAfter = loadAfter;
+        this.minUltiToolsVersion = minUltiToolsVersion;
+        this.mainClass = mainClass;
+        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
+        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");
+        if (!file.exists()) {
+            String lanPath = "lang/" + this.getLanguageCode() + ".json";
+            InputStream in = getResource(lanPath);
+            if (in != null) {
+                String result = new BufferedReader(new InputStreamReader(in))
+                        .lines().collect(Collectors.joining(""));
+                language = new Language(result);
+            }else {
+                language = new Language("{}");
+            }
         } else {
             language = new Language(file);
         }
@@ -165,7 +192,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     private InputStream getResource(String filename) {
         try {
-            return this.getClass().getClassLoader().getResource(filename).openStream();
+            URL resource = this.getClass().getClassLoader().getResource(filename);
+            if (resource == null) {
+                return null;
+            }
+            return resource.openStream();
         } catch (IOException ex) {
             return null;
         }
