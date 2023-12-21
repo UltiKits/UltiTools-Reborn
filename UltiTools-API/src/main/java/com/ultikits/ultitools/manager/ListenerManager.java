@@ -27,7 +27,7 @@ public class ListenerManager {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 EventListener.class,
                 packageName,
-                Objects.requireNonNull(plugin.getContext().getClassLoader())
+                Objects.requireNonNull(plugin.getClass().getClassLoader())
         );
         for (Class<?> clazz : classes) {
             try {

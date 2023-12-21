@@ -40,7 +40,7 @@ public class CommandManager {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
                 packageName,
-                Objects.requireNonNull(plugin.getContext().getClassLoader())
+                Objects.requireNonNull(plugin.getClass().getClassLoader())
         );
         for (Class<?> clazz : classes) {
             try {
@@ -48,9 +48,9 @@ public class CommandManager {
                         (AbstractCommendExecutor) clazz.getDeclaredConstructor().newInstance();
                 plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
                 register(commandExecutor);
-            } catch (InstantiationException    |
+            } catch (InstantiationException |
                      InvocationTargetException |
-                     IllegalAccessException    |
+                     IllegalAccessException |
                      NoSuchMethodException ignored) {
             }
         }

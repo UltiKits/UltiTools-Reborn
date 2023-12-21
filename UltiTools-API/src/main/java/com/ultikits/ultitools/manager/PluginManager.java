@@ -102,7 +102,7 @@ public class PluginManager {
                         annotation.scanPackage().isEmpty() ?
                                 plugin.getClass().getPackage().getName() :
                                 annotation.scanPackage(),
-                        urlClassLoader
+                        plugin.getClass().getClassLoader()
                 );
             } else {
                 List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();

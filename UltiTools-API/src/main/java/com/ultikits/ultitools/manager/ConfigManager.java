@@ -47,9 +47,9 @@ public class ConfigManager {
                 AbstractConfigEntity configEntity =
                         (AbstractConfigEntity) clazz.getDeclaredConstructor(String.class).newInstance(path);
                 register(plugin, configEntity);
-            } catch (InstantiationException    |
+            } catch (InstantiationException |
                      InvocationTargetException |
-                     IllegalAccessException    |
+                     IllegalAccessException |
                      NoSuchMethodException ignored) {
             }
         }
