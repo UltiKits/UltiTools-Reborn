@@ -31,6 +31,11 @@ public class CommandManager {
         command.setExecutor(commandExecutor);
     }
 
+    public void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor) {
+        plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
+        register(commandExecutor);
+    }
+
     public void unregister(String name) {
         PluginCommand command = getCommand(name, UltiTools.getInstance());
         command.unregister(getCommandMap());
@@ -46,7 +51,6 @@ public class CommandManager {
             try {
                 AbstractCommendExecutor commandExecutor =
                         (AbstractCommendExecutor) clazz.getDeclaredConstructor().newInstance();
-                plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
                 register(commandExecutor);
             } catch (InstantiationException |
                      InvocationTargetException |
