@@ -1,16 +1,18 @@
 <br>
 <br>
 
-<center>
+<div align="center">
 <img src="https://www.freeimg.cn/i/2023/12/24/65883862cbd7d.png" width="96" height="96"/>
-</center>
+</div>
 
 <h1 align="center">UltiTools 6</h1>
 
-<center><strong>UltiTools' Reborn</strong></center>
+<div align="center"><strong>UltiTools' Reborn</strong></div>
 
----
-<center>
+<br>
+<br>
+
+<div align="center">
 <img alt="GitHub License" src="https://img.shields.io/github/license/ultikits/ultitools-reborn?style=flat-square"/>
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/wisdommen/UltiTools?style=flat-square"/>
@@ -21,28 +23,21 @@
 <img alt="wakatime" src="https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub issues" src="https://img.shields.io/github/issues/wisdommen/UltiTools?style=flat-square"/>
-</center>
+</div>
 
 ---
 
-<div style="vertical-align: center; display: flex; align-items: center">
-<a href="https://discord.gg/6TVRRF47">
-<img alt="wakatime" src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"/>
-</a>
-<p style="margin-left: 1rem">👈 点击左侧按钮加入官方 Discord 服务器！</p>
+<div align="center">
+
+| [![discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/6TVRRF47) | 👈 点击左侧按钮加入官方 Discord 服务器！ | 点击右侧按钮加入官方 QQ 群！ 👉 | [![discord](https://img.shields.io/badge/Tencent_QQ-EB1923?style=for-the-badge&logo=TencentQQ&logoColor=white)](https://qm.qq.com/cgi-bin/qm/qr?k=UNq3LPCmpfH2aLum7V0GmMRFBusNxqxn&jump_from=webapi) |
+|-----------------------------------------------------------------------------------------------------------------------------------------|----------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+
 </div>
 
-<div style="float: right; display: flex; align-items: center">
-<p style="margin-right: 1rem">点击右侧按钮加入官方 QQ 群！ 👉 </p>
-<a href="https://qm.qq.com/cgi-bin/qm/qr?k=UNq3LPCmpfH2aLum7V0GmMRFBusNxqxn&jump_from=webapi">
-<img alt="wakatime" src="https://img.shields.io/badge/Tencent_QQ-EB1923?style=for-the-badge&logo=TencentQQ&logoColor=white"/>
-</a>
-</div>
+
 
 <br>
 <br>
-
----
 
 ## 给各位服主的介绍
 
@@ -61,9 +56,6 @@ UltiTools是一个高层的基础插件，包含了很多GUI和高级的玩法�
 希望我的插件能够帮到你的插件开发！
 
 UltiTools包含了不少实用的API，方便你快速的开发自己的插件。
-
-<details>
-<summary>快速开始</summary>
 
 数据存储方面，UltiTools提供了Mysql和Json的封装API，让你无需考虑用户会使用哪种数据存储方式。
 
@@ -145,7 +137,10 @@ UltiTools也提供了Adventure的API。
 
 更多内容请查看 [UltiTools API 文档](https://doc.dev.ultikits.com/)
 
-## 快速开始
+<details>
+<summary>快速开始</summary>
+
+### 快速开始
 
 首先将UltiTools-API依赖加入到你的项目
 
@@ -181,7 +176,7 @@ authors: [ wisdomme ]
 ```
 新建一个config文件夹，里面可以按照你的需求放入你的插件配置文件。这些配置文件会被原封不动的放入UltiTools插件的集体配置文件夹中展示给用户。
 
-## 简单开发
+### 简单开发
 
 新建一个主类继承UltiToolsPlugin，类似传统的Spigot插件，UltiTools插件也需要重写启动和关闭方法。
 但是UltiToolsPlugin增加了一个可选的```UltiToolsPlugin#reloadSelf()```方法，用于插件重载时执行。
@@ -250,9 +245,8 @@ public List<AbstractConfigEntity> getAllConfigs() {
 
 </details>
 
-更多内容可访问 [UltiTools API 开发文档](https://doc.dev.ultikits.com)
-
----
+<br>
+<br>
 
 ## WakaTime 统计
 
@@ -265,7 +259,8 @@ public List<AbstractConfigEntity> getAllConfigs() {
 <img alt="wakatime week" src="https://wakatime.com/share/@wisdomme/bf0d9440-52ee-41b6-9df9-03fae3ae86dc.svg"/>
 </details>
 
----
+<br>
+<br>
 
 ## 主要贡献者
 | 贡献者                                              | 描述                                      |
@@ -279,38 +274,14 @@ public List<AbstractConfigEntity> getAllConfigs() {
 ## 发现问题？想提建议？
 [点击这里提交开启一个Issue！](https://github.com/wisdommen/UltiTools/issues/new/choose)
 
-## 赞助
-
-[![piHMYTA.png](https://s11.ax1x.com/2023/12/24/piHMYTA.png)](https://afdian.net/a/ultikits)
 
 ## 鸣谢
 
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white"/>
-<p style="margin-left: 1rem">记录了我们开发途中的每一刻</p>
-</div>
-
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white"/>
-<p style="margin-left: 1rem">地表最强 Java IDE 助力愉悦开发体验</p>
-</div>
-
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white"/>
-<p style="margin-left: 1rem">帮助解决了许多重复且枯燥的工作</p>
-</div>
-
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white"/>
-<p style="margin-left: 1rem">为插件带来了许多黑科技</p>
-</div>
-
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white"/>
-<p style="margin-left: 1rem">官方构建工具</p>
-</div>
-
-<div style="vertical-align: center; display: flex; align-items: center">
-<img alt="wakatime" src="https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16"/>
-<p style="margin-left: 1rem">官方内置 HTTP 服务端</p>
-</div>
+|                                                                                                                           |                        |
+|---------------------------------------------------------------------------------------------------------------------------|------------------------|
+| ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | 记录了我们开发途中的每一刻          |
+| ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | 地表最强 Java IDE 助力愉悦开发体验 |
+| ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | 帮助解决了许多重复且枯燥的工作        |
+| ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | 为插件带来了许多黑科技            |
+| ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | 官方构建工具                 |
+| ![wakatime](https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16)      | 官方内置 HTTP 服务端          |
