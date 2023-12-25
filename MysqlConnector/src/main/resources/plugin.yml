@@ -1,4 +1,4 @@
-name: UltiTools-MysqlConnector
+name: MysqlConnector
 version: '${project.version}'
 main: com.ultikits.plugins.mysqlconnector.MysqlConnector
 api-version: 600

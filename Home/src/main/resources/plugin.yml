@@ -1,5 +1,6 @@
 name: UltiTools-Home
 version: '${project.version}'
 main: com.ultikits.plugins.home.PluginMain
+base-package: com.ultikits.plugins.home
 api-version: 600
 authors: [ wisdomme ]

@@ -1,8 +1,7 @@
 package com.ultikits.plugins.economy.apis;
 
 import com.ultikits.plugins.economy.entity.AccountEntity;
-import com.ultikits.ultitools.interfaces.Registrable;
-import org.bukkit.OfflinePlayer;
+import com.ultikits.ultitools.interfaces.BaseService;
 
 import java.util.List;
 import java.util.UUID;
@@ -10,7 +9,7 @@ import java.util.UUID;
 /**
  * The interface Bank service.
  */
-public interface BankService extends Registrable {
+public interface BankService extends BaseService {
 
     boolean playerHasAccount(UUID player, String name);
 

@@ -1,4 +1,4 @@
-name: UltiTools-SidebarPlugin
+name: Sidebar
 version: '${project.version}'
 main: com.ultikits.plugins.sidebar.SidebarPlugin
 api-version: 600

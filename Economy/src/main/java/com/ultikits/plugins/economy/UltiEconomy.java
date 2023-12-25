@@ -16,8 +16,7 @@ import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.ServicePriority;
 
-import java.io.IOException;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.bukkit.Bukkit.getServer;
@@ -34,7 +33,7 @@ public final class UltiEconomy extends UltiToolsPlugin {
     }
 
     @Override
-    public boolean registerSelf() throws IOException {
+    public boolean registerSelf() {
         economy = this;
         vault = new VaultImpl();
         bank = new BankServiceImpl();
@@ -44,8 +43,8 @@ public final class UltiEconomy extends UltiToolsPlugin {
             new UltiEconomyExpansion().register();
         }
 
-        getCommandManager().register(new MoneyCommand(), "", "Money", "money");
-        getCommandManager().register(new BankCommand(), "", "Bank", "bank");
+        getCommandManager().register(new MoneyCommand());
+        getCommandManager().register(new BankCommand());
         getListenerManager().register(this, new JoinListener());
 
         new InterestTask().runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, getConfig(EcoConfig.class).getInterestTime() * 20L * 60);
@@ -59,8 +58,8 @@ public final class UltiEconomy extends UltiToolsPlugin {
 
     @Override
     public List<AbstractConfigEntity> getAllConfigs() {
-        return Arrays.asList(
-                new EcoConfig("res/config/config.yml")
+        return Collections.singletonList(
+                new EcoConfig("config/config.yml")
         );
     }
 }

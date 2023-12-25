@@ -4,6 +4,7 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
 import com.alibaba.fastjson.JSONObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.entities.vo.ServerEntityVO;
 
@@ -11,7 +12,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class HttpRequestUtils {
-    private static final String BASE_URL = "https://api.v2.ultikits.com";
+    private static final String BASE_URL = UltiTools.getEnv().getString("api-url");
 
     public static TokenEntity getToken(String username, String password) {
         Map<String, Object> paramMap = new HashMap<>();

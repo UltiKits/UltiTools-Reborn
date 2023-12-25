@@ -4,7 +4,6 @@ import com.ultikits.plugins.home.PluginMain;
 import com.ultikits.plugins.home.entity.HomeEntity;
 import com.ultikits.plugins.home.services.HomeService;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.guis.PagingPage;
 import com.ultikits.ultitools.entities.Colors;
 import mc.obliviate.inventory.Icon;
@@ -18,7 +17,6 @@ import org.bukkit.entity.Player;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 
 public class HomeListGui extends PagingPage {
     private final List<Colors> beds = Arrays.asList(Colors.values());
@@ -32,11 +30,7 @@ public class HomeListGui extends PagingPage {
                         .color(TextColor.color(0xFF00A6)),
                 3
         );
-        Optional<HomeService> service = UltiToolsPlugin.getPluginManager().getService(HomeService.class);
-        if (!service.isPresent()) {
-            throw new RuntimeException("未找到家服务！");
-        }
-        home = service.get();
+        home = PluginMain.getPluginMain().getContext().getBean(HomeService.class);
     }
 
     @Override

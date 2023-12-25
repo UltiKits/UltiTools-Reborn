@@ -1,13 +1,13 @@
 package com.ultikits.plugins.home.services;
 
 import com.ultikits.plugins.home.entity.HomeEntity;
-import com.ultikits.ultitools.interfaces.Registrable;
+import com.ultikits.ultitools.interfaces.BaseService;
 import org.bukkit.entity.Player;
 
 import java.util.List;
 import java.util.UUID;
 
-public interface HomeService extends Registrable {
+public interface HomeService extends BaseService {
 
     /**
      * 使用玩家UUID和家的名字获取到一个具体的家对象

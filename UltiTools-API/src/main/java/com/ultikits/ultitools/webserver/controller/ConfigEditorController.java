@@ -4,6 +4,9 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.webserver.service.ConfigEditorService;
 import com.ultikits.ultitools.webserver.service.impl.ConfigEditorServiceImpl;
 import com.ultikits.ultitools.webserver.wrapper.ResultWrapper;
+import org.bukkit.Bukkit;
+
+import java.util.logging.Level;
 
 import static spark.Spark.*;
 
@@ -13,6 +16,7 @@ public class ConfigEditorController {
     public void init() {
         path("/config", () -> {
             before("/*", (request, response) -> {
+                Bukkit.getLogger().log(Level.INFO, "Get connection from: " + request.ip() + " access to " + request.uri());
                 if (!request.ip().equals("47.242.179.141") &&
                         !UltiTools.getInstance().getConfig().getStringList("web-editor.trustIp")
                                 .contains(request.ip())) {

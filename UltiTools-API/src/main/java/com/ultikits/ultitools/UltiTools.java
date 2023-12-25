@@ -1,6 +1,10 @@
 package com.ultikits.ultitools;
 
-
+import cn.hutool.core.util.IdUtil;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONUtil;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Language;
@@ -8,172 +12,252 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.*;
-import com.ultikits.ultitools.services.TeleportService;
-import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
-import com.ultikits.ultitools.services.registers.TeleportServiceRegister;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
-import com.ultikits.ultitools.utils.HttpDownloadUtils;
+import lombok.Getter;
+import lombok.Setter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import static com.ultikits.ultitools.utils.PluginInitiationUtils.*;
 
+/**
+ * UltiTools plugin main class.
+ *
+ * @author wisdommen, qianmo
+ * @version 6.0.1
+ */
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
+    @Getter
     private final ListenerManager listenerManager = new ListenerManager();
+    @Getter
     private final CommandManager commandManager = new CommandManager();
-    private DataStore dataStore;
+    @Getter
     private VersionWrapper versionWrapper;
+    @Getter
     private Language language;
+    @Getter
     private PluginManager pluginManager;
+    @Getter
     private ConfigManager configManager;
+    @Getter
+    private ClassLoader pluginClassLoader;
+    @Getter
+    private AnnotationConfigApplicationContext context;
+    @Getter
+    @Setter
+    private DataStore dataStore;
     private boolean restartRequired;
     private BukkitAudiences adventure;
 
+    /**
+     * Returns the instance of the UltiTools.
+     *
+     * @return the instance of the UltiTools
+     */
     public static UltiTools getInstance() {
         return ultiTools;
     }
 
+    /**
+     * Gets the version of UltiTools.
+     *
+     * @return the version of the UltiTools
+     */
     public static int getPluginVersion() {
-        return 600;
+        return 601;
     }
 
-    public DataStore getDataStore() {
-        return dataStore;
-    }
-
-    public void setDataStore(DataStore dataStore) {
-        this.dataStore = dataStore;
-    }
-
-    public VersionWrapper getVersionWrapper() {
-        return versionWrapper;
-    }
-
-    public Language getLanguage() {
-        return language;
-    }
-
-    public PluginManager getPluginManager() {
-        return pluginManager;
-    }
-
-    public ConfigManager getConfigManager() {
-        return configManager;
-    }
-
+    /**
+     * Pre-initialization of the plugin.
+     * <p>
+     * It will save the default config and download the required libraries.
+     */
     @Override
     public void onLoad() {
         saveDefaultConfig();
+        ultiTools = this;
         restartRequired = downloadRequiredDependencies();
         if (restartRequired) {
-//            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件依赖下载完毕，请重启服务器或者重载本插件！");
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
+            Bukkit.getLogger().log(
+                    Level.WARNING,
+                    "[UltiTools-API] Libraries downloaded, please restart the server or reload UltiTools!"
+            );
+//          Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
         }
     }
 
+    /**
+     * Initialization of the plugin.
+     * <p>
+     * It will do nothing if the plugin requires restart.
+     */
     @Override
     public void onEnable() {
-        // Plugin startup logic
-        ultiTools = this;
-        this.adventure = BukkitAudiences.create(this);
-        new InventoryAPI(this).init();
-        this.versionWrapper = new SpigotVersionManager().match();
-        if (this.versionWrapper == null) {
-            Bukkit.getLogger().log(Level.SEVERE, "Your server version isn't supported in UltiTools-API!");
+        // check if the plugin requires restart
+        if (restartRequired) {
             return;
         }
+
+        // External bukkit libraries initialization
+        this.adventure = BukkitAudiences.create(this);
+        new InventoryAPI(this).init();
+
+        // Adopt server version
+        this.versionWrapper = new SpigotVersionManager().match();
+        if (this.versionWrapper == null) {
+            Bukkit.getLogger().log(
+                    Level.SEVERE,
+                    "[UltiTools-API] Your server version isn't supported in UltiTools-API!"
+            );
+            return;
+        }
+
+        // Embed web server initialization & Account login
         initEmbedWebServer();
         try {
             loginAccount();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        configManager = new ConfigManager();
 
+        // Config initialization & DataStore initialization
+        configManager = new ConfigManager();
         String storeType = getConfig().getString("datasource.type");
+        //noinspection DataFlowIssue
         dataStore = DataStoreManager.getDatastore(storeType);
         if (dataStore == null) {
             new DataStoreWaitingTask().runTaskTimerAsynchronously(this, 0L, 20L);
             dataStore = DataStoreManager.getDatastore("json");
         }
 
-        File file = new File(getDataFolder() + File.separator + "plugins");
+        // Language initialization
+        String lanPath = "lang/" + getConfig().getString("language") + ".json";
+        InputStream in = getFileResource(lanPath);
+        @SuppressWarnings("DataFlowIssue")
+        String result  = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
+        this.language  = new Language(result);
+
+        // Spring context initialization
+        pluginClassLoader = getClassLoader();
+        context           = new AnnotationConfigApplicationContext();
+        context.setClassLoader(pluginClassLoader);
+        context.register(ContextConfig.class);
+        context.refresh();
+        context.registerShutdownHook();
+
+        // initialize plugin modules
+        pluginManager = new PluginManager();
+        File file     = new File(getDataFolder() + File.separator + "plugins");
         if (!file.exists()) {
+            //noinspection ResultOfMethodCallIgnored
             file.mkdirs();
         }
         try {
-            pluginManager = new PluginManager();
             pluginManager.init();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
 
-        String lanPath = "lang/" + getConfig().getString("language") + ".json";
-        InputStream in = getFileResource(lanPath);
-        String result = new BufferedReader(new InputStreamReader(in))
-                .lines().collect(Collectors.joining(""));
-        this.language = new Language(result);
+        // bukkit plugin registration
+        getCommandManager().register(new UltiToolsCommands());
+        getCommandManager().register(new PluginInstallCommands());
 
-        getCommandManager().register(new UltiToolsCommands(), "", "UltiTools Commands", "ul", "ultitools", "ulti");
-        getCommandManager().register(new PluginInstallCommands(), "", "UltiTools Plugin Management Commands", "upm");
-
-        new TeleportServiceRegister(TeleportService.class, new InMemeryTeleportService());
+        Bukkit.getServicesManager().register(
+                PluginManager.class,
+                this.pluginManager,
+                this,
+                ServicePriority.Normal
+        );
     }
 
+    /**
+     * Shutdown of the plugin.
+     * <p>
+     * It will do nothing if the plugin requires restart.
+     */
     @Override
     public void onDisable() {
+        if (restartRequired) {
+            return;
+        }
         // Plugin shutdown logic
         if (this.adventure != null) {
             this.adventure.close();
             this.adventure = null;
         }
-        if (restartRequired) {
-            return;
-        }
         stopEmbedWebServer();
         pluginManager.close();
+        context.close();
         DataStoreManager.close();
         getConfigManager().saveAll();
+        Bukkit.getServicesManager().unregisterAll(this);
     }
 
+    /**
+     * Reloads the UltiTools plugins by calling the reload method in the PluginManager.
+     *
+     * @throws IOException if an I/O error occurs during the reloading process
+     */
     public void reloadPlugins() throws IOException {
         pluginManager.reload();
     }
 
+    /**
+     * Returns the supported language codes.
+     *
+     * @return a list of supported language codes
+     */
     @Override
     public List<String> supported() {
         return Arrays.asList("en", "zh");
     }
 
+    /**
+     * Internationalization method that translates the given string based on the current language.
+     * If the string is not found in the dictionary, the original string is returned.
+     *
+     * @param str the string to be translated
+     * @return the translated string or the original string if not found in the dictionary
+     */
     public String i18n(String str) {
         return this.language.getLocalizedText(str);
     }
 
+    /**
+     * Retrieves the input stream for the specified file resource.
+     *
+     * @param filename the name of the file resource
+     * @return the input stream for the file resource, or null if an I/O error occurs
+     */
     private InputStream getFileResource(String filename) {
         try {
-            return this.getClass().getClassLoader().getResource(filename).openStream();
+            return Objects.requireNonNull(this.getClass().getClassLoader().getResource(filename)).openStream();
         } catch (IOException ex) {
             return null;
         }
     }
 
-    public ListenerManager getListenerManager() {
-        return listenerManager;
-    }
-
-    public CommandManager getCommandManager() {
-        return commandManager;
-    }
-
+    /**
+     * Returns the instance of the BukkitAudiences used for Adventure messaging.
+     *
+     * @return the BukkitAudiences instance
+     * @throws IllegalStateException if the plugin is disabled and Adventure is accessed
+     */
     public BukkitAudiences adventure() {
         if (this.adventure == null) {
             throw new IllegalStateException("Tried to access Adventure when the plugin was disabled!");
@@ -181,87 +265,36 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return this.adventure;
     }
 
-    private boolean downloadRequiredDependencies() {
-        List<String> dependencies = Arrays.asList(
-                "advancedslot-4.1.13.jar",
-                "adventure-api-4.13.0.jar",
-                "adventure-key-4.13.0.jar",
-                "adventure-nbt-4.13.0.jar",
-                "adventure-platform-api-4.3.0.jar",
-                "adventure-platform-bukkit-4.3.0.jar",
-                "adventure-platform-facet-4.3.0.jar",
-                "adventure-platform-viaversion-4.3.0.jar",
-                "adventure-text-serializer-bungeecord-4.3.0.jar",
-                "adventure-text-serializer-gson-4.13.0.jar",
-                "adventure-text-serializer-gson-legacy-impl-4.13.0.jar",
-                "adventure-text-serializer-legacy-4.13.0.jar",
-                "annotations-24.0.1.jar",
-                "bukkit-1.13.1-R0.1-SNAPSHOT.jar",
-                "bungeecord-chat-1.16-R0.4.jar",
-                "checker-qual-3.12.0.jar",
-                "commons-lang-2.6.jar",
-                "configurablegui-4.1.13.jar",
-                "core-4.1.13.jar",
-                "error_prone_annotations-2.11.0.jar",
-                "examination-api-1.3.0.jar",
-                "examination-string-1.3.0.jar",
-                "failureaccess-1.0.1.jar",
-                "fastjson-1.2.83.jar",
-                "gson-2.10.jar",
-                "guava-31.1-jre.jar",
-                "hamcrest-core-1.1.jar",
-                "hutool-all-5.8.20.jar",
-                "j2objc-annotations-1.3.jar",
-                "javax.servlet-api-3.1.0.jar",
-                "jetty-client-9.4.48.v20220622.jar",
-                "jetty-http-9.4.48.v20220622.jar",
-                "jetty-io-9.4.48.v20220622.jar",
-                "jetty-security-9.4.48.v20220622.jar",
-                "jetty-server-9.4.48.v20220622.jar",
-                "jetty-servlet-9.4.48.v20220622.jar",
-                "jetty-util-9.4.48.v20220622.jar",
-                "jetty-util-ajax-9.4.48.v20220622.jar",
-                "jetty-webapp-9.4.48.v20220622.jar",
-                "jetty-xml-9.4.48.v20220622.jar",
-                "json-simple-1.1.1.jar",
-                "jsr305-3.0.2.jar",
-                "junit-4.10.jar",
-                "listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar",
-                "lombok-1.18.24.jar",
-                "mysql-connector-j-8.0.33.jar",
-                "obliviate-invs-4.1.13.jar",
-                "obliviate-utils-2.0.5.jar",
-                "pagination-4.1.13.jar",
-                "placeholder-2.0.5.jar",
-                "protobuf-java-3.21.9.jar",
-                "slf4j-api-1.7.25.jar",
-                "snakeyaml-1.33.jar",
-                "spark-core-2.9.4.jar",
-                "spigot-api-1.19.3-R0.1-SNAPSHOT.jar",
-                "string-2.0.5.jar",
-                "VaultAPI-1.7.jar",
-                "version-detection-2.0.5.jar",
-                "websocket-api-9.4.48.v20220622.jar",
-                "websocket-client-9.4.48.v20220622.jar",
-                "websocket-common-9.4.48.v20220622.jar",
-                "websocket-server-9.4.48.v20220622.jar",
-                "websocket-servlet-9.4.48.v20220622.jar"
-        );
-        boolean restartRequired = false;
-        for (String name : dependencies) {
-            File file = new File(getDataFolder() + "/lib", name);
-            if (!file.exists()) {
-                if (!restartRequired) {
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]插件必要库缺失，正在尝试在线下载...");
-                    Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API]若下载失败或多次重启均无法启动，请尝试下载包含依赖的版本。");
-                }
-                restartRequired = true;
-                String url = "https://ultitools.oss-cn-shanghai.aliyuncs.com/lib/" + name;
-                Bukkit.getLogger().log(Level.INFO, "[UltiTools]正在下载" + url);
-                HttpDownloadUtils.download(url, name, getDataFolder() + "/lib");
-            }
+    /**
+     * Retrieves the YAML configuration object containing environment variables.
+     *
+     * @return the YAML configuration object
+     */
+    public static YamlConfiguration getEnv() {
+        YamlConfiguration config = new YamlConfiguration();
+        try {
+            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
+        } catch (IOException | InvalidConfigurationException e) {
+            throw new RuntimeException(e);
         }
-        return restartRequired;
+        return config;
     }
 
+    /**
+     * get UltiTools UUID
+     *
+     * @return UUID
+     * @throws IOException if an I/O error occurs
+     */
+    public static String getUltiToolsUUID() throws IOException {
+        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
+        JSON json = new cn.hutool.json.JSONObject();
+        if (dataFile.exists()) {
+            json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
+        } else {
+            json.putByPath("uuid", IdUtil.simpleUUID());
+            json.write(new FileWriter(dataFile));
+        }
+        return json.getByPath("uuid").toString();
+    }
 }

@@ -11,6 +11,7 @@ import com.ultikits.ultitools.manager.PluginManager;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
 import java.net.JarURLConnection;
@@ -45,23 +46,20 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private final int minUltiToolsVersion;
     @Getter
     private final String mainClass;
+    @Getter
+    private final AnnotationConfigApplicationContext context;
 
     @SneakyThrows
-    public UltiToolsPlugin() {
-        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        URL jar = src.getLocation();
-        String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        URL url = new URL("jar:file:" + path + "!/plugin.yml");
-        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-        InputStream inputStream = jarConnection.getInputStream();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+    public UltiToolsPlugin(){
+        InputStream inputStream        = getInputStream();
+        BufferedReader reader          = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-        version = pluginConfig.getString("version");
-        pluginName = pluginConfig.getString("name");
-        authors = pluginConfig.getStringList("authors");
-        loadAfter = pluginConfig.getStringList("loadAfter");
-        minUltiToolsVersion = pluginConfig.getInt("api-version");
-        mainClass = pluginConfig.getString("mainClass");
+        version                        = pluginConfig.getString("version");
+        pluginName                     = pluginConfig.getString("name");
+        authors                        = pluginConfig.getStringList("authors");
+        loadAfter                      = pluginConfig.getStringList("loadAfter");
+        minUltiToolsVersion            = pluginConfig.getInt("api-version");
+        mainClass                      = pluginConfig.getString("mainClass");
         inputStream.close();
         reader.close();
 
@@ -77,6 +75,45 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             language = new Language(file);
         }
         saveResources();
+
+        this.context = new AnnotationConfigApplicationContext();
+    }
+
+    @SneakyThrows
+    public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
+        this.pluginName = pluginName;
+        this.version = version;
+        this.authors = authors;
+        this.loadAfter = loadAfter;
+        this.minUltiToolsVersion = minUltiToolsVersion;
+        this.mainClass = mainClass;
+        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
+        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");
+        if (!file.exists()) {
+            String lanPath = "lang/" + this.getLanguageCode() + ".json";
+            InputStream in = getResource(lanPath);
+            if (in != null) {
+                String result = new BufferedReader(new InputStreamReader(in))
+                        .lines().collect(Collectors.joining(""));
+                language = new Language(result);
+            }else {
+                language = new Language("{}");
+            }
+        } else {
+            language = new Language(file);
+        }
+        saveResources();
+
+        this.context = new AnnotationConfigApplicationContext();
+    }
+
+    private InputStream getInputStream() throws IOException {
+        CodeSource src                 = this.getClass().getProtectionDomain().getCodeSource();
+        URL jar                        = src.getLocation();
+        String path                    = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
+        URL url                        = new URL("jar:file:" + path + "!/plugin.yml");
+        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+        return jarConnection.getInputStream();
     }
 
     public static ConfigManager getConfigManager() {
@@ -128,7 +165,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         while (entries.hasMoreElements()) {
             JarEntry jarEntry = entries.nextElement();
             String fileName = jarEntry.getName();
-            if ((fileName.startsWith("res") || fileName.startsWith("lang")) && fileName.contains(".")) {
+            if ((fileName.startsWith("res") || fileName.startsWith("lang") || fileName.startsWith("config")) && fileName.contains(".")) {
                 InputStream inputStream = jarFile.getInputStream(jarEntry);
                 if (inputStream == null) {
                     throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
@@ -155,7 +192,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     private InputStream getResource(String filename) {
         try {
-            return this.getClass().getClassLoader().getResource(filename).openStream();
+            URL resource = this.getClass().getClassLoader().getResource(filename);
+            if (resource == null) {
+                return null;
+            }
+            return resource.openStream();
         } catch (IOException ex) {
             return null;
         }

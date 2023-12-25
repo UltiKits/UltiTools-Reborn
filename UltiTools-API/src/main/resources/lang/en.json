@@ -15,8 +15,13 @@
   "取消": "Cancel",
   "清空": "Clear",
   "你没有权限！": "You don't have permission to do that!",
+  "未知指令，请使用/%s %s获取帮助": "Unknown command, please enter /%s %s for help",
   "指令执行错误，请使用/%s %s获取帮助": "Command execution error, please enter /%s %s for help",
-  "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n================": "=== UltiTools Commands ===\n/ul reload Reload modules\n================",
+  "请先等待上一条命令执行完毕！": "Please wait for last Command Processing!",
+  "请先等待其他玩家发送的命令执行完毕！": "Please wait for last Command Processing which sent by other players!",
+  "操作频繁，请稍后再试": "Frequent operations, please try again later",
+  "参数 '%s' 格式错误：'%s' 不是一个有效的 %s 类型": "Parameter '%s' has a formatting error: '%s' is not a valid %s type.",
+  "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul list 查看已加载的模块列表\n================": "=== UltiTools Commands ===\n/ul reload Reload modules\n/ul list Check loaded module list================",
   "========|可用插件列表|========\n": "========|Available Plugin List|========\n",
   ". 名字：": ". Name:",
   "   安装命令：/upm install ": "   Install Command：/upm install ",
@@ -33,5 +38,12 @@
   "卸载成功！请手动删除本地文件，否则重启之后还会启用！": "Uninstalled! Please delete local files manually, otherwise it will be enabled after restart!",
   "文件位置：%s": "File Location: %s",
   "卸载失败！请检查是否拼写正确！": "Uninstall Failed! Please check if the spelling is correct!",
-  "删除失败！文件访问错误！请手动删除！": "Delete Failed! File access error! Please delete it manually!"
+  "删除失败！文件访问错误！请手动删除！": "Delete Failed! File access error! Please delete it manually!",
+  "   安装状态：": "    Install Status:",
+  "已安装": "Installed",
+  "未安装": "Not Installed",
+  "     | 安装 |     ": "     | Install |     ",
+  "     | 卸载 |     ": "     | Uninstall |     ",
+  "点击卸载模块": "Click to uninstall module",
+  "点击安装模块": "Click to install module"
 }

@@ -76,7 +76,7 @@ public class VaultImpl implements Economy {
      */
     @Override
     public String currencyNamePlural() {
-        return UltiEconomy.getInstance().getConfig("res/config/config.yml", EcoConfig.class).getCurrencyName();
+        return UltiEconomy.getInstance().getConfig("config/config.yml", EcoConfig.class).getCurrencyName();
     }
 
     /**
@@ -87,7 +87,7 @@ public class VaultImpl implements Economy {
      */
     @Override
     public String currencyNameSingular() {
-        return UltiEconomy.getInstance().getConfig("res/config/config.yml", EcoConfig.class).getCurrencyName();
+        return UltiEconomy.getInstance().getConfig("config/config.yml", EcoConfig.class).getCurrencyName();
     }
 
     /**
@@ -516,7 +516,7 @@ public class VaultImpl implements Economy {
                 return false;
             }
             PlayerAccountEntity playerAccountEntity = new PlayerAccountEntity();
-            playerAccountEntity.setCash(UltiEconomy.getInstance().getConfig("res/config/config.yml", EcoConfig.class).getInitMoney());
+            playerAccountEntity.setCash(UltiEconomy.getInstance().getConfig("config/config.yml", EcoConfig.class).getInitMoney());
             playerAccountEntity.setId(player.getUniqueId().toString());
             dataOperator.insert(playerAccountEntity);
             return true;

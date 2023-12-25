@@ -10,12 +10,10 @@ import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.webserver.controller.ConfigEditorController;
 import com.ultikits.ultitools.webserver.ws.HeartBeatWebSocket;
 import org.bukkit.Bukkit;
+import org.bukkit.configuration.file.YamlConfiguration;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
 
@@ -23,16 +21,28 @@ import static spark.Spark.*;
 
 public class PluginInitiationUtils {
 
-    public static void loginAccount() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        JSON json = new cn.hutool.json.JSONObject();
-        if (dataFile.exists()) {
-            json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
-        } else {
-            json.putByPath("uuid", IdUtil.simpleUUID());
-            json.write(new FileWriter(dataFile));
+    public static boolean downloadRequiredDependencies() {
+        YamlConfiguration env = UltiTools.getEnv();
+        List<String> dependencies = env.getStringList("libraries");
+        boolean restartRequired = false;
+        for (String name : dependencies) {
+            File file = new File(UltiTools.getInstance().getDataFolder() + "/lib", name);
+            if (file.exists()) {
+                continue;
+            }
+            if (!restartRequired) {
+                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] Missing required libraries，trying to download...");
+                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] If have problems in downloading，you can download full version.");
+            }
+            restartRequired = true;
+            String url = env.getString("oss-url") + env.getString("lib-path") + name;
+            Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + url);
+            HttpDownloadUtils.download(url, name, UltiTools.getInstance().getDataFolder() + "/lib");
         }
+        return restartRequired;
+    }
 
+    public static void loginAccount() throws IOException {
         String username = UltiTools.getInstance().getConfig().getString("account.username");
         String password = UltiTools.getInstance().getConfig().getString("account.password");
         boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
@@ -41,7 +51,7 @@ public class PluginInitiationUtils {
         }
 
         TokenEntity token = HttpRequestUtils.getToken(username, password);
-        String uuid = json.getByPath("uuid").toString();
+        String uuid = UltiTools.getUltiToolsUUID();
         HttpResponse uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token);
         int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
         String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
@@ -50,11 +60,13 @@ public class PluginInitiationUtils {
             if (!registerResponse.isOk()) {
                 Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
             }
+            registerResponse.close();
         } else {
             HttpResponse registerResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token);
             if (!registerResponse.isOk()) {
                 Bukkit.getLogger().log(Level.WARNING, registerResponse.body());
             }
+            registerResponse.close();
         }
     }
 

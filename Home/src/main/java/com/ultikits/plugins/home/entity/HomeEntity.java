@@ -4,6 +4,7 @@ import com.alibaba.fastjson.annotation.JSONField;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.common.WorldLocation;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.bukkit.Bukkit;

@@ -18,7 +18,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0.202308112144</version>
+            <version>6.0.0.202310142230</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -74,7 +74,7 @@
                 <artifactId>ultitools-maven-plugin</artifactId>
                 <version>1.0.0</version>
                 <configuration>
-                    <name>Basic Functions</name>
+                    <name>BasicFunctions</name>
                     <identifyString>UltiTools-Basic-Functions</identifyString>
                     <shortDescription>All basic functions of the UltiTools</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
