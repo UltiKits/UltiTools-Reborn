@@ -38,5 +38,12 @@
   "卸载成功！请手动删除本地文件，否则重启之后还会启用！": "Uninstalled! Please delete local files manually, otherwise it will be enabled after restart!",
   "文件位置：%s": "File Location: %s",
   "卸载失败！请检查是否拼写正确！": "Uninstall Failed! Please check if the spelling is correct!",
-  "删除失败！文件访问错误！请手动删除！": "Delete Failed! File access error! Please delete it manually!"
+  "删除失败！文件访问错误！请手动删除！": "Delete Failed! File access error! Please delete it manually!",
+  "   安装状态：": "    Install Status:",
+  "已安装": "Installed",
+  "未安装": "Not Installed",
+  "     | 安装 |     ": "     | Install |     ",
+  "     | 卸载 |     ": "     | Uninstall |     ",
+  "点击卸载模块": "Click to uninstall module",
+  "点击安装模块": "Click to install module"
 }

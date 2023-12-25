@@ -19,7 +19,7 @@ import java.util.List;
  * @version 1.0.0
  */
 @CmdExecutor(description = "UltiToolsCommands" ,alias = {"ul", "ultitools", "ulti"}, requireOp = true)
-@CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
+@CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class UltiToolsCommands extends AbstractCommendExecutor {
     @CmdMapping(format = "reload")
     public void reloadPlugins() {

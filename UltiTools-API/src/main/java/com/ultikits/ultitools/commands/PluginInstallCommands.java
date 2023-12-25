@@ -2,11 +2,18 @@ package com.ultikits.ultitools.commands;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.TextColor;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.io.IOException;
@@ -25,33 +32,84 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
             } catch (NumberFormatException ignored) {
             }
         }
+        List<UltiToolsPlugin> installedPlugins = UltiTools.getInstance().getPluginManager().getPluginList();
         List<PluginEntity> plugins = PluginInstallUtils.getPluginList(pageInt, 10);
-        StringBuilder stringBuilder = new StringBuilder();
-        stringBuilder.append(UltiTools.getInstance().i18n("========|可用插件列表|========\n"));
-        int i = 1;
-        for (PluginEntity plugin : plugins) {
-            stringBuilder.append(i);
-            stringBuilder.append(UltiTools.getInstance().i18n(".  名字："));
-            stringBuilder.append(plugin.getName());
-            stringBuilder.append("\n");
-            stringBuilder.append(UltiTools.getInstance().i18n("   安装命令：/upm install "));
-            stringBuilder.append(plugin.getIdentifyString());
-            stringBuilder.append("\n");
-            stringBuilder.append(UltiTools.getInstance().i18n("   简介："));
-            stringBuilder.append(plugin.getShortDescription());
-            stringBuilder.append("\n");
-            if (i < plugins.size()) {
-                stringBuilder.append("---------------------\n");
+        if (sender instanceof Player) {
+            TextComponent text = Component.text(UltiTools.getInstance().i18n("========|可用插件列表|========\n"))
+                    .color(TextColor.color(0x00ffff));
+            int i = 1;
+            for (PluginEntity plugin : plugins) {
+                text = text.append(Component.text(i + UltiTools.getInstance().i18n(".  名字：") + plugin.getName() + "\n").color(TextColor.color(0x00ffff)));
+                text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
+                boolean installed = false;
+                for (UltiToolsPlugin installedPlugin : installedPlugins) {
+                    if (installedPlugin.getPluginName().equals(plugin.getName())) {
+                        installed = true;
+                        break;
+                    }
+                }
+                if (installed) {
+                    text = text.append(Component.text(UltiTools.getInstance().i18n(" 已安装") + "\n").color(TextColor.color(0x00ff00)));
+                    text = text.append(
+                            Component
+                                    .text(UltiTools.getInstance().i18n("     | 卸载 |     ") + "\n")
+                                    .color(TextColor.color(255, 0, 0))
+                                    .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击卸载模块")))
+                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + plugin.getName()))
+                    );
+                } else {
+                    text = text.append(Component.text(UltiTools.getInstance().i18n(" 未安装") + "\n").color(TextColor.color(0xff0000)));
+                    text = text.append(
+                            Component
+                                    .text(UltiTools.getInstance().i18n("     | 安装 |     ") + "\n")
+                                    .color(TextColor.color(0, 255, 0))
+                                    .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击安装模块")))
+                                    .clickEvent(ClickEvent.runCommand("/upm install " + plugin.getIdentifyString()))
+                    );
+                }
+                text = text.append(Component.text(UltiTools.getInstance().i18n("   简介：") + plugin.getShortDescription() + "\n").color(TextColor.color(127, 127, 127)));
+                if (i < plugins.size()) {
+                    text = text.append(Component.text("---------------------\n").color(TextColor.color(0x00ffff)));
+                }
+                i++;
             }
-            i++;
+            text = text.append(Component.text(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt))
+                    .color(TextColor.color(0x00ffff)));
+            TextComponent finalText = text;
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    MessageUtils.sendMessage((Player) sender, finalText);
+                }
+            }.runTask(UltiTools.getInstance());
+        } else {
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.append(UltiTools.getInstance().i18n("========|可用插件列表|========\n"));
+            int i = 1;
+            for (PluginEntity plugin : plugins) {
+                stringBuilder.append(i);
+                stringBuilder.append(UltiTools.getInstance().i18n(".  名字："));
+                stringBuilder.append(plugin.getName());
+                stringBuilder.append("\n");
+                stringBuilder.append(UltiTools.getInstance().i18n("   安装命令：/upm install "));
+                stringBuilder.append(plugin.getIdentifyString());
+                stringBuilder.append("\n");
+                stringBuilder.append(UltiTools.getInstance().i18n("   简介："));
+                stringBuilder.append(plugin.getShortDescription());
+                stringBuilder.append("\n");
+                if (i < plugins.size()) {
+                    stringBuilder.append("---------------------\n");
+                }
+                i++;
+            }
+            stringBuilder.append(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt));
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    sender.sendMessage(stringBuilder.toString());
+                }
+            }.runTask(UltiTools.getInstance());
         }
-        stringBuilder.append(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt));
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                sender.sendMessage(stringBuilder.toString());
-            }
-        }.runTask(UltiTools.getInstance());
     }
 
     @CmdMapping(format = "list")
@@ -96,7 +154,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
             if (i1 == pluginVersions.size()) {
                 stringBuilder.append(UltiTools.getInstance().i18n("   安装命令：/upm install "));
                 stringBuilder.append(plugin);
-                stringBuilder.append(" [版本]");
+                stringBuilder.append(" [version]");
                 stringBuilder.append("\n");
                 stringBuilder.append("---------------------\n");
             }

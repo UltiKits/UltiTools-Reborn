@@ -25,17 +25,13 @@
             <id>spigotmc-repo</id>
             <url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
         </repository>
-        <repository>
-            <id>ultikits</id>
-            <url>https://maven.wisdommee.com/repository/ultikits-dev/</url>
-        </repository>
     </repositories>
 
     <dependencies>
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0.202310142230</version>
+            <version>6.0.0.202312150106</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
@@ -64,6 +60,9 @@
         <module>1_19_R2</module>
         <module>1_19_R3</module>
         <module>1_20_R1</module>
+        <module>1_20_R2</module>
+        <module>1_20_R3</module>
+        <module>1_20_R4</module>
     </modules>
 
     <build>

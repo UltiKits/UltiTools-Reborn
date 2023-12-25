@@ -3,6 +3,7 @@ package com.ultikits.ultitools;
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.json.JSON;
 import cn.hutool.json.JSONUtil;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
@@ -37,7 +38,7 @@ import static com.ultikits.ultitools.utils.PluginInitiationUtils.*;
  * UltiTools plugin main class.
  *
  * @author wisdommen, qianmo
- * @version 6.0.0
+ * @version 6.0.1
  */
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
@@ -78,7 +79,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return the version of the UltiTools
      */
     public static int getPluginVersion() {
-        return 600;
+        return 601;
     }
 
     /**

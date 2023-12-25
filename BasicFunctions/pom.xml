@@ -74,7 +74,7 @@
                 <artifactId>ultitools-maven-plugin</artifactId>
                 <version>1.0.0</version>
                 <configuration>
-                    <name>Basic Functions</name>
+                    <name>BasicFunctions</name>
                     <identifyString>UltiTools-Basic-Functions</identifyString>
                     <shortDescription>All basic functions of the UltiTools</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>

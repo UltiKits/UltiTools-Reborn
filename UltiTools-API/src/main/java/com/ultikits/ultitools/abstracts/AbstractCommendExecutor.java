@@ -259,7 +259,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
                 String value = params.get(cmdParam.value());
                 try {
-
                     if (parameter.getType() == float.class || parameter.getType() == Float.class) {
                         ParamList.add(Float.parseFloat(value));
                         continue;
