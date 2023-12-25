@@ -1,18 +1,43 @@
-# UltiTools介绍
-![GitHub](https://img.shields.io/github/license/UltiKits/UltiTools-Reborn)
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn)
-![GitHub Repo stars](https://img.shields.io/github/stars/wisdommen/UltiTools)
-![Minecraft Version](https://img.shields.io/badge/Minecraft-1.8--1.20-blue)
-![Spigot Rating](https://img.shields.io/spiget/rating/85214?label=SpigotMC)
-![bStats Players](https://img.shields.io/bstats/players/8652)
-![bStats Servers](https://img.shields.io/bstats/servers/8652)
-[![CodeFactor](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge/main)](https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/overview/main)
-[![wakatime](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg)](https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469)
-![Maven Central](https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API)
-![GitHub issues](https://img.shields.io/github/issues/wisdommen/UltiTools)
+<br>
+<br>
 
-![wakatime timeline](https://wakatime.com/share/@wisdomme/0a9b3a30-f210-4be9-91f2-1b2e94ff403b.svg)
+<div align="center">
+<img src="https://www.freeimg.cn/i/2023/12/24/65883862cbd7d.png" width="96" height="96"/>
+</div>
 
+<h1 align="center">UltiTools 6</h1>
+
+<div align="center"><strong>UltiTools' Reborn</strong></div>
+
+<br>
+<br>
+
+<div align="center">
+<img alt="GitHub License" src="https://img.shields.io/github/license/ultikits/ultitools-reborn?style=flat-square"/>
+<img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
+<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/wisdommen/UltiTools?style=flat-square"/>
+<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.8--1.20-blue?style=flat-square"/>
+<img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
+<img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
+<img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
+<img alt="wakatime" src="https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg?style=flat-square"/>
+<img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
+<img alt="GitHub issues" src="https://img.shields.io/github/issues/wisdommen/UltiTools?style=flat-square"/>
+</div>
+
+---
+
+<div align="center">
+
+| [![discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/6TVRRF47) | 👈 点击左侧按钮加入官方 Discord 服务器！ | 点击右侧按钮加入官方 QQ 群！ 👉 | [![discord](https://img.shields.io/badge/Tencent_QQ-EB1923?style=for-the-badge&logo=TencentQQ&logoColor=white)](https://qm.qq.com/cgi-bin/qm/qr?k=UNq3LPCmpfH2aLum7V0GmMRFBusNxqxn&jump_from=webapi) |
+|-----------------------------------------------------------------------------------------------------------------------------------------|----------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+
+</div>
+
+
+
+<br>
+<br>
 
 ## 给各位服主的介绍
 
@@ -112,7 +137,10 @@ UltiTools也提供了Adventure的API。
 
 更多内容请查看 [UltiTools API 文档](https://doc.dev.ultikits.com/)
 
-## 快速开始
+<details>
+<summary>快速开始</summary>
+
+### 快速开始
 
 首先将UltiTools-API依赖加入到你的项目
 
@@ -148,7 +176,7 @@ authors: [ wisdomme ]
 ```
 新建一个config文件夹，里面可以按照你的需求放入你的插件配置文件。这些配置文件会被原封不动的放入UltiTools插件的集体配置文件夹中展示给用户。
 
-## 简单开发
+### 简单开发
 
 新建一个主类继承UltiToolsPlugin，类似传统的Spigot插件，UltiTools插件也需要重写启动和关闭方法。
 但是UltiToolsPlugin增加了一个可选的```UltiToolsPlugin#reloadSelf()```方法，用于插件重载时执行。
@@ -214,17 +242,46 @@ public List<AbstractConfigEntity> getAllConfigs() {
     );
 }
 ```
+
+</details>
+
+<br>
+<br>
+
+## WakaTime 统计
+
+<details>
+<h3>开发时间线统计</h3>
+<summary>点击查看统计数据</summary>
+<img alt="wakatime timeline" src="https://wakatime.com/share/@wisdomme/0a9b3a30-f210-4be9-91f2-1b2e94ff403b.svg"/>
+<br>
+<br>
+<img alt="wakatime week" src="https://wakatime.com/share/@wisdomme/bf0d9440-52ee-41b6-9df9-03fae3ae86dc.svg"/>
+</details>
+
+<br>
+<br>
+
 ## 主要贡献者
-| 贡献者         | 描述                                    |
-|---------------|-----------------------------------------|
-| [@wisdommen](https://github.com/wisdommen)       | 创始人，UltiKits套件作者                            |
+| 贡献者                                              | 描述                                      |
+|--------------------------------------------------|-----------------------------------------|
+| [@wisdommen](https://github.com/wisdommen)       | 创始人，UltiKits套件作者                        |
 | [@qianmo2233](https://github.com/qianmo2233)     | UltiTools&UltiCore开发者，UltiKits开发文档主要维护者 |
 | [@Shpries](https://github.com/Shpries)           | UltiTools开发者，UltiTools使用文档主要维护者         |
-| [@DevilJueChen](https://github.com/DevilJueChen) | UltiKits问题&漏洞&建议反馈                          |
-| 拾柒          | 美工                                               |
+| [@DevilJueChen](https://github.com/DevilJueChen) | UltiKits问题&漏洞&建议反馈                      |
+| 拾柒                                               | 美工                                      |
+
 ## 发现问题？想提建议？
 [点击这里提交开启一个Issue！](https://github.com/wisdommen/UltiTools/issues/new/choose)
 
 
-![wakatime week](https://wakatime.com/share/@wisdomme/bf0d9440-52ee-41b6-9df9-03fae3ae86dc.svg)
+## 鸣谢
 
+|                                                                                                                           |                        |
+|---------------------------------------------------------------------------------------------------------------------------|------------------------|
+| ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | 记录了我们开发途中的每一刻          |
+| ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | 地表最强 Java IDE 助力愉悦开发体验 |
+| ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | 帮助解决了许多重复且枯燥的工作        |
+| ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | 为插件带来了许多黑科技            |
+| ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | 官方构建工具                 |
+| ![wakatime](https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16)      | 官方内置 HTTP 服务端          |
