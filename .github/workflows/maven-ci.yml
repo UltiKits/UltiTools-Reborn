@@ -16,7 +16,7 @@ jobs:
         distribution: 'temurin'
         cache: maven
     - name: Build with Maven
-      run: mvn -B package --file UltiTools/pom.xml
+      run: mvn -B package --file UltiTools-API/pom.xml
     - name: Get latest commit message
       id: commit
       run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
