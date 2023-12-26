@@ -44,14 +44,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: "Generate release changelog"
-      id: changelog
-      uses: heinrichreimer/action-github-changelog-generator@v2.3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        onlyLastTag: "true"
-        stripHeaders: "true"
-        stripGeneratorNotice: "true"
+    - name: "Build Changelog"
+      id: build_changelog
+      uses: mikepenz/release-changelog-builder-action@{latest-release}
 
     - name: Get Project Version from pom.xml
       id: version
@@ -74,7 +69,7 @@ jobs:
       with:
         tag_name: v${{ steps.version.outputs.version }}
         release_name: Release v${{ steps.version.outputs.version }}
-        body: ${{ steps.changelog.outputs.changelog }}
+        body: ${{ steps.build_changelog.outputs.changelog }}
         draft: true
         prerelease: true
 
