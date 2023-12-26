@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -25,12 +25,6 @@ jobs:
     - name: Get version
       id: version
       run: echo "::set-output name=version::$(xmlstarlet sel -t -v '/project/version' UltiTools-API/pom.xml)"
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
@@ -52,3 +46,4 @@ jobs:
         asset_path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
         asset_name: UltiTools-API.jar
         asset_content_type: application/java-archive
+    
