@@ -16,13 +16,16 @@ jobs:
         distribution: 'temurin'
         cache: maven
     - name: Build with Maven
-      run: mvn -B package --file UltiTools-API/pom.xml
+      run: mvn -B package -Dmaven.javadoc.skip=true --file UltiTools-API/pom.xml
     - name: Get latest commit message
       id: commit
       run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
     - name: Get Project Version from pom.xml
       id: version
-      uses: entimaniac/read-pom-version-action@1.0.0    
+    - uses: avides/actions-project-version-check@v1.4.0
+    - with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        file-to-check: UltiTools-API/pom.xml
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
