@@ -20,11 +20,9 @@ jobs:
     - name: Get latest commit message
       id: commit
       run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
-    - name: Install xmlstarlet
-      run: sudo apt-get update && sudo apt-get install -y xmlstarlet
-    - name: Get version
+    - name: Get Project Version from pom.xml
       id: version
-      run: echo "::set-output name=version::$(xmlstarlet sel -t -v '/project/version' UltiTools-API/pom.xml)"
+      uses: entimaniac/read-pom-version-action@1.0.0    
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
