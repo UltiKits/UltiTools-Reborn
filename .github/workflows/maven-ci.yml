@@ -83,3 +83,21 @@ jobs:
         asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
         asset_name: UltiTools-API.jar
         asset_content_type: application/java-archive
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Publish package
+        run: mvn --batch-mode --file UltiTools-API/pom.xml deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
