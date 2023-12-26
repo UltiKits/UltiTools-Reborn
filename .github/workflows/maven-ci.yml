@@ -3,8 +3,8 @@ name: UltiTools API CI with Maven
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - 'UltiTools-API/**'
+    #paths:
+      #- 'UltiTools-API/**'
 
 jobs:
   build:
