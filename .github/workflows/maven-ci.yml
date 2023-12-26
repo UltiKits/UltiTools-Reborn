@@ -3,6 +3,8 @@ name: Java CI with Maven
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'UltiTools-API/**'
 
 jobs:
   build:
@@ -81,4 +83,3 @@ jobs:
         asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
         asset_name: UltiTools-API.jar
         asset_content_type: application/java-archive
-      
