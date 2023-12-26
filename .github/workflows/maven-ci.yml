@@ -44,9 +44,11 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Get latest commit message
-      id: commit
-      run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
+    - name: "Generate release changelog"
+      id: changelog
+      uses: heinrichreimer/action-github-changelog-generator@v2.3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Get Project Version from pom.xml
       id: version
@@ -69,9 +71,9 @@ jobs:
       with:
         tag_name: v${{ steps.version.outputs.version }}
         release_name: Release v${{ steps.version.outputs.version }}
-        body: ${{ steps.commit.outputs.message }}
-        draft: false
-        prerelease: false
+        body: ${{ steps.changelog.outputs.changelog }}
+        draft: true
+        prerelease: true
 
     - name: Upload Release Asset
       id: upload-release-asset
