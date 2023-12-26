@@ -1,4 +1,4 @@
-name: Java CI with Maven
+name: UltiTools API CI with Maven
 
 on:
   push:
@@ -70,8 +70,8 @@ jobs:
         tag_name: v${{ steps.version.outputs.version }}
         release_name: Release v${{ steps.version.outputs.version }}
         body: ${{ steps.commit.outputs.message }}
-        draft: true
-        prerelease: true
+        draft: false
+        prerelease: false
 
     - name: Upload Release Asset
       id: upload-release-asset
