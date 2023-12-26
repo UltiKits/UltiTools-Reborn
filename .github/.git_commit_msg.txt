@@ -1,0 +1,28 @@
+# <type>(<scope>): <subject>
+
+# <body>
+
+# <footer>
+
+#------------------------------------------------@---------------------*
+#
+# 各段内容说明:
+#
+#    - type(PR 的类型):
+#        - feat: 新功能
+#        - fix: 修复
+#        - refactor: 代码重构
+#        - test: 测试用例相关修改
+#        - chore: 其它修改，比如Makefile,Dockerfile等
+#
+#    - scope(影响范围，相关组件): 比如 api, home, login等
+#
+#    - subject(commit 的概述): 建议不超过 50 个字符
+#
+#    - body(commit 具体修改内容): 可以分为多行，建议每行不超过 72 个字符
+#
+#    - footer(一些备注，选填): 一些备注，通常是相关参考连接、BREAKING CHANGE 或修复 bug 的连接
+#
+# More info: https://docs.google.com/document/d/1QrDFcIiPjSLDn3EL15IJygNPiHORgU1_OOAqWjiDU5Y/edit#heading=h.fpepsvr2gqby
+#
+#
