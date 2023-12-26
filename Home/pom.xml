@@ -18,7 +18,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0.202312150106</version>
+            <version>6.0.2</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
