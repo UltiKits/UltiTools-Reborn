@@ -26,6 +26,7 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         file-to-check: UltiTools-API/pom.xml
+        only-return-version: true
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
