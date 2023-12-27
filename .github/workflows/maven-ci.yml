@@ -3,94 +3,83 @@ name: UltiTools API CI with Maven
 on:
   push:
     branches: [ "main" ]
-    #paths:
-      #- 'UltiTools-API/**'
+    paths:
+      - 'UltiTools-API/**'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: maven
-        
-    - name: Build with Maven
-      run: mvn -B package -Dmaven.javadoc.skip=true --file UltiTools-API/pom.xml
+      - uses: actions/checkout@v3
 
-    - name: Get Project Version from pom.xml
-      id: version
-      uses: avides/actions-project-version-check@v1.4.0
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: UltiTools-API/pom.xml
-        only-return-version: true
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
 
-    - name: Archive artifacts
-      uses: actions/upload-artifact@v4.0.0
-      with:
-        name: ultitools-artifact
-        path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
-        
+      - name: Build with Maven
+        run: mvn -B package -Dmaven.javadoc.skip=true --file UltiTools-API/pom.xml
+
+      - name: Get Project Version from pom.xml
+        id: version
+        uses: avides/actions-project-version-check@v1.4.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          file-to-check: UltiTools-API/pom.xml
+          only-return-version: true
+
+      - name: Archive artifacts
+        uses: actions/upload-artifact@v4.0.0
+        with:
+          name: ultitools-artifact
+          path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
+
   release:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Get Project Version from pom.xml
-      id: version
-      uses: avides/actions-project-version-check@v1.4.0
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: UltiTools-API/pom.xml
-        only-return-version: true
+      - name: Get latest commit message
+        id: commit
+        run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
 
-    - name: Create tag
-      uses: actions/github-script@v5
-      with:
-        script: |
-          github.rest.git.createRef({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            ref: 'refs/tags/v${{ steps.version.outputs.version }}',
-            sha: context.sha
-          })
+      - name: Get Project Version from pom.xml
+        id: version
+        uses: avides/actions-project-version-check@v1.4.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          file-to-check: UltiTools-API/pom.xml
+          only-return-version: true
 
-    - name: "Build Changelog"
-      id: build_changelog
-      uses: mikepenz/release-changelog-builder-action@v4.1.0
+      - name: Download artifacts
+        uses: actions/download-artifact@v4.1.0
+        with:
+          name: ultitools-artifact
 
-    - name: Download artifacts
-      uses: actions/download-artifact@v4.1.0
-      with:
-        name: ultitools-artifact
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          release_name: Release v${{ steps.version.outputs.version }}
+          body: ${{ steps.commit.outputs.message }}
+          draft: false
+          prerelease: false
 
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release v${{ steps.version.outputs.version }}
-        body: ${{ steps.build_changelog.outputs.changelog }}
-        draft: true
-        prerelease: true
-
-    - name: Upload Release Asset
-      id: upload-release-asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
-        asset_name: UltiTools-API.jar
-        asset_content_type: application/java-archive
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
+          asset_name: UltiTools-API.jar
+          asset_content_type: application/java-archive
