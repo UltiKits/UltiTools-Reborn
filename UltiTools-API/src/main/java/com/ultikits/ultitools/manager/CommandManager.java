@@ -51,7 +51,7 @@ public class CommandManager {
             try {
                 AbstractCommendExecutor commandExecutor =
                         (AbstractCommendExecutor) clazz.getDeclaredConstructor().newInstance();
-                register(commandExecutor);
+                register(plugin, commandExecutor);
             } catch (InstantiationException |
                      InvocationTargetException |
                      IllegalAccessException |
