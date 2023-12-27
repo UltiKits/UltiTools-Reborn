@@ -51,7 +51,7 @@ public class PluginInitiationUtils {
         }
 
         TokenEntity token = HttpRequestUtils.getToken(username, password);
-        String uuid = UltiTools.getUltiToolsUUID();
+        String uuid = CommonUtils.getUltiToolsUUID();
         HttpResponse uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token);
         int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
         String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
