@@ -54,5 +54,8 @@
   "请求传送至此功能": "Request teleport to here function",
   "/speed <0-10> 设置速度": "/speed <0-10> Set speed",
   "行走/飞行速度已设置为%s，默认速度为2": "Walking/flying speed has been set to %s, the default speed is 2",
-  "速度设置功能": "Speed setting function"
+  "速度设置功能": "Speed setting function",
+  "你已被封禁! 原因: %s": "You have been banned! Reason: %s",
+  "§a封禁成功！": "§aBanned successfully!",
+  "§a解封成功！": "§aUnbanned successfully!"
 }

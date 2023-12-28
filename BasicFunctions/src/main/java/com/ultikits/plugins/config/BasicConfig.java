@@ -1,12 +1,14 @@
 package com.ultikits.plugins.config;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
+@ConfigEntity("config/config.yml")
 public class BasicConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "enableWhitelist", comment = "是否启用白名单")
     private boolean enableWhitelist = false;
@@ -26,6 +28,8 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableTpa = true;
     @ConfigEntry(path = "enableSpeed", comment = "是否启用速度设置")
     private boolean enableSpeed = true;
+    @ConfigEntry(path = "enableBan", comment = "是否启用封禁")
+    private boolean enableBan = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

@@ -16,3 +16,5 @@ enableJoinWelcome: true
 enableTpa: true
 # 是否启用速度设置功能
 enableSpeed: true
+# 是否启用封禁功能
+enableBan: true
