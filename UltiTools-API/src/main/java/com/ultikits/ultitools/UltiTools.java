@@ -1,5 +1,6 @@
 package com.ultikits.ultitools;
 
+import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.context.ContextConfig;
@@ -270,7 +271,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     public BukkitAudiences adventure() {
         if (this.adventure == null) {
-            throw new IllegalStateException("Tried to access Adventure when the plugin was disabled!");
+            throw new IllegalStateException("[UltiTools-API] Tried to access Adventure when the plugin was disabled!");
         }
         return this.adventure;
     }
