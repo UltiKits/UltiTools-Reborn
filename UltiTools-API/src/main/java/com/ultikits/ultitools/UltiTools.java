@@ -3,6 +3,7 @@ package com.ultikits.ultitools;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
@@ -74,7 +75,22 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return the version of the UltiTools
      */
     public static int getPluginVersion() {
-        return 601;
+        return 603;
+    }
+
+    /**
+     * Retrieves the YAML configuration object containing environment variables.
+     *
+     * @return the YAML configuration object
+     */
+    public static YamlConfiguration getEnv() {
+        YamlConfiguration config = new YamlConfiguration();
+        try {
+            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
+        } catch (IOException | InvalidConfigurationException e) {
+            throw new RuntimeException(e);
+        }
+        return config;
     }
 
     /**
@@ -144,12 +160,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
         InputStream in = getFileResource(lanPath);
         @SuppressWarnings("DataFlowIssue")
-        String result  = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
-        this.language  = new Language(result);
+        String result = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
+        this.language = new Language(result);
 
         // Spring context initialization
         pluginClassLoader = getClassLoader();
-        context           = new AnnotationConfigApplicationContext();
+        context = new AnnotationConfigApplicationContext();
         context.setClassLoader(pluginClassLoader);
         context.register(ContextConfig.class);
         context.refresh();
@@ -157,7 +173,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         // initialize plugin modules
         pluginManager = new PluginManager();
-        File file     = new File(getDataFolder() + File.separator + "plugins");
+        File file = new File(getDataFolder() + File.separator + "plugins");
         if (!file.exists()) {
             //noinspection ResultOfMethodCallIgnored
             file.mkdirs();
@@ -258,20 +274,5 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new IllegalStateException("[UltiTools-API] Tried to access Adventure when the plugin was disabled!");
         }
         return this.adventure;
-    }
-
-    /**
-     * Retrieves the YAML configuration object containing environment variables.
-     *
-     * @return the YAML configuration object
-     */
-    public static YamlConfiguration getEnv() {
-        YamlConfiguration config = new YamlConfiguration();
-        try {
-            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
-        } catch (IOException | InvalidConfigurationException e) {
-            throw new RuntimeException(e);
-        }
-        return config;
     }
 }

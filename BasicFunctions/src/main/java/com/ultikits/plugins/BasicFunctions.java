@@ -4,23 +4,35 @@ import com.ultikits.plugins.commands.*;
 import com.ultikits.plugins.config.BasicConfig;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
 import com.ultikits.plugins.listeners.BackListener;
+import com.ultikits.plugins.listeners.BanListener;
 import com.ultikits.plugins.listeners.JoinWelcomeListener;
 import com.ultikits.plugins.listeners.WhitelistListener;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+//import com.ultikits.ultitools.annotations.ContextEntry;
+//import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import lombok.Getter;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+//@EnableAutoRegister(
+//        scanPackage = "com.ultikits.plugins",
+//        eventListener = false,
+//        cmdExecutor = false
+//)
 public class BasicFunctions extends UltiToolsPlugin {
     @Getter
     private static BasicFunctions instance;
 
+    public BasicFunctions() {
+        super();
+        instance = this;
+    }
+
     @Override
     public boolean registerSelf() throws IOException {
-        instance = this;
         BasicConfig configEntity = getConfigManager().getConfigEntity(this, BasicConfig.class);
         if (configEntity.isEnableHeal()) {
             getCommandManager().register(new HealCommand(), "ultikits.tools.command.heal", i18n("指令治愈功能"), "heal", "h");
@@ -49,8 +61,12 @@ public class BasicFunctions extends UltiToolsPlugin {
             getCommandManager().register(new TpaCommands(), "ultikits.tools.command.tpa", i18n("传送请求功能"), "tpa");
             getCommandManager().register(new TpaHereCommands(), "ultikits.tools.command.tphere", i18n("请求传送到此功能"), "tphere");
         }
-        if (configEntity.isEnableSpeed()){
+        if (configEntity.isEnableSpeed()) {
             getCommandManager().register(new SpeedCommands(), "ultikits.tools.command.speed", i18n("速度设置功能"), "speed");
+        }
+        if (configEntity.isEnableBan()) {
+            getCommandManager().register(new BanCommands(), "ultikits.tools.command.uban", i18n("封禁功能"), "uban");
+            getListenerManager().register(this, new BanListener());
         }
         return true;
     }
