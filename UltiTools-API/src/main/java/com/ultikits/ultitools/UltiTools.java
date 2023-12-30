@@ -1,9 +1,5 @@
 package com.ultikits.ultitools;
 
-import cn.hutool.core.util.IdUtil;
-import cn.hutool.json.JSON;
-import cn.hutool.json.JSONUtil;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
@@ -25,7 +21,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -260,7 +255,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     public BukkitAudiences adventure() {
         if (this.adventure == null) {
-            throw new IllegalStateException("Tried to access Adventure when the plugin was disabled!");
+            throw new IllegalStateException("[UltiTools-API] Tried to access Adventure when the plugin was disabled!");
         }
         return this.adventure;
     }

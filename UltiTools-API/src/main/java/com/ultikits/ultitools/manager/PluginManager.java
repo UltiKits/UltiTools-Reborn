@@ -1,17 +1,18 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.interfaces.IPlugin;
+import com.ultikits.ultitools.utils.CommonUtils;
 import lombok.Getter;
 import org.bukkit.Bukkit;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
@@ -25,106 +26,122 @@ public class PluginManager {
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
-    private URLClassLoader urlClassLoader;
+    private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
 
     public void init() throws IOException {
-        Bukkit.getLogger().log(Level.INFO, "Initiating UltiTools plugins...");
         String currentPath = System.getProperty("user.dir");
-        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
+        String path = currentPath+ File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
         File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
+
         if (plugins == null) {
             return;
         }
 
-        URL[] urls = new URL[plugins.length];
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
 
-        for (int i = 0; i < plugins.length; i++) {
-            urls[i] = plugins[i].toURI().toURL();
+        for (File file : plugins) {
+            Bukkit.getLogger().log(Level.INFO, "  - " + file.getName());
         }
 
-        // 将jar文件组成数组，来创建一个URLClassLoader
-        urlClassLoader = new URLClassLoader(urls, UltiTools.getInstance().getPluginClassLoader());
         for (File file : plugins) {
-            try (JarFile jarFile = new JarFile(file)) {
-                Enumeration<JarEntry> entryEnumeration = jarFile.entries();
-                while (entryEnumeration.hasMoreElements()) {
-                    // 获取JarEntry对象
-                    JarEntry entry = entryEnumeration.nextElement();
-                    // 获取当前JarEntry对象的路径+文件名
-                    if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
-                        continue;
-                    }
-                    try {
-                        Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
-                        if (!IPlugin.class.isAssignableFrom(aClass)) {
-                            continue;
-                        }
-                        UltiToolsPlugin plugin = (UltiToolsPlugin) aClass.getDeclaredConstructor().newInstance();
-                        if (plugin.getPluginName() != null) {
-                            pluginList.add(plugin);
-                        }
-                    } catch (NoClassDefFoundError | InvocationTargetException | NoSuchMethodException ignored) {
-                    }
-                }
-            } catch (ClassNotFoundException | InstantiationException | IllegalAccessException ignored) {
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(file);
+            if (pluginClass != null) {
+                pluginClassList.add(pluginClass);
             }
         }
         int success = 0;
-        if (pluginList.isEmpty()) {
-            Bukkit.getLogger().log(Level.INFO, "No UltiTools plugins found.");
+        if (pluginClassList.isEmpty()) {
+            Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] No UltiTools plugin found.");
             return;
         }
-        Bukkit.getLogger().log(Level.INFO, String.format("%d UltiTools plugins found.", pluginList.size()));
-        for (int i = 0; i < pluginList.size(); i++) {
-            Bukkit.getLogger().log(Level.INFO, String.format("Now loading plugin %d", i + 1));
-            UltiToolsPlugin plugin = pluginList.get(i);
-            if (register(plugin)) {
+        Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
+        for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
+            if (register(pluginClass)) {
                 success++;
             }
         }
-        Bukkit.getLogger().log(Level.INFO, String.format("Successfully loaded %d plugins! Failed %d!", success, pluginList.size() - success));
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin Loading completed.");
+        Bukkit.getLogger().log(
+                Level.INFO,
+                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, pluginClassList.size() - success)
+        );
+    }
+
+    public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
+        UltiToolsPlugin plugin;
+        try {
+            plugin = initializePlugin(pluginClass);
+        } catch (Exception e) {
+            Bukkit.getLogger().log(
+                    Level.WARNING,
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+            );
+            return false;
+        }
+        boolean result = invokeRegisterSelf(plugin);
+        if (result) {
+            registerBukkit(plugin);
+        }
+        return result;
+    }
+
+    public boolean register(
+            Class<? extends UltiToolsPlugin> pluginClass,
+            String pluginName,
+            String version,
+            List<String> authors,
+            List<String> loadAfter,
+            int minUltiToolsVersion,
+            String mainClass
+    ) {
+        UltiToolsPlugin plugin;
+        try {
+            plugin = initializePlugin(
+                    pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
+            );
+        } catch (Exception e) {
+            Bukkit.getLogger().log(
+                    Level.WARNING,
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+            );
+            return false;
+        }
+        boolean result = invokeRegisterSelf(plugin);
+        if (result) {
+            registerBukkit(plugin);
+        }
+        return result;
     }
 
     public boolean register(UltiToolsPlugin plugin) {
-        if (!pluginList.contains(plugin)) {
-            pluginList.add(plugin);
-        }
-        if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
-            Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！UltiTools version is outdated！", plugin.getPluginName()));
-            return false;
-        }
         try {
-            EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
-            if (annotation != null && annotation.config()) {
-                UltiTools.getInstance().getConfigManager().registerAll(
-                        plugin,
-                        annotation.scanPackage().isEmpty() ?
-                                plugin.getClass().getPackage().getName() :
-                                annotation.scanPackage(),
-                        plugin.getClass().getClassLoader()
-                );
-            } else {
-                List<AbstractConfigEntity> allConfigs = plugin.getAllConfigs();
-                for (AbstractConfigEntity configEntity : allConfigs) {
-                    UltiToolsPlugin.getConfigManager().register(plugin, configEntity);
-                }
+            AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+            plugin.setContext(pluginContext);
+            pluginContext.setParent(UltiTools.getInstance().getContext());
+            pluginContext.registerShutdownHook();
+            pluginContext.setClassLoader(plugin.getClass().getClassLoader());
+            pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
+            pluginContext.refresh();
+            if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
+                ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
+                Class<?> clazz = contextEntry.value();
+                pluginContext.register(clazz);
+                pluginContext.refresh();
+                pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
             }
-            initPluginContext(plugin);
-            boolean registerSelf = plugin.registerSelf();
-            initAutoRegister(plugin);
-            if (registerSelf) {
-                Bukkit.getLogger().log(Level.INFO, String.format("%s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
-            } else {
-                plugin.getContext().close();
-                Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
-            }
-            return registerSelf;
         } catch (Exception e) {
-            Bukkit.getLogger().log(Level.WARNING, e, String::new);
-            Bukkit.getLogger().log(Level.WARNING, String.format("%s load failed！", plugin.getPluginName()));
+            Bukkit.getLogger().log(
+                    Level.WARNING,
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s", plugin.getPluginName())
+            );
             return false;
         }
+        boolean result = invokeRegisterSelf(plugin);
+        if (result) {
+            registerBukkit(plugin);
+        }
+        return result;
     }
 
     public void unregister(UltiToolsPlugin plugin) {
@@ -134,58 +151,124 @@ public class PluginManager {
     }
 
     public void close() {
-        Bukkit.getLogger().log(Level.INFO, "Unregistering all plugins...");
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
             unregister(plugin);
         }
         pluginList.clear();
-        try {
-            urlClassLoader.close();
-        } catch (IOException ignored) {
-        }
+        pluginClassList.clear();
     }
 
     public void reload() {
-        Bukkit.getLogger().log(Level.INFO, "Reloading all plugins...");
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Reloading all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
             plugin.reloadSelf();
         }
-        Bukkit.getLogger().log(Level.INFO, "All plugins reloaded.");
-        Bukkit.getLogger().log(Level.WARNING, "This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!");
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] All plugins reloaded.");
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                "[UltiTools-API] This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!"
+        );
     }
 
-    private void initPluginContext(UltiToolsPlugin plugin) {
-        plugin.getContext().setParent(UltiTools.getInstance().getContext());
-        plugin.getContext().registerShutdownHook();
-        plugin.getContext().setClassLoader(urlClassLoader);
-        if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
-            Class<?> contextEntry = plugin.getClass().getAnnotation(ContextEntry.class).value();
-            plugin.getContext().register(contextEntry);
-            plugin.getContext().refresh();
-            plugin.getContext().getAutowireCapableBeanFactory().autowireBean(plugin);
+    private Class<? extends UltiToolsPlugin> loadPluginMainClass(File pluginJar) {
+        try {
+            @SuppressWarnings("resource")
+            URLClassLoader classLoader = new URLClassLoader(
+                    new URL[]{pluginJar.toURI().toURL()},
+                    UltiTools.getInstance().getPluginClassLoader()
+            );
+            try (JarFile jarFile = new JarFile(pluginJar)) {
+                Enumeration<JarEntry> entryEnumeration = jarFile.entries();
+
+                while (entryEnumeration.hasMoreElements()) {
+                    JarEntry entry = entryEnumeration.nextElement();
+
+                    if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
+                        continue;
+                    }
+
+                    String className = entry
+                            .getName()
+                            .replace('/', '.')
+                            .replace(".class", "");
+
+                    try {
+                        Class<?> aClass = classLoader.loadClass(className);
+                        if (IPlugin.class.isAssignableFrom(aClass)) {
+                            return aClass.asSubclass(UltiToolsPlugin.class);
+                        }
+                    } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
+                    }
+                }
+            } catch (IOException ignored) {
+            }
+        } catch (MalformedURLException ignored) {
+        }
+        return null;
+    }
+
+
+    private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
+        if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
+            Bukkit.getLogger().log(
+                    Level.WARNING,
+                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName())
+            );
+            plugin.getContext().close();
+            return false;
+        }
+        try {
+            boolean registerSelf = plugin.registerSelf();
+            registerBukkit(plugin);
+            if (registerSelf) {
+                pluginList.add(plugin);
+                Bukkit.getLogger().log(
+                        Level.INFO,
+                        String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion())
+                );
+            } else {
+                plugin.getContext().close();
+                Bukkit.getLogger().log(
+                        Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion())
+                );
+            }
+            return registerSelf;
+        } catch (Exception e) {
+            Bukkit.getLogger().log(Level.WARNING, e, String::new);
+            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            return false;
         }
     }
 
-    private void initAutoRegister(UltiToolsPlugin plugin) {
+    private UltiToolsPlugin initializePlugin(Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+        pluginContext.setParent(UltiTools.getInstance().getContext());
+        pluginContext.registerShutdownHook();
+        pluginContext.setClassLoader(pluginClass.getClassLoader());
+        pluginContext.registerBean(pluginClass, constructorArgs);
+        pluginContext.refresh();
+        UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
+        pluginContext.setDisplayName(plugin.getPluginName());
+        pluginContext.setId(plugin.getPluginName());
+        plugin.setContext(pluginContext);
+        return plugin;
+    }
+
+    private void registerBukkit(UltiToolsPlugin plugin) {
         if (!plugin.getClass().isAnnotationPresent(EnableAutoRegister.class)) {
             return;
         }
         EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
-        if (annotation.cmdExecutor()) {
-            UltiTools.getInstance().getCommandManager().registerAll(
-                    plugin,
-                    annotation.scanPackage().isEmpty() ?
-                            plugin.getClass().getPackage().getName() :
-                            annotation.scanPackage()
-            );
-        }
-        if (annotation.eventListener()) {
-            UltiTools.getInstance().getListenerManager().registerAll(
-                    plugin,
-                    annotation.scanPackage().isEmpty() ?
-                            plugin.getClass().getPackage().getName() :
-                            annotation.scanPackage()
-            );
+        String[] packages = CommonUtils.getPluginPackages(plugin);
+        for (String packageName : packages) {
+            if (annotation.cmdExecutor()) {
+                UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
+            }
+            if (annotation.eventListener()) {
+                UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
+            }
         }
     }
 }
