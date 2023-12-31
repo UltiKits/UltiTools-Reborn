@@ -2,13 +2,16 @@ package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.io.FileUtil;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.*;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.CommonUtils;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -46,8 +49,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private final int minUltiToolsVersion;
     @Getter
     private final String mainClass;
+    @Setter
     @Getter
-    private final AnnotationConfigApplicationContext context;
+    private AnnotationConfigApplicationContext context;
 
     @SneakyThrows
     public UltiToolsPlugin(){
@@ -75,8 +79,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             language = new Language(file);
         }
         saveResources();
-
-        this.context = new AnnotationConfigApplicationContext();
+        initConfig();
     }
 
     @SneakyThrows
@@ -103,8 +106,23 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             language = new Language(file);
         }
         saveResources();
+        initConfig();
+    }
 
-        this.context = new AnnotationConfigApplicationContext();
+    public final void initConfig() {
+        EnableAutoRegister annotation = this.getClass().getAnnotation(EnableAutoRegister.class);
+        if (annotation != null && annotation.config()) {
+            for (String packageName : CommonUtils.getPluginPackages(this)) {
+                UltiTools.getInstance().getConfigManager().registerAll(
+                        this, packageName, this.getClass().getClassLoader()
+                );
+            }
+        } else {
+            List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
+            for (AbstractConfigEntity configEntity : allConfigs) {
+                UltiToolsPlugin.getConfigManager().register(this, configEntity);
+            }
+        }
     }
 
     private InputStream getInputStream() throws IOException {

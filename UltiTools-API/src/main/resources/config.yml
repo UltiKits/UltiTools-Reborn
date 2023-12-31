@@ -1,7 +1,7 @@
 datasource:
   type: "json"
 
-language: "en"
+language: "zh"
 
 web-editor:
   enable: true

@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.utils;
 
 import com.google.common.reflect.ClassPath;
+import org.bukkit.Bukkit;
 
 import java.lang.annotation.Annotation;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.logging.Level;
 
 public class PackageScanUtils {
     public static Set<Class<?>> scanAnnotatedClasses(
@@ -22,7 +24,7 @@ public class PackageScanUtils {
                 }
             }
         } catch (Exception e) {
-            ExceptionUtils.catchException(e);
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to scan annotated classes", e);
         }
         return classes;
     }
