@@ -75,7 +75,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return the version of the UltiTools
      */
     public static int getPluginVersion() {
-        return 603;
+        return 604;
     }
 
     /**

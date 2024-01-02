@@ -12,9 +12,8 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
 import java.io.File;
 import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
+import java.io.UnsupportedEncodingException;
+import java.net.*;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -175,7 +174,7 @@ public class PluginManager {
         try {
             @SuppressWarnings("resource")
             URLClassLoader classLoader = new URLClassLoader(
-                    new URL[]{pluginJar.toURI().toURL()},
+                    new URL[]{new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8"))},
                     UltiTools.getInstance().getPluginClassLoader()
             );
             try (JarFile jarFile = new JarFile(pluginJar)) {
@@ -204,6 +203,8 @@ public class PluginManager {
             } catch (IOException ignored) {
             }
         } catch (MalformedURLException ignored) {
+        } catch (UnsupportedEncodingException e) {
+            throw new RuntimeException(e);
         }
         return null;
     }
