@@ -18,7 +18,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.0.202310142230</version>
+            <version>6.0.3</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -78,7 +78,7 @@
                     <identifyString>UltiTools-Basic-Functions</identifyString>
                     <shortDescription>All basic functions of the UltiTools</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>F:\SpigotServers\Servers\1.19.4\plugins\UltiTools\plugins</pluginFolder>
+                    <pluginFolder>F:\SpigotServers\Servers\1.20.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>
             </plugin>
         </plugins>

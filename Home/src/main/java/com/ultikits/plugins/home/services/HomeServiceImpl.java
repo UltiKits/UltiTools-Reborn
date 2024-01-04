@@ -20,7 +20,7 @@ public class HomeServiceImpl implements HomeService {
     private final DataOperator<HomeEntity> dataOperator;
     private final TeleportService teleportService;
 
-    public HomeServiceImpl(HomeConfig homeConfig, DataOperator<HomeEntity> dataOperator, TeleportService teleportService) {
+    public HomeServiceImpl(DataOperator<HomeEntity> dataOperator, HomeConfig homeConfig, TeleportService teleportService) {
         this.homeConfig = homeConfig;
         this.dataOperator = dataOperator;
         this.teleportService = teleportService;

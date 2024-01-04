@@ -4,6 +4,9 @@ import cn.hutool.core.util.IdUtil;
 import cn.hutool.json.JSON;
 import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import org.springframework.context.annotation.ComponentScan;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -29,4 +32,26 @@ public class CommonUtils {
         }
         return json.getByPath("uuid").toString();
     }
+
+    public static String[] getPluginPackages(UltiToolsPlugin plugin) {
+        Class<?> pluginClass = plugin.getClass();
+        String[] packages;
+
+        if (!pluginClass.isAnnotationPresent(ComponentScan.class)) {
+            if (pluginClass.isAnnotationPresent(EnableAutoRegister.class)) {
+                EnableAutoRegister enableAutoRegister = pluginClass.getAnnotation(EnableAutoRegister.class);
+                packages = new String[]{enableAutoRegister.scanPackage()};
+            } else {
+                packages = new String[]{pluginClass.getPackage().getName()};
+            }
+        } else {
+            ComponentScan componentScan = pluginClass.getAnnotation(ComponentScan.class);
+            packages = (componentScan.value().length != 0) ? componentScan.value() :
+                    (componentScan.basePackages().length != 0) ? componentScan.basePackages() :
+                            new String[]{pluginClass.getPackage().getName()};
+        }
+
+        return packages;
+    }
+
 }
