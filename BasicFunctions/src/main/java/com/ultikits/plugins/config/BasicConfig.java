@@ -30,6 +30,8 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableSpeed = true;
     @ConfigEntry(path = "enableBan", comment = "是否启用封禁")
     private boolean enableBan = true;
+    @ConfigEntry(path = "enableBan", comment = "是否启用传送点")
+    private boolean enableWarp = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

@@ -9,19 +9,12 @@ import com.ultikits.plugins.listeners.JoinWelcomeListener;
 import com.ultikits.plugins.listeners.WhitelistListener;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-//import com.ultikits.ultitools.annotations.ContextEntry;
-//import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import lombok.Getter;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
-//@EnableAutoRegister(
-//        scanPackage = "com.ultikits.plugins",
-//        eventListener = false,
-//        cmdExecutor = false
-//)
 public class BasicFunctions extends UltiToolsPlugin {
     @Getter
     private static BasicFunctions instance;
@@ -68,6 +61,9 @@ public class BasicFunctions extends UltiToolsPlugin {
             getCommandManager().register(new BanCommands(), "ultikits.tools.command.uban", i18n("封禁功能"), "uban");
             getListenerManager().register(this, new BanListener());
         }
+        if (configEntity.isEnableWarp()) {
+            getCommandManager().register(new WarpCommands(), "ultikits.tools.command.warp", i18n("传送点功能"), "warp");
+        }
         return true;
     }
 
@@ -82,6 +78,8 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().unregister("tpa");
         getCommandManager().unregister("tphere");
         getCommandManager().unregister("speed");
+        getCommandManager().unregister("uban");
+        getCommandManager().unregister("warp");
         getListenerManager().unregisterAll(this);
     }
 
@@ -92,7 +90,7 @@ public class BasicFunctions extends UltiToolsPlugin {
 
     @Override
     public List<String> supported() {
-        return super.supported();
+        return Arrays.asList("zh", "en");
     }
 
     @Override

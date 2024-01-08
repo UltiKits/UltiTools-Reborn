@@ -57,5 +57,14 @@
   "速度设置功能": "Speed setting function",
   "你已被封禁! 原因: %s": "You have been banned! Reason: %s",
   "§a封禁成功！": "§aBanned successfully!",
-  "§a解封成功！": "§aUnbanned successfully!"
+  "§a解封成功！": "§aUnbanned successfully!",
+  "传送点功能": "Teleport point function",
+  "§a已添加传送点 %s": "§aTeleport point %s has been added",
+  "§a已删除传送点 %s": "§aTeleport point %s has been deleted",
+  "§a/warp list §7- §e查看所有传送点": "§a/warp list §7- §eView all teleport points",
+  "§a/warp tp <name> §7- §e传送至传送点": "§a/warp tp <name> §7- §eTeleport to teleport point",
+  "§a/warp add <name> §7- §e添加传送点": "§a/warp add <name> §7- §eAdd teleport point",
+  "§a/warp remove <name> §7- §e删除传送点": "§a/warp remove <name> §7- §eDelete teleport point",
+  "所在世界 %s": "World: %s",
+  "传送点列表": "Teleport point list"
 }

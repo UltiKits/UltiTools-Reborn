@@ -18,3 +18,5 @@ enableTpa: true
 enableSpeed: true
 # 是否启用封禁功能
 enableBan: true
+# 是否启用封禁功能
+enableWarp: true

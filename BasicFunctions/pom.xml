@@ -6,7 +6,7 @@
 
     <groupId>com.ultikits.plugins</groupId>
     <artifactId>BasicFunctions</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
@@ -76,7 +76,7 @@
                 <configuration>
                     <name>BasicFunctions</name>
                     <identifyString>UltiTools-Basic-Functions</identifyString>
-                    <shortDescription>All basic functions of the UltiTools</shortDescription>
+                    <shortDescription>开服必装！所有的杂七杂八的小功能哦！包括不限于TPA，飞行，模式更改，白名单，随机传送。</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
                     <pluginFolder>F:\SpigotServers\Servers\1.20.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>

@@ -88,7 +88,7 @@
                 <configuration>
                     <name>MysqlConnector</name>
                     <identifyString>MysqlConnector</identifyString>
-                    <shortDescription>A MysqlConnector Plugin</shortDescription>
+                    <shortDescription>连接MySQL数据库的必须前置模块</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
                     <pluginFolder>F:\SpigotServers\Servers\1.19.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>
