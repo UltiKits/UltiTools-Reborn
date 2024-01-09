@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import com.ultikits.ultitools.annotations.I18n;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -19,9 +20,8 @@ public interface Localized {
      * @return 支持的语言代码 Supported language codes
      */
     default List<String> supported() {
-        Class<? extends Localized> clazz = this.getClass();
-        if (clazz.isAnnotationPresent(I18n.class)) {
-            I18n i18n = clazz.getAnnotation(I18n.class);
+        I18n i18n = AnnotationUtils.findAnnotation(this.getClass(), I18n.class);
+        if (i18n != null) {
             return Arrays.asList(i18n.value());
         } else {
             return new ArrayList<>();
