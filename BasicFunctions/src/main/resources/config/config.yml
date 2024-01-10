@@ -20,3 +20,7 @@ enableSpeed: true
 enableBan: true
 # 是否启用封禁功能
 enableWarp: true
+# 是否启用重生点设置
+enableSpawn: true
+# 是否启用Lore编辑器
+enableLoreEditor: true

@@ -64,6 +64,13 @@ public class BasicFunctions extends UltiToolsPlugin {
         if (configEntity.isEnableWarp()) {
             getCommandManager().register(new WarpCommands(), "ultikits.tools.command.warp", i18n("传送点功能"), "warp");
         }
+        if (configEntity.isEnableSpawn()) {
+            getCommandManager().register(new SpawnCommands(), "ultikits.tools.command.spawn", i18n("重生点功能"), "spawn");
+            getCommandManager().register(new SpawnCommands(), "ultikits.tools.command.setspawn", i18n("重生点功能"), "setspawn");
+        }
+        if (configEntity.isEnableLoreEditor()){
+            getCommandManager().register(new LoreCommands(), "ultikits.tools.command.lore", i18n("物品Lore编辑功能"), "lore");
+        }
         return true;
     }
 
@@ -80,6 +87,9 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().unregister("speed");
         getCommandManager().unregister("uban");
         getCommandManager().unregister("warp");
+        getCommandManager().unregister("spawn");
+        getCommandManager().unregister("setspawn");
+        getCommandManager().unregister("lore");
         getListenerManager().unregisterAll(this);
     }
 

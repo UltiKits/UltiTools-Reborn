@@ -66,5 +66,20 @@
   "§a/warp add <name> §7- §e添加传送点": "§a/warp add <name> §7- §eAdd teleport point",
   "§a/warp remove <name> §7- §e删除传送点": "§a/warp remove <name> §7- §eDelete teleport point",
   "所在世界 %s": "World: %s",
-  "传送点列表": "Teleport point list"
+  "传送点列表": "Teleport point list",
+  "未找到世界！": "World not found!",
+  "这个世界没有重生点！": "This world has no respawn point!",
+  "已重设世界重生点！": "World respawn point has been reset!",
+  "传送到世界重生点": "Teleport to world respawn point",
+  "重生点功能": "Spawn point function",
+  "设置世界重生点": "Set world respawn point",
+  "请手持物品来修改Lore": "Please hold the item to modify the Lore",
+  "物品Lore为空": "Item Lore is empty",
+  "物品Lore已修改": "Item Lore has been modified",
+  "物品Lore编辑功能": "Item Lore editing function",
+  "添加Lore": "Add Lore",
+  "删除Lore": "Delete Lore",
+  "修改Lore": "Modify Lore",
+  "<内容>": "<content>",
+  "<- 请输入对应的lore行数": "<- Please enter the lore line number"
 }

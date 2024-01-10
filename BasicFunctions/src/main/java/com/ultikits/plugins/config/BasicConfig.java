@@ -32,6 +32,10 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableBan = true;
     @ConfigEntry(path = "enableBan", comment = "是否启用传送点")
     private boolean enableWarp = true;
+    @ConfigEntry(path = "enableSpawn", comment = "是否启用重生点设置")
+    private boolean enableSpawn = true;
+    @ConfigEntry(path = "enableLoreEditor", comment = "是否启用Lore编辑器")
+    private boolean enableLoreEditor = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);
