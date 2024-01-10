@@ -15,6 +15,7 @@ import lombok.Setter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.*;
 import java.net.JarURLConnection;
@@ -110,7 +111,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     public final void initConfig() {
-        EnableAutoRegister annotation = this.getClass().getAnnotation(EnableAutoRegister.class);
+        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
             for (String packageName : CommonUtils.getPluginPackages(this)) {
                 UltiTools.getInstance().getConfigManager().registerAll(

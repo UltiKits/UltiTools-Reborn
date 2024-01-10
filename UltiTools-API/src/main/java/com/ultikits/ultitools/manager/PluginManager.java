@@ -9,6 +9,7 @@ import com.ultikits.ultitools.utils.CommonUtils;
 import lombok.Getter;
 import org.bukkit.Bukkit;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -258,10 +259,10 @@ public class PluginManager {
     }
 
     private void registerBukkit(UltiToolsPlugin plugin) {
-        if (!plugin.getClass().isAnnotationPresent(EnableAutoRegister.class)) {
+        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(plugin.getClass(), EnableAutoRegister.class);
+        if (annotation == null) {
             return;
         }
-        EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
         String[] packages = CommonUtils.getPluginPackages(plugin);
         for (String packageName : packages) {
             if (annotation.cmdExecutor()) {
