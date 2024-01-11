@@ -212,6 +212,21 @@ public class PluginManager {
 
 
     private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
+        for (UltiToolsPlugin plugin1 : pluginList){
+            if (!plugin1.getMainClass().equals(plugin.getMainClass())){
+                continue;
+            }
+            if (plugin1.isNewerVersionThan(plugin)){
+                Bukkit.getLogger().log(
+                        Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName())
+                );
+                plugin.getContext().close();
+                return false;
+            }else if (plugin.isNewerVersionThan(plugin1)){
+                plugin1.unregisterSelf();
+            }
+        }
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(
                     Level.WARNING,

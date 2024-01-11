@@ -1,6 +1,5 @@
 package com.ultikits.plugins.commands;
 
-import com.nametagedit.plugin.NametagEdit;
 import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractPlayerCommandExecutor;
@@ -19,6 +18,10 @@ import static com.ultikits.ultitools.utils.MessageUtils.info;
 
 public class HideCommands extends AbstractPlayerCommandExecutor {
     private static final List<UUID> hidePlayers = new ArrayList<>();
+
+    public static void removeHidePlayer(UUID uuid) {
+        hidePlayers.remove(uuid);
+    }
 
     @Override
     protected boolean onPlayerCommand(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
@@ -50,18 +53,14 @@ public class HideCommands extends AbstractPlayerCommandExecutor {
                     }
                 }
             }.runTaskAsynchronously(UltiTools.getInstance());
+            player.sendMessage(info(BasicFunctions.getInstance().i18n("你已进入隐身")));
         }
-        player.sendMessage(info(BasicFunctions.getInstance().i18n("你已进入隐身")));
         return true;
     }
 
     @Override
     protected void sendHelpMessage(CommandSender commandSender) {
         commandSender.sendMessage(info(BasicFunctions.getInstance().i18n("/hide - 开启/关闭隐身")));
-    }
-
-    public static void removeHidePlayer(UUID uuid) {
-        hidePlayers.remove(uuid);
     }
 }
 

@@ -64,7 +64,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         authors                        = pluginConfig.getStringList("authors");
         loadAfter                      = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion            = pluginConfig.getInt("api-version");
-        mainClass                      = pluginConfig.getString("mainClass");
+        mainClass                      = pluginConfig.getString("main");
         inputStream.close();
         reader.close();
 
@@ -240,5 +240,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Override
     public final String i18n(String code, String str) {
         return this.getLanguage().getLocalizedText(str);
+    }
+
+    public boolean isNewerVersionThan(UltiToolsPlugin plugin){
+        return this.getVersion().compareTo(plugin.getVersion()) > 0;
     }
 }
