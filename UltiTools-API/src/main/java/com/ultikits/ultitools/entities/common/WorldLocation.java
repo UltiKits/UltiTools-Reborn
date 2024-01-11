@@ -2,6 +2,7 @@ package com.ultikits.ultitools.entities.common;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 
 import java.io.Serializable;
@@ -32,6 +33,10 @@ public class WorldLocation implements Serializable {
         this.z = z;
         this.yaw = yaw;
         this.pitch = pitch;
+    }
+
+    public Location toLocation() {
+        return new Location(Bukkit.getWorld(world), x, y, z, yaw, pitch);
     }
 
     @Override

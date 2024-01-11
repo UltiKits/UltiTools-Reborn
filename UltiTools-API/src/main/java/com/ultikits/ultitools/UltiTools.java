@@ -1,6 +1,5 @@
 package com.ultikits.ultitools;
 
-import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.context.ContextConfig;
@@ -8,6 +7,7 @@ import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import lombok.Getter;
@@ -194,6 +194,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 this,
                 ServicePriority.Normal
         );
+
+        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
     }
 
     /**

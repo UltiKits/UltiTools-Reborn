@@ -121,7 +121,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     @CmdMapping(format = "install <plugin> <version>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
         if (PluginInstallUtils.installPlugin(plugin, version)) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！"));
+            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
         } else {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }
@@ -130,7 +130,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
     @CmdMapping(format = "install <plugin>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         if (PluginInstallUtils.installLatestPlugin(plugin)) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！"));
+            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
         } else {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }
