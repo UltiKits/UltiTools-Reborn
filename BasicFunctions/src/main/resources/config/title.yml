@@ -1,0 +1,8 @@
+# 玩家名前缀
+prefix: "&e[&dLv.%player_level%&e]"
+# 玩家名后缀
+suffix: "&e[&a%player_health_rounded%&e/&a%player_max_health_rounded%&e]"
+# 玩家头顶显示更新间隔（单位：tick，一般20代表1秒）
+updateInterval: 20
+# 是否启用Nametagedit插件支持
+enableNameTagEdit: false

@@ -24,3 +24,7 @@ enableWarp: true
 enableSpawn: true
 # 是否启用Lore编辑器
 enableLoreEditor: true
+# 是否启用隐身功能
+enableHide: true
+# 是否启用玩家头顶显示功能
+enableTitle: true

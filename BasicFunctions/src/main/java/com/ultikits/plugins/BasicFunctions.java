@@ -3,10 +3,10 @@ package com.ultikits.plugins;
 import com.ultikits.plugins.commands.*;
 import com.ultikits.plugins.config.BasicConfig;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
-import com.ultikits.plugins.listeners.BackListener;
-import com.ultikits.plugins.listeners.BanListener;
-import com.ultikits.plugins.listeners.JoinWelcomeListener;
-import com.ultikits.plugins.listeners.WhitelistListener;
+import com.ultikits.plugins.config.PlayerNameTagConfig;
+import com.ultikits.plugins.listeners.*;
+import com.ultikits.plugins.tasks.NamePrefixSuffixTask;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import lombok.Getter;
@@ -71,6 +71,15 @@ public class BasicFunctions extends UltiToolsPlugin {
         if (configEntity.isEnableLoreEditor()){
             getCommandManager().register(new LoreCommands(), "ultikits.tools.command.lore", i18n("物品Lore编辑功能"), "lore");
         }
+        if (configEntity.isEnableHide()) {
+            getCommandManager().register(new HideCommands(), "ultikits.tools.command.hide", i18n("隐身功能"), "hide");
+            getListenerManager().register(this, new HideListener());
+        }
+        if (configEntity.isEnableTitle()) {
+            getListenerManager().register(this, new PlayerNameTagListener());
+            int updateInterval = getConfig(PlayerNameTagConfig.class).getUpdateInterval();
+            new NamePrefixSuffixTask().runTaskTimer(UltiTools.getInstance(), 0, updateInterval);
+        }
         return true;
     }
 
@@ -90,6 +99,7 @@ public class BasicFunctions extends UltiToolsPlugin {
         getCommandManager().unregister("spawn");
         getCommandManager().unregister("setspawn");
         getCommandManager().unregister("lore");
+        getCommandManager().unregister("hide");
         getListenerManager().unregisterAll(this);
     }
 
@@ -107,7 +117,8 @@ public class BasicFunctions extends UltiToolsPlugin {
     public List<AbstractConfigEntity> getAllConfigs() {
         return Arrays.asList(
                 new BasicConfig("config/config.yml"),
-                new JoinWelcomeConfig("config/join.yml")
+                new JoinWelcomeConfig("config/join.yml"),
+                new PlayerNameTagConfig("config/title.yml")
         );
     }
 }

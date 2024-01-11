@@ -36,6 +36,10 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableSpawn = true;
     @ConfigEntry(path = "enableLoreEditor", comment = "是否启用Lore编辑器")
     private boolean enableLoreEditor = true;
+    @ConfigEntry(path = "enableHide", comment = "是否启用隐身功能")
+    private boolean enableHide = true;
+    @ConfigEntry(path = "enableTitle", comment = "是否启用头顶显示功能")
+    private boolean enableTitle = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);
