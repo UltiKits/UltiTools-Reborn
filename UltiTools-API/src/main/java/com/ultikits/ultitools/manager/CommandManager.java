@@ -6,6 +6,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
 import org.bukkit.command.PluginCommand;
@@ -15,30 +16,38 @@ import org.bukkit.plugin.SimplePluginManager;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 public class CommandManager {
+    private final Map<UltiToolsPlugin, List<Command>> commandListMap = new HashMap<>();
 
-    public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+    public void register (UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
-
         command.setAliases(Arrays.asList(aliases));
         command.setPermission(permission);
         command.setDescription(description);
         getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
         command.setExecutor(commandExecutor);
+        commandListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
+        List<Command> commands = commandListMap.get(plugin);
+        if (!commands.contains(command)) {
+            commands.add(command);
+        }
     }
 
     public void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor) {
-        plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
-        register(commandExecutor);
-    }
+        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
 
-    public void unregister(String name) {
-        PluginCommand command = getCommand(name, UltiTools.getInstance());
-        command.unregister(getCommandMap());
+        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
+            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
+            register(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
+        } else {
+            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
+        }
+        if (plugin.getContext().getBeanNamesForType(CommandExecutor.class).length == 0) {
+            plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
+        }
+        register(commandExecutor);
     }
 
     public void registerAll(UltiToolsPlugin plugin, String packageName) {
@@ -60,6 +69,38 @@ public class CommandManager {
         }
     }
 
+    public void registerAll(UltiToolsPlugin plugin) {
+        for(String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
+            CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
+            register(plugin, commandExecutor);
+        }
+    }
+
+    public void unregister(String name) {
+        PluginCommand command = getCommand(name, UltiTools.getInstance());
+        command.unregister(getCommandMap());
+    }
+
+    public void unregisterAll(UltiToolsPlugin plugin) {
+        List<Command> commands = commandListMap.get(plugin);
+        if (commands == null) return;
+        for (Command command : commands) {
+            unregister(command.getName());
+        }
+    }
+
+    @Deprecated
+    public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+        PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
+
+        command.setAliases(Arrays.asList(aliases));
+        command.setPermission(permission);
+        command.setDescription(description);
+        getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
+        command.setExecutor(commandExecutor);
+    }
+
+    @Deprecated
     public void register(CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
 
