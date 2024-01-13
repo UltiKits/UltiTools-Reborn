@@ -42,6 +42,13 @@ public class ListenerManager {
         }
     }
 
+    public void registerAll(UltiToolsPlugin plugin) {
+        for (String listenerBean : plugin.getContext().getBeanNamesForType(Listener.class)) {
+            Listener listener = plugin.getContext().getBean(listenerBean, Listener.class);
+            register(plugin, listener);
+        }
+    }
+
     public void unregister(Listener listener) {
         HandlerList.unregisterAll(listener);
     }

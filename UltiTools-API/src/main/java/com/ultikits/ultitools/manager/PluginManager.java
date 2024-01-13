@@ -14,7 +14,11 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.*;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -81,7 +85,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, true);
         }
         return result;
     }
@@ -95,6 +99,19 @@ public class PluginManager {
             int minUltiToolsVersion,
             String mainClass
     ) {
+        URLClassLoader urlClassLoader = (URLClassLoader) pluginClass.getClassLoader();
+        Method method;
+        try {
+            method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
+        method.setAccessible(true);
+        try {
+            method.invoke(urlClassLoader, getServerJar());
+        } catch (IllegalAccessException | InvocationTargetException e) {
+            throw new RuntimeException(e);
+        }
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
@@ -109,7 +126,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, false);
         }
         return result;
     }
@@ -139,7 +156,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, false);
         }
         return result;
     }
@@ -175,7 +192,10 @@ public class PluginManager {
         try {
             @SuppressWarnings("resource")
             URLClassLoader classLoader = new URLClassLoader(
-                    new URL[]{new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8"))},
+                    new URL[]{
+                            new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
+                            getServerJar()
+                    },
                     UltiTools.getInstance().getPluginClassLoader()
             );
             try (JarFile jarFile = new JarFile(pluginJar)) {
@@ -237,7 +257,6 @@ public class PluginManager {
         }
         try {
             boolean registerSelf = plugin.registerSelf();
-            registerBukkit(plugin);
             if (registerSelf) {
                 pluginList.add(plugin);
                 Bukkit.getLogger().log(
@@ -273,7 +292,7 @@ public class PluginManager {
         return plugin;
     }
 
-    private void registerBukkit(UltiToolsPlugin plugin) {
+    private void registerBukkit(UltiToolsPlugin plugin, boolean flag) {
         EnableAutoRegister annotation = AnnotationUtils.findAnnotation(plugin.getClass(), EnableAutoRegister.class);
         if (annotation == null) {
             return;
@@ -281,11 +300,28 @@ public class PluginManager {
         String[] packages = CommonUtils.getPluginPackages(plugin);
         for (String packageName : packages) {
             if (annotation.cmdExecutor()) {
-                UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
+                if (flag) {
+                    UltiTools.getInstance().getCommandManager().registerAll(plugin);
+                } else {
+                    UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
+                }
             }
             if (annotation.eventListener()) {
-                UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
+                if (flag) {
+                    UltiTools.getInstance().getListenerManager().registerAll(plugin);
+                } else {
+                    UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
+                }
             }
         }
+    }
+
+    private URL getServerJar() {
+        ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
+        CodeSource codeSource = protectionDomain.getCodeSource();
+        if (codeSource == null) {
+            return null;
+        }
+        return codeSource.getLocation();
     }
 }
