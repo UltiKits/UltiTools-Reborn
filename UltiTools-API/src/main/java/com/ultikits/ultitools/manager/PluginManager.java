@@ -99,19 +99,10 @@ public class PluginManager {
             int minUltiToolsVersion,
             String mainClass
     ) {
-        URLClassLoader urlClassLoader = (URLClassLoader) pluginClass.getClassLoader();
-        Method method;
-        try {
-            method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
-        }
-        method.setAccessible(true);
-        try {
-            method.invoke(urlClassLoader, getServerJar());
-        } catch (IllegalAccessException | InvocationTargetException e) {
-            throw new RuntimeException(e);
-        }
+        URLClassLoader urlClassLoader = new URLClassLoader(
+                new URL[]{CommonUtils.getServerJar()},
+                pluginClass.getClassLoader()
+        );
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
@@ -194,7 +185,7 @@ public class PluginManager {
             URLClassLoader classLoader = new URLClassLoader(
                     new URL[]{
                             new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
-                            getServerJar()
+                            CommonUtils.getServerJar()
                     },
                     UltiTools.getInstance().getPluginClassLoader()
             );
@@ -299,14 +290,5 @@ public class PluginManager {
                 }
             }
         }
-    }
-
-    private URL getServerJar() {
-        ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
-        CodeSource codeSource = protectionDomain.getCodeSource();
-        if (codeSource == null) {
-            return null;
-        }
-        return codeSource.getLocation();
     }
 }

@@ -3,13 +3,13 @@ package com.ultikits.ultitools;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
-import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
+import com.ultikits.ultitools.utils.CommonUtils;
 import lombok.Getter;
 import lombok.Setter;
 import mc.obliviate.inventory.InventoryAPI;
@@ -22,6 +22,9 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -163,10 +166,23 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String result = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
+        // Plugin classloader initialization
+        pluginClassLoader = getClassLoader();
+        URL serverJar = CommonUtils.getServerJar();
+        try {
+            if (serverJar != null) {
+                String name = new File(serverJar.toURI()).getName().split("\\.jar")[0];
+                Bukkit.getLogger().info("[UltiTools-API] Spigot API detected: " + name);
+            }
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
+        URLClassLoader classLoader = new URLClassLoader(new URL[]{serverJar}, pluginClassLoader);
+
         // Spring context initialization
         pluginClassLoader = getClassLoader();
         context = new AnnotationConfigApplicationContext();
-        context.setClassLoader(pluginClassLoader);
+        context.setClassLoader(classLoader);
         context.register(ContextConfig.class);
         context.refresh();
         context.registerShutdownHook();
@@ -185,8 +201,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
 
         // bukkit plugin registration
-        getCommandManager().register(new UltiToolsCommands());
-        getCommandManager().register(new PluginInstallCommands());
+        getCommandManager().register(context.getBean(UltiToolsCommands.class));
+        getCommandManager().register(context.getBean(PluginInstallCommands.class));
 
         Bukkit.getServicesManager().register(
                 PluginManager.class,

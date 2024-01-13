@@ -23,7 +23,7 @@ public class DataStoreManager {
     }
 
     public static void close() {
-        Bukkit.getLogger().log(Level.INFO, "Unregistering all data operators...");
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all data operators...");
         for (DataStore dataStore : dataMap.values()) {
             dataStore.destroyAllOperators();
         }
