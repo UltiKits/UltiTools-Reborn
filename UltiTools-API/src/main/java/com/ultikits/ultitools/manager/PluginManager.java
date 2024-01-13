@@ -14,11 +14,7 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.*;
-import java.security.CodeSource;
-import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -99,19 +95,6 @@ public class PluginManager {
             int minUltiToolsVersion,
             String mainClass
     ) {
-        URLClassLoader urlClassLoader = (URLClassLoader) pluginClass.getClassLoader();
-        Method method;
-        try {
-            method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
-        }
-        method.setAccessible(true);
-        try {
-            method.invoke(urlClassLoader, getServerJar());
-        } catch (IllegalAccessException | InvocationTargetException e) {
-            throw new RuntimeException(e);
-        }
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
@@ -194,7 +177,7 @@ public class PluginManager {
             URLClassLoader classLoader = new URLClassLoader(
                     new URL[]{
                             new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
-                            getServerJar()
+                            CommonUtils.getServerJar()
                     },
                     UltiTools.getInstance().getPluginClassLoader()
             );
@@ -279,10 +262,14 @@ public class PluginManager {
     }
 
     private UltiToolsPlugin initializePlugin(Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        URLClassLoader urlClassLoader = new URLClassLoader(
+                new URL[]{CommonUtils.getServerJar()},
+                pluginClass.getClassLoader()
+        );
         AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
         pluginContext.setParent(UltiTools.getInstance().getContext());
         pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(pluginClass.getClassLoader());
+        pluginContext.setClassLoader(urlClassLoader);
         pluginContext.registerBean(pluginClass, constructorArgs);
         pluginContext.refresh();
         UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
@@ -314,14 +301,5 @@ public class PluginManager {
                 }
             }
         }
-    }
-
-    private URL getServerJar() {
-        ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
-        CodeSource codeSource = protectionDomain.getCodeSource();
-        if (codeSource == null) {
-            return null;
-        }
-        return codeSource.getLocation();
     }
 }
