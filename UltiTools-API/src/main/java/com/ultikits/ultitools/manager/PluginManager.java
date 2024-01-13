@@ -14,11 +14,7 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.*;
-import java.security.CodeSource;
-import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -99,10 +95,6 @@ public class PluginManager {
             int minUltiToolsVersion,
             String mainClass
     ) {
-        URLClassLoader urlClassLoader = new URLClassLoader(
-                new URL[]{CommonUtils.getServerJar()},
-                pluginClass.getClassLoader()
-        );
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
@@ -255,10 +247,14 @@ public class PluginManager {
     }
 
     private UltiToolsPlugin initializePlugin(Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        URLClassLoader urlClassLoader = new URLClassLoader(
+                new URL[]{CommonUtils.getServerJar()},
+                pluginClass.getClassLoader()
+        );
         AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
         pluginContext.setParent(UltiTools.getInstance().getContext());
         pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(pluginClass.getClassLoader());
+        pluginContext.setClassLoader(urlClassLoader);
         pluginContext.registerBean(pluginClass, constructorArgs);
         pluginContext.refresh();
         UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
