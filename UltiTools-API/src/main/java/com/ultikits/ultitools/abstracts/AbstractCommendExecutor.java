@@ -78,26 +78,32 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     }
 
     private static Map<String, String[]> getParams(String[] args, String format) {
+        if (args.length == 0) {
+            return Collections.emptyMap();
+        }
+
         String[] formatArgs = format.split(" ");
         Map<String, String[]> params = new HashMap<>();
         List<String> paramList = new ArrayList<>();
         int index = 0;
 
         for (String arg : args) {
-            if (index < formatArgs.length - 1) {
-                String formatArg = formatArgs[index];
-                if (formatArg.startsWith("<") && formatArg.endsWith(">")) {
-                    String paramName = formatArg.substring(1, formatArg.length() - 1);
-                    params.put(paramName, new String[]{arg});
-                }
-                index++;
-            } else {
-                if (formatArgs[index].startsWith("<") && formatArgs[index].endsWith("...>")) {
-                    paramList.add(arg);
-                }
+            String currentFormatArg = formatArgs[index];
+
+            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith("...>")) {
+                paramList.add(arg);
+            } else if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith(">")) {
+                String paramName = currentFormatArg.substring(1, currentFormatArg.length() - 1);
+                params.put(paramName, new String[]{arg});
             }
+
+            index = (index + 1) % formatArgs.length;
         }
-        params.put(formatArgs[index].substring(1, formatArgs[index].length() - 1), paramList.toArray(new String[0]));
+
+        if (!paramList.isEmpty()) {
+            params.put(formatArgs[index].substring(1, formatArgs[index].length() - 1), paramList.toArray(new String[0]));
+        }
+
         return params;
     }
 
@@ -300,6 +306,8 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                     paramList.add(parseType(value, paramType));
                 } catch (Exception e) {
                     commandSender.sendMessage(ChatColor.RED + e.getMessage());
+                    //noinspection CallToPrintStackTrace
+                    e.printStackTrace();
                     return null;
                 }
             } else {
