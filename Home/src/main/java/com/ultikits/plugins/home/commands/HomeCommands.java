@@ -8,6 +8,7 @@ import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,11 +17,9 @@ import java.util.List;
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(permission = "ultikits.home.command.all", description = "家功能", alias = {"home"})
 public class HomeCommands extends AbstractCommendExecutor {
-    private final HomeService homeService;
-
-    public HomeCommands(HomeService homeService) {
-        this.homeService = homeService;
-    }
+    @SuppressWarnings("SpringJavaInjectionPointsAutowiringInspection")
+    @Autowired
+    private HomeService homeService;
 
     @CmdMapping(format = "list")
     public void openList(@CmdSender Player player) {

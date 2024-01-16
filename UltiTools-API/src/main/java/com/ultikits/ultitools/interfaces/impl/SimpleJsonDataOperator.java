@@ -61,7 +61,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
 
     @Override
     public boolean exist(WhereCondition... whereConditions) {
-        return !getAll(whereConditions).isEmpty();
+        return getAll(whereConditions).size() > 0;
     }
 
     @Override

@@ -3,7 +3,10 @@ package com.ultikits.ultitools.commands;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.command.*;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
 import org.bukkit.command.CommandSender;
 
 import java.io.IOException;

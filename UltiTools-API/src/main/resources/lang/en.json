@@ -28,7 +28,7 @@
   "   简介：": "   Intro:",
   "========  第%d页  ========": "========  Page %d  ========",
   "安装失败！": "Install Failed!",
-  "安装成功！请重启服务器！请务必删除旧版本模块！": "Installed! Please restart the server! Please be sure to delete the old version module!",
+  "安装成功！请重启服务器！": "Installed! Please restart the server!",
   "========|插件安装帮助|========": "========|Plugin Install Help|========",
   "/upm list [页数] - 查看可用插件列表": "/upm list [page] - View available plugin list",
   "/upm install [插件] - 安装最新插件": "/upm install [plugin] - Install latest plugin",

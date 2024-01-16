@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <artifactId>UltiTools-API</artifactId>
     <groupId>com.ultikits</groupId>
-    <version>6.0.5</version>
+    <version>6.0.4</version>
     <modelVersion>4.0.0</modelVersion>
     <name>UltiTools-API</name>
     <description>This project is the base of the Ultitools plugin development.</description>
@@ -36,8 +36,7 @@
     <properties>
         <java.version>1.8</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <gui.version>4.3.0</gui.version>
-        <hutool.version>5.8.25</hutool.version>
+        <gui.version>4.1.13</gui.version>
     </properties>
 
     <distributionManagement>
@@ -132,7 +131,6 @@
                             <outputDirectory>
                                 ${project.build.directory}/UltiTools/lib
                             </outputDirectory>
-                            <excludeScope>provided</excludeScope>
                         </configuration>
                     </execution>
                 </executions>
@@ -205,18 +203,6 @@
                     <autoReleaseAfterClose>true</autoReleaseAfterClose>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>com.ultikits</groupId>
-                <artifactId>ultitools-maven-plugin</artifactId>
-                <version>1.0.0</version>
-                <configuration>
-                    <name>UltiTools-API</name>
-                    <identifyString>UltiTools-API</identifyString>
-                    <shortDescription>UltiTools-API</shortDescription>
-                    <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>F:\SpigotServers\Paper\1.20.4\plugins</pluginFolder>
-                </configuration>
-            </plugin>
         </plugins>
         <resources>
             <resource>
@@ -265,7 +251,7 @@
         <dependency>
             <groupId>com.github.MilkBowl</groupId>
             <artifactId>VaultAPI</artifactId>
-            <version>1.7.1</version>
+            <version>1.7</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -275,38 +261,8 @@
         </dependency>
         <dependency>
             <groupId>cn.hutool</groupId>
-            <artifactId>hutool-core</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-crypto</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-db</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-json</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-cache</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-cron</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-http</artifactId>
-            <version>${hutool.version}</version>
+            <artifactId>hutool-all</artifactId>
+            <version>5.8.20</version>
         </dependency>
         <dependency>
             <groupId>mysql</groupId>
@@ -323,7 +279,7 @@
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-platform-bukkit</artifactId>
-            <version>4.3.2</version>
+            <version>4.3.0</version>
         </dependency>
         <dependency>
             <groupId>com.github.hamza-cskn</groupId>
@@ -334,12 +290,6 @@
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
             <version>5.3.31</version>
-        </dependency>
-        <dependency>
-            <groupId>me.clip</groupId>
-            <artifactId>placeholderapi</artifactId>
-            <version>2.11.4</version>
-            <scope>provided</scope>
         </dependency>
     </dependencies>
 
