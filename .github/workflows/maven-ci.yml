@@ -37,7 +37,7 @@ jobs:
         name: ultitools-artifact
         path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
         
-    release:
+  release:
     needs: build
     runs-on: ubuntu-latest
 
