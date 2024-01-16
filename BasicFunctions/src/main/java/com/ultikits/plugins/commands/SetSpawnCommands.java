@@ -8,30 +8,31 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import static com.ultikits.ultitools.utils.MessageUtils.error;
+import static com.ultikits.ultitools.utils.MessageUtils.info;
 
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
-@CmdExecutor(alias = {"spawn"}, manualRegister = true, permission = "ultikits.tools.command.spawn", description = "重生点功能")
-public class SpawnCommands extends AbstractCommendExecutor {
+@CmdExecutor(alias = {"setspawn"}, manualRegister = true, permission = "ultikits.tools.command.setspawn", description = "重生点功能")
+public class SetSpawnCommands extends AbstractCommendExecutor {
 
     @CmdMapping(format = "")
-    public void spawn(@CmdSender Player player) {
-        if (player.getLocation().getWorld() == null) {
+    public void setSpawn(@CmdSender Player player) {
+        Location location = player.getLocation();
+        World world = location.getWorld();
+        if (world == null) {
             player.sendMessage(error(BasicFunctions.getInstance().i18n("未找到世界！")));
             return;
         }
-        if (player.getLocation().getWorld().getSpawnLocation().equals(new Location(player.getLocation().getWorld(), 0, 0, 0, 0, 0))) {
-            player.sendMessage(error(BasicFunctions.getInstance().i18n("这个世界没有重生点！")));
-            return;
-        }
-        player.teleport(player.getLocation().getWorld().getSpawnLocation());
+        world.setSpawnLocation(location);
+        player.sendMessage(info(BasicFunctions.getInstance().i18n("已重设世界重生点！")));
     }
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.RED + "spawn" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("传送到世界重生点"));
+        sender.sendMessage(ChatColor.RED + "setspawn" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("设置世界重生点"));
     }
 }

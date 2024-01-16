@@ -28,3 +28,5 @@ enableLoreEditor: true
 enableHide: true
 # 是否启用玩家头顶显示功能
 enableTitle: true
+# 是否启用死亡惩罚功能
+enableDeathPunishment: true

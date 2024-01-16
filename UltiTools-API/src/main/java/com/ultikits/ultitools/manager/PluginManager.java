@@ -14,7 +14,10 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.net.*;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -30,7 +33,7 @@ public class PluginManager {
 
     public void init() throws IOException {
         String currentPath = System.getProperty("user.dir");
-        String path = currentPath+ File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
+        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
         File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
 
@@ -215,18 +218,18 @@ public class PluginManager {
 
 
     private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
-        for (UltiToolsPlugin plugin1 : pluginList){
-            if (!plugin1.getMainClass().equals(plugin.getMainClass())){
+        for (UltiToolsPlugin plugin1 : pluginList) {
+            if (!plugin1.getMainClass().equals(plugin.getMainClass())) {
                 continue;
             }
-            if (plugin1.isNewerVersionThan(plugin)){
+            if (plugin1.isNewerVersionThan(plugin)) {
                 Bukkit.getLogger().log(
                         Level.WARNING,
                         String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName())
                 );
                 plugin.getContext().close();
                 return false;
-            }else if (plugin.isNewerVersionThan(plugin1)){
+            } else if (plugin.isNewerVersionThan(plugin1)) {
                 plugin1.unregisterSelf();
             }
         }

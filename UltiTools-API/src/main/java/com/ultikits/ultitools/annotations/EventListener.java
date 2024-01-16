@@ -9,4 +9,5 @@ import java.lang.annotation.*;
 @Target(ElementType.TYPE)
 @Component
 public @interface EventListener {
+    boolean manualRegister() default false;
 }

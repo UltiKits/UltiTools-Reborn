@@ -35,4 +35,9 @@ public @interface CmdExecutor {
      * @return 是否要求OP
      */
     boolean requireOp() default false;
+
+    /**
+     * @return 是否手动注册
+     */
+    boolean manualRegister() default false;
 }

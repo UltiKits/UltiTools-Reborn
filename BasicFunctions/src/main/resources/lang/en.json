@@ -85,5 +85,10 @@
   "你已退出隐身": "You are not invisible now",
   "你已进入隐身": "You are invisible now",
   "隐身功能": "Invisible function",
-  "/hide - 开启/关闭隐身": "/hide - Turn on/off invisible"
+  "/hide - 开启/关闭隐身": "/hide - Turn on/off invisible",
+  "§c/uban ban <player> <reason> §7封禁玩家": "§c/uban ban <player> <reason> §7Ban player",
+  "§c/uban unban <player> §7解封玩家": "§c/uban unban <player> §7Unban player",
+  "§c/heal §7治愈自己": "§c/heal §7Heal yourself",
+  "[死亡惩罚]你因为死亡随机掉落了%d个物品！": "[Death penalty] You randomly dropped %d items due to death!",
+  "[死亡惩罚]你因为死亡而扣除了%d个金币！": "[Death penalty] You deducted %d coins due to death!"
 }

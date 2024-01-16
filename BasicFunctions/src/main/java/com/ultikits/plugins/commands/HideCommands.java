@@ -2,13 +2,15 @@ package com.ultikits.plugins.commands;
 
 import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractPlayerCommandExecutor;
+import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
 import org.bukkit.Bukkit;
-import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,16 +18,17 @@ import java.util.UUID;
 
 import static com.ultikits.ultitools.utils.MessageUtils.info;
 
-public class HideCommands extends AbstractPlayerCommandExecutor {
+@CmdTarget(CmdTarget.CmdTargetType.PLAYER)
+@CmdExecutor(alias = {"hide"}, manualRegister = true, permission = "ultikits.tools.command.hide", description = "隐身功能")
+public class HideCommands extends AbstractCommendExecutor {
     private static final List<UUID> hidePlayers = new ArrayList<>();
 
     public static void removeHidePlayer(UUID uuid) {
         hidePlayers.remove(uuid);
     }
 
-    @Override
-    protected boolean onPlayerCommand(@NotNull Command command, @NotNull String[] strings, @NotNull Player player) {
-        if (strings.length != 0) return false;
+    @CmdMapping(format = "")
+    public void hide(@CmdSender Player player) {
         if (hidePlayers.contains(player.getUniqueId())) {
             hidePlayers.remove(player.getUniqueId());
             new BukkitRunnable() {
@@ -55,12 +58,12 @@ public class HideCommands extends AbstractPlayerCommandExecutor {
             }.runTaskAsynchronously(UltiTools.getInstance());
             player.sendMessage(info(BasicFunctions.getInstance().i18n("你已进入隐身")));
         }
-        return true;
+
     }
 
     @Override
-    protected void sendHelpMessage(CommandSender commandSender) {
-        commandSender.sendMessage(info(BasicFunctions.getInstance().i18n("/hide - 开启/关闭隐身")));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(info(BasicFunctions.getInstance().i18n("/hide - 开启/关闭隐身")));
     }
 }
 

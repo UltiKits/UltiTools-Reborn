@@ -6,7 +6,7 @@
 
     <groupId>com.ultikits.plugins</groupId>
     <artifactId>BasicFunctions</artifactId>
-    <version>1.0.3</version>
+    <version>1.0.4</version>
 
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
@@ -18,7 +18,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.3</version>
+            <version>6.0.5</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -49,6 +49,12 @@
             <groupId>com.nametagedit</groupId>
             <artifactId>nametagedit</artifactId>
             <version>4.4.16</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.BlueMap-Minecraft</groupId>
+            <artifactId>BlueMapAPI</artifactId>
+            <version>v2.6.2</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
@@ -88,7 +94,7 @@
                     <identifyString>UltiTools-Basic-Functions</identifyString>
                     <shortDescription>开服必装！所有的杂七杂八的小功能哦！包括不限于TPA，飞行，模式更改，白名单，随机传送。</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>F:\SpigotServers\Servers\1.20.4\plugins\UltiTools\plugins</pluginFolder>
+                    <pluginFolder>F:\SpigotServers\Paper\1.20.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>
             </plugin>
         </plugins>

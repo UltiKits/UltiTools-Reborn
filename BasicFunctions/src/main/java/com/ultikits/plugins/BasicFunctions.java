@@ -4,17 +4,21 @@ import com.ultikits.plugins.commands.*;
 import com.ultikits.plugins.config.BasicConfig;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
 import com.ultikits.plugins.config.PlayerNameTagConfig;
+import com.ultikits.plugins.config.WarpConfig;
 import com.ultikits.plugins.listeners.*;
+import com.ultikits.plugins.services.WarpService;
 import com.ultikits.plugins.tasks.NamePrefixSuffixTask;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
+import de.bluecolored.bluemap.api.BlueMapAPI;
 import lombok.Getter;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+@UltiToolsModule
 public class BasicFunctions extends UltiToolsPlugin {
     @Getter
     private static BasicFunctions instance;
@@ -25,87 +29,72 @@ public class BasicFunctions extends UltiToolsPlugin {
     }
 
     @Override
-    public boolean registerSelf() throws IOException {
+    public boolean registerSelf() {
         BasicConfig configEntity = getConfigManager().getConfigEntity(this, BasicConfig.class);
         if (configEntity.isEnableHeal()) {
-            getCommandManager().register(new HealCommand(), "ultikits.tools.command.heal", i18n("指令治愈功能"), "heal", "h");
+            getCommandManager().register(this, HideCommands.class);
         }
         if (configEntity.isEnableGmChange()) {
-            getCommandManager().register(new GMChangeCommand(), "ultikits.tools.command.gm", i18n("游戏模式切换功能"), "gm");
+            getCommandManager().register(this, GMChangeCommand.class);
         }
         if (configEntity.isEnableBack()) {
-            getCommandManager().register(new BackCommands(), "ultikits.tools.command.back", i18n("快捷返回功能"), "back");
-            getListenerManager().register(this, new BackListener());
+            getCommandManager().register(this, BackCommands.class);
+            getListenerManager().register(this, BackListener.class);
         }
         if (configEntity.isEnableRandomTeleport()) {
-            getCommandManager().register(new RandomTpCommands(), "ultikits.tools.command.wild", i18n("随机传送功能"), "wild");
+            getCommandManager().register(this, RandomTpCommands.class);
         }
         if (configEntity.isEnableFly()) {
-            getCommandManager().register(new FlyCommands(), "ultikits.tools.command.fly", i18n("飞行功能"), "fly");
+            getCommandManager().register(this, FlyCommands.class);
         }
         if (configEntity.isEnableWhitelist()) {
-            getCommandManager().register(new WhitelistCommands(), "ultikits.tools.whitelist", i18n("白名单功能"), "wl");
-            getListenerManager().register(this, new WhitelistListener());
+            getCommandManager().register(this, WhitelistCommands.class);
+            getListenerManager().register(this, WhitelistListener.class);
         }
         if (configEntity.isEnableJoinWelcome()) {
-            getListenerManager().register(this, new JoinWelcomeListener());
+            getListenerManager().register(this, JoinWelcomeListener.class);
         }
         if (configEntity.isEnableTpa()) {
-            getCommandManager().register(new TpaCommands(), "ultikits.tools.command.tpa", i18n("传送请求功能"), "tpa");
-            getCommandManager().register(new TpaHereCommands(), "ultikits.tools.command.tphere", i18n("请求传送到此功能"), "tphere");
+            getCommandManager().register(this, TpaCommands.class);
+            getCommandManager().register(this, TpaHereCommands.class);
         }
         if (configEntity.isEnableSpeed()) {
-            getCommandManager().register(new SpeedCommands(), "ultikits.tools.command.speed", i18n("速度设置功能"), "speed");
+            getCommandManager().register(this, SpeedCommands.class);
         }
         if (configEntity.isEnableBan()) {
-            getCommandManager().register(new BanCommands(), "ultikits.tools.command.uban", i18n("封禁功能"), "uban");
-            getListenerManager().register(this, new BanListener());
+            getCommandManager().register(this, BanCommands.class);
+            getListenerManager().register(this, BanListener.class);
         }
         if (configEntity.isEnableWarp()) {
-            getCommandManager().register(new WarpCommands(), "ultikits.tools.command.warp", i18n("传送点功能"), "warp");
+            getCommandManager().register(this, WarpCommands.class);
+            WarpConfig warpConfig = getConfigManager().getConfigEntity(this, WarpConfig.class);
+            if (warpConfig.isEnableBlueMap()) {
+                BlueMapAPI.onEnable(api -> {
+                    WarpService warpService = getContext().getBean(WarpService.class);
+                    warpService.initBlueMap();
+                });
+            }
         }
         if (configEntity.isEnableSpawn()) {
-            getCommandManager().register(new SpawnCommands(), "ultikits.tools.command.spawn", i18n("重生点功能"), "spawn");
-            getCommandManager().register(new SpawnCommands(), "ultikits.tools.command.setspawn", i18n("重生点功能"), "setspawn");
+            getCommandManager().register(this, SpawnCommands.class);
+            getCommandManager().register(this, SetSpawnCommands.class);
         }
-        if (configEntity.isEnableLoreEditor()){
-            getCommandManager().register(new LoreCommands(), "ultikits.tools.command.lore", i18n("物品Lore编辑功能"), "lore");
+        if (configEntity.isEnableLoreEditor()) {
+            getCommandManager().register(this, LoreCommands.class);
         }
         if (configEntity.isEnableHide()) {
-            getCommandManager().register(new HideCommands(), "ultikits.tools.command.hide", i18n("隐身功能"), "hide");
-            getListenerManager().register(this, new HideListener());
+            getCommandManager().register(this, HideCommands.class);
+            getListenerManager().register(this, HideListener.class);
         }
         if (configEntity.isEnableTitle()) {
-            getListenerManager().register(this, new PlayerNameTagListener());
+            getListenerManager().register(this, PlayerNameTagListener.class);
             int updateInterval = getConfig(PlayerNameTagConfig.class).getUpdateInterval();
             new NamePrefixSuffixTask().runTaskTimer(UltiTools.getInstance(), 0, updateInterval);
         }
+        if (configEntity.isEnableDeathPunishment()) {
+            getListenerManager().register(this, DeathListener.class);
+        }
         return true;
-    }
-
-    @Override
-    public void unregisterSelf() {
-        getCommandManager().unregister("heal");
-        getCommandManager().unregister("gm");
-        getCommandManager().unregister("back");
-        getCommandManager().unregister("wild");
-        getCommandManager().unregister("fly");
-        getCommandManager().unregister("wl");
-        getCommandManager().unregister("tpa");
-        getCommandManager().unregister("tphere");
-        getCommandManager().unregister("speed");
-        getCommandManager().unregister("uban");
-        getCommandManager().unregister("warp");
-        getCommandManager().unregister("spawn");
-        getCommandManager().unregister("setspawn");
-        getCommandManager().unregister("lore");
-        getCommandManager().unregister("hide");
-        getListenerManager().unregisterAll(this);
-    }
-
-    @Override
-    public void reloadSelf() {
-        getConfigManager().reloadConfigs(this);
     }
 
     @Override

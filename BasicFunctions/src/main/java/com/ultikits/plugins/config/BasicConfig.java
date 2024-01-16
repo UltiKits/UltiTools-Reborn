@@ -40,6 +40,8 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableHide = true;
     @ConfigEntry(path = "enableTitle", comment = "是否启用头顶显示功能")
     private boolean enableTitle = true;
+    @ConfigEntry(path = "enableDeathPunishment", comment = "是否启用死亡惩罚功能")
+    private boolean enableDeathPunishment = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

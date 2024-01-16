@@ -12,7 +12,7 @@ import java.util.Arrays;
 import java.util.List;
 
 public class PlayerJoinListener implements Listener {
-    private final List<String> placeholderList = Arrays.asList("player", "server", "math", "vault", "localtime", "world");
+    private final List<String> placeholderList = Arrays.asList("player", "server", "math", "vault", "localtime");
 
     // make the word first letter uppercase
     public static String toUpperCaseFirstOne(String s) {
@@ -26,7 +26,7 @@ public class PlayerJoinListener implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         try {
             boolean reload = false;
-            long time = 20L;
+            long time = 30L;
             for (String placeholder : placeholderList) {
                 if (!PlaceholderAPI.isRegistered(placeholder)) {
                     reload = true;
@@ -36,7 +36,7 @@ public class PlayerJoinListener implements Listener {
                             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "papi ecloud download " + toUpperCaseFirstOne(placeholder));
                         }
                     }.runTaskLater(UltiTools.getInstance(), time);
-                    time += 20L;
+                    time += 30L;
                 }
             }
             if (reload) {
@@ -45,7 +45,7 @@ public class PlayerJoinListener implements Listener {
                     public void run() {
                         Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "papi reload");
                     }
-                }.runTaskLater(UltiTools.getInstance(), time + 20L);
+                }.runTaskLater(UltiTools.getInstance(), time + 30L);
             }
         } catch (Exception ignored) {
 

@@ -33,7 +33,6 @@ public class WarpGui extends PagingPage {
     public List<Icon> setAllItems() {
         List<Icon> icons = new ArrayList<>();
         List<WarpData> allWarps = warpService.getAllWarps();
-        int i = 0;
         for (WarpData warpData : allWarps) {
             Location location = WarpService.toLocation(warpData.getLocation());
             Icon icon = new Icon(UltiTools.getInstance().getVersionWrapper().getEndEye());
@@ -47,7 +46,6 @@ public class WarpGui extends PagingPage {
                 player.closeInventory();
             });
             icons.add(icon);
-            i++;
         }
         return icons;
     }

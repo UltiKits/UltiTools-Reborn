@@ -4,26 +4,51 @@ import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.plugins.data.WarpData;
 import com.ultikits.plugins.guis.WarpGui;
 import com.ultikits.plugins.services.WarpService;
-import com.ultikits.ultitools.abstracts.AbstractTabExecutor;
+import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.Location;
-import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class WarpCommands extends AbstractTabExecutor {
-    private final WarpService warpService = new WarpService();
+@CmdTarget(CmdTarget.CmdTargetType.PLAYER)
+@CmdExecutor(alias = {"warp"}, manualRegister = true, permission = "ultikits.tools.command.warp", description = "传送点功能")
+public class WarpCommands extends AbstractCommendExecutor {
+    @Autowired
+    private WarpService warpService;
 
-    @Override
-    protected boolean onPlayerCommand(Command command, String[] strings, Player player) {
-        return executeWarpCommand(strings, player);
+    @CmdMapping(format = "list")
+    public void listWarps(@CmdSender Player player) {
+        WarpGui warpGui = new WarpGui(player);
+        warpGui.open();
+    }
+
+    @CmdMapping(format = "tp <name>")
+    public void tpWarp(@CmdSender Player player, @CmdParam("name") String name) {
+        Location warpLocation = warpService.getWarpLocation(name);
+        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已传送至传送点 %s"), name));
+        TeleportService teleportService = BasicFunctions.getInstance().getContext().getBean(TeleportService.class);
+        teleportService.delayTeleport(player, warpLocation, 3);
+    }
+
+    @CmdMapping(format = "add <name>", requireOp = true)
+    public void addWarp(@CmdSender Player player, @CmdParam("name") String name) {
+        warpService.addWarp(name, player.getLocation());
+        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已添加传送点 %s"), name));
+    }
+
+    @CmdMapping(format = "remove <name>", requireOp = true)
+    public void removeWarp(@CmdSender Player player, @CmdParam("name") String name) {
+        warpService.removeWarp(name);
+        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已删除传送点 %s"), name));
     }
 
     @Override
-    protected List<String> onPlayerTabComplete(Command command, String[] strings, Player player) {
+    protected List<String> suggest(Player player, String[] strings) {
         ArrayList<String> list = new ArrayList<>();
         switch (strings.length) {
             case 1:
@@ -60,50 +85,12 @@ public class WarpCommands extends AbstractTabExecutor {
     }
 
     @Override
-    protected void sendHelpMessage(CommandSender sender) {
+    protected void handleHelp(CommandSender sender) {
         sender.sendMessage(BasicFunctions.getInstance().i18n("§a/warp list §7- §e查看所有传送点"));
         sender.sendMessage(BasicFunctions.getInstance().i18n("§a/warp tp <name> §7- §e传送至传送点"));
         if (sender.isOp()) {
             sender.sendMessage(BasicFunctions.getInstance().i18n("§a/warp add <name> §7- §e添加传送点"));
             sender.sendMessage(BasicFunctions.getInstance().i18n("§a/warp remove <name> §7- §e删除传送点"));
-        }
-    }
-
-    private boolean executeWarpCommand(String[] strings, Player player) {
-        switch (strings.length) {
-            case 1:
-                if (strings[0].equals("list")) {
-                    WarpGui warpGui = new WarpGui(player);
-                    warpGui.open();
-                }
-                return true;
-            case 2:
-                switch (strings[0]) {
-                    case "add":
-                        if (!player.isOp()) {
-                            return false;
-                        }
-                        warpService.addWarp(strings[1], player.getLocation());
-                        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已添加传送点 %s"), strings[1]));
-                        return true;
-                    case "remove":
-                        if (!player.isOp()) {
-                            return false;
-                        }
-                        warpService.removeWarp(strings[1]);
-                        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已删除传送点 %s"), strings[1]));
-                        return true;
-                    case "tp":
-                        Location warpLocation = warpService.getWarpLocation(strings[1]);
-                        player.sendMessage(String.format(BasicFunctions.getInstance().i18n("§a已传送至传送点 %s"), strings[1]));
-                        TeleportService teleportService = BasicFunctions.getInstance().getContext().getBean(TeleportService.class);
-                        teleportService.delayTeleport(player, warpLocation, 3);
-                        return true;
-                    default:
-                        return false;
-                }
-            default:
-                return false;
         }
     }
 }

@@ -24,6 +24,5 @@ public interface IPlugin {
     /**
      * 重载此插件模块时调用的方法，此重载并非重启模块，不会调用{@link #registerSelf()}和{@link #unregisterSelf()}。
      */
-    default void reloadSelf() {
-    }
+    void reloadSelf();
 }
