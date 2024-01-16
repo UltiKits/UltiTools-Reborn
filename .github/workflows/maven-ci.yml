@@ -27,7 +27,7 @@ jobs:
       id: version
       uses: avides/actions-project-version-check@v1.4.0
       with:
-        token: ${{ secrets.RELEASE_TOKEN }}
+        token: ${{ secrets.GITHUB_TOKEN }}
         file-to-check: UltiTools-API/pom.xml
         only-return-version: true
 
@@ -44,11 +44,15 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Get latest commit message
+      id: commit
+      run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
+
     - name: Get Project Version from pom.xml
       id: version
       uses: avides/actions-project-version-check@v1.4.0
       with:
-        token: ${{ secrets.RELEASE_TOKEN }}
+        token: ${{ secrets.GITHUB_TOKEN }}
         file-to-check: UltiTools-API/pom.xml
         only-return-version: true
 
@@ -57,47 +61,25 @@ jobs:
       with:
         name: ultitools-artifact
 
-    - name: Get Latest Merged PR
-      id: get-pr
-      uses: actions/github-script@v5
-      with:
-        script: |
-          const { data: pullRequests } = await github.rest.pulls.list({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            state: 'closed',
-            sort: 'updated',
-            direction: 'desc',
-            per_page: 1
-          });
-          const mergedPR = pullRequests.find(pr => pr.merged_at);
-          return {
-            title: mergedPR.title,
-            body: mergedPR.body
-          };
-        result-encoding: json
-
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release ${{ steps.version.outputs.version }}
-        body: |
-          # ${{ steps.get-pr.outputs.title }}
-          ${{ steps.get-pr.outputs.body }}
+        release_name: Release v${{ steps.version.outputs.version }}
+        body: ${{ steps.commit.outputs.message }}
         draft: false
         prerelease: false
-    
+
     - name: Upload Release Asset
+      id: upload-release-asset
       uses: actions/upload-release-asset@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
-        asset_name: UltiTools-API-${{ steps.version.outputs.version }}.jar
+        asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
+        asset_name: UltiTools-API.jar
         asset_content_type: application/java-archive
-
