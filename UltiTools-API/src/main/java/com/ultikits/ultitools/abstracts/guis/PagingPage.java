@@ -45,9 +45,17 @@ public abstract class PagingPage extends Gui {
 
     @Override
     public void onOpen(InventoryOpenEvent event) {
+        updateItems();
+    }
+
+    public void updateItems() {
+        paginationManager.getItems().clear();
         Icon lastRowBackground = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GRAY));
         lastRowBackground.setName(" ");
         this.fillRow(lastRowBackground, getSize() / 9 - 1);
+        for (Icon icon : setAllItems()) {
+            paginationManager.addItem(icon);
+        }
         Icon next = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
         next.setName(info(UltiTools.getInstance().i18n("下一页")));
         if (this.paginationManager.isLastPage()) {
@@ -58,6 +66,7 @@ public abstract class PagingPage extends Gui {
                 return;
             }
             this.paginationManager.goNextPage();
+            updateItems();
         });
         Icon last = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
         last.setName(info(UltiTools.getInstance().i18n("上一页")));
@@ -69,17 +78,10 @@ public abstract class PagingPage extends Gui {
                 return;
             }
             this.paginationManager.goPreviousPage();
+            updateItems();
         });
         this.addItem(getLastSlot() - 3, next);
         this.addItem(getLastSlot() - 5, last);
-        updateItems();
-    }
-
-    public void updateItems() {
-        paginationManager.getItems().clear();
-        for (Icon icon : setAllItems()) {
-            paginationManager.addItem(icon);
-        }
         paginationManager.update();
     }
 

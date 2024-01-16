@@ -1,6 +1,5 @@
 package com.ultikits.ultitools;
 
-import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.context.ContextConfig;
@@ -8,20 +7,28 @@ import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
+import com.ultikits.ultitools.utils.CommonUtils;
+import com.ultikits.ultitools.utils.Metrics;
 import lombok.Getter;
 import lombok.Setter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
+import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.*;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -75,7 +82,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return the version of the UltiTools
      */
     public static int getPluginVersion() {
-        return 604;
+        String versionString = getEnv().getString("version");
+        if (versionString == null) {
+            throw new RuntimeException("Version not found in env.yml!");
+        }
+        return Integer.parseInt(versionString.replace(".", ""));
     }
 
     /**
@@ -163,10 +174,23 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String result = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
         this.language = new Language(result);
 
+        // Plugin classloader initialization
+        pluginClassLoader = getClassLoader();
+        URL serverJar = CommonUtils.getServerJar();
+        try {
+            if (serverJar != null) {
+                String name = new File(serverJar.toURI()).getName().split("\\.jar")[0];
+                Bukkit.getLogger().info("[UltiTools-API] Spigot API detected: " + name);
+            }
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
+        URLClassLoader classLoader = new URLClassLoader(new URL[]{serverJar}, pluginClassLoader);
+
         // Spring context initialization
         pluginClassLoader = getClassLoader();
         context = new AnnotationConfigApplicationContext();
-        context.setClassLoader(pluginClassLoader);
+        context.setClassLoader(classLoader);
         context.register(ContextConfig.class);
         context.refresh();
         context.registerShutdownHook();
@@ -184,9 +208,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new RuntimeException(e);
         }
 
+        Metrics metrics = new Metrics(this, 8652);
+
         // bukkit plugin registration
-        getCommandManager().register(new UltiToolsCommands());
-        getCommandManager().register(new PluginInstallCommands());
+        getCommandManager().register(context.getBean(UltiToolsCommands.class));
+        getCommandManager().register(context.getBean(PluginInstallCommands.class));
 
         Bukkit.getServicesManager().register(
                 PluginManager.class,
@@ -194,6 +220,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 this,
                 ServicePriority.Normal
         );
+
+        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
     }
 
     /**
@@ -214,6 +242,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         stopEmbedWebServer();
         pluginManager.close();
         context.close();
+        getCommandManager().close();
         DataStoreManager.close();
         getConfigManager().saveAll();
         Bukkit.getServicesManager().unregisterAll(this);
@@ -274,5 +303,21 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new IllegalStateException("[UltiTools-API] Tried to access Adventure when the plugin was disabled!");
         }
         return this.adventure;
+    }
+
+    /**
+     * Get the economy provider
+     *
+     * @return the instance of the Economy provider
+     */
+    public Economy getEconomy() {
+        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
+            throw new RuntimeException("Vault not found!");
+        }
+        RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
+        if (registration == null) {
+            throw new RuntimeException("Economy service not found!");
+        }
+        return registration.getProvider();
     }
 }

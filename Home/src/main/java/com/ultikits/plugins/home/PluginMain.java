@@ -3,20 +3,14 @@ package com.ultikits.plugins.home;
 import com.ultikits.plugins.home.config.HomeConfig;
 import com.ultikits.plugins.home.entity.HomeEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.annotations.I18n;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
 import lombok.Getter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
-import org.springframework.stereotype.Component;
 
-@Component
-@ComponentScan
-@I18n({"zh", "en"})
-@EnableAutoRegister
+@UltiToolsModule
 public class PluginMain extends UltiToolsPlugin {
     @SuppressWarnings("SpringJavaAutowiredFieldsWarningInspection")
     @Autowired
