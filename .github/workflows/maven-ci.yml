@@ -61,15 +61,35 @@ jobs:
       with:
         name: ultitools-artifact
 
+    - name: Get Latest Merged PR
+      id: get-pr
+      uses: actions/github-script@v5
+      with:
+        script: |
+          const { data: pullRequest } = await github.rest.pulls.list({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'closed',
+            sort: 'updated',
+            direction: 'desc',
+            per_page: 1
+          });
+          const mergedPR = pullRequest.find(pr => pr.merged_at);
+          return {
+            id: mergedPR.number,
+            title: mergedPR.title,
+            body: mergedPR.body
+          };
+        result-encoding: json
+
     - name: Create Release
-      id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release v${{ steps.version.outputs.version }}
-        body: ${{ steps.commit.outputs.message }}
+        tag_name: v${{ steps.get-pr.outputs.id }}
+        release_name: Release ${{ steps.get-pr.outputs.title }}
+        body: ${{ steps.get-pr.outputs.body }}
         draft: false
         prerelease: false
 
