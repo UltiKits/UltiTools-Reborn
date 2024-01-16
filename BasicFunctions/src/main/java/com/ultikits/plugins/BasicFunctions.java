@@ -8,11 +8,11 @@ import com.ultikits.plugins.config.WarpConfig;
 import com.ultikits.plugins.listeners.*;
 import com.ultikits.plugins.services.WarpService;
 import com.ultikits.plugins.tasks.NamePrefixSuffixTask;
+import com.ultikits.plugins.utils.BlueMapUtils;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
-import de.bluecolored.bluemap.api.BlueMapAPI;
 import lombok.Getter;
 
 import java.util.Arrays;
@@ -69,10 +69,8 @@ public class BasicFunctions extends UltiToolsPlugin {
             getCommandManager().register(this, WarpCommands.class);
             WarpConfig warpConfig = getConfigManager().getConfigEntity(this, WarpConfig.class);
             if (warpConfig.isEnableBlueMap()) {
-                BlueMapAPI.onEnable(api -> {
-                    WarpService warpService = getContext().getBean(WarpService.class);
-                    warpService.initBlueMap();
-                });
+                WarpService warpService = getContext().getBean(WarpService.class);
+                BlueMapUtils.initBlueMap(warpService.getAllWarps());
             }
         }
         if (configEntity.isEnableSpawn()) {
