@@ -66,7 +66,8 @@ jobs:
       uses: actions/github-script@v5
       with:
         script: |
-          const { data: pullRequest } = await github.rest.pulls.list({
+          // 获取最新合并的 PR
+          const { data: pullRequests } = await github.rest.pulls.list({
             owner: context.repo.owner,
             repo: context.repo.repo,
             state: 'closed',
@@ -74,11 +75,21 @@ jobs:
             direction: 'desc',
             per_page: 1
           });
-          const mergedPR = pullRequest.find(pr => pr.merged_at);
+          const mergedPR = pullRequests.find(pr => pr.merged_at);
+
+          // 获取该 PR 的第一条评论
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: mergedPR.number,
+            per_page: 1
+          });
+
+          // 设置输出
           return {
             id: mergedPR.number,
             title: mergedPR.title,
-            body: mergedPR.body
+            first_comment: comments.data.length > 0 ? comments.data[0].body : 'No comments found'
           };
         result-encoding: json
 
