@@ -1,7 +1,5 @@
 package com.ultikits.ultitools.annotations.command;
 
-import org.springframework.stereotype.Component;
-
 import java.lang.annotation.*;
 
 /**
@@ -13,7 +11,6 @@ import java.lang.annotation.*;
 @Documented
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-@Component
 public @interface CmdExecutor {
 
     /**
@@ -35,9 +32,4 @@ public @interface CmdExecutor {
      * @return 是否要求OP
      */
     boolean requireOp() default false;
-
-    /**
-     * @return 是否手动注册
-     */
-    boolean manualRegister() default false;
 }

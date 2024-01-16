@@ -1,16 +1,12 @@
 package com.ultikits.plugins.listeners;
 
 import com.ultikits.plugins.services.BanPlayerService;
-import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
-import org.springframework.beans.factory.annotation.Autowired;
 
-@EventListener(manualRegister = true)
 public class BanListener implements Listener {
-    @Autowired
-    private BanPlayerService banPlayerService;
+    private BanPlayerService banPlayerService = new BanPlayerService();
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {

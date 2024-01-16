@@ -14,6 +14,4 @@ public class WhiteListData extends AbstractDataEntity {
     private String id;
     @Column("name")
     private String name;
-    @Column("remark")
-    private String remark;
 }

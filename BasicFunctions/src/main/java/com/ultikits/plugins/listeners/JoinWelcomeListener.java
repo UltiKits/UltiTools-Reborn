@@ -3,7 +3,6 @@ package com.ultikits.plugins.listeners;
 import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.plugins.config.JoinWelcomeConfig;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.EventListener;
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -15,7 +14,6 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import static com.ultikits.ultitools.utils.MessageUtils.coloredMsg;
 
-@EventListener(manualRegister = true)
 public class JoinWelcomeListener implements Listener {
 
     @EventHandler

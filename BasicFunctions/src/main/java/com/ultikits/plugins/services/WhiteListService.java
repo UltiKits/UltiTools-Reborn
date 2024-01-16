@@ -4,11 +4,9 @@ import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.plugins.data.WhiteListData;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-@Service
 public class WhiteListService {
 
     public boolean isWhiteList(String uuid) {

@@ -1,6 +1,5 @@
 package com.ultikits.ultitools.abstracts;
 
-import cn.hutool.core.comparator.VersionComparator;
 import cn.hutool.core.io.FileUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
@@ -16,7 +15,6 @@ import lombok.Setter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.*;
 import java.net.JarURLConnection;
@@ -56,16 +54,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private AnnotationConfigApplicationContext context;
 
     @SneakyThrows
-    public UltiToolsPlugin() {
-        InputStream inputStream = getInputStream();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+    public UltiToolsPlugin(){
+        InputStream inputStream        = getInputStream();
+        BufferedReader reader          = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-        version = pluginConfig.getString("version");
-        pluginName = pluginConfig.getString("name");
-        authors = pluginConfig.getStringList("authors");
-        loadAfter = pluginConfig.getStringList("loadAfter");
-        minUltiToolsVersion = pluginConfig.getInt("api-version");
-        mainClass = pluginConfig.getString("main");
+        version                        = pluginConfig.getString("version");
+        pluginName                     = pluginConfig.getString("name");
+        authors                        = pluginConfig.getStringList("authors");
+        loadAfter                      = pluginConfig.getStringList("loadAfter");
+        minUltiToolsVersion            = pluginConfig.getInt("api-version");
+        mainClass                      = pluginConfig.getString("mainClass");
         inputStream.close();
         reader.close();
 
@@ -101,7 +99,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 String result = new BufferedReader(new InputStreamReader(in))
                         .lines().collect(Collectors.joining(""));
                 language = new Language(result);
-            } else {
+            }else {
                 language = new Language("{}");
             }
         } else {
@@ -109,6 +107,31 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
         saveResources();
         initConfig();
+    }
+
+    public final void initConfig() {
+        EnableAutoRegister annotation = this.getClass().getAnnotation(EnableAutoRegister.class);
+        if (annotation != null && annotation.config()) {
+            for (String packageName : CommonUtils.getPluginPackages(this)) {
+                UltiTools.getInstance().getConfigManager().registerAll(
+                        this, packageName, this.getClass().getClassLoader()
+                );
+            }
+        } else {
+            List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
+            for (AbstractConfigEntity configEntity : allConfigs) {
+                UltiToolsPlugin.getConfigManager().register(this, configEntity);
+            }
+        }
+    }
+
+    private InputStream getInputStream() throws IOException {
+        CodeSource src                 = this.getClass().getProtectionDomain().getCodeSource();
+        URL jar                        = src.getLocation();
+        String path                    = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
+        URL url                        = new URL("jar:file:" + path + "!/plugin.yml");
+        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+        return jarConnection.getInputStream();
     }
 
     public static ConfigManager getConfigManager() {
@@ -129,31 +152,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
-    }
-
-    public final void initConfig() {
-        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(this.getClass(), EnableAutoRegister.class);
-        if (annotation != null && annotation.config()) {
-            for (String packageName : CommonUtils.getPluginPackages(this)) {
-                UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, this.getClass().getClassLoader()
-                );
-            }
-        } else {
-            List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
-            for (AbstractConfigEntity configEntity : allConfigs) {
-                UltiToolsPlugin.getConfigManager().register(this, configEntity);
-            }
-        }
-    }
-
-    private InputStream getInputStream() throws IOException {
-        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        URL jar = src.getLocation();
-        String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        URL url = new URL("jar:file:" + path + "!/plugin.yml");
-        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-        return jarConnection.getInputStream();
     }
 
     protected final String getConfigFolder() {
@@ -241,20 +239,5 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Override
     public final String i18n(String code, String str) {
         return this.getLanguage().getLocalizedText(str);
-    }
-
-    public boolean isNewerVersionThan(UltiToolsPlugin plugin) {
-        return VersionComparator.INSTANCE.compare(this.getVersion(), plugin.getVersion()) > 0;
-    }
-
-    @Override
-    public void unregisterSelf() {
-        getCommandManager().unregisterAll(this);
-        getListenerManager().unregisterAll(this);
-    }
-
-    @Override
-    public void reloadSelf() {
-        getConfigManager().reloadConfigs(this);
     }
 }

@@ -4,10 +4,8 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.*;
-import lombok.Getter;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -17,12 +15,10 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.*;
-import java.util.function.Function;
 
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
@@ -30,41 +26,12 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<UUID, Method> ServerLock = HashBiMap.create();
     private final BiMap<UUID, Method> CmdCoolDown = HashBiMap.create();
 
-    @Getter
-    private final Map<List<Class<?>>, Function<String, ?>> parsers = new HashMap<>();
-
     public AbstractCommendExecutor() {
-        initParsers();
         scanCommandMappings();
     }
 
     public AbstractCommendExecutor getInstance() {
         return this;
-    }
-
-    @SuppressWarnings("deprecation")
-    private void initParsers() {
-        parsers.put(Arrays.asList(Boolean[].class, Boolean.class, boolean[].class, boolean.class), Boolean::parseBoolean);
-        parsers.put(Arrays.asList(Double[].class, Double.class, double[].class, double.class), Double::parseDouble);
-        parsers.put(Arrays.asList(Integer[].class, Integer.class, int[].class, int.class), Integer::parseInt);
-        parsers.put(Arrays.asList(Float[].class, Float.class, float[].class, float.class), Float::parseFloat);
-        parsers.put(Arrays.asList(Short[].class, Short.class, short[].class, short.class), Short::parseShort);
-        parsers.put(Arrays.asList(Short[].class, Short.class, short[].class, short.class), Byte::parseByte);
-        parsers.put(Arrays.asList(OfflinePlayer[].class, OfflinePlayer.class), Bukkit::getOfflinePlayer);
-        parsers.put(Arrays.asList(Long[].class, Long.class, long[].class, long.class), Long::parseLong);
-        parsers.put(Arrays.asList(Material[].class, Material.class), Material::getMaterial);
-        parsers.put(Arrays.asList(Player[].class, Player.class), Bukkit::getPlayerExact);
-        parsers.put(Arrays.asList(UUID[].class, UUID.class), UUID::fromString);
-        parsers.put(Arrays.asList(String[].class, String.class), s -> s);
-    }
-
-    private <T> Function<String, T> getParser(Class<T> type) {
-        //noinspection unchecked
-        return (Function<String, T>) parsers.keySet().stream()
-                .filter(classes -> classes.stream().anyMatch(clazz -> clazz.isAssignableFrom(type)))
-                .findFirst()
-                .map(parsers::get)
-                .orElse(null);
     }
 
     private void scanCommandMappings() {
@@ -77,70 +44,69 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
     }
 
-    private static Map<String, String[]> getParams(String[] args, String format) {
-        if (args.length == 0) {
-            return Collections.emptyMap();
-        }
-
+    private Map<String, String> getParams(String[] args, String format) {
         String[] formatArgs = format.split(" ");
-        Map<String, String[]> params = new HashMap<>();
-        List<String> paramList = new ArrayList<>();
-        int index = 0;
-
-        for (String arg : args) {
-            String currentFormatArg = formatArgs[index];
-
-            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith("...>")) {
-                paramList.add(arg);
-            } else if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith(">")) {
-                String paramName = currentFormatArg.substring(1, currentFormatArg.length() - 1);
-                params.put(paramName, new String[]{arg});
+        Map<String, String> params = new HashMap<>();
+        for (int i = 0; i < formatArgs.length; i++) {
+            if (formatArgs[i].startsWith("<") && formatArgs[i].endsWith(">")) {
+                params.put(formatArgs[i].substring(1, formatArgs[i].length() - 1), args[i]);
             }
-
-            index = (index + 1) % formatArgs.length;
+            if (formatArgs[i].startsWith("[") && formatArgs[i].endsWith("]")) {
+                params.put(formatArgs[i].substring(1, formatArgs[i].length() - 1), args[i]);
+            }
         }
-
-        if (!paramList.isEmpty()) {
-            params.put(formatArgs[index].substring(1, formatArgs[index].length() - 1), paramList.toArray(new String[0]));
-        }
-
         return params;
     }
 
     private Method matchMethod(String[] args) {
-        if (args.length == 0) {
-            return mappings.getOrDefault("", null);
-        }
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             String format = entry.getKey();
+            if (format.isEmpty() && args.length == 0) {
+                return entry.getValue();
+            }
             String[] formatArgs = format.split(" ");
-            boolean match = true;
-
-            for (int i = 0; i < formatArgs.length - 1; i++) {
-                if (!matchesArgument(formatArgs[i], args[i])) {
-                    match = false;
-                    break;
+            String lastArg = formatArgs[formatArgs.length - 1];
+            boolean match;
+            if (lastArg.startsWith("[") && lastArg.endsWith("]")) {
+                if (formatArgs.length - args.length == 1) {
+                    continue;
+                }
+                match = true;
+                for (int i = 0; i < formatArgs.length - 1; i++) {
+                    String formatArg = formatArgs[i];
+                    String actualArg = args[i];
+                    if (formatArg.startsWith("<") && formatArg.endsWith(">")) {
+                        continue;
+                    }
+                    if (!formatArg.equalsIgnoreCase(actualArg)) {
+                        match = false;
+                        break;
+                    }
+                }
+            } else {
+                if (formatArgs.length != args.length) {
+                    continue;
+                }
+                match = true;
+                for (int i = 0; i < formatArgs.length; i++) {
+                    String formatArg = formatArgs[i];
+                    String actualArg = args[i];
+                    if (formatArg.startsWith("<") && formatArg.endsWith(">")) {
+                        continue;
+                    }
+                    if (!formatArg.equalsIgnoreCase(actualArg)) {
+                        match = false;
+                        break;
+                    }
                 }
             }
 
-            if (match && matchesLastArgument(formatArgs[formatArgs.length - 1], args[formatArgs.length - 1])) {
+            if (match) {
                 return entry.getValue();
             }
         }
         return null;
     }
-
-    private boolean matchesArgument(String formatArg, String actualArg) {
-        return formatArg.startsWith("<") && formatArg.endsWith(">") || formatArg.equalsIgnoreCase(actualArg);
-    }
-
-    private boolean matchesLastArgument(String formatArg, String actualArg) {
-        if (formatArg.endsWith("...>")) {
-            return true;
-        }
-        return matchesArgument(formatArg, actualArg);
-    }
-
 
     private boolean checkSender(CommandSender sender) {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
@@ -177,22 +143,20 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
 
     private boolean checkPermission(CommandSender sender) {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
-
         if (!clazz.isAnnotationPresent(CmdExecutor.class)) {
             return true;
         }
-
         CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
-        String permission = cmdExecutor.permission();
-
-        if (permission.isEmpty() || sender.hasPermission(permission)) {
+        if (cmdExecutor.permission().isEmpty()) {
             return true;
         }
-
+        String permission = cmdExecutor.permission();
+        if (sender.hasPermission(permission)) {
+            return true;
+        }
         sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
         return false;
     }
-
 
     private boolean checkPermission(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(CmdMapping.class)) {
@@ -274,60 +238,95 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return false;
     }
 
-    private Object[] buildParams(String[] strings, Method method, CommandSender commandSender) {
-        Map<String, String[]> params = getParams(strings, mappings.inverse().get(method));
+    private Object[] parseParams(String[] strings, Method method, CommandSender commandSender) {
+        Map<String, String> params = getParams(strings, mappings.inverse().get(method));
         Parameter[] parameters = method.getParameters();
-
         if (parameters.length == 0) {
             return new Object[0];
         }
-
-        List<Object> paramList = new ArrayList<>();
-
+        List<Object> ParamList = new ArrayList<>();
         for (Parameter parameter : parameters) {
-            Class<?> paramType = parameter.getType();
-
-            if (paramType.equals(Player.class) || paramType.equals(CommandSender.class)) {
-                boolean isCmdSenderAnnotationPresent = parameter.isAnnotationPresent(CmdSender.class);
-
-                if (paramType.equals(Player.class) && commandSender instanceof Player) {
-                    paramList.add(isCmdSenderAnnotationPresent ? commandSender : null);
-                } else if (paramType.equals(CommandSender.class)) {
-                    paramList.add(isCmdSenderAnnotationPresent ? commandSender : null);
-                }
-
+            if (parameter.getType().equals(Player.class)) {
+                Player player = (Player) commandSender;
+                ParamList.add(parameter.isAnnotationPresent(CmdSender.class) ? player : null);
                 continue;
             }
-
+            if (parameter.getType().equals(CommandSender.class)) {
+                ParamList.add(parameter.isAnnotationPresent(CmdSender.class) ? commandSender : null);
+                continue;
+            }
             if (parameter.isAnnotationPresent(CmdParam.class)) {
                 CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
-                String[] value = params.get(cmdParam.value());
+                String value = params.get(cmdParam.value());
                 try {
-                    paramList.add(parseType(value, paramType));
-                } catch (Exception e) {
-                    commandSender.sendMessage(ChatColor.RED + e.getMessage());
-                    //noinspection CallToPrintStackTrace
-                    e.printStackTrace();
+                    if (parameter.getType() == float.class || parameter.getType() == Float.class) {
+                        ParamList.add(Float.parseFloat(value));
+                        continue;
+                    }
+                    if (parameter.getType() == double.class || parameter.getType() == Double.class) {
+                        ParamList.add(Double.parseDouble(value));
+                        continue;
+                    }
+                    if (parameter.getType() == int.class || parameter.getType() == Integer.class) {
+                        ParamList.add(Integer.parseInt(value));
+                        continue;
+                    }
+                } catch (NumberFormatException e) {
+                    commandSender.sendMessage(
+                            ChatColor.RED + String.format(
+                                    UltiTools.getInstance().i18n("参数 '%s' 格式错误：'%s' 不是一个有效的 %s 类型"),
+                                    cmdParam.value(), value, parameter.getType().getName()
+                            ));
                     return null;
                 }
+                if (parameter.getType() == OfflinePlayer.class) {
+                    ParamList.add(Bukkit.getOfflinePlayer(value));
+                    continue;
+                }
+                if (parameter.getType() == Player.class) {
+                    Player player = Bukkit.getPlayerExact(value);
+                    if (player == null) {
+                        commandSender.sendMessage(
+                                ChatColor.RED + String.format(
+                                        UltiTools.getInstance().i18n("玩家 \"%s\" 未找到"),
+                                        cmdParam.value(), value, parameter.getType().getName()
+                                ));
+                        return null;
+                    }
+                    ParamList.add(player);
+                }
+                ParamList.add(value);
             } else {
-                paramList.add(null);
+                ParamList.add(null);
+            }
+            if (parameter.isAnnotationPresent(OptionalParam.class)) {
+                if (parameter.getType() == Map.class) {
+                    String format = method.getAnnotation(CmdMapping.class).format();
+                    String OptionParams = params.get(format.split(" ")[format.split(" ").length - 1]);
+                    ParamList.add(parseOptionalParams(OptionParams));
+                } else {
+                    ParamList.add(null);
+                }
             }
         }
-        return paramList.toArray();
+        return ParamList.toArray();
     }
 
-    private <T> Object parseType(String[] value, Class<T> type) {
-        Function<String, T> parser = getParser(type);
-        if (type.isArray()) {
-            Object array = Array.newInstance(type.getComponentType(), value.length);
-            for (int i = 0; i < value.length; i++) {
-                Array.set(array, i, parser.apply(value[i]));
+    private Map<String, List<String>> parseOptionalParams(String OptionalParam) {
+        Map<String, List<String>> resultMap = new HashMap<>();
+
+        String[] optionGroups = OptionalParam.split(";");
+        for (String optionGroup : optionGroups) {
+            String[] parts = optionGroup.split("=");
+            if (parts.length == 2) {
+                String optionName = parts[0];
+                String[] arguments = parts[1].split(",");
+
+                resultMap.put(optionName, Arrays.asList(arguments));
             }
-            return array;
-        } else {
-            return parser.apply(value[0]);
         }
+
+        return resultMap;
     }
 
     private void setCoolDown(CommandSender commandSender, Method method) {
@@ -415,23 +414,20 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (checkCD(commandSender)) {
             return true;
         }
-        Object[] params = buildParams(strings, method, commandSender);
-        if (params == null) {
-            return true;
-        }
+        Object[] params = parseParams(strings, method, commandSender);
         BukkitRunnable bukkitRunnable = new BukkitRunnable() {
             @Override
             public void run() {
-                UsageLimit usageLimit = method.getAnnotation(UsageLimit.class);
-
-                if (usageLimit != null) {
-                    if (usageLimit.value().equals(UsageLimit.LimitType.ALL)) {
+                if (method.isAnnotationPresent(UsageLimit.class)) {
+                    if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
                         ServerLock.put(((Player) commandSender).getUniqueId(), method);
-                    } else if (usageLimit.value().equals(UsageLimit.LimitType.SENDER) && commandSender instanceof Player) {
-                        SenderLock.put(((Player) commandSender).getUniqueId(), method);
+                    }
+                    if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
+                        if (commandSender instanceof Player) {
+                            SenderLock.put(((Player) commandSender).getUniqueId(), method);
+                        }
                     }
                 }
-
                 try {
                     setCoolDown(commandSender, method);
                     method.invoke(getInstance(), params);
@@ -439,11 +435,14 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                     sendErrorMessage(commandSender, command);
                     throw new RuntimeException(e);
                 } finally {
-                    if (usageLimit != null) {
-                        if (usageLimit.value().equals(UsageLimit.LimitType.ALL)) {
+                    if (method.isAnnotationPresent(UsageLimit.class)) {
+                        if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.ALL)) {
                             ServerLock.remove(((Player) commandSender).getUniqueId());
-                        } else if (usageLimit.value().equals(UsageLimit.LimitType.SENDER) && commandSender instanceof Player) {
-                            SenderLock.remove(((Player) commandSender).getUniqueId());
+                        }
+                        if (method.getAnnotation(UsageLimit.class).value().equals(UsageLimit.LimitType.SENDER)) {
+                            if (commandSender instanceof Player) {
+                                SenderLock.remove(((Player) commandSender).getUniqueId());
+                            }
                         }
                     }
                 }

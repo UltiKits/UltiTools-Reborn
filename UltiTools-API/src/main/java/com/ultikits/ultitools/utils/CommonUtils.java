@@ -6,16 +6,12 @@ import cn.hutool.json.JSONUtil;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import org.bukkit.Bukkit;
 import org.springframework.context.annotation.ComponentScan;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.CodeSource;
-import java.security.ProtectionDomain;
 
 public class CommonUtils {
 
@@ -58,12 +54,4 @@ public class CommonUtils {
         return packages;
     }
 
-    public static URL getServerJar() {
-        ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
-        CodeSource codeSource = protectionDomain.getCodeSource();
-        if (codeSource == null) {
-            return null;
-        }
-        return codeSource.getLocation();
-    }
 }

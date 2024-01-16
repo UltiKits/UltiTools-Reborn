@@ -4,8 +4,5 @@ main: com.ultikits.ultitools.UltiTools
 api-version: 1.13
 prefix: UltiTools
 authors: [ wisdomme ]
-load: POSTWORLD
+load: STARTUP
 depend: [ Vault, PlaceholderAPI ]
-softdepend:
-  - Vault
-  - PlaceholderAPI
