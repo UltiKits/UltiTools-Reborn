@@ -37,16 +37,12 @@ jobs:
         name: ultitools-artifact
         path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
         
-  release:
+    release:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
-
-    - name: Get latest commit message
-      id: commit
-      run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
 
     - name: Get Project Version from pom.xml
       id: version
@@ -66,7 +62,6 @@ jobs:
       uses: actions/github-script@v5
       with:
         script: |
-          // 获取最新合并的 PR
           const { data: pullRequests } = await github.rest.pulls.list({
             owner: context.repo.owner,
             repo: context.repo.repo,
@@ -76,20 +71,9 @@ jobs:
             per_page: 1
           });
           const mergedPR = pullRequests.find(pr => pr.merged_at);
-
-          // 获取该 PR 的第一条评论
-          const comments = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: mergedPR.number,
-            per_page: 1
-          });
-
-          // 设置输出
           return {
-            id: mergedPR.number,
             title: mergedPR.title,
-            first_comment: comments.data.length > 0 ? comments.data[0].body : 'No comments found'
+            body: mergedPR.body
           };
         result-encoding: json
 
@@ -99,19 +83,21 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
       with:
-        tag_name: v${{ steps.get-pr.outputs.id }}
-        release_name: Release ${{ steps.get-pr.outputs.title }}
-        body: ${{ steps.get-pr.outputs.body }}
+        tag_name: v${{ steps.version.outputs.version }}
+        release_name: Release ${{ steps.version.outputs.version }}
+        body: |
+          # ${{ steps.get-pr.outputs.title }}
+          ${{ steps.get-pr.outputs.body }}
         draft: false
         prerelease: false
-
+    
     - name: Upload Release Asset
-      id: upload-release-asset
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
-        asset_name: UltiTools-API.jar
+        asset_path: ./UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
+        asset_name: UltiTools-API-${{ steps.version.outputs.version }}.jar
         asset_content_type: application/java-archive
+
