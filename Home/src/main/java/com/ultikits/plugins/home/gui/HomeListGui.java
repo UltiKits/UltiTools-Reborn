@@ -16,6 +16,7 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 public class HomeListGui extends PagingPage {
@@ -37,6 +38,7 @@ public class HomeListGui extends PagingPage {
     public List<Icon> setAllItems() {
         List<Icon> icons = new ArrayList<>();
         List<HomeEntity> homeList = home.getHomeList(player.getUniqueId());
+        homeList.sort(Comparator.comparing(HomeEntity::getId));
         int i = 0;
         for (HomeEntity homeEntity : homeList) {
             Location location = homeEntity.getHomeLocation();
@@ -51,7 +53,11 @@ public class HomeListGui extends PagingPage {
                 player.closeInventory();
             });
             icons.add(icon);
-            i++;
+            if (i == beds.size() - 1) {
+                i = 0;
+            } else {
+                i++;
+            }
         }
         return icons;
     }

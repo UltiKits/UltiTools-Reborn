@@ -1,12 +1,10 @@
 package com.ultikits.ultitools.annotations;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import java.lang.annotation.*;
 
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
+@Documented
 public @interface I18n {
-    String[] value();
+    String[] value() default {};
 }

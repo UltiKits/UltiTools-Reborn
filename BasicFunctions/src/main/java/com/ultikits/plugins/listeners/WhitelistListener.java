@@ -2,14 +2,18 @@ package com.ultikits.plugins.listeners;
 
 import com.ultikits.plugins.BasicFunctions;
 import com.ultikits.plugins.services.WhiteListService;
+import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerLoginEvent;
+import org.springframework.beans.factory.annotation.Autowired;
 
+@EventListener(manualRegister = true)
 public class WhitelistListener implements Listener {
-    private final WhiteListService whiteListService = new WhiteListService();
+    @Autowired
+    private WhiteListService whiteListService;
 
     @EventHandler
     public void onPlayerLogin(PlayerLoginEvent event) {
