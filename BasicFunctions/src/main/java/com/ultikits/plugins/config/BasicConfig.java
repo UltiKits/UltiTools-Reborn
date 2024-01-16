@@ -30,6 +30,18 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableSpeed = true;
     @ConfigEntry(path = "enableBan", comment = "是否启用封禁")
     private boolean enableBan = true;
+    @ConfigEntry(path = "enableBan", comment = "是否启用传送点")
+    private boolean enableWarp = true;
+    @ConfigEntry(path = "enableSpawn", comment = "是否启用重生点设置")
+    private boolean enableSpawn = true;
+    @ConfigEntry(path = "enableLoreEditor", comment = "是否启用Lore编辑器")
+    private boolean enableLoreEditor = true;
+    @ConfigEntry(path = "enableHide", comment = "是否启用隐身功能")
+    private boolean enableHide = true;
+    @ConfigEntry(path = "enableTitle", comment = "是否启用头顶显示功能")
+    private boolean enableTitle = true;
+    @ConfigEntry(path = "enableDeathPunishment", comment = "是否启用死亡惩罚功能")
+    private boolean enableDeathPunishment = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

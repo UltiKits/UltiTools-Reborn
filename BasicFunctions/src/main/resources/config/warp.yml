@@ -1,0 +1,6 @@
+# 是否启用BlueMap，自行安装BlueMap插件
+enable_blue_map: false
+# 传送点在BlueMap中最远显示距离
+blue_map_warp_max_distance: 1000
+# 传送点在BlueMap中的标记集名称
+blue_map_marker_set: "UltiTools Warps"

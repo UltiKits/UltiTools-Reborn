@@ -21,7 +21,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.3</version>
+            <version>6.0.5</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -78,7 +78,7 @@
                 <configuration>
                     <name>UltiEconomy</name>
                     <identifyString>UltiEconomy</identifyString>
-                    <shortDescription>A Economy Plugin</shortDescription>
+                    <shortDescription>多账户，利息发放，多人共享账户的经济模块</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
                     <pluginFolder>F:\SpigotServers\Servers\1.19.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>

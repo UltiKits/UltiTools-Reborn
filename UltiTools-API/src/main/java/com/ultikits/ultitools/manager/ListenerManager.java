@@ -14,6 +14,12 @@ import java.util.*;
 public class ListenerManager {
     private final Map<UltiToolsPlugin, List<Listener>> listenerListMap = new HashMap<>();
 
+    public void register(UltiToolsPlugin plugin, Class<? extends Listener> listenerClass) {
+        Listener listener = plugin.getContext().getBean(listenerClass);
+        register(plugin, listener);
+    }
+
+    @Deprecated
     public void register(UltiToolsPlugin plugin, Listener listener) {
         listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
@@ -39,6 +45,14 @@ public class ListenerManager {
                      IllegalAccessException |
                      NoSuchMethodException ignored) {
             }
+        }
+    }
+
+    public void registerAll(UltiToolsPlugin plugin) {
+        for (String listenerBean : plugin.getContext().getBeanNamesForType(Listener.class)) {
+            Listener listener = plugin.getContext().getBean(listenerBean, Listener.class);
+            if (listener.getClass().getAnnotation(EventListener.class).manualRegister()) continue;
+            register(plugin, listener);
         }
     }
 

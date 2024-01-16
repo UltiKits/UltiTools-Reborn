@@ -11,11 +11,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-@CmdExecutor(permission = "ultikits.ban.command.all", description = "Ban功能", alias = {"uban"})
+@CmdExecutor(permission = "ultikits.ban.command.all", description = "封禁功能", alias = {"uban"}, manualRegister = true)
 public class BanCommands extends AbstractCommendExecutor {
-    @SuppressWarnings("SpringJavaInjectionPointsAutowiringInspection")
     @Autowired
-    private BanPlayerService banPlayerService = new BanPlayerService();
+    private BanPlayerService banPlayerService;
 
     @CmdMapping(format = "ban <player> <reason>")
     public void banPlayer(@CmdSender CommandSender sender, @CmdParam("player") String player, @CmdParam("reason") String reason) {
@@ -36,6 +35,7 @@ public class BanCommands extends AbstractCommendExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-
+        sender.sendMessage(BasicFunctions.getInstance().i18n("§c/uban ban <player> <reason> §7封禁玩家"));
+        sender.sendMessage(BasicFunctions.getInstance().i18n("§c/uban unban <player> §7解封玩家"));
     }
 }

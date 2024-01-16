@@ -9,11 +9,15 @@ import com.ultikits.ultitools.utils.CommonUtils;
 import lombok.Getter;
 import org.bukkit.Bukkit;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.net.*;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -29,7 +33,7 @@ public class PluginManager {
 
     public void init() throws IOException {
         String currentPath = System.getProperty("user.dir");
-        String path = currentPath+ File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
+        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
         File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
 
@@ -80,7 +84,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, true);
         }
         return result;
     }
@@ -108,7 +112,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, false);
         }
         return result;
     }
@@ -138,7 +142,7 @@ public class PluginManager {
         }
         boolean result = invokeRegisterSelf(plugin);
         if (result) {
-            registerBukkit(plugin);
+            registerBukkit(plugin, false);
         }
         return result;
     }
@@ -174,7 +178,10 @@ public class PluginManager {
         try {
             @SuppressWarnings("resource")
             URLClassLoader classLoader = new URLClassLoader(
-                    new URL[]{new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8"))},
+                    new URL[]{
+                            new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
+                            CommonUtils.getServerJar()
+                    },
                     UltiTools.getInstance().getPluginClassLoader()
             );
             try (JarFile jarFile = new JarFile(pluginJar)) {
@@ -211,6 +218,21 @@ public class PluginManager {
 
 
     private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
+        for (UltiToolsPlugin plugin1 : pluginList) {
+            if (!plugin1.getMainClass().equals(plugin.getMainClass())) {
+                continue;
+            }
+            if (plugin1.isNewerVersionThan(plugin)) {
+                Bukkit.getLogger().log(
+                        Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName())
+                );
+                plugin.getContext().close();
+                return false;
+            } else if (plugin.isNewerVersionThan(plugin1)) {
+                plugin1.unregisterSelf();
+            }
+        }
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(
                     Level.WARNING,
@@ -221,7 +243,6 @@ public class PluginManager {
         }
         try {
             boolean registerSelf = plugin.registerSelf();
-            registerBukkit(plugin);
             if (registerSelf) {
                 pluginList.add(plugin);
                 Bukkit.getLogger().log(
@@ -244,10 +265,14 @@ public class PluginManager {
     }
 
     private UltiToolsPlugin initializePlugin(Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        URLClassLoader urlClassLoader = new URLClassLoader(
+                new URL[]{CommonUtils.getServerJar()},
+                pluginClass.getClassLoader()
+        );
         AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
         pluginContext.setParent(UltiTools.getInstance().getContext());
         pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(pluginClass.getClassLoader());
+        pluginContext.setClassLoader(urlClassLoader);
         pluginContext.registerBean(pluginClass, constructorArgs);
         pluginContext.refresh();
         UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
@@ -257,18 +282,26 @@ public class PluginManager {
         return plugin;
     }
 
-    private void registerBukkit(UltiToolsPlugin plugin) {
-        if (!plugin.getClass().isAnnotationPresent(EnableAutoRegister.class)) {
+    private void registerBukkit(UltiToolsPlugin plugin, boolean flag) {
+        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(plugin.getClass(), EnableAutoRegister.class);
+        if (annotation == null) {
             return;
         }
-        EnableAutoRegister annotation = plugin.getClass().getAnnotation(EnableAutoRegister.class);
         String[] packages = CommonUtils.getPluginPackages(plugin);
         for (String packageName : packages) {
             if (annotation.cmdExecutor()) {
-                UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
+                if (flag) {
+                    UltiTools.getInstance().getCommandManager().registerAll(plugin);
+                } else {
+                    UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
+                }
             }
             if (annotation.eventListener()) {
-                UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
+                if (flag) {
+                    UltiTools.getInstance().getListenerManager().registerAll(plugin);
+                } else {
+                    UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
+                }
             }
         }
     }
