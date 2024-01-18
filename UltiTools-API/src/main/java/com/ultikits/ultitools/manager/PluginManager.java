@@ -19,6 +19,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
@@ -176,12 +177,21 @@ public class PluginManager {
 
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(File pluginJar) {
         try {
+            File dir = new File(UltiTools.class.getProtectionDomain().getCodeSource().getLocation().getPath().replaceAll("%20", " "));
+            File plugins = new File(dir.getParentFile().getPath());
+            List<URL> urls = new ArrayList<>();
+            for (File file : plugins.listFiles()) {
+                if (file.getName().endsWith(".jar")) {
+                    urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
+                }
+            }
+            urls.addAll(Arrays.asList(
+                    new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
+                    CommonUtils.getServerJar()
+            ));
             @SuppressWarnings("resource")
             URLClassLoader classLoader = new URLClassLoader(
-                    new URL[]{
-                            new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
-                            CommonUtils.getServerJar()
-                    },
+                    urls.toArray(new URL[0]),
                     UltiTools.getInstance().getPluginClassLoader()
             );
             try (JarFile jarFile = new JarFile(pluginJar)) {

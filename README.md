@@ -56,7 +56,42 @@ UltiTools是一个高层的基础插件，包含了很多GUI和高级的玩法�
 
 希望我的插件能够帮到你的插件开发！
 
-UltiTools包含了不少实用的API，方便你快速的开发自己的插件。
+### 注解驱动的
+
+UltiTools-API改变了插件开发的方式，通过引入注解等高级语法，让你的插件开发更加高效。
+
+通过使用UltiTools-API，你再也无需手动注册指令和监听器，只需要在你的指令类和监听器类上添加注解，UltiTools-API会自动帮你注册。
+
+你也可以像写一个控制器一样，再也不需要为一个命令做繁琐的判断，只需要在你的指令方法上添加注解，UltiTools-API会自动帮你将指令匹配到对应的方法上。
+
+```java
+@CmdTarget(CmdTarget.CmdTargetType.PLAYER)
+@CmdExecutor(alias = {"lore"}, manualRegister = true, permission = "ultikits.tools.command.lore", description = "物品Lore编辑功能")
+public class LoreCommands extends AbstractCommendExecutor {
+
+    @CmdMapping(format = "add <lore...>")
+    public void addLore(@CmdSender Player player, @CmdParam("lore...") String[] lore) {
+        ...
+    }
+
+    @CmdMapping(format = "delete <position>")
+    public void deleteLore(@CmdSender Player player, @CmdParam("position") int position) {
+        ...
+    }
+
+    @CmdMapping(format = "edit <position> <lore...>")
+    public void editLore(@CmdSender Player player, @CmdParam("position") int position, @CmdParam("lore...") String[] lore) {
+        ...
+    }
+
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.RED + "lore add <内容>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("添加Lore"));
+        sender.sendMessage(ChatColor.RED + "lore delete <行数>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("删除Lore"));
+        sender.sendMessage(ChatColor.RED + "lore edit <行数> <内容>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("编辑Lore"));
+    }
+}
+```
 
 数据存储方面，UltiTools提供了Mysql和Json的封装API，让你无需考虑用户会使用哪种数据存储方式。
 
@@ -89,12 +124,13 @@ public boolean playerHasAccount(UUID player, String name) {
 }
 ```
 
-配置文件方面，UltiTools提供了优雅的单例模式的封装API，让你可以像操作对象一样操作配置文件。
+配置文件方面，UltiTools让你可以像操作对象一样读取配置文件。
 
 例如
 ```java
 @Getter
 @Setter
+@ConfigEntity(path = "config/config.yml")
 public class EcoConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "useThirdPartEconomy", comment = "是否使用其他的经济插件作为基础（即仅使用本插件的银行功能）")
     private boolean useThirdPartEconomy = false;
@@ -123,20 +159,69 @@ EcoConfig config = UltiEconomy.getInstance().getConfig(EcoConfig.class);
 double intrestRate = config.getInterestRate();
 ```
 
-UltiTools还封装了一系列的Spigot API，让你更加高效优雅的开发插件。
+### IOC容器管理
 
-例如
+UltiTools-API提供了一个Spring IOC容器，它可以帮你管理你的插件中的所有Bean，并且自动注入依赖。
+
 ```java
-// 注册一个Test指令，权限为permission.test，指令为test
-// 无需在Plugin.yml中注册指令
-getCommandManager().register(new TestCommands(), "permission.test", "示例功能", "test");
+// @Service将类型标记为一个Bean，UltiTools-API会自动扫描并注册
+@Service
+public class BanPlayerService {
+    
+    ...
+
+    public void unBanPlayer(OfflinePlayer player) {
+        DataOperator<BanedUserData> dataOperator = BasicFunctions.getInstance().getDataOperator(BanedUserData.class);
+        dataOperator.delById(player.getUniqueId().toString());
+    }
+}
 ```
 
-GUI界面方面，UltiTools提供了obliviate-invs的API，方便你快速的开发GUI界面。
+```java
+@CmdTarget(CmdTarget.CmdTargetType.BOTH)
+@CmdExecutor(permission = "ultikits.ban.command.all", description = "封禁功能", alias = {"uban"}, manualRegister = true)
+public class BanCommands extends AbstractCommendExecutor {
+    
+    // 使用@Autowired注解，UltiTools-API会自动注入依赖
+    @Autowired
+    private BanPlayerService banPlayerService;
+
+    @CmdMapping(format = "unban <player>")
+    public void unBanPlayer(@CmdSender CommandSender sender, @CmdParam("player") String player) {
+        banPlayerService.unBanPlayer(Bukkit.getOfflinePlayer(player));
+        sender.sendMessage(BasicFunctions.getInstance().i18n("§a解封成功"));
+    }
+    
+    ...
+}
+```
+
+如果你不喜欢自动注入，或者无法使用自动注入，你也可以手动获取Bean。
+
+```java
+BanPlayerService banPlayerService = getContext().getBean(BanPlayerService.class);
+```
+
+### 提供超多的现代化依赖库
+
+UltiTools-API提供了Hutool的部分功能，包括了大量的工具类。
+
+[Hutool 文档](https://hutool.cn/docs/#/)
+
+GUI界面方面，UltiTools提供了obliviate-invs的API，方便你快速的开发GUI界面。 
+
+[ObliviateInvs — Highly efficient modular GUI library](https://www.spigotmc.org/resources/obliviateinvs-%E2%80%94-highly-efficient-modular-gui-library.103572/)
 
 UltiTools也提供了Adventure的API。
 
-更多内容请查看 [UltiTools API 文档](https://doc.dev.ultikits.com/)
+[Adventure 文档](https://docs.adventure.kyori.net/)
+
+## 快速开始
+
+更多详细文档请查看 [UltiTools API 文档](https://doc.dev.ultikits.com/)
+
+以下是简单的快速开始
+<br>
 
 <details>
 <summary>快速开始</summary>

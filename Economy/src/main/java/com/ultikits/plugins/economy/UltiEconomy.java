@@ -1,16 +1,13 @@
 package com.ultikits.plugins.economy;
 
 import com.ultikits.plugins.economy.apis.BankService;
-import com.ultikits.plugins.economy.commands.BankCommand;
-import com.ultikits.plugins.economy.commands.MoneyCommand;
-import com.ultikits.plugins.economy.impls.BankServiceImpl;
+import com.ultikits.plugins.economy.config.EcoConfig;
 import com.ultikits.plugins.economy.impls.UltiEconomyExpansion;
-import com.ultikits.plugins.economy.impls.VaultImpl;
-import com.ultikits.plugins.economy.listener.JoinListener;
 import com.ultikits.plugins.economy.task.InterestTask;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import lombok.Getter;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -21,12 +18,15 @@ import java.util.List;
 
 import static org.bukkit.Bukkit.getServer;
 
-public final class UltiEconomy extends UltiToolsPlugin {
+@UltiToolsModule
+public class UltiEconomy extends UltiToolsPlugin {
+    @Getter
     private static UltiEconomy economy;
-    @Getter
-    private static Economy vault;
-    @Getter
-    private static BankService bank;
+
+    public UltiEconomy() {
+        super();
+        economy = this;
+    }
 
     public static UltiEconomy getInstance() {
         return economy;
@@ -34,20 +34,14 @@ public final class UltiEconomy extends UltiToolsPlugin {
 
     @Override
     public boolean registerSelf() {
-        economy = this;
-        vault = new VaultImpl();
-        bank = new BankServiceImpl();
-        Bukkit.getServicesManager().register(Economy.class, vault, UltiTools.getInstance(), ServicePriority.Highest);
-        Bukkit.getServicesManager().register(BankService.class, bank, UltiTools.getInstance(), ServicePriority.Highest);
+        // Register the Vault economy service
+        Bukkit.getServicesManager().register(Economy.class, UltiEconomy.getInstance().getContext().getBean(Economy.class), UltiTools.getInstance(), ServicePriority.Highest);
+        Bukkit.getServicesManager().register(BankService.class, UltiEconomy.getInstance().getContext().getBean(BankService.class), UltiTools.getInstance(), ServicePriority.Highest);
         if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
             new UltiEconomyExpansion().register();
         }
 
-        getCommandManager().register(new MoneyCommand());
-        getCommandManager().register(new BankCommand());
-        getListenerManager().register(this, new JoinListener());
-
-        new InterestTask().runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, getConfig(EcoConfig.class).getInterestTime() * 20L * 60);
+        new InterestTask().runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, getConfigManager().getConfigEntity(this, EcoConfig.class).getInterestTime() * 20L * 60);
         return true;
     }
 

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import cn.hutool.core.util.ReflectUtil;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
@@ -17,6 +18,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -36,6 +38,38 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     public AbstractCommendExecutor() {
         initParsers();
         scanCommandMappings();
+    }
+
+    private Map<String, String[]> getParams(String[] args, String format) {
+        if (args.length == 0) {
+            return Collections.emptyMap();
+        }
+
+        String[] formatArgs = format.split(" ");
+        Map<String, String[]> params = new HashMap<>();
+        List<String> paramList = new ArrayList<>();
+        int index = 0;
+
+        for (String arg : args) {
+            String currentFormatArg = formatArgs[index];
+
+            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith("...>")) {
+                paramList.add(arg);
+                continue;
+            }
+            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith(">")) {
+                String paramName = currentFormatArg.substring(1, currentFormatArg.length() - 1);
+                params.put(paramName, new String[]{arg});
+            }
+
+            index++;
+        }
+
+        if (!paramList.isEmpty()) {
+            params.put(formatArgs[index].substring(1, formatArgs[index].length() - 1), paramList.toArray(new String[0]));
+        }
+
+        return params;
     }
 
     public AbstractCommendExecutor getInstance() {
@@ -75,36 +109,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 mappings.put(method.getAnnotation(CmdMapping.class).format(), method);
             }
         }
-    }
-
-    private static Map<String, String[]> getParams(String[] args, String format) {
-        if (args.length == 0) {
-            return Collections.emptyMap();
-        }
-
-        String[] formatArgs = format.split(" ");
-        Map<String, String[]> params = new HashMap<>();
-        List<String> paramList = new ArrayList<>();
-        int index = 0;
-
-        for (String arg : args) {
-            String currentFormatArg = formatArgs[index];
-
-            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith("...>")) {
-                paramList.add(arg);
-            } else if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith(">")) {
-                String paramName = currentFormatArg.substring(1, currentFormatArg.length() - 1);
-                params.put(paramName, new String[]{arg});
-            }
-
-            index = (index + 1) % formatArgs.length;
-        }
-
-        if (!paramList.isEmpty()) {
-            params.put(formatArgs[index].substring(1, formatArgs[index].length() - 1), paramList.toArray(new String[0]));
-        }
-
-        return params;
     }
 
     private Method matchMethod(String[] args) {
@@ -365,23 +369,179 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("指令执行错误，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
     }
 
-    protected List<String> suggest(Player player, String[] strings) {
+    protected List<String> suggest(Player player, Command command, String[] strings) {
         List<String> completions = new ArrayList<>();
-
-        if (strings.length == 0) {
-            for (String format : mappings.keySet()) {
+        if (strings.length == 1) {
+            for (Map.Entry<String, Method> entry : mappings.entrySet()) {
+                Method method = entry.getValue();
+                String format = entry.getKey();
+                if (!checkPermission(player, method) || !checkOp(player, method)) {
+                    continue;
+                }
                 String arg = format.split(" ")[0];
+                if (arg.startsWith("<") && arg.endsWith(">")) {
+                    getArgSuggestion(player, command, strings, method, arg, completions);
+                    continue;
+                }
                 completions.add(arg);
             }
+            return completions;
         } else {
-            String partialCommand = strings[strings.length - 1];
-            for (String cmd : mappings.keySet()) {
-                if (cmd.startsWith(partialCommand)) {
-                    completions.add(cmd);
+            List<Method> methodsByArg = getMethodsByArg(player, String.join(" ", strings));
+            for (Method method : methodsByArg) {
+                String formatByMethod = getFormatByMethod(method);
+                String arg = getArgAt(formatByMethod, strings.length - 1);
+                if (arg.startsWith("<") && arg.endsWith(">")) {
+                    getArgSuggestion(player, command, strings, method, arg, completions);
+                } else {
+                    for (String format : mappings.keySet()) {
+                        String[] args = format.split(" ");
+                        if (args.length < strings.length) {
+                            continue;
+                        }
+                        String sug = args[strings.length - 1];
+                        if (sug.startsWith("<") && sug.endsWith(">")) {
+                            continue;
+                        }
+                        completions.add(sug);
+                    }
                 }
             }
         }
         return completions;
+    }
+
+    private void getArgSuggestion(Player player, Command command, String[] strings, Method method, String arg, List<String> completions) {
+        String suggestName = getSuggestName(method, arg.substring(1, arg.length() - 1));
+        if (suggestName == null) {
+            return;
+        }
+        Method[] suggestMethod = getSuggestMethodByName(suggestName);
+        UltiToolsPlugin pluginByCommand = UltiTools.getInstance().getCommandManager().getPluginByCommand(command);
+        if (suggestMethod == null || suggestMethod.length == 0) {
+            completions.add(pluginByCommand.i18n(suggestName));
+            return;
+        }
+        Class<?> declaringClass = suggestMethod[0].getDeclaringClass();
+        Collection<?> suggestObject;
+        if (this.getClass() != declaringClass) {
+            Object bean = pluginByCommand.getContext().getBean(declaringClass);
+            suggestObject = invokeSuggestMethod(bean, suggestMethod[0], player, command, strings);
+        } else {
+            suggestObject = invokeSuggestMethod(this, suggestMethod[0], player, command, strings);
+        }
+        if (suggestObject != null) {
+            for (Object o : suggestObject) {
+                completions.add(o.toString());
+            }
+        }
+    }
+
+    private String getFormatByMethod(Method method) {
+        return mappings.inverse().get(method);
+    }
+
+    private String getArgAt(String format, int index) {
+        String[] args = format.split(" ");
+        if (args.length <= index) {
+            return "";
+        }
+        return args[index];
+    }
+
+    private String getSuggestName(Method method, String paramName) {
+        Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+        for (Annotation[] annotations : parameterAnnotations) {
+            for (Annotation annotation : annotations) {
+                if (annotation instanceof CmdParam) {
+                    CmdParam cmdParam = (CmdParam) annotation;
+                    if (!paramName.equals(cmdParam.value())) {
+                        continue;
+                    }
+                    return cmdParam.suggest();
+                }
+            }
+        }
+        return null;
+    }
+
+    private Method[] getSuggestMethodByName(String suggestName) {
+        if (suggestName.endsWith("()")) {
+            suggestName = suggestName.substring(0, suggestName.length() - 2);
+        }
+        Method[] localSuggestMethod = getMethod(suggestName);
+        if (localSuggestMethod != null && localSuggestMethod.length > 0) return localSuggestMethod;
+        if (this.getClass().isAnnotationPresent(CmdSuggest.class)) {
+            Class<?>[] value = this.getClass().getAnnotation(CmdSuggest.class).value();
+            for (Class<?> clazz : value) {
+                Method[] method = getMethod(clazz, suggestName);
+                if (method != null) {
+                    return method;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private Method[] getMethod(String suggestName) {
+        return getMethod(this.getClass(), suggestName);
+    }
+
+    @Nullable
+    private Method[] getMethod(Class<?> clazz, String suggestName) {
+        return ReflectUtil.getMethods(clazz, method -> method.getName().equals(suggestName));
+    }
+
+    private Collection<?> invokeSuggestMethod(Object object, Method method, Player player, Command command, String[] strings) {
+        Parameter[] parameters = method.getParameters();
+        Object[] params = new Object[parameters.length];
+        for (int i = 0; i < parameters.length; i++) {
+            Parameter parameter = parameters[i];
+            Class<?> type = parameter.getType();
+            if (type.equals(Player.class)) {
+                params[i] = player;
+            } else if (type.equals(Command.class)) {
+                params[i] = command;
+            } else if (type.equals(String[].class)) {
+                params[i] = strings;
+            }
+        }
+        return ReflectUtil.invoke(object, method, params);
+    }
+
+    private List<Method> getMethodsByArg(Player player, String command) {
+        List<Method> perfectMatch = new ArrayList<>();
+        List<Method> methods = new ArrayList<>();
+        for (Map.Entry<String, Method> entry : mappings.entrySet()) {
+            Method method = entry.getValue();
+            String format = entry.getKey();
+            if (format.startsWith(command.substring(0, command.lastIndexOf(" ")))) {
+                if (checkPermission(player, method) && checkOp(player, method)) {
+                    perfectMatch.add(method);
+                }
+            } else {
+                String[] formatArgs = format.split(" ");
+                String[] commandArgs = command.split(" ");
+                boolean match = true;
+                for (int i = 0; i < Math.min(commandArgs.length, formatArgs.length); i++) {
+                    if (!matchesArgument(formatArgs[i], commandArgs[i])) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    if (checkPermission(player, method) && checkOp(player, method)) {
+                        methods.add(method);
+                    }
+                }
+            }
+        }
+        if (!perfectMatch.isEmpty()) {
+            return perfectMatch;
+        } else {
+            return methods;
+        }
     }
 
     protected String getHelpCommand() {
@@ -471,6 +631,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE)) {
             return null;
         }
-        return suggest((Player) commandSender, strings);
+        return suggest((Player) commandSender, command, strings);
     }
 }

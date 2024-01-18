@@ -8,18 +8,24 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import net.milkbowl.vault.economy.Economy;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.List;
 
 @CmdExecutor(description = "Money", alias = {"money"})
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 public class MoneyCommand extends AbstractCommendExecutor {
+    @Autowired
+    private BankService bank;
+    @Autowired
+    private Economy vault;
+
     @CmdMapping(format = "")
     public void money(@CmdSender Player player) {
-        double balance = UltiEconomy.getVault().getBalance(player);
-        BankService bank = UltiEconomy.getBank();
+        double balance = vault.getBalance(player);
         List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
         player.sendMessage(String.format(UltiEconomy.getInstance().i18n("现金: %.2f"), balance));
         player.sendMessage(UltiEconomy.getInstance().i18n("你的账户:"));
@@ -33,6 +39,7 @@ public class MoneyCommand extends AbstractCommendExecutor {
             );
         }
     }
+
     @Override
     protected void handleHelp(CommandSender sender) {
     }

@@ -1,6 +1,7 @@
 package com.ultikits.plugins.commands;
 
 import com.ultikits.plugins.BasicFunctions;
+import com.ultikits.plugins.suggests.CommonSuggest;
 import com.ultikits.plugins.tasks.TpTimerTask;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
@@ -13,11 +14,10 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
-import java.util.List;
-
 import static com.ultikits.ultitools.utils.MessageUtils.info;
 import static com.ultikits.ultitools.utils.MessageUtils.warning;
 
+@CmdSuggest({CommonSuggest.class})
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(alias = {"tpa"}, manualRegister = true, permission = "ultikits.tools.command.tpa", description = "传送请求功能")
 public class TpaCommands extends AbstractCommendExecutor {
@@ -49,7 +49,7 @@ public class TpaCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "<player>")
-    public void tpa(@CmdSender Player player, @CmdParam("player") String targetName) {
+    public void tpa(@CmdSender Player player, @CmdParam(value = "player", suggest = "suggestPlayer") String targetName) {
         Player target = Bukkit.getPlayerExact(targetName);
         if (target == null) {
             player.sendMessage(warning(BasicFunctions.getInstance().i18n("未找到目标，无法请求传送！")));
@@ -77,11 +77,6 @@ public class TpaCommands extends AbstractCommendExecutor {
                                 .clickEvent(ClickEvent.runCommand("/tpa reject"))
                 );
         MessageUtils.sendMessage(target, ask);
-    }
-
-    @Override
-    protected List<String> suggest(Player player, String[] strings) {
-        return TpaHereCommands.getTpTabList(strings);
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.ultikits.plugins.commands;
 
 import com.ultikits.plugins.BasicFunctions;
+import com.ultikits.plugins.suggests.CommonSuggest;
 import com.ultikits.plugins.tasks.TpTimerTask;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
@@ -12,32 +13,15 @@ import net.kyori.adventure.text.format.TextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import static com.ultikits.ultitools.utils.MessageUtils.info;
 import static com.ultikits.ultitools.utils.MessageUtils.warning;
 
 
+@CmdSuggest({CommonSuggest.class})
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(alias = {"tphere"}, manualRegister = true, permission = "ultikits.tools.command.tphere", description = "请求传送到此功能")
 public class TpaHereCommands extends AbstractCommendExecutor {
-    @Nullable
-    public static List<String> getTpTabList(@NotNull String[] strings) {
-        List<String> tabCommands = new ArrayList<>();
-        if (strings.length == 1) {
-            tabCommands.add("accept");
-            tabCommands.add("reject");
-            for (Player player1 : Bukkit.getOnlinePlayers()) {
-                tabCommands.add(player1.getName());
-            }
-            return tabCommands;
-        }
-        return null;
-    }
 
     @CmdMapping(format = "accept")
     public void acceptTpa(@CmdSender Player player) {
@@ -66,7 +50,8 @@ public class TpaHereCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "<player>")
-    public void tpa(@CmdSender Player player, @CmdParam("player") String targetName) {
+    public void tpa(@CmdSender Player player,
+                    @CmdParam(value = "player", suggest = "suggestPlayer") String targetName) {
         Player target = Bukkit.getPlayerExact(targetName);
         if (target == null) {
             player.sendMessage(warning(BasicFunctions.getInstance().i18n("未找到目标，无法请求传送！")));
@@ -96,10 +81,10 @@ public class TpaHereCommands extends AbstractCommendExecutor {
         MessageUtils.sendMessage(target, ask);
     }
 
-    @Override
-    protected List<String> suggest(Player player, String[] strings) {
-        return getTpTabList(strings);
-    }
+//    @Override
+//    protected List<String> suggest(Player player, Command command, String[] strings) {
+//        return getTpTabList(strings);
+//    }
 
     @Override
     protected void handleHelp(CommandSender sender) {

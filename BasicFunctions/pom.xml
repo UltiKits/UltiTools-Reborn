@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
@@ -18,7 +18,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.5</version>
+            <version>6.0.6</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -92,7 +92,8 @@
                 <configuration>
                     <name>BasicFunctions</name>
                     <identifyString>UltiTools-Basic-Functions</identifyString>
-                    <shortDescription>开服必装！所有的杂七杂八的小功能哦！包括不限于TPA，飞行，模式更改，白名单，随机传送。</shortDescription>
+                    <shortDescription>开服必装！所有的杂七杂八的小功能哦！包括不限于TPA，飞行，模式更改，白名单，随机传送。
+                    </shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
                     <pluginFolder>F:\SpigotServers\Paper\1.20.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>

@@ -19,13 +19,17 @@ public class SpeedCommands extends AbstractCommendExecutor {
     List<String> speeds = Arrays.asList("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
 
     @CmdMapping(format = "<speed>")
-    public void setSpeeds(@CmdSender Player player, @CmdParam("speed") String speed) {
+    public void setSpeeds(@CmdSender Player player, @CmdParam(value = "speed", suggest = "speedSuggest") String speed) {
         if (!speeds.contains(speed)) {
             return;
         }
         player.setWalkSpeed(Float.parseFloat(speed) / 10);
         player.setFlySpeed(Float.parseFloat(speed) / 10);
         player.sendMessage(ChatColor.YELLOW + String.format(BasicFunctions.getInstance().i18n("行走/飞行速度已设置为%s，默认速度为2"), speed));
+    }
+
+    public List<String> speedSuggest() {
+        return speeds;
     }
 
     @Override

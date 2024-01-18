@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.ultikits.plugins</groupId>
     <artifactId>Economy</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>Economy</name>
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.5</version>
+            <version>6.0.6</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -80,7 +80,7 @@
                     <identifyString>UltiEconomy</identifyString>
                     <shortDescription>多账户，利息发放，多人共享账户的经济模块</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>F:\SpigotServers\Servers\1.19.4\plugins\UltiTools\plugins</pluginFolder>
+                    <pluginFolder>F:\SpigotServers\Paper\1.20.4\plugins\UltiTools\plugins</pluginFolder>
                 </configuration>
             </plugin>
         </plugins>

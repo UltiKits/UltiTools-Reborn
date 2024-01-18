@@ -27,6 +27,7 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**
@@ -204,7 +205,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         inputStream.close();
                     }
                 } catch (IOException ex) {
-                    System.out.println("Could not save " + outFile.getName() + " to " + outFile);
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                 }
             }
         }

@@ -53,8 +53,8 @@ public class UltiEconomyExpansion extends PlaceholderExpansion {
 //                return null;
 //            }
 //        }
-        Economy economy = UltiEconomy.getVault();
-        BankService bankService = UltiEconomy.getBank();
+        Economy economy = UltiEconomy.getInstance().getContext().getBean(Economy.class);
+        BankService bankService = UltiEconomy.getInstance().getContext().getBean(BankService.class);
         switch (params) {
             case "money":
                 return String.format("%.2f", economy.getBalance(player));

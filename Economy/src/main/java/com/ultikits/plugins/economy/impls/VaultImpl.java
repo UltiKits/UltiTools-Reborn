@@ -1,7 +1,7 @@
 package com.ultikits.plugins.economy.impls;
 
-import com.ultikits.plugins.economy.EcoConfig;
 import com.ultikits.plugins.economy.UltiEconomy;
+import com.ultikits.plugins.economy.config.EcoConfig;
 import com.ultikits.plugins.economy.entity.PlayerAccountEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -9,9 +9,11 @@ import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+@Service
 public class VaultImpl implements Economy {
 
     /**

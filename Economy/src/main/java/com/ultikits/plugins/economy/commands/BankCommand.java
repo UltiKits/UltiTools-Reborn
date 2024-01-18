@@ -11,14 +11,20 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.springframework.beans.factory.annotation.Autowired;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
 
 @CmdExecutor(description = "Bank", alias = {"bank"})
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 public class BankCommand extends AbstractCommendExecutor {
-    BankService bank = UltiEconomy.getBank();
-    Economy vault = UltiEconomy.getVault();
+    @Autowired
+    private BankService bank;
+    @Autowired
+    private Economy vault;
 
     @CmdMapping(format = "list")
     public void listAccounts(@CmdSender Player player) {
@@ -33,7 +39,8 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "create <name>")
-    public void createAccount(@CmdSender Player player, @CmdParam("name") String name) {
+    public void createAccount(@CmdSender Player player,
+                              @CmdParam(value = "name", suggest = "[银行名称]") String name) {
         if (bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你已经有一个名为 %s 的银行账户了"), name));
             return;
@@ -46,15 +53,18 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "balance <name>")
-    public void showBalance(@CmdSender Player player, @CmdParam("name") String name) {
+    public void showBalance(@CmdSender Player player,
+                            @CmdParam(value = "name", suggest = "getBankList") String name) {
         if (bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("银行账户 %s 的余额为 %s"), name, bank.checkAccountBalance(player.getUniqueId(), name)));
         } else {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
         }
     }
+
     @CmdMapping(format = "members <name>")
-    public void showMembers(@CmdSender Player player, @CmdParam("name") String name) {
+    public void showMembers(@CmdSender Player player,
+                            @CmdParam(value = "name", suggest = "getBankList") String name) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
             return;
@@ -71,7 +81,8 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "close <name>")
-    public void closeAccount(@CmdSender Player player, @CmdParam("name") String name) {
+    public void closeAccount(@CmdSender Player player,
+                             @CmdParam(value = "name", suggest = "getBankList") String name) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
             return;
@@ -80,7 +91,8 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "close <name> confirm")
-    public void closeAccountConfirm(@CmdSender Player player, @CmdParam("name") String name) {
+    public void closeAccountConfirm(@CmdSender Player player,
+                                    @CmdParam(value = "name", suggest = "getBankList") String name) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
             return;
@@ -94,7 +106,9 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "deposit <name> <amount>")
-    public void deposit(@CmdSender Player player, @CmdParam("name") String name, @CmdParam("amount") double amount) {
+    public void deposit(@CmdSender Player player,
+                        @CmdParam(value = "name", suggest = "getBankList") String name,
+                        @CmdParam(value = "amount", suggest = "getMaxDeposit") double amount) {
         EconomyResponse response;
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
@@ -116,9 +130,9 @@ public class BankCommand extends AbstractCommendExecutor {
     @CmdMapping(format = "transfer <name> <to> <amount>")
     public void transfer(
             @CmdSender Player player,
-            @CmdParam("name") String name,
-            @CmdParam("to") String to,
-            @CmdParam("amount") double amount
+            @CmdParam(value = "name", suggest = "getBankList") String name,
+            @CmdParam(value = "to", suggest = "getBankList") String to,
+            @CmdParam(value = "amount", suggest = "[数额]") double amount
     ) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
@@ -147,7 +161,9 @@ public class BankCommand extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "withdraw <name> <amount>")
-    public void withdraw(@CmdSender Player player, @CmdParam("name") String name, @CmdParam("amount") double amount) {
+    public void withdraw(@CmdSender Player player,
+                         @CmdParam(value = "name", suggest = "getBankList") String name,
+                         @CmdParam(value = "amount", suggest = "getMaxWithdraw") double amount) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
             return;
@@ -168,8 +184,8 @@ public class BankCommand extends AbstractCommendExecutor {
     @CmdMapping(format = "member <name> add <player>")
     public void addMember(
             @CmdSender Player player,
-            @CmdParam("name") String name,
-            @CmdParam("player") OfflinePlayer target
+            @CmdParam(value = "name", suggest = "getBankList") String name,
+            @CmdParam(value = "player", suggest = "getPlayers") OfflinePlayer target
     ) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
@@ -186,8 +202,8 @@ public class BankCommand extends AbstractCommendExecutor {
     @CmdMapping(format = "member <name> remove <player>")
     public void removeMember(
             @CmdSender Player player,
-            @CmdParam("name") String name,
-            @CmdParam("player") OfflinePlayer target
+            @CmdParam(value = "name", suggest = "getBankList") String name,
+            @CmdParam(value = "player", suggest = "getPlayers") OfflinePlayer target
     ) {
         if (!bank.playerHasAccount(player.getUniqueId(), name)) {
             player.sendMessage(String.format(UltiEconomy.getInstance().i18n("你没有名为 %s 的银行账户"), name));
@@ -217,79 +233,37 @@ public class BankCommand extends AbstractCommendExecutor {
         sender.sendMessage(UltiEconomy.getInstance().i18n("/bank member <name> remove <player> - 从银行账户删除成员"));
     }
 
-    @Override
-    protected List<String> suggest(Player player, String[] strings) {
-        BankService bank = UltiEconomy.getBank();
-        Economy vault = UltiEconomy.getVault();
-        switch (strings.length) {
-            case 1:
-                return Arrays.asList("create", "deposit", "withdraw", "transfer", "balance", "members", "close", "list", "help", "member");
-            case 2:
-                switch (strings[0]) {
-                    case "create":
-                        return Collections.singletonList(UltiEconomy.getInstance().i18n("[银行名称]"));
-                    case "deposit":
-                    case "withdraw":
-                    case "transfer":
-                    case "balance":
-                    case "members":
-                    case "close":
-                    case "member":
-                        List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
-                        List<String> accountNames = new ArrayList<>();
-                        for (AccountEntity account : accounts) {
-                            accountNames.add(account.getName());
-                        }
-                        return accountNames;
-                    case "list":
-                    case "help":
-                    default:
-                        return Collections.emptyList();
-                }
-            case 3:
-                switch (strings[0]) {
-                    case "deposit":
-                        return Collections.singletonList(
-                                String.format(UltiEconomy.getInstance().i18n(
-                                        "[数额] 最高 %.2f"), vault.getBalance(player)
-                                )
-                        );
-                    case "withdraw":
-                        return Collections.singletonList(
-                                String.format(UltiEconomy.getInstance().i18n(
-                                                "[数额] 最高 %.2f"),
-                                        bank.getAccountByName(player.getUniqueId(), strings[1]).getBalance()
-                                )
-                        );
-                    case "transfer":
-                        List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
-                        List<String> accountNames = new ArrayList<>();
-                        for (AccountEntity account : accounts) {
-                            if (!account.getName().equals(strings[1])) {
-                                accountNames.add(account.getName());
-                            }
-                        }
-                        return accountNames;
-                    case "member":
-                        return Arrays.asList("add", "remove");
-                    default:
-                        return Collections.emptyList();
-                }
-            case 4:
-                switch (strings[0]) {
-                    case "transfer":
-                        return Collections.singletonList(UltiEconomy.getInstance().i18n("[数额]"));
-                    case "member":
-                        List<String> players = new ArrayList<>();
-                        for (OfflinePlayer player1 : Bukkit.getOfflinePlayers()) {
-                            players.add(player1.getName());
-                        }
-                        return players;
-                    default:
-                        return Collections.emptyList();
-                }
-            default:
-                return Collections.emptyList();
+    public List<String> getBankList(Player player) {
+        List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
+        List<String> accountNames = new ArrayList<>();
+        for (AccountEntity account : accounts) {
+            accountNames.add(account.getName());
         }
+        return accountNames;
+    }
+
+    public List<String> getMaxDeposit(Player player) {
+        return Collections.singletonList(
+                String.format(UltiEconomy.getInstance().i18n(
+                        "[数额] 最高 %.2f"), vault.getBalance(player)
+                )
+        );
+    }
+
+    public List<String> getMaxWithdraw(Player player, String[] strings) {
+        return Collections.singletonList(
+                String.format(UltiEconomy.getInstance().i18n(
+                                "[数额] 最高 %.2f"),
+                        bank.getAccountByName(player.getUniqueId(), strings[1]).getBalance()
+                )
+        );
+    }
+
+    public List<String> getPlayers() {
+        List<String> players = new ArrayList<>();
+        for (OfflinePlayer player1 : Bukkit.getOfflinePlayers()) {
+            players.add(player1.getName());
+        }
+        return players;
     }
 }

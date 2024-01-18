@@ -16,25 +16,25 @@ import org.bukkit.entity.Player;
 public class GMChangeCommand extends AbstractCommendExecutor {
 
     @CmdMapping(format = "0", permission = "ultikits.tools.command.gm.0")
-    public void changeGameMode0(@CmdSender Player player, String mode) {
+    public void changeGameMode0(@CmdSender Player player) {
         player.setGameMode(GameMode.SURVIVAL);
         player.sendMessage(ChatColor.YELLOW + String.format(BasicFunctions.getInstance().i18n("你的游戏模式已设置为%s"), BasicFunctions.getInstance().i18n("生存模式")));
     }
 
     @CmdMapping(format = "1", permission = "ultikits.tools.command.gm.1")
-    public void changeGameMode1(@CmdSender Player player, String mode) {
+    public void changeGameMode1(@CmdSender Player player) {
         player.setGameMode(GameMode.CREATIVE);
         player.sendMessage(ChatColor.YELLOW + String.format(BasicFunctions.getInstance().i18n("你的游戏模式已设置为%s"), BasicFunctions.getInstance().i18n("创造模式")));
     }
 
     @CmdMapping(format = "2", permission = "ultikits.tools.command.gm.2")
-    public void changeGameMode2(@CmdSender Player player, String mode) {
+    public void changeGameMode2(@CmdSender Player player) {
         player.setGameMode(GameMode.ADVENTURE);
         player.sendMessage(ChatColor.YELLOW + String.format(BasicFunctions.getInstance().i18n("你的游戏模式已设置为%s"), BasicFunctions.getInstance().i18n("冒险模式")));
     }
 
     @CmdMapping(format = "3", permission = "ultikits.tools.command.gm.3")
-    public void changeGameMode3(@CmdSender Player player, String mode) {
+    public void changeGameMode3(@CmdSender Player player) {
         player.setGameMode(GameMode.SPECTATOR);
         player.sendMessage(ChatColor.YELLOW + String.format(BasicFunctions.getInstance().i18n("你的游戏模式已设置为%s"), BasicFunctions.getInstance().i18n("旁观模式")));
     }

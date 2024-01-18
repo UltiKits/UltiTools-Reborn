@@ -1,8 +1,8 @@
 package com.ultikits.plugins.economy.task;
 
-import com.ultikits.plugins.economy.EcoConfig;
 import com.ultikits.plugins.economy.UltiEconomy;
 import com.ultikits.plugins.economy.apis.BankService;
+import com.ultikits.plugins.economy.config.EcoConfig;
 import com.ultikits.plugins.economy.entity.AccountEntity;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -17,9 +17,9 @@ public class InterestTask extends BukkitRunnable {
         // The interest rate is stored in the config.yml file
         // The interest will be added to each of the player's account according to the amount in that account
         for (Player player : Bukkit.getOnlinePlayers()) {
-            BankService bank = UltiEconomy.getBank();
+            BankService bank = UltiEconomy.getInstance().getContext().getBean(BankService.class);
             List<AccountEntity> accounts = bank.getAccounts(player.getUniqueId());
-            if (accounts.isEmpty()){
+            if (accounts.isEmpty()) {
                 continue;
             }
             for (AccountEntity account : accounts) {

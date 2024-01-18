@@ -6,12 +6,14 @@ import com.ultikits.plugins.economy.entity.AccountEntity;
 import com.ultikits.plugins.economy.entity.AccountPlayerEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
+@Service
 public class BankServiceImpl implements BankService {
 
     @Override
@@ -88,7 +90,7 @@ public class BankServiceImpl implements BankService {
     @Override
     public List<AccountEntity> getOwnedAccounts(UUID player) {
         DataOperator<AccountEntity> dataOperator = UltiEconomy.getInstance().getDataOperator(AccountEntity.class);
-        return (List<AccountEntity>) dataOperator.getAll(WhereCondition.builder().column("owner").value(player.toString()).build());
+        return dataOperator.getAll(WhereCondition.builder().column("owner").value(player.toString()).build());
     }
 
     @Override
@@ -188,7 +190,7 @@ public class BankServiceImpl implements BankService {
     public List<UUID> getAccountMembers(String accountId) {
         // get all members of the account
         DataOperator<AccountPlayerEntity> accountPlayerEntityDataOperator = UltiEconomy.getInstance().getDataOperator(AccountPlayerEntity.class);
-        List<AccountPlayerEntity> accountPlayerEntities = (List<AccountPlayerEntity>) accountPlayerEntityDataOperator.getAll(
+        List<AccountPlayerEntity> accountPlayerEntities = accountPlayerEntityDataOperator.getAll(
                 WhereCondition.builder().column("accountId").value(accountId).build()
         );
         List<UUID> members = new ArrayList<>();

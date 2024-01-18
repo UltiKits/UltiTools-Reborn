@@ -76,7 +76,7 @@ public class CommandManager {
 
         if (clazz.isAnnotationPresent(CmdExecutor.class)) {
             CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
-            register(commandExecutor, cmdExecutor.permission(), plugin.i18n(cmdExecutor.description()), cmdExecutor.alias());
+            register(plugin, commandExecutor, cmdExecutor.permission(), plugin.i18n(cmdExecutor.description()), cmdExecutor.alias());
             return;
         } else {
             Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
@@ -110,6 +110,17 @@ public class CommandManager {
             if (commandExecutor.getClass().getAnnotation(CmdExecutor.class).manualRegister()) continue;
             register(plugin, commandExecutor);
         }
+    }
+
+    public UltiToolsPlugin getPluginByCommand(Command command) {
+        for (Map.Entry<UltiToolsPlugin, List<Command>> entry : commandListMap.entrySet()) {
+            for (Command cmd : entry.getValue()) {
+                if (cmd.getName().equals(command.getName())) {
+                    return entry.getKey();
+                }
+            }
+        }
+        return null;
     }
 
     public void unregister(String name) {
