@@ -94,5 +94,6 @@
   "编辑物品名称": "Edit item name",
   "[名称]": "[name]",
   "[原因]": "[reason]",
-  "%s请求传送到您的位置": "%s requests to teleport to your position"
+  "%s请求传送到您的位置": "%s requests to teleport to your position",
+  "[备注]": "[remark]"
 }

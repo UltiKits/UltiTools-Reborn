@@ -65,7 +65,7 @@ public class CommonUtils {
         if (codeSource == null) {
             return null;
         }
-        if (codeSource.getLocation().toString().startsWith("union:")){
+        if (codeSource.getLocation().toString().startsWith("union:")) {
             String replace = codeSource.getLocation().toString().replace("union:", "file:").split("%")[0];
             try {
                 return new URL(replace);

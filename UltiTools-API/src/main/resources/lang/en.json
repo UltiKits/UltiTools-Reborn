@@ -45,5 +45,6 @@
   "     | 安装 |     ": "     | Install |     ",
   "     | 卸载 |     ": "     | Uninstall |     ",
   "点击卸载模块": "Click to uninstall module",
-  "点击安装模块": "Click to install module"
+  "点击安装模块": "Click to install module",
+  "§6[UltiTools-API] §e下载地址：§a%s": "§6[UltiTools-API] §eDownload URL: §a%s",
 }

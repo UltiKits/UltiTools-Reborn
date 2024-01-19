@@ -13,15 +13,13 @@ import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.net.URLDecoder;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Objects;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -33,6 +31,16 @@ public class PluginManager {
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
 
     public void init() throws IOException {
+        File dir = new File(UltiTools.class.getProtectionDomain().getCodeSource().getLocation().getPath().replaceAll("%20", " "));
+        File pluginsFolder = new File(dir.getParentFile().getPath());
+        List<URL> urls = new ArrayList<>();
+        urls.add(CommonUtils.getServerJar());
+        for (File file : Objects.requireNonNull(pluginsFolder.listFiles())) {
+            if (file.getName().endsWith(".jar")) {
+                urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
+            }
+        }
+
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -46,10 +54,16 @@ public class PluginManager {
 
         for (File file : plugins) {
             Bukkit.getLogger().log(Level.INFO, "  - " + file.getName());
+            urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
         }
 
+        URLClassLoader classLoader = new URLClassLoader(
+                urls.toArray(new URL[0]),
+                UltiTools.getInstance().getPluginClassLoader()
+        );
+
         for (File file : plugins) {
-            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(file);
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
             if (pluginClass != null) {
                 pluginClassList.add(pluginClass);
             }
@@ -61,7 +75,7 @@ public class PluginManager {
         }
         Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
         for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
-            if (register(pluginClass)) {
+            if (register(classLoader, pluginClass)) {
                 success++;
             }
         }
@@ -72,10 +86,10 @@ public class PluginManager {
         );
     }
 
-    public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
+    public boolean register(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
         UltiToolsPlugin plugin;
         try {
-            plugin = initializePlugin(pluginClass);
+            plugin = initializePlugin(classLoader, pluginClass);
         } catch (Exception e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
@@ -102,7 +116,7 @@ public class PluginManager {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
-                    pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
+                    pluginClass.getClassLoader(), pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
         } catch (Exception e) {
             Bukkit.getLogger().log(
@@ -175,53 +189,27 @@ public class PluginManager {
         );
     }
 
-    private Class<? extends UltiToolsPlugin> loadPluginMainClass(File pluginJar) {
-        try {
-            File dir = new File(UltiTools.class.getProtectionDomain().getCodeSource().getLocation().getPath().replaceAll("%20", " "));
-            File plugins = new File(dir.getParentFile().getPath());
-            List<URL> urls = new ArrayList<>();
-            for (File file : plugins.listFiles()) {
-                if (file.getName().endsWith(".jar")) {
-                    urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
+    private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) {
+        try (JarFile jarFile = new JarFile(pluginJar)) {
+            Enumeration<JarEntry> entryEnumeration = jarFile.entries();
+            while (entryEnumeration.hasMoreElements()) {
+                JarEntry entry = entryEnumeration.nextElement();
+                if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
+                    continue;
+                }
+                String className = entry
+                        .getName()
+                        .replace('/', '.')
+                        .replace(".class", "");
+                try {
+                    Class<?> aClass = classLoader.loadClass(className);
+                    if (IPlugin.class.isAssignableFrom(aClass)) {
+                        return aClass.asSubclass(UltiToolsPlugin.class);
+                    }
+                } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
                 }
             }
-            urls.addAll(Arrays.asList(
-                    new URL(URLDecoder.decode(pluginJar.toURI().toASCIIString(), "UTF-8")),
-                    CommonUtils.getServerJar()
-            ));
-            @SuppressWarnings("resource")
-            URLClassLoader classLoader = new URLClassLoader(
-                    urls.toArray(new URL[0]),
-                    UltiTools.getInstance().getPluginClassLoader()
-            );
-            try (JarFile jarFile = new JarFile(pluginJar)) {
-                Enumeration<JarEntry> entryEnumeration = jarFile.entries();
-
-                while (entryEnumeration.hasMoreElements()) {
-                    JarEntry entry = entryEnumeration.nextElement();
-
-                    if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
-                        continue;
-                    }
-
-                    String className = entry
-                            .getName()
-                            .replace('/', '.')
-                            .replace(".class", "");
-
-                    try {
-                        Class<?> aClass = classLoader.loadClass(className);
-                        if (IPlugin.class.isAssignableFrom(aClass)) {
-                            return aClass.asSubclass(UltiToolsPlugin.class);
-                        }
-                    } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
-                    }
-                }
-            } catch (IOException ignored) {
-            }
-        } catch (MalformedURLException ignored) {
-        } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException(e);
+        } catch (IOException ignored) {
         }
         return null;
     }
@@ -274,15 +262,11 @@ public class PluginManager {
         }
     }
 
-    private UltiToolsPlugin initializePlugin(Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
-        URLClassLoader urlClassLoader = new URLClassLoader(
-                new URL[]{CommonUtils.getServerJar()},
-                pluginClass.getClassLoader()
-        );
+    private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
         AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
         pluginContext.setParent(UltiTools.getInstance().getContext());
         pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(urlClassLoader);
+        pluginContext.setClassLoader(classLoader);
         pluginContext.registerBean(pluginClass, constructorArgs);
         pluginContext.refresh();
         UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
