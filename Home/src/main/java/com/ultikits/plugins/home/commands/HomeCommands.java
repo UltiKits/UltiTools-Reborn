@@ -28,7 +28,7 @@ public class HomeCommands extends AbstractCommendExecutor {
 
     @CmdMapping(format = "create <name>")
     public void createHome(@CmdSender Player player,
-                           @CmdParam(value = "name", suggest = "getHomeList") String name) {
+                           @CmdParam(value = "name", suggest = "[name]") String name) {
         boolean created = homeService.createHome(player, name);
         if (created) {
             player.sendMessage(ChatColor.YELLOW + PluginMain.getPluginMain().i18n("已创建！"));

@@ -191,25 +191,22 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
 
     private Entity copyEntity(T obj) throws IllegalAccessException {
         Entity entity = Entity.create(tableName);
-        List<Field> fieldList = new ArrayList<>();
-        Class tempClass = obj.getClass();
-        while (tempClass != null) {
-            fieldList.addAll(Arrays.asList(tempClass.getDeclaredFields()));
-            tempClass = tempClass.getSuperclass();
-        }
-        for (Field field : fieldList) {
+        Field[] fields = ReflectUtil.getFields(obj.getClass());
+        for (Field field : fields) {
             if (field.isAnnotationPresent(Column.class)) {
                 field.setAccessible(true);
                 Column column = field.getAnnotation(Column.class);
-                if (ClassUtil.isBasicType(field.getType())) {
-                    entity.set(column.value(), field.get(obj));
-                } else {
+                Object value = field.get(obj);
+                if (!ClassUtil.isBasicType(field.getType())) {
                     String jsonString = JSON.toJSONString(field.get(obj));
                     if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
                         jsonString = jsonString.substring(1);
                         jsonString = jsonString.substring(0, jsonString.lastIndexOf("\""));
                     }
-                    entity.set(column.value(), jsonString);
+                    value = jsonString;
+                }
+                if (entity.get(column.value()) == null) {
+                    entity.set(column.value(), value);
                 }
             }
         }

@@ -17,17 +17,16 @@ import java.util.*;
 @Service
 public class HomeServiceImpl implements HomeService {
     private final HomeConfig homeConfig;
-    private final DataOperator<HomeEntity> dataOperator;
     private final TeleportService teleportService;
 
-    public HomeServiceImpl(DataOperator<HomeEntity> dataOperator, HomeConfig homeConfig, TeleportService teleportService) {
+    public HomeServiceImpl(HomeConfig homeConfig, TeleportService teleportService) {
         this.homeConfig = homeConfig;
-        this.dataOperator = dataOperator;
         this.teleportService = teleportService;
     }
 
     @Override
     public HomeEntity getHomeByName(UUID playerId, String name) {
+        DataOperator<HomeEntity> dataOperator = PluginMain.getPluginMain().getDataOperator(HomeEntity.class);
         Collection<HomeEntity> homeEntities = dataOperator.getAll(
                 WhereCondition.builder().column("playerId").value(playerId).build(),
                 WhereCondition.builder().column("name").value(name).build()
@@ -40,6 +39,7 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public List<HomeEntity> getHomeList(UUID playerId) {
+        DataOperator<HomeEntity> dataOperator = PluginMain.getPluginMain().getDataOperator(HomeEntity.class);
         Collection<HomeEntity> all = dataOperator.getAll(
                 WhereCondition.builder().column("playerId").value(playerId).build()
         );
@@ -62,6 +62,7 @@ public class HomeServiceImpl implements HomeService {
             player.sendMessage(ChatColor.RED + PluginMain.getPluginMain().i18n("你没法创建更多的家！"));
             return false;
         }
+        DataOperator<HomeEntity> dataOperator = PluginMain.getPluginMain().getDataOperator(HomeEntity.class);
         boolean exist = dataOperator.exist(
                 WhereCondition.builder().column("playerId").value(player.getUniqueId()).build(),
                 WhereCondition.builder().column("name").value(name).build()
@@ -70,6 +71,7 @@ public class HomeServiceImpl implements HomeService {
             return false;
         }
         HomeEntity homeEntity = new HomeEntity();
+        homeEntity.setId(new Date().getTime());
         homeEntity.setPlayerId(player.getUniqueId());
         homeEntity.setLocation(new WorldLocation(player.getLocation()));
         homeEntity.setName(name);
@@ -79,6 +81,7 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public void deleteHome(UUID playerId, String name) {
+        DataOperator<HomeEntity> dataOperator = PluginMain.getPluginMain().getDataOperator(HomeEntity.class);
         dataOperator.del(
                 WhereCondition.builder().column("playerId").value(playerId).build(),
                 WhereCondition.builder().column("name").value(name).build()
