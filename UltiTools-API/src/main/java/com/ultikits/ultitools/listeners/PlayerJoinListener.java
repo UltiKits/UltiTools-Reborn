@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.listeners;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.EventListener;
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
@@ -11,6 +12,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import java.util.Arrays;
 import java.util.List;
 
+@EventListener
 public class PlayerJoinListener implements Listener {
     private final List<String> placeholderList = Arrays.asList("player", "server", "math", "vault", "localtime");
 

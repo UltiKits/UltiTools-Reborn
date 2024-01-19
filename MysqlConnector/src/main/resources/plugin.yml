@@ -1,5 +1,5 @@
 name: MysqlConnector
 version: '${project.version}'
 main: com.ultikits.plugins.mysqlconnector.MysqlConnector
-api-version: 600
+api-version: 606
 authors: [ wisdomme ]

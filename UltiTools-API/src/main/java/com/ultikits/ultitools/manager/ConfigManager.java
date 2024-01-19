@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.TypeReference;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
@@ -13,6 +14,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
 
 /**
  * @author wisdomme
@@ -96,7 +98,7 @@ public class ConfigManager {
                 try {
                     config.save();
                 } catch (IOException e) {
-                    System.out.println("Configuration save failed！File path：" + config.getConfigFilePath());
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
                 }
             }
         }

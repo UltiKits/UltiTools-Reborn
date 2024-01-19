@@ -12,6 +12,7 @@ import org.springframework.context.annotation.ComponentScan;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.CodeSource;
@@ -63,6 +64,14 @@ public class CommonUtils {
         CodeSource codeSource = protectionDomain.getCodeSource();
         if (codeSource == null) {
             return null;
+        }
+        if (codeSource.getLocation().toString().startsWith("union:")) {
+            String replace = codeSource.getLocation().toString().replace("union:", "file:").split("%")[0];
+            try {
+                return new URL(replace);
+            } catch (MalformedURLException e) {
+                e.printStackTrace();
+            }
         }
         return codeSource.getLocation();
     }

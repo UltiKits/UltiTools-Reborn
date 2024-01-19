@@ -9,8 +9,6 @@ import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
@@ -29,7 +27,8 @@ public class HomeCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "create <name>")
-    public void createHome(@CmdSender Player player, @CmdParam("name") String name) {
+    public void createHome(@CmdSender Player player,
+                           @CmdParam(value = "name", suggest = "[name]") String name) {
         boolean created = homeService.createHome(player, name);
         if (created) {
             player.sendMessage(ChatColor.YELLOW + PluginMain.getPluginMain().i18n("已创建！"));
@@ -39,12 +38,14 @@ public class HomeCommands extends AbstractCommendExecutor {
     }
 
     @CmdMapping(format = "del <name>")
-    public void deleteHome(@CmdSender Player player, @CmdParam("name") String name) {
+    public void deleteHome(@CmdSender Player player,
+                           @CmdParam(value = "name", suggest = "getHomeList") String name) {
         homeService.deleteHome(player.getUniqueId(), name);
     }
 
     @CmdMapping(format = "tp <name>")
-    public void goHome(@CmdSender Player player, @CmdParam("name") String name) {
+    public void goHome(@CmdSender Player player,
+                       @CmdParam(value = "name", suggest = "getHomeList") String name) {
         homeService.goHome(player, name);
     }
 
@@ -59,18 +60,7 @@ public class HomeCommands extends AbstractCommendExecutor {
         sender.sendMessage(PluginMain.getPluginMain().i18n(help));
     }
 
-    @Override
-    protected List<String> suggest(Player player, String[] strings) {
-        switch (strings.length) {
-            case 1:
-                return Arrays.asList("list", "create", "del", "tp");
-            case 2:
-                if (strings[1].equals("create") || strings[1].contains("list")) {
-                    return new ArrayList<>();
-                }
-                return homeService.getHomeNames(player.getUniqueId());
-            default:
-                return new ArrayList<>();
-        }
+    private List<String> getHomeList(Player player) {
+        return homeService.getHomeNames(player.getUniqueId());
     }
 }

@@ -7,43 +7,19 @@ import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.webserver.controller.ConfigEditorController;
 import com.ultikits.ultitools.webserver.ws.HeartBeatWebSocket;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
 
-import java.io.File;
 import java.io.IOException;
-import java.util.List;
 import java.util.logging.Level;
 
 import static spark.Spark.*;
 
 public class PluginInitiationUtils {
 
-    public static boolean downloadRequiredDependencies() {
-        YamlConfiguration env = UltiTools.getEnv();
-        List<String> dependencies = env.getStringList("libraries");
-        boolean restartRequired = false;
-        for (String name : dependencies) {
-            File file = new File(UltiTools.getInstance().getDataFolder() + "/lib", name);
-            if (file.exists()) {
-                continue;
-            }
-            if (!restartRequired) {
-                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] Missing required libraries，trying to download...");
-                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] If have problems in downloading，you can download full version.");
-            }
-            restartRequired = true;
-            String url = env.getString("oss-url") + env.getString("lib-path") + name;
-            Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + url);
-            HttpDownloadUtils.download(url, name, UltiTools.getInstance().getDataFolder() + "/lib");
-        }
-        return restartRequired;
-    }
-
     public static void loginAccount() throws IOException {
         String username = UltiTools.getInstance().getConfig().getString("account.username");
         String password = UltiTools.getInstance().getConfig().getString("account.password");
         boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
-        if (username == null || password == null || username.equals("") || password.equals("")) {
+        if (username == null || password == null || username.isEmpty() || password.isEmpty()) {
             return;
         }
 

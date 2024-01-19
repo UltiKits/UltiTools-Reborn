@@ -9,4 +9,6 @@ import java.lang.annotation.Target;
 @Target(ElementType.PARAMETER)
 public @interface CmdParam {
     String value();
+
+    String suggest() default "";
 }

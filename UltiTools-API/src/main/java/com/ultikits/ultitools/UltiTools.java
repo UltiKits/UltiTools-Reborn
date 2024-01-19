@@ -1,13 +1,11 @@
 package com.ultikits.ultitools;
 
-import com.ultikits.ultitools.commands.PluginInstallCommands;
-import com.ultikits.ultitools.commands.UltiToolsCommands;
+import cn.hutool.core.comparator.VersionComparator;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
-import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.ultitools.utils.CommonUtils;
@@ -35,7 +33,9 @@ import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
+import static com.ultikits.ultitools.utils.DependencyUtils.downloadRequiredDependencies;
 import static com.ultikits.ultitools.utils.PluginInitiationUtils.*;
+import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
 
 /**
  * UltiTools plugin main class.
@@ -64,7 +64,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     @Setter
     private DataStore dataStore;
-    private boolean restartRequired;
     private BukkitAudiences adventure;
 
     /**
@@ -113,14 +112,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public void onLoad() {
         saveDefaultConfig();
         ultiTools = this;
-        restartRequired = downloadRequiredDependencies();
-        if (restartRequired) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    "[UltiTools-API] Libraries downloaded, please restart the server or reload UltiTools!"
-            );
-//          Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "reload");
-        }
+        downloadRequiredDependencies();
     }
 
     /**
@@ -130,11 +122,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     @Override
     public void onEnable() {
-        // check if the plugin requires restart
-        if (restartRequired) {
-            return;
-        }
-
         // External bukkit libraries initialization
         this.adventure = BukkitAudiences.create(this);
         new InventoryAPI(this).init();
@@ -210,18 +197,26 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         Metrics metrics = new Metrics(this, 8652);
 
-        // bukkit plugin registration
-        getCommandManager().register(context.getBean(UltiToolsCommands.class));
-        getCommandManager().register(context.getBean(PluginInstallCommands.class));
-
         Bukkit.getServicesManager().register(
                 PluginManager.class,
                 this.pluginManager,
                 this,
                 ServicePriority.Normal
         );
-
-        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        getServer().getScheduler().scheduleSyncDelayedTask(this, new Runnable() {
+            public void run() {
+                String ultiToolsNewestVersion = getUltiToolsNewestVersion();
+                String currentVersion = getEnv().getString("version");
+                Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
+                Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] 正在检查版本更新..."));
+                if (new VersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
+                    Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
+                    Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] 下载地址：§a%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+                    return;
+                }
+                Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] UltiTools-API已是最新版本！"));
+            }
+        });
     }
 
     /**
@@ -231,9 +226,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     @Override
     public void onDisable() {
-        if (restartRequired) {
-            return;
-        }
         // Plugin shutdown logic
         if (this.adventure != null) {
             this.adventure.close();

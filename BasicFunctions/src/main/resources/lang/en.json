@@ -90,5 +90,10 @@
   "§c/uban unban <player> §7解封玩家": "§c/uban unban <player> §7Unban player",
   "§c/heal §7治愈自己": "§c/heal §7Heal yourself",
   "[死亡惩罚]你因为死亡随机掉落了%d个物品！": "[Death penalty] You randomly dropped %d items due to death!",
-  "[死亡惩罚]你因为死亡而扣除了%d个金币！": "[Death penalty] You deducted %d coins due to death!"
+  "[死亡惩罚]你因为死亡而扣除了%d个金币！": "[Death penalty] You deducted %d coins due to death!",
+  "编辑物品名称": "Edit item name",
+  "[名称]": "[name]",
+  "[原因]": "[reason]",
+  "%s请求传送到您的位置": "%s requests to teleport to your position",
+  "[备注]": "[remark]"
 }

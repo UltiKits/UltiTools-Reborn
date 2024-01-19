@@ -38,19 +38,17 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
         this.type = type;
-        synchronized (this) {
-            File file = new File(storeLocation);
-            File[] files = file.listFiles();
-            if (files != null) {
-                for (File dataFile : files) {
-                    try {
-                        JSON json = JSONUtil.readJSON(dataFile, Charset.defaultCharset());
-                        cache.put(FileNameUtil.mainName(dataFile), json.toBean(type));
-                    } catch (Exception e) {
-                        Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
-                    }
+        File file = new File(storeLocation);
+        File[] files = file.listFiles();
+        if (files != null) {
+            Arrays.stream(files).parallel().forEach(dataFile -> {
+                try {
+                    JSON json = JSONUtil.readJSON(dataFile, Charset.defaultCharset());
+                    cache.put(FileNameUtil.mainName(dataFile), json.toBean(type));
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
                 }
-            }
+            });
         }
     }
 
