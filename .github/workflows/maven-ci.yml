@@ -37,6 +37,14 @@ jobs:
         name: ultitools-artifact
         path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
         
+    - name: Deploy Java DOC
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      with:
+        server: ${{ secrets.FTP_HOST }}
+        username: ${{ secrets.FTP_USERNAME }}
+        password: ${{ secrets.FTP_PASSWORD }}
+        local-dir: "./UltiTools-API/target/apidocs/"
+        
   release:
     needs: build
     runs-on: ubuntu-latest
