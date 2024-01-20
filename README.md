@@ -62,7 +62,7 @@ UltiTools-API改变了插件开发的方式，通过引入注解等高级语法�
 
 通过使用UltiTools-API，你再也无需手动注册指令和监听器，只需要在你的指令类和监听器类上添加注解，UltiTools-API会自动帮你注册。
 
-你也可以像写一个控制器一样，再也不需要为一个命令做繁琐的判断，只需要在你的指令方法上添加注解，UltiTools-API会自动帮你将指令匹配到对应的方法上。
+你也可以像写一个控制器一样，再也不需要为一个命令做繁琐的判断，只需要在你的指令方法上添加注解，UltiTools-API会自动帮你将指令匹配到对应的方法上。甚至包括参数的Tab补全，UltiTools-API也可以简化判断！
 
 ```java
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)

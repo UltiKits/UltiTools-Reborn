@@ -29,6 +29,8 @@ public class PluginManager {
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+    @Getter
+    private ClassLoader classLoader;
 
     public void init() throws IOException {
         File dir = new File(UltiTools.class.getProtectionDomain().getCodeSource().getLocation().getPath().replaceAll("%20", " "));
@@ -57,7 +59,7 @@ public class PluginManager {
             urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
         }
 
-        URLClassLoader classLoader = new URLClassLoader(
+        classLoader = new URLClassLoader(
                 urls.toArray(new URL[0]),
                 UltiTools.getInstance().getPluginClassLoader()
         );
@@ -75,7 +77,7 @@ public class PluginManager {
         }
         Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
         for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
-            if (register(classLoader, pluginClass)) {
+            if (register(pluginClass)) {
                 success++;
             }
         }
@@ -86,7 +88,7 @@ public class PluginManager {
         );
     }
 
-    public boolean register(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+    public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(classLoader, pluginClass);
@@ -116,7 +118,7 @@ public class PluginManager {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
-                    pluginClass.getClassLoader(), pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
+                    classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
         } catch (Exception e) {
             Bukkit.getLogger().log(
@@ -138,7 +140,7 @@ public class PluginManager {
             plugin.setContext(pluginContext);
             pluginContext.setParent(UltiTools.getInstance().getContext());
             pluginContext.registerShutdownHook();
-            pluginContext.setClassLoader(plugin.getClass().getClassLoader());
+            pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {

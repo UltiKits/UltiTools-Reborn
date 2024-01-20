@@ -45,7 +45,11 @@ public class CommonUtils {
         if (!pluginClass.isAnnotationPresent(ComponentScan.class)) {
             if (pluginClass.isAnnotationPresent(EnableAutoRegister.class)) {
                 EnableAutoRegister enableAutoRegister = pluginClass.getAnnotation(EnableAutoRegister.class);
-                packages = new String[]{enableAutoRegister.scanPackage()};
+                if (enableAutoRegister.scanPackage().isEmpty()) {
+                    packages = new String[]{pluginClass.getPackage().getName()};
+                } else {
+                    packages = new String[]{enableAutoRegister.scanPackage()};
+                }
             } else {
                 packages = new String[]{pluginClass.getPackage().getName()};
             }

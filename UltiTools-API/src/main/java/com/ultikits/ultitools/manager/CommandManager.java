@@ -89,7 +89,7 @@ public class CommandManager {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
                 packageName,
-                Objects.requireNonNull(plugin.getClass().getClassLoader())
+                UltiTools.getInstance().getPluginManager().getClassLoader()
         );
         for (Class<?> clazz : classes) {
             try {
