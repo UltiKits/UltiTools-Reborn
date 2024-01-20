@@ -1,11 +1,14 @@
 package com.ultikits.ultitools;
 
 import cn.hutool.core.comparator.VersionComparator;
+import com.ultikits.ultitools.commands.PluginInstallCommands;
+import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.context.ContextConfig;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.tasks.DataStoreWaitingTask;
 import com.ultikits.ultitools.utils.CommonUtils;
@@ -203,6 +206,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 this,
                 ServicePriority.Normal
         );
+
+        getCommandManager().register(new UltiToolsCommands());
+        getCommandManager().register(new PluginInstallCommands());
+
+        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+
         getServer().getScheduler().scheduleSyncDelayedTask(this, new Runnable() {
             public void run() {
                 String ultiToolsNewestVersion = getUltiToolsNewestVersion();
