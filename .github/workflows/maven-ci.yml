@@ -21,7 +21,7 @@ jobs:
         cache: maven
         
     - name: Build with Maven
-      run: mvn -B package javadoc:javadoc -Dmaven.javadoc.skip=true --file UltiTools-API/pom.xml
+      run: mvn -B package javadoc:javadoc --file UltiTools-API/pom.xml
 
     - name: Get Project Version from pom.xml
       id: version
