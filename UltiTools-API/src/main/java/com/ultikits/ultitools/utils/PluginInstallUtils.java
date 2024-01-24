@@ -26,7 +26,7 @@ public class PluginInstallUtils {
      * <br>
      * 在线获取插件列表。
      *
-     * @param page    页数
+     * @param page     页数
      * @param pageSize 每页数量
      * @return 插件列表
      */
@@ -50,7 +50,7 @@ public class PluginInstallUtils {
      * 获取插件下载链接。
      *
      * @param idString 插件ID
-     * @param version 版本
+     * @param version  版本
      * @return 插件下载链接
      */
     public static String getPluginVersionDownloadLink(String idString, String version) {
@@ -176,7 +176,7 @@ public class PluginInstallUtils {
      * 安装插件。
      *
      * @param idString 插件ID
-     * @param version 版本
+     * @param version  版本
      * @return 是否安装成功
      */
     public static boolean installPlugin(String idString, String version) {

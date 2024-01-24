@@ -32,6 +32,7 @@ import java.util.function.Function;
  * <p>
  * 这个抽象类代表了一个命令执行器。
  * 它实现了Bukkit API中的TabExecutor接口。
+ *
  * @see TabExecutor
  */
 public abstract class AbstractCommendExecutor implements TabExecutor {

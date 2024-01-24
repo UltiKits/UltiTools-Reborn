@@ -24,7 +24,7 @@ public class ListenerManager {
      * <br>
      * 注册监听器。
      *
-     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
+     * @param plugin        UltiTools plugin instance <br> UltiTools模块实例
      * @param listenerClass Listener class <br> 监听器类
      */
     public void register(UltiToolsPlugin plugin, Class<? extends Listener> listenerClass) {
@@ -37,7 +37,7 @@ public class ListenerManager {
      * <br>
      * 注册监听器。无自动注入。请使用 {@link #register(UltiToolsPlugin, Class)} 代替。
      *
-     * @param plugin  UltiTools plugin instance <br> UltiTools模块实例
+     * @param plugin   UltiTools plugin instance <br> UltiTools模块实例
      * @param listener Listener <br> 监听器
      */
     @Deprecated
@@ -55,7 +55,7 @@ public class ListenerManager {
      * <br>
      * 注册包中的所有监听器。
      *
-     * @param plugin     UltiTools plugin instance <br> UltiTools模块实例
+     * @param plugin      UltiTools plugin instance <br> UltiTools模块实例
      * @param packageName Package name <br> 包名
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName) {

@@ -192,9 +192,9 @@ public class CommandManager {
      * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class, String, String, String...)}代替。
      *
      * @param commandExecutor Command executor instance <br> 命令执行器实例
-     * @param permission     Permission <br> 权限
-     * @param description   Description <br> 描述
-     * @param aliases       Aliases <br> 别名
+     * @param permission      Permission <br> 权限
+     * @param description     Description <br> 描述
+     * @param aliases         Aliases <br> 别名
      */
     @Deprecated
     public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {

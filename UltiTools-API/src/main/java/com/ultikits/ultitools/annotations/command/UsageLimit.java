@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
  * Usage limit annotation.
  * <p>
  * 指令使用限制注解。
+ *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#execution-lock">@UsageLimit</a>
  */
 @Target(ElementType.METHOD)

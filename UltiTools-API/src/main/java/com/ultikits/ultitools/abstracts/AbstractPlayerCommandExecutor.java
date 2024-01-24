@@ -11,14 +11,15 @@ import org.bukkit.entity.Player;
  * Abstract class representing a player command executor.
  * <p>
  * 玩家指令执行器的抽象类。
+ *
  * @see CommandExecutor
  */
 public abstract class AbstractPlayerCommandExecutor implements CommandExecutor {
     /**
      * @param commandSender the sender of the command <br> 指令发送者
-     * @param command      the command which was executed <br> 被执行的指令
-     * @param s           the alias of the command which was used <br> 被使用的指令别名
-     * @param strings     the arguments passed to the command, split by spaces <br> 通过空格分割的指令参数
+     * @param command       the command which was executed <br> 被执行的指令
+     * @param s             the alias of the command which was used <br> 被使用的指令别名
+     * @param strings       the arguments passed to the command, split by spaces <br> 通过空格分割的指令参数
      * @return whether the command was executed successfully <br> 指令是否执行成功
      * @see CommandExecutor#onCommand(CommandSender, Command, String, String[])
      */

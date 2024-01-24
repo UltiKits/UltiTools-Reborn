@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
  * Command suggest annotation.
  * <p>
  * 指令建议注解。
+ *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#cmdsuggest">@CmdSuggest</a>
  */
 @Target({ElementType.TYPE, ElementType.METHOD})

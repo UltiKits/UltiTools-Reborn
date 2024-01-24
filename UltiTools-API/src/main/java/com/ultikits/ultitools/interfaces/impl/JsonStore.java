@@ -8,7 +8,6 @@ import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.manager.DataStoreManager;
 import org.bukkit.scheduler.BukkitRunnable;
 

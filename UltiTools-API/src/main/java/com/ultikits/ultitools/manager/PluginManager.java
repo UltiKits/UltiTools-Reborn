@@ -131,13 +131,13 @@ public class PluginManager {
      * <br>
      * 注册插件。
      *
-     * @param pluginClass UltiTools plugin class <br> UltiTools模块类
-     * @param pluginName Plugin name <br> 插件名称
-     * @param version Plugin version <br> 插件版本
-     * @param authors Plugin authors <br> 插件作者
-     * @param loadAfter Load after plugins <br> 加载在此插件之后的插件
+     * @param pluginClass         UltiTools plugin class <br> UltiTools模块类
+     * @param pluginName          Plugin name <br> 插件名称
+     * @param version             Plugin version <br> 插件版本
+     * @param authors             Plugin authors <br> 插件作者
+     * @param loadAfter           Load after plugins <br> 加载在此插件之后的插件
      * @param minUltiToolsVersion Min UltiTools version <br> 最低UltiTools版本
-     * @param mainClass Main class <br> 主类
+     * @param mainClass           Main class <br> 主类
      * @return Register result <br> 注册结果
      */
     public boolean register(
