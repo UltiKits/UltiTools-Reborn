@@ -18,17 +18,24 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
+/**
+ * Command manager.
+ * <p>
+ * 命令管理器
+ */
 public class CommandManager {
     private final Map<UltiToolsPlugin, List<Command>> commandListMap = new HashMap<>();
 
     /**
+     * Manually register a command. Only used to register classes annotated with @CmdExecutor. Dependencies will be injected automatically.
+     * <p>
      * 手动注册一个命令。仅用于注册被@CmdExecutor注解的类。会自动注入依赖。
      *
-     * @param plugin      插件实例
-     * @param clazz       命令执行器类
-     * @param permission  权限
-     * @param description 描述
-     * @param aliases     别名
+     * @param plugin      UltiTools Plugin instance <br> 模块实例
+     * @param clazz       Command executor class <br> 命令执行器类
+     * @param permission  Permission <br> 权限
+     * @param description Description <br> 描述
+     * @param aliases     Aliases <br> 别名
      */
     public void register(UltiToolsPlugin plugin, Class<? extends CommandExecutor> clazz, String permission, String description, String... aliases) {
         CommandExecutor commandExecutor = UltiTools.getInstance().getContext().getBean(clazz);
@@ -36,13 +43,15 @@ public class CommandManager {
     }
 
     /**
+     * Manually register a command, will not be managed by the container. Dependencies will not be injected automatically.
+     * <p>
      * 手动注册一个命令，不会被容器管理。不会自动注入依赖。
      *
-     * @param plugin          插件实例
-     * @param commandExecutor 命令执行器实例
-     * @param permission      权限
-     * @param description     描述
-     * @param aliases         别名
+     * @param plugin          UltiTools Plugin instance <br> 模块实例
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param permission      Permission <br> 权限
+     * @param description     Description <br> 描述
+     * @param aliases         Aliases <br> 别名
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         register(commandExecutor, permission, plugin.i18n(description), aliases);
@@ -55,10 +64,12 @@ public class CommandManager {
     }
 
     /**
+     * Manually register a command. Only used to register classes annotated with @CmdExecutor. Dependencies will be injected automatically.
+     * <p>
      * 手动注册一个命令。仅用于注册被@CmdExecutor注解的类。会自动注入依赖。
      *
-     * @param plugin 插件实例
-     * @param clazz  命令执行器类
+     * @param plugin UltiTools Plugin instance <br> 模块实例
+     * @param clazz  Command executor class <br> 命令执行器类
      */
     public void register(UltiToolsPlugin plugin, Class<? extends CommandExecutor> clazz) {
         CommandExecutor commandExecutor = plugin.getContext().getBean(clazz);
@@ -66,10 +77,12 @@ public class CommandManager {
     }
 
     /**
+     * Manually register a command, will not be managed by the container. Dependencies will not be injected automatically.
+     * <p>
      * 手动注册一个命令，不会被容器管理。不会自动注入依赖。
      *
-     * @param plugin          插件实例
-     * @param commandExecutor 命令执行器实例
+     * @param plugin          UltiTools Plugin instance <br> 模块实例
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
@@ -85,6 +98,14 @@ public class CommandManager {
         register(commandExecutor);
     }
 
+    /**
+     * Register all classes annotated with @CmdExecutor in the specified package. Dependencies will be injected automatically.
+     * <p>
+     * 注册指定包下所有被@CmdExecutor注解的类。会自动注入依赖。
+     *
+     * @param plugin      UltiTools Plugin instance <br> 模块实例
+     * @param packageName Package name <br> 包名
+     */
     public void registerAll(UltiToolsPlugin plugin, String packageName) {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
@@ -104,6 +125,12 @@ public class CommandManager {
         }
     }
 
+    /**
+     * Register all classes annotated with @CmdExecutor in the specified package. Dependencies will be injected automatically.
+     * <p>
+     *
+     * @param plugin UltiTools Plugin instance <br> 模块实例
+     */
     public void registerAll(UltiToolsPlugin plugin) {
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
@@ -112,6 +139,14 @@ public class CommandManager {
         }
     }
 
+    /**
+     * Get the plugin instance by command.
+     * <p>
+     * 通过命令获取模块实例
+     *
+     * @param command Command <br> 命令
+     * @return UltiTools plugin <br> 模块实例
+     */
     public UltiToolsPlugin getPluginByCommand(Command command) {
         for (Map.Entry<UltiToolsPlugin, List<Command>> entry : commandListMap.entrySet()) {
             for (Command cmd : entry.getValue()) {
@@ -123,11 +158,17 @@ public class CommandManager {
         return null;
     }
 
+    /**
+     * @param name Command name <br> 命令名
+     */
     public void unregister(String name) {
         PluginCommand command = getCommand(name, UltiTools.getInstance());
         command.unregister(getCommandMap());
     }
 
+    /**
+     * @param plugin UltiTools Plugin instance <br> 模块实例
+     */
     public void unregisterAll(UltiToolsPlugin plugin) {
         List<Command> commands = commandListMap.get(plugin);
         if (commands == null) return;
@@ -136,12 +177,25 @@ public class CommandManager {
         }
     }
 
+    /**
+     * Unregister all commands.
+     */
     public void close() {
         for (UltiToolsPlugin plugin : commandListMap.keySet()) {
             unregisterAll(plugin);
         }
     }
 
+    /**
+     * Don't use this method to register commands, use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
+     * <p>
+     * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class, String, String, String...)}代替。
+     *
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param permission     Permission <br> 权限
+     * @param description   Description <br> 描述
+     * @param aliases       Aliases <br> 别名
+     */
     @Deprecated
     public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
@@ -152,6 +206,13 @@ public class CommandManager {
         command.setExecutor(commandExecutor);
     }
 
+    /**
+     * Don't use this method to register commands, use {@link #register(UltiToolsPlugin, Class)} instead.
+     * <p>
+     * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class)}代替。
+     *
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     */
     @Deprecated
     public void register(CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();

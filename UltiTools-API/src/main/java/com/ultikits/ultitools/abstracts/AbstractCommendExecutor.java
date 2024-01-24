@@ -26,6 +26,14 @@ import java.lang.reflect.Parameter;
 import java.util.*;
 import java.util.function.Function;
 
+/**
+ * This abstract class represents a command executor.
+ * It implements the TabExecutor interface from the Bukkit API.
+ * <p>
+ * 这个抽象类代表了一个命令执行器。
+ * 它实现了Bukkit API中的TabExecutor接口。
+ * @see TabExecutor
+ */
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
     private final BiMap<UUID, Method> SenderLock = HashBiMap.create();
@@ -35,11 +43,46 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     @Getter
     private final Map<List<Class<?>>, Function<String, ?>> parsers = new HashMap<>();
 
+    /**
+     * Constructor that initializes parsers and scans command mappings.
+     * <p>
+     * 构造函数，初始化解析器并扫描命令映射。
+     */
     public AbstractCommendExecutor() {
         initParsers();
         scanCommandMappings();
     }
 
+    /**
+     * Checks whether the sender is valid.
+     * <p>
+     * 检查发送者是否有效。
+     *
+     * @param sender    The sender of the command. <br> 命令的发送者。
+     * @param cmdTarget The method that matches the command. <br> 匹配命令的方法。
+     * @return Whether the sender is valid. <br> 发送者是否有效。
+     */
+    private boolean checkCmdTargetType(CommandSender sender, CmdTarget cmdTarget) {
+        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.PLAYER) && !(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只有游戏内可以执行这个指令！"));
+            return false;
+        }
+        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE) && sender instanceof Player) {
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只可以在后台执行这个指令！"));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Registers the command executor.
+     * <p>
+     * 注册命令执行器。
+     *
+     * @param args   The arguments of the command. <br> 命令的参数。
+     * @param format The format of the command. <br> 命令的格式。
+     * @return The map of the parameters. <br> 参数的映射。
+     */
     private Map<String, String[]> getParams(String[] args, String format) {
         if (args.length == 0) {
             return Collections.emptyMap();
@@ -72,10 +115,22 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return params;
     }
 
+    /**
+     * Gets the instance of the command executor.
+     * <p>
+     * 获取命令执行器的实例。
+     *
+     * @return The instance of the command executor. <br> 命令执行器的实例。
+     */
     public AbstractCommendExecutor getInstance() {
         return this;
     }
 
+    /**
+     * Initializes the parsers.
+     * <p>
+     * 初始化解析器。
+     */
     @SuppressWarnings("deprecation")
     private void initParsers() {
         parsers.put(Arrays.asList(Boolean[].class, Boolean.class, boolean[].class, boolean.class), Boolean::parseBoolean);
@@ -92,6 +147,15 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         parsers.put(Arrays.asList(String[].class, String.class), s -> s);
     }
 
+    /**
+     * Gets the parser of the parameter.
+     * <p>
+     * 获取参数的解析器。
+     *
+     * @param type The type of the parameter. <br> 参数的类型。
+     * @param <T>  The type of the parameter. <br> 参数的类型。
+     * @return The parser of the parameter. <br> 参数的解析器。
+     */
     private <T> Function<String, T> getParser(Class<T> type) {
         //noinspection unchecked
         return (Function<String, T>) parsers.keySet().stream()
@@ -101,6 +165,11 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 .orElse(null);
     }
 
+    /**
+     * Scans the command mappings.
+     * <p>
+     * 扫描命令映射。
+     */
     private void scanCommandMappings() {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
         Method[] methods = clazz.getDeclaredMethods();
@@ -111,6 +180,14 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
     }
 
+    /**
+     * Matches the command.
+     * <p>
+     * 匹配命令。
+     *
+     * @param args The arguments of the command. <br> 命令的参数。
+     * @return The method that matches the command. <br> 匹配命令的方法。
+     */
     private Method matchMethod(String[] args) {
         if (args.length == 0) {
             return mappings.getOrDefault("", null);
@@ -134,10 +211,28 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return null;
     }
 
+    /**
+     * Compare the actual argument with the format argument.
+     * <p>
+     * 将实际参数与格式参数进行比较。
+     *
+     * @param formatArg The format argument. <br> 格式参数。
+     * @param actualArg The actual argument. <br> 实际参数。
+     * @return Whether the actual argument matches the format argument. <br> 实际参数是否与格式参数匹配。
+     */
     private boolean matchesArgument(String formatArg, String actualArg) {
         return formatArg.startsWith("<") && formatArg.endsWith(">") || formatArg.equalsIgnoreCase(actualArg);
     }
 
+    /**
+     * Compare the actual argument with the format argument.
+     * <p>
+     * 将实际参数与格式参数进行比较。
+     *
+     * @param formatArg The format argument. <br> 格式参数。
+     * @param actualArg The actual argument. <br> 实际参数。
+     * @return Whether the actual argument matches the format argument. <br> 实际参数是否与格式参数匹配。
+     */
     private boolean matchesLastArgument(String formatArg, String actualArg) {
         if (formatArg.endsWith("...>")) {
             return true;
@@ -145,59 +240,72 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return matchesArgument(formatArg, actualArg);
     }
 
-
+    /**
+     * Checks whether the sender is valid.
+     * <p>
+     * 检查发送者是否有效。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @return Whether the sender is valid. <br> 发送者是否有效。
+     */
     private boolean checkSender(CommandSender sender) {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
         if (!clazz.isAnnotationPresent(CmdTarget.class)) {
             return true;
         }
         CmdTarget cmdTarget = clazz.getAnnotation(CmdTarget.class);
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.PLAYER) && !(sender instanceof Player)) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只有游戏内可以执行这个指令！"));
-            return false;
-        }
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE) && sender instanceof Player) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只可以在后台执行这个指令！"));
-            return false;
-        }
-        return true;
+        return checkCmdTargetType(sender, cmdTarget);
     }
 
+    /**
+     * Checks whether the sender is valid.
+     * <p>
+     * 检查发送者是否有效。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @param method The method that matches the command. <br> 匹配命令的方法。
+     * @return Whether the sender is valid. <br> 发送者是否有效。
+     */
     private boolean checkSender(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(CmdTarget.class)) {
             return true;
         }
         CmdTarget cmdTarget = method.getAnnotation(CmdTarget.class);
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.PLAYER) && !(sender instanceof Player)) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只有游戏内可以执行这个指令！"));
-            return false;
-        }
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE) && sender instanceof Player) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只可以在后台执行这个指令！"));
-            return false;
-        }
-        return true;
+        return checkCmdTargetType(sender, cmdTarget);
     }
 
+    /**
+     * Checks whether the sender has permission.
+     * <p>
+     * 检查发送者是否有权限。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @return Whether the sender has permission. <br> 发送者是否有权限。
+     */
     private boolean checkPermission(CommandSender sender) {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
-
         if (!clazz.isAnnotationPresent(CmdExecutor.class)) {
             return true;
         }
-
         CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
         String permission = cmdExecutor.permission();
-
         if (permission.isEmpty() || sender.hasPermission(permission)) {
             return true;
         }
-
         sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
         return false;
     }
 
 
+    /**
+     * Checks whether the sender has permission.
+     * <p>
+     * 检查发送者是否有权限。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @param method The method that matches the command. <br> 匹配命令的方法。
+     * @return Whether the sender has permission. <br> 发送者是否有权限。
+     */
     private boolean checkPermission(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(CmdMapping.class)) {
             return true;
@@ -214,6 +322,14 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return false;
     }
 
+    /**
+     * Checks whether the sender need to be an OP.
+     * <p>
+     * 检查发送者是否需要是OP。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @return Whether the sender need to be an OP. <br> 发送者是否需要是OP。
+     */
     private boolean checkOp(CommandSender sender) {
         Class<? extends AbstractCommendExecutor> clazz = this.getClass();
         if (!clazz.isAnnotationPresent(CmdExecutor.class)) {
@@ -227,6 +343,15 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return true;
     }
 
+    /**
+     * Checks whether the sender need to be an OP.
+     * <p>
+     * 检查发送者是否需要是OP。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @param method The method that matches the command. <br> 匹配命令的方法。
+     * @return Whether the sender need to be an OP. <br> 发送者是否需要是OP。
+     */
     private boolean checkOp(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(CmdMapping.class)) {
             return true;
@@ -239,6 +364,15 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return true;
     }
 
+    /**
+     * Checks whether the sender need to wait for the previous command to finish.
+     * <p>
+     * 检查发送者是否需要等待上一条命令执行完毕。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @param method The method that matches the command. <br> 匹配命令的方法。
+     * @return Whether the sender need to wait for the previous command to finish. <br> 发送者是否需要等待上一条命令执行完毕。
+     */
     private boolean checkLock(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(UsageLimit.class)) {
             return false;
@@ -266,6 +400,14 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return false;
     }
 
+    /**
+     * Checks whether the sender need to wait for the command cool down.
+     * <p>
+     * 检查发送者是否需要等待命令冷却。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     * @return Whether the sender need to wait for command cool down. <br> 发送者是否需要等待命令冷却。
+     */
     private boolean checkCD(CommandSender sender) {
         if (!(sender instanceof Player)) {
             return false;
@@ -278,6 +420,16 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return false;
     }
 
+    /**
+     * Builds the parameters of the command.
+     * <p>
+     * 构建命令的参数。
+     *
+     * @param strings       The arguments of the command. <br> 命令的参数。
+     * @param method        The method that matches the command. <br> 匹配命令的方法。
+     * @param commandSender The sender of the command. <br> 命令的发送者。
+     * @return Parameters of the command. <br> 命令的参数。
+     */
     private Object[] buildParams(String[] strings, Method method, CommandSender commandSender) {
         Map<String, String[]> params = getParams(strings, mappings.inverse().get(method));
         Parameter[] parameters = method.getParameters();
@@ -321,6 +473,16 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return paramList.toArray();
     }
 
+    /**
+     * Parses the type of the parameter.
+     * <p>
+     * 解析参数的类型。
+     *
+     * @param value The value of the parameter. <br> 参数的值。
+     * @param type  The type of the parameter. <br> 参数的类型。
+     * @param <T>   The type of the parameter. <br> 参数的类型。
+     * @return The parsed parameter. <br> 解析后的参数。
+     */
     private <T> Object parseType(String[] value, Class<T> type) {
         Function<String, T> parser = getParser(type);
         if (type.isArray()) {
@@ -334,6 +496,14 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
     }
 
+    /**
+     * Sets the cool down of the command.
+     * <p>
+     * 设置命令的冷却。
+     *
+     * @param commandSender The sender of the command. <br> 命令的发送者。
+     * @param method        The method that matches the command. <br> 匹配命令的方法。
+     */
     private void setCoolDown(CommandSender commandSender, Method method) {
         if (!(commandSender instanceof Player)) {
             return;
@@ -363,12 +533,39 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
     }
 
 
+    /**
+     * Abstract method that handles the help command.
+     * <p>
+     * 处理帮助命令的抽象方法。
+     *
+     * @param sender The sender of the command. <br> 命令的发送者。
+     */
     abstract protected void handleHelp(CommandSender sender);
 
+    /**
+     * Sends the error message.
+     * <p>
+     * 发送错误信息。
+     *
+     * @param sender  The sender of the command. <br> 命令的发送者。
+     * @param command The command that was executed. <br> 执行的命令。
+     */
     protected void sendErrorMessage(CommandSender sender, Command command) {
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("指令执行错误，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
     }
 
+    /**
+     * Tab complete method. Returns a list of possible completions for the specified command string.
+     * By rewriting this method, you can customize the tab completion of the command.
+     * <p>
+     * 补全方法。返回指定命令字符串的可能补全列表。
+     * 通过重写此方法，您可以自定义命令的补全。
+     *
+     * @param player  The player who will see the suggestions. <br> 看到补全的玩家
+     * @param command The command that was typed in. <br> 需要补全的命令
+     * @param strings The arguments of the command that was typed in. <br> 目前输入的命令参数
+     * @return The suggestions. <br> 补全的建议
+     */
     protected List<String> suggest(Player player, Command command, String[] strings) {
         List<String> completions = new ArrayList<>();
         if (strings.length == 1) {
@@ -411,6 +608,20 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return completions;
     }
 
+    /**
+     * Adds suggestion to the list of suggestions. This method is called by the suggest method.
+     * Fetch the suggestions by invoking the given method.
+     * <p>
+     * 将建议添加到建议列表中。此方法由suggest方法调用。
+     * 通过调用给定的方法获取建议。
+     *
+     * @param player      The player who will see the suggestions. <br> 看到补全的玩家
+     * @param command     The command that was typed in. <br> 需要补全的命令
+     * @param strings     The arguments of the command that was typed in. <br> 目前输入的命令参数
+     * @param method      The method that matches the command. <br> 匹配命令的方法。
+     * @param arg         The argument that needs to be completed. <br> 需要补全的参数。
+     * @param completions The suggestions. <br> 补全的建议
+     */
     private void getArgSuggestion(Player player, Command command, String[] strings, Method method, String arg, List<String> completions) {
         String suggestName = getSuggestName(method, arg.substring(1, arg.length() - 1));
         if (suggestName == null) {
@@ -437,10 +648,27 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
     }
 
+    /**
+     * Gets the format of the command.
+     * <p>
+     * 获取命令的格式。
+     *
+     * @param method The method that matches the command. <br> 匹配命令的方法。
+     * @return The format of the command. <br> 命令的格式。
+     */
     private String getFormatByMethod(Method method) {
         return mappings.inverse().get(method);
     }
 
+    /**
+     * Gets the argument at the specified index.
+     * <p>
+     * 获取指定索引处的参数。
+     *
+     * @param format The format of the command. <br> 命令的格式。
+     * @param index  The index of the argument. <br> 参数的索引。
+     * @return The argument at the specified index. <br> 指定索引处的参数。
+     */
     private String getArgAt(String format, int index) {
         String[] args = format.split(" ");
         if (args.length <= index) {
@@ -449,6 +677,15 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return args[index];
     }
 
+    /**
+     * Gets the suggest method name of the parameter.
+     * <p>
+     * 获取参数的建议方法名称。
+     *
+     * @param method    The method that matches the command. <br> 匹配命令的方法。
+     * @param paramName The name of the parameter. <br> 参数的名称。
+     * @return The suggest method name of the parameter. <br> 参数的建议方法名称。
+     */
     private String getSuggestName(Method method, String paramName) {
         Annotation[][] parameterAnnotations = method.getParameterAnnotations();
         for (Annotation[] annotations : parameterAnnotations) {
@@ -465,6 +702,21 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return null;
     }
 
+    /**
+     * Gets the suggest method array by the suggest method name.
+     * If the suggest method name ends with (), remove ().
+     * Get the suggest method array from the current class first.
+     * If the current class has the CmdSuggest annotation,
+     * get the suggest method array from the CmdSuggest annotation.
+     * <p>
+     * 通过建议方法名称获取建议方法数组。
+     * 如果建议方法名称以()结尾，则去掉()。
+     * 优先从当前类中获取建议方法集合。
+     * 如果当前类上有CmdSuggest注解，则从CmdSuggest注解中获取建议方法集合。
+     *
+     * @param suggestName The name of the suggest method. <br> 建议方法的名称
+     * @return The suggest method array. <br> 建议方法数组
+     */
     private Method[] getSuggestMethodByName(String suggestName) {
         if (suggestName.endsWith("()")) {
             suggestName = suggestName.substring(0, suggestName.length() - 2);
@@ -483,16 +735,45 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return null;
     }
 
+    /**
+     * Gets the suggest method array by the suggest method name.
+     * <p>
+     * 通过建议方法名称获取建议方法数组。
+     *
+     * @param suggestName The name of the suggest method. <br> 建议方法的名称
+     * @return The suggest method array. <br> 建议方法数组
+     */
     @Nullable
     private Method[] getMethod(String suggestName) {
         return getMethod(this.getClass(), suggestName);
     }
 
+    /**
+     * Gets the suggest method array by the suggest method name from another class.
+     * <p>
+     * 从另一个类中通过方法名称获取方法数组。
+     *
+     * @param clazz       The class of the suggest method. <br> 建议方法的类
+     * @param suggestName The name of the suggest method. <br> 建议方法的名称
+     * @return The suggest method array. <br> 建议方法数组
+     */
     @Nullable
     private Method[] getMethod(Class<?> clazz, String suggestName) {
         return ReflectUtil.getMethods(clazz, method -> method.getName().equals(suggestName));
     }
 
+    /**
+     * Invokes the suggest method. Inject parameters by parameter type.
+     * <p>
+     * 调用建议方法。按照参数类型注入参数。
+     *
+     * @param object  The object that the method is invoked from. <br> 方法所在的对象。
+     * @param method  The method that is invoked. <br> 被调用的方法。
+     * @param player  The player who will see the suggestions. <br> 看到补全的玩家
+     * @param command The command that was typed in. <br> 需要补全的命令
+     * @param strings The arguments of the command that was typed in. <br> 目前输入的命令参数
+     * @return The return string list of suggestions of the method. <br> 方法的返回字符串列表。
+     */
     private Collection<?> invokeSuggestMethod(Object object, Method method, Player player, Command command, String[] strings) {
         Parameter[] parameters = method.getParameters();
         Object[] params = new Object[parameters.length];
@@ -510,6 +791,22 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return ReflectUtil.invoke(object, method, params);
     }
 
+    /**
+     * Gets the methods that match the command.
+     * Get the perfect match method first.
+     * If there is no perfect match method, get the partial match method.
+     * If there is no perfect match method and partial match method, return an empty list.
+     * If there is a perfect match method, only return the perfect match method.
+     * <p>
+     * 获取匹配命令的方法。
+     * 优先获取完全匹配的方法，如果没有完全匹配的方法，则获取部分匹配的方法。
+     * 如果没有完全匹配的方法和部分匹配的方法，则返回空列表。
+     * 如果有完全匹配的方法，则只返回完全匹配的方法。
+     *
+     * @param player  The player who will see the suggestions. <br> 看到补全的玩家
+     * @param command The command that was typed in. <br> 需要补全的命令
+     * @return The suggestions. <br> 补全的建议
+     */
     private List<Method> getMethodsByArg(Player player, String command) {
         List<Method> perfectMatch = new ArrayList<>();
         List<Method> methods = new ArrayList<>();
@@ -544,10 +841,25 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         }
     }
 
+    /**
+     * @return The help command. <br> 帮助命令。
+     * @see #handleHelp(CommandSender)
+     */
     protected String getHelpCommand() {
         return "help";
     }
 
+    /**
+     * Executes the command, returning its success.
+     * <p>
+     * 执行命令，返回是否成功。
+     *
+     * @param commandSender Source of the command <br> 命令的发送者
+     * @param command       Command which was executed <br> 命令
+     * @param s             Alias of the command which was used <br> 命令的别名
+     * @param strings       Passed command arguments <br> 命令的参数
+     * @return true if a valid command, otherwise false <br> 如果是有效的命令则返回true，否则返回false
+     */
     @Override
     public boolean onCommand(@NotNull CommandSender commandSender, @NotNull Command command, @NotNull String s, @NotNull String[] strings) {
         if (strings.length == 1 && getHelpCommand().equals(strings[0])) {
@@ -617,6 +929,20 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         return true;
     }
 
+    /**
+     * Requests a list of possible completions for a command argument.
+     * <p>
+     * 请求命令参数的可能补全列表。
+     *
+     * @param commandSender Source of the command.  For players tab-completing a
+     *                      command inside of a command block, this will be the player, not
+     *                      the command block.
+     * @param command       Command which was executed
+     * @param s             Alias of the command which was used
+     * @param strings       The arguments passed to the command, including final
+     *                      partial argument to be completed
+     * @return A List of possible completions for the final argument, or null
+     */
     @Nullable
     @Override
     public List<String> onTabComplete(@NotNull CommandSender commandSender, @NotNull Command command, @NotNull String s, @NotNull String[] strings) {

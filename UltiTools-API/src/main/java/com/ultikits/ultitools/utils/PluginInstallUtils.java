@@ -21,6 +21,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class PluginInstallUtils {
 
+    /**
+     * Get plugin list online.
+     * <br>
+     * 在线获取插件列表。
+     *
+     * @param page    页数
+     * @param pageSize 每页数量
+     * @return 插件列表
+     */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
         List<PluginEntity> pluginEntities = new ArrayList<>();
         HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/list?page=" + page + "&pageSize=" + pageSize);
@@ -35,6 +44,15 @@ public class PluginInstallUtils {
         });
     }
 
+    /**
+     * Get plugin download link.
+     * <br>
+     * 获取插件下载链接。
+     *
+     * @param idString 插件ID
+     * @param version 版本
+     * @return 插件下载链接
+     */
     public static String getPluginVersionDownloadLink(String idString, String version) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
@@ -50,6 +68,14 @@ public class PluginInstallUtils {
         return body;
     }
 
+    /**
+     * Get plugin versions.
+     * <br>
+     * 获取插件版本列表。
+     *
+     * @param idString 插件ID
+     * @return 插件版本列表
+     */
     public static List<String> getPluginVersions(String idString) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
@@ -66,6 +92,14 @@ public class PluginInstallUtils {
         return jsonArray.toList(String.class);
     }
 
+    /**
+     * Get plugin latest version.
+     * <br>
+     * 获取插件最新版本。
+     *
+     * @param idString 插件ID
+     * @return 插件最新版本
+     */
     public static String getPluginLatestVersion(String idString) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
@@ -81,6 +115,10 @@ public class PluginInstallUtils {
         return body;
     }
 
+    /**
+     * @param idString 插件ID
+     * @return 插件最新版本下载链接
+     */
     public static String getPluginLatestDownloadLink(String idString) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
@@ -96,6 +134,10 @@ public class PluginInstallUtils {
         return body;
     }
 
+    /**
+     * @param idString 插件ID
+     * @return 插件信息
+     */
     public static PluginEntity getPlugin(String idString) {
         HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/get?identifyString=" + idString);
         HttpResponse httpResponse = get.execute();
@@ -108,6 +150,14 @@ public class PluginInstallUtils {
         return jsonObject.toBean(PluginEntity.class);
     }
 
+    /**
+     * Install latest plugin.
+     * <br>
+     * 安装最新插件。
+     *
+     * @param idString 插件ID
+     * @return 是否安装成功
+     */
     public static boolean installLatestPlugin(String idString) {
         String pluginVersionDownloadLink = getPluginLatestDownloadLink(idString);
         if (pluginVersionDownloadLink == null) {
@@ -120,6 +170,15 @@ public class PluginInstallUtils {
         return true;
     }
 
+    /**
+     * Install plugin.
+     * <br>
+     * 安装插件。
+     *
+     * @param idString 插件ID
+     * @param version 版本
+     * @return 是否安装成功
+     */
     public static boolean installPlugin(String idString, String version) {
         PluginEntity plugin = getPlugin(idString);
         if (plugin == null) {
@@ -136,6 +195,15 @@ public class PluginInstallUtils {
         return true;
     }
 
+    /**
+     * Uninstall plugin.
+     * <br>
+     * 卸载插件。
+     *
+     * @param name 插件名称
+     * @return 是否卸载成功
+     * @throws IOException if an I/O error occurs
+     */
     public static boolean uninstallPlugin(String name) throws IOException {
         AtomicReference<UltiToolsPlugin> ultiToolsPluginAtomicReference = new AtomicReference<>();
         UltiTools.getInstance().getPluginManager().getPluginList().stream().filter(plugin -> plugin.getPluginName().equals(name)).forEach(plugin -> {

@@ -9,6 +9,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.player.PlayerEvent;
 
+/**
+ * Player temp listener.
+ * <p>
+ *     玩家临时监听器。
+ *
+ * @param <E> PlayerEvent type
+ * @see <a href="https://dev.ultikits.com/en/guide/essentials/event-listener.html#temporary-listener">Temporary Listener</a>
+ */
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor

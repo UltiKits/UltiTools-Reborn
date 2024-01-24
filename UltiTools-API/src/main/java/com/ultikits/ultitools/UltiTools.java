@@ -42,9 +42,11 @@ import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersio
 
 /**
  * UltiTools plugin main class.
+ * <p>
+ * UltiTools插件主类。
  *
  * @author wisdommen, qianmo
- * @version 6.0.1
+ * @version 6.0.7
  */
 public final class UltiTools extends JavaPlugin implements Localized {
     private static UltiTools ultiTools;
@@ -71,8 +73,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Returns the instance of the UltiTools.
+     * <p>
+     * 获取UltiTools的实例。
      *
-     * @return the instance of the UltiTools
+     * @return the instance of the UltiTools <br> UltiTools的实例
      */
     public static UltiTools getInstance() {
         return ultiTools;
@@ -80,8 +84,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Gets the version of UltiTools.
+     * <p>
+     * 获取UltiTools的版本。
      *
-     * @return the version of the UltiTools
+     * @return the version of the UltiTools <br> UltiTools的版本
      */
     public static int getPluginVersion() {
         String versionString = getEnv().getString("version");
@@ -93,8 +99,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Retrieves the YAML configuration object containing environment variables.
+     * <p>
+     * 获取包含环境变量的YAML配置对象。
      *
-     * @return the YAML configuration object
+     * @return the YAML configuration object <br> YAML配置对象
      */
     public static YamlConfiguration getEnv() {
         YamlConfiguration config = new YamlConfiguration();
@@ -106,11 +114,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         return config;
     }
 
-    /**
-     * Pre-initialization of the plugin.
-     * <p>
-     * It will save the default config and download the required libraries.
-     */
     @Override
     public void onLoad() {
         saveDefaultConfig();
@@ -118,11 +121,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         downloadRequiredDependencies();
     }
 
-    /**
-     * Initialization of the plugin.
-     * <p>
-     * It will do nothing if the plugin requires restart.
-     */
     @Override
     public void onEnable() {
         // External bukkit libraries initialization
@@ -228,11 +226,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         });
     }
 
-    /**
-     * Shutdown of the plugin.
-     * <p>
-     * It will do nothing if the plugin requires restart.
-     */
     @Override
     public void onDisable() {
         // Plugin shutdown logic
@@ -251,6 +244,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Reloads the UltiTools plugins by calling the reload method in the PluginManager.
+     * <p>
+     * 通过调用PluginManager中的reload方法重新加载UltiTools插件。
      *
      * @throws IOException if an I/O error occurs during the reloading process
      */
@@ -260,8 +255,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Returns the supported language codes.
+     * <p>
+     * 返回支持的语言代码。
      *
-     * @return a list of supported language codes
+     * @return a list of supported language codes <br> 支持的语言代码列表
      */
     @Override
     public List<String> supported() {
@@ -271,9 +268,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * Internationalization method that translates the given string based on the current language.
      * If the string is not found in the dictionary, the original string is returned.
+     * <p>
+     * 根据当前语言翻译给定的字符串的国际化方法。
+     * 如果在字典中找不到字符串，则返回原始字符串。
      *
-     * @param str the string to be translated
-     * @return the translated string or the original string if not found in the dictionary
+     * @param str the string to be translated <br> 要翻译的字符串
+     * @return the translated string or the original string if not found in the dictionary <br> 翻译后的字符串，如果在字典中找不到，则为原始字符串
      */
     public String i18n(String str) {
         return this.language.getLocalizedText(str);
@@ -281,6 +281,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Retrieves the input stream for the specified file resource.
+     * <p>
+     * 获取指定文件资源的输入流。
      *
      * @param filename the name of the file resource
      * @return the input stream for the file resource, or null if an I/O error occurs
@@ -295,9 +297,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Returns the instance of the BukkitAudiences used for Adventure messaging.
+     * <p>
+     * 返回用于Adventure消息的BukkitAudiences实例。
      *
-     * @return the BukkitAudiences instance
-     * @throws IllegalStateException if the plugin is disabled and Adventure is accessed
+     * @return the BukkitAudiences instance <br> BukkitAudiences实例
+     * @throws IllegalStateException if the plugin is disabled and Adventure is accessed <br> 如果在插件已经关闭时访问Adventure
      */
     public BukkitAudiences adventure() {
         if (this.adventure == null) {
@@ -308,8 +312,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Get the economy provider
+     * <p>
+     * 获取经济服务提供者
      *
-     * @return the instance of the Economy provider
+     * @return the instance of the Economy provider <br> 经济服务提供者实例
      */
     public Economy getEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {

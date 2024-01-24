@@ -5,10 +5,13 @@ import org.springframework.stereotype.Component;
 import java.lang.annotation.*;
 
 /**
+ * Command executor annotation.
+ * <p>
  * 命令标记注释
  *
  * @author qianmo
  * @version 1.0.0
+ * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#quick-start">Command Excutor</a>
  */
 @Documented
 @Target(ElementType.TYPE)
@@ -17,27 +20,27 @@ import java.lang.annotation.*;
 public @interface CmdExecutor {
 
     /**
-     * @return 权限
+     * @return permission <br> 权限
      */
     String permission() default "";
 
     /**
-     * @return 描述
+     * @return description <br> 描述
      */
     String description() default "";
 
     /**
-     * @return 别名
+     * @return command alias <br> 别名
      */
     String[] alias();
 
     /**
-     * @return 是否要求OP
+     * @return if requires op <br> 是否要求OP
      */
     boolean requireOp() default false;
 
     /**
-     * @return 是否手动注册
+     * @return if it is manually register <br> 是否手动注册
      */
     boolean manualRegister() default false;
 }

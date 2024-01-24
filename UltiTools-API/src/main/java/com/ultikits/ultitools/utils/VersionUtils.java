@@ -11,6 +11,9 @@ import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVer
 
 public class VersionUtils {
 
+    /**
+     * @return UltiTools newest version <br> UltiTools最新版本
+     */
     public static String getUltiToolsNewestVersion() {
         HttpRequest get = HttpUtil.createGet("https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn");
         HttpResponse httpResponse = get.execute();
@@ -19,6 +22,11 @@ public class VersionUtils {
         return version;
     }
 
+    /**
+     * @param pluginIdString 插件ID
+     * @param currentVersion 当前版本
+     * @return 插件是否有更新
+     */
     public static boolean pluginHasUpdate(String pluginIdString, String currentVersion) {
         PluginEntity plugin = getPlugin(pluginIdString);
         if (plugin == null) {

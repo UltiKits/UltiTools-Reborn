@@ -16,6 +16,13 @@ import java.util.jar.JarFile;
 public class SpigotVersionManager {
     private final String serverVersion = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3].substring(1);
 
+    /**
+     * Match version wrapper.
+     * <br>
+     * 匹配版本包装器。
+     *
+     * @return Version wrapper <br> 版本包装器
+     */
     @SneakyThrows
     public VersionWrapper match() {
         VersionWrapper versionWrapper = null;

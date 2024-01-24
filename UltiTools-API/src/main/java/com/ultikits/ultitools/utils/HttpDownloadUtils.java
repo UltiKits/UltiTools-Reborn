@@ -7,6 +7,15 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class HttpDownloadUtils {
+    /**
+     * Download file from URL.
+     * <br>
+     * 从URL下载文件。
+     *
+     * @param urlString Download URL <br> 下载地址
+     * @param fileName File name <br> 文件名
+     * @param savePath Save path <br> 保存路径
+     */
     @SneakyThrows
     public static void download(String urlString, String fileName, String savePath) {
 
@@ -38,7 +47,7 @@ public class HttpDownloadUtils {
         }
     }
 
-    public static byte[] readInputStream(InputStream inputStream) throws IOException {
+    private static byte[] readInputStream(InputStream inputStream) throws IOException {
         byte[] buffer = new byte[1024];
         int len = 0;
         ByteArrayOutputStream bos = new ByteArrayOutputStream();

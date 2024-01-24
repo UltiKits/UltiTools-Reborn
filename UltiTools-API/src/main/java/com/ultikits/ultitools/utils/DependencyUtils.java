@@ -14,6 +14,11 @@ import java.util.jar.JarFile;
 import java.util.logging.Level;
 
 public class DependencyUtils {
+    /**
+     * Download required dependencies.
+     * <br>
+     * 下载必要的依赖。
+     */
     public static void downloadRequiredDependencies() {
         YamlConfiguration env = UltiTools.getEnv();
         List<String> dependencies = env.getStringList("libraries");
@@ -39,6 +44,14 @@ public class DependencyUtils {
         }
     }
 
+    /**
+     * Load jar file.
+     * <br>
+     * 加载jar文件。
+     *
+     * @param jar        jar file <br> jar文件
+     * @param classLoader Class loader <br> 类加载器
+     */
     public static void loadJar(File jar, ClassLoader classLoader) {
         try (JarFile jarFile = new JarFile(jar)) {
             Enumeration<JarEntry> entryEnumeration = jarFile.entries();
@@ -64,7 +77,7 @@ public class DependencyUtils {
         }
     }
 
-    public static void printLoadingBar(int percentage) {
+    private static void printLoadingBar(int percentage) {
         StringBuilder loadingBar = new StringBuilder("[");
         int progress = percentage / 10;
         for (int i = 0; i < progress; i++) {

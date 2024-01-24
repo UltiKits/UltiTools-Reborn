@@ -8,6 +8,14 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventPriority;
 
+/**
+ * Simple temp listener.
+ * <p>
+ * 简单临时监听器。
+ *
+ * @param <E> Event type (事件类型)
+ * @see <a href="https://dev.ultikits.com/en/guide/essentials/event-listener.html#temporary-listener">Temporary Listener</a>
+ */
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
@@ -28,7 +36,7 @@ public class SimpleTempListener<E extends Event> implements TempListener {
                 (ignored, event) -> {
                     try {
                         //noinspection unchecked
-                        if (eventHandler.handle((E) event)){
+                        if (eventHandler.handle((E) event)) {
                             unregister();
                         }
                     } catch (ClassCastException e) {
