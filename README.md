@@ -30,43 +30,34 @@
 
 <div align="center">
 
-| [![discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/6TVRRF47) | 👈 点击左侧按钮加入官方 Discord 服务器！ | 点击右侧按钮加入官方 QQ 群！ 👉 | [![discord](https://img.shields.io/badge/Tencent_QQ-EB1923?style=for-the-badge&logo=TencentQQ&logoColor=white)](https://qm.qq.com/cgi-bin/qm/qr?k=UNq3LPCmpfH2aLum7V0GmMRFBusNxqxn&jump_from=webapi) |
+| [![discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/6TVRRF47) | 👈 Click to join Discord server! | 点击右侧按钮加入官方 QQ 群！ 👉 | [![discord](https://img.shields.io/badge/Tencent_QQ-EB1923?style=for-the-badge&logo=TencentQQ&logoColor=white)](https://qm.qq.com/cgi-bin/qm/qr?k=UNq3LPCmpfH2aLum7V0GmMRFBusNxqxn&jump_from=webapi) |
 |-----------------------------------------------------------------------------------------------------------------------------------------|----------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 
 </div>
 
-
-
 <br>
 <br>
 
-## 给各位服主的介绍
+## UltiTools-API Introduction
 
-UltiTools是一个高层的基础插件，包含了很多GUI和高级的玩法，而非仅仅所谓的“基础”。
+[中文文档](https://github.com/UltiKits/UltiTools-Reborn/wiki/%E4%B8%AD%E6%96%87%E4%BB%8B%E7%BB%8D)
 
-插件本身的详细介绍，请看mcbbs的帖子。
+I hope my plugin can help with your plugin development! XD
 
-[\[综合\]UltiTools —— 远程背包\|GUI登陆\|GUI邮箱\|礼包\|头显\|侧边栏~\[1.8.x-1.20.x\]](https://www.mcbbs.net/thread-1062730-1-1.html)
+[Detailed Dev Documents](https://dev.ultikits.com/en/)
 
-用户使用文档
 
-[UltiTools 文档](https://doc.ultitools.ultikits.com/)
+### Annotation-driven
 
-## 给开发者的介绍
+UltiTools-API has changed the way plugin development is done. By introducing advanced syntax like annotations, it makes your plugin development much more efficient.
 
-希望我的插件能够帮到你的插件开发！
+With UltiTools-API, you no longer need to manually register commands and listeners. Simply add annotations to your command classes and listener classes, and UltiTools-API will automatically register them for you.
 
-### 注解驱动的
-
-UltiTools-API改变了插件开发的方式，通过引入注解等高级语法，让你的插件开发更加高效。
-
-通过使用UltiTools-API，你再也无需手动注册指令和监听器，只需要在你的指令类和监听器类上添加注解，UltiTools-API会自动帮你注册。
-
-你也可以像写一个控制器一样，再也不需要为一个命令做繁琐的判断，只需要在你的指令方法上添加注解，UltiTools-API会自动帮你将指令匹配到对应的方法上。甚至包括参数的Tab补全，UltiTools-API也可以简化判断！
+You can also write your commands like a controller. You no longer need to make tedious judgments for a command. Just add annotations to your command methods, and UltiTools-API will automatically match the commands to the corresponding methods.
 
 ```java
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
-@CmdExecutor(alias = {"lore"}, manualRegister = true, permission = "ultikits.tools.command.lore", description = "物品Lore编辑功能")
+@CmdExecutor(alias = {"lore"}, manualRegister = true, permission = "ultikits.tools.command.lore", description = "Lore edit function")
 public class LoreCommands extends AbstractCommendExecutor {
 
     @CmdMapping(format = "add <lore...>")
@@ -86,16 +77,17 @@ public class LoreCommands extends AbstractCommendExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.RED + "lore add <内容>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("添加Lore"));
-        sender.sendMessage(ChatColor.RED + "lore delete <行数>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("删除Lore"));
-        sender.sendMessage(ChatColor.RED + "lore edit <行数> <内容>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("编辑Lore"));
+        sender.sendMessage(ChatColor.RED + "lore add <content>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("Add Lore"));
+        sender.sendMessage(ChatColor.RED + "lore delete <lineNum>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("Delete Lore"));
+        sender.sendMessage(ChatColor.RED + "lore edit <linNum> <content>" + ChatColor.GRAY + " - " + BasicFunctions.getInstance().i18n("Edit Lore"));
     }
 }
 ```
 
-数据存储方面，UltiTools提供了Mysql和Json的封装API，让你无需考虑用户会使用哪种数据存储方式。
+In terms of data storage, UltiTools provides wrapped APIs for both MySQL and JSON, allowing you not to worry about which data storage method the users will choose.
 
-例如
+For example
+
 ```java
 @Data
 @Builder
@@ -114,7 +106,7 @@ public class AccountEntity extends AbstractDataEntity {
 ```
 
 ```java
-//检查玩家账户是否存在
+// check if the player account exists
 public boolean playerHasAccount(UUID player, String name) {
     DataOperator<AccountEntity> dataOperator = UltiEconomy.getInstance().getDataOperator(AccountEntity.class);
     return dataOperator.exist(
@@ -124,29 +116,30 @@ public boolean playerHasAccount(UUID player, String name) {
 }
 ```
 
-配置文件方面，UltiTools让你可以像操作对象一样读取配置文件。
+Regarding configuration files, UltiTools allows you to read the configuration files as if you were manipulating objects.
 
-例如
+For example
+
 ```java
 @Getter
 @Setter
 @ConfigEntity(path = "config/config.yml")
 public class EcoConfig extends AbstractConfigEntity {
-    @ConfigEntry(path = "useThirdPartEconomy", comment = "是否使用其他的经济插件作为基础（即仅使用本插件的银行功能）")
+    @ConfigEntry(path = "useThirdPartEconomy", comment = "Whether to use another economy plugin as a base (i.e., only use the bank function of this plugin)")
     private boolean useThirdPartEconomy = false;
-    @ConfigEntry(path = "enableInterest", comment = "是否开启利息")
+    @ConfigEntry(path = "enableInterest", comment = "Whether to enable interest")
     private boolean enableInterest = true;
-    @ConfigEntry(path = "interestRate", comment = "利率，利息 = 利率 × 本金")
+    @ConfigEntry(path = "interestRate", comment = "Interest rate, interest = interest rate × principal")
     private double  interestRate = 0.0003;
-    @ConfigEntry(path = "interestTime", comment = "利息发放间隔（分钟）")
+    @ConfigEntry(path = "interestTime", comment = "Interval for interest distribution (minutes)")
     private int interestTime = 30;
-    @ConfigEntry(path = "initial_money", comment = "玩家初始货币数量")
+    @ConfigEntry(path = "initial_money", comment = "Initial amount of currency for players")
     private double initMoney = 1000;
-    @ConfigEntry(path = "op_operate_money", comment = "服务器管理员是否能够增减玩家货币")
+    @ConfigEntry(path = "op_operate_money", comment = "Whether the server administrator can increase or decrease player currency")
     private boolean opOperateMoney = false;
-    @ConfigEntry(path = "currency_name", comment = "货币名称")
-    private String currencyName = "金币";
-    @ConfigEntry(path = "server_trade_log", comment = "是否开启服务器交易记录")
+    @ConfigEntry(path = "currency_name", comment = "Name of the currency")
+    private String currencyName = "Gold Coin";
+    @ConfigEntry(path = "server_trade_log", comment = "Whether to enable server trade log")
     private boolean enableTradeLog = false;
     public EcoConfig(String configFilePath) {
         super(configFilePath);
@@ -154,17 +147,17 @@ public class EcoConfig extends AbstractConfigEntity {
 }
 ```
 ```java
-// 获取经济插件的配置文件，并且读取利息率
+// Get the configuration file of the economy plugin and read the interest rate
 EcoConfig config = UltiEconomy.getInstance().getConfig(EcoConfig.class);
-double intrestRate = config.getInterestRate();
+double interestRate = config.getInterestRate();
 ```
 
-### IOC容器管理
+### IOC Container
 
-UltiTools-API提供了一个Spring IOC容器，它可以帮你管理你的插件中的所有Bean，并且自动注入依赖。
+UltiTools-API provides a Spring IOC container, which can manage all the Beans in your plugin and automatically inject dependencies.
 
 ```java
-// @Service将类型标记为一个Bean，UltiTools-API会自动扫描并注册
+// @Service marks the type as a Bean, and UltiTools-API will automatically scan and register it
 @Service
 public class BanPlayerService {
     
@@ -179,58 +172,55 @@ public class BanPlayerService {
 
 ```java
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-@CmdExecutor(permission = "ultikits.ban.command.all", description = "封禁功能", alias = {"uban"}, manualRegister = true)
+@CmdExecutor(permission = "ultikits.ban.command.all", description = "Ban function", alias = {"uban"}, manualRegister = true)
 public class BanCommands extends AbstractCommendExecutor {
     
-    // 使用@Autowired注解，UltiTools-API会自动注入依赖
+    // Using the @Autowired annotation, UltiTools-API will automatically inject the dependency
     @Autowired
     private BanPlayerService banPlayerService;
 
     @CmdMapping(format = "unban <player>")
     public void unBanPlayer(@CmdSender CommandSender sender, @CmdParam("player") String player) {
         banPlayerService.unBanPlayer(Bukkit.getOfflinePlayer(player));
-        sender.sendMessage(BasicFunctions.getInstance().i18n("§a解封成功"));
+        sender.sendMessage(BasicFunctions.getInstance().i18n("§aUnban successful"));
     }
     
     ...
 }
 ```
 
-如果你不喜欢自动注入，或者无法使用自动注入，你也可以手动获取Bean。
+If you don't like automatic injection, or can't use automatic injection, you can also manually obtain the Bean.
 
 ```java
 BanPlayerService banPlayerService = getContext().getBean(BanPlayerService.class);
 ```
 
-### 提供超多的现代化依赖库
+### Providing Numerous Modern Dependency Libraries
 
-UltiTools-API提供了Hutool的部分功能，包括了大量的工具类。
+UltiTools-API offers some functionalities of Hutool, including a large number of utility classes.
 
-[Hutool 文档](https://hutool.cn/docs/#/)
+[Hutool Documentation](ttps://hutoolkit.com/docs/)
 
-GUI界面方面，UltiTools提供了obliviate-invs的API，方便你快速的开发GUI界面。 
+In terms of GUI interfaces, UltiTools provides the obliviate-invs API, facilitating rapid GUI development.
 
 [ObliviateInvs — Highly efficient modular GUI library](https://www.spigotmc.org/resources/obliviateinvs-%E2%80%94-highly-efficient-modular-gui-library.103572/)
 
-UltiTools也提供了Adventure的API。
+UltiTools also offers the Adventure API.
 
-[Adventure 文档](https://docs.adventure.kyori.net/)
+[Adventure Documentation](https://docs.adventure.kyori.net/)
 
-## 快速开始
+## Quick Start
 
-更多详细文档请查看 [UltiTools API 文档](https://doc.dev.ultikits.com/)
+For more detailed documentation, please refer to [UltiTools API Documentation ](https://dev.ultikits.com/en/)
 
-以下是简单的快速开始
+Below is a simple quick start guide.
 <br>
 
-<details>
-<summary>快速开始</summary>
+### Installing Dependencies
 
-### 快速开始
+First, add the UltiTools-API dependency to your project.
 
-首先将UltiTools-API依赖加入到你的项目
-
-使用Maven
+Using Maven
 
 ```xml
 <dependency>
@@ -240,85 +230,84 @@ UltiTools也提供了Adventure的API。
 </dependency>
 ```
 
-使用Gradle
+Using Gradle
 
 ```groovy
 implementation 'com.ultikits:UltiTools-API:{VERSION}'
 ```
 
-开始之前请在resources文件夹下新建一个plugin.yml文件，内容如下
+Before starting, please create a plugin.yml file in the resources folder with the following content:
 
 ```yaml
-# 插件名称
+# Plugin name
 name: TestPlugin
-# 插件版本
+# Plugin version
 version: '${project.version}'
-# 插件主类
+# Plugin main class
 main: com.test.plugin.MyPlugin
-# 插件用到的UltiTools-API版本，例如6.0.0就是600
+# UltiTools-API version used by the plugin, for example, 6.0.0 is 600
 api-version: 600
-# 插件作者
+# Plugin authors
 authors: [ wisdomme ]
 ```
-新建一个config文件夹，里面可以按照你的需求放入你的插件配置文件。这些配置文件会被原封不动的放入UltiTools插件的集体配置文件夹中展示给用户。
+Create a config folder, where you can put your plugin configuration files according to your needs. These configuration files will be placed unmodified in the collective configuration folder of the UltiTools plugin for display to users.
 
-### 简单开发
+### Simple Guide
 
-新建一个主类继承UltiToolsPlugin，类似传统的Spigot插件，UltiTools插件也需要重写启动和关闭方法。
-但是UltiToolsPlugin增加了一个可选的```UltiToolsPlugin#reloadSelf()```方法，用于插件重载时执行。
+Create a main class extending `UltiToolsPlugin`. Similar to traditional Spigot plugins, UltiTools plugins also need to override the start and stop methods. However, `UltiToolsPlugin` adds an optional `UltiToolsPlugin#reloadSelf()` method for use during plugin reload.
 
 ```java
 public class MyPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
-        // 插件启动时执行
+        // Executes when the plugin starts
         return true;
     }
 
     @Override
     public void unregisterSelf() {
-        // 插件关闭时执行
+        // Executes when the plugin shuts down
     }
     
     @Override
     public void reloadSelf() {
-        // 插件重载时执行
+        // Executes when the plugin is reloaded
     }
 }
 ```
-这样就已经完成了一个什么功能都没有的UltiTools插件。然后你可以在```UltiToolsPlugin#registerSelf()```方法中注册你的监听器和指令。
+With this, you've completed an UltiTools plugin that does nothing. Then, you can register your listeners and commands in the `UltiToolsPlugin#registerSelf()` method.
 
 ```java
 public class MyPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
-        // 注册一个Test指令，权限为permission.test，指令为test
-        // 无需在Plugin.yml中注册指令
-        getCommandManager().register(new TestCommands(), "permission.test", "示例功能", "test");
-        // 注册监听器
+        // Register a Test command, with permission 'permission.test', and command 'test'
+        // No need to register the command in Plugin.yml
+        getCommandManager().register(new TestCommands(), "permission.test", "Sample Function", "test");
+        // Register listeners
         getListenerManager().register(this, new TestListener());
         return true;
     }
 }
 ```
-然后你可以在主类中添加你的配置文件，UltiTools会自动加载配置文件。
+Then, you can add your configuration file in the main class, and UltiTools will automatically load the configuration file.
 
 ```java
 public class MyPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
-        // 注册一个Test指令，权限为permission.test，指令为test
-        // 无需在Plugin.yml中注册指令
-        getCommandManager().register(new TestCommands(), "permission.test", "示例功能", "test");
-        // 注册监听器
+        // Register a Test command, with permission 'permission.test', and command 'test'
+        // No need to register the command in Plugin.yml
+        getCommandManager().register(new TestCommands(), "permission.test", "Sample Function", "test");
+        // Register listeners
         getListenerManager().register(this, new TestListener());
-        // 注册配置文件
+        // Register configuration file
         getConfigManager().register(this, new TestConfig("config/config.yml"));
         return true;
     }
 }
 ```
-或者你可以重写```UltiToolsPlugin#getAllConfigs()```方法，将所有的配置文件注册放在这里。
+Alternatively, you can override the `UltiToolsPlugin#getAllConfigs()` method to register all configuration files here.
 
 ```java
 @Override
@@ -329,45 +318,43 @@ public List<AbstractConfigEntity> getAllConfigs() {
 }
 ```
 
-</details>
-
 <br>
 <br>
 
-## WakaTime 统计
+## WakaTime Statistics
 
 <details>
-<h3>开发时间线统计</h3>
-<summary>点击查看统计数据</summary>
+<h3>Development Timeline Statistics</h3>
+<summary>Click to view statistics</summary>
 <img alt="wakatime timeline" src="https://wakatime.com/share/@wisdomme/0a9b3a30-f210-4be9-91f2-1b2e94ff403b.svg"/>
 <br>
 <br>
 <img alt="wakatime week" src="https://wakatime.com/share/@wisdomme/bf0d9440-52ee-41b6-9df9-03fae3ae86dc.svg"/>
 </details>
-
 <br>
 <br>
 
-## 主要贡献者
-| 贡献者                                              | 描述                                      |
+
+## Main Contributors
+| Contributor                                              | Description                                      |
 |--------------------------------------------------|-----------------------------------------|
-| [@wisdommen](https://github.com/wisdommen)       | 创始人，UltiKits套件作者                        |
-| [@qianmo2233](https://github.com/qianmo2233)     | UltiTools&UltiCore开发者，UltiKits开发文档主要维护者 |
-| [@Shpries](https://github.com/Shpries)           | UltiTools开发者，UltiTools使用文档主要维护者         |
-| [@DevilJueChen](https://github.com/DevilJueChen) | UltiKits问题&漏洞&建议反馈                      |
-| 拾柒                                               | 美工                                      |
+| [@wisdommen](https://github.com/wisdommen)       | Founder, UltiKits Author                        |
+| [@qianmo2233](https://github.com/qianmo2233)     | UltiTools & UltiCore Developer, Main Maintainer of UltiKits Development Documentation |
+| [@Shpries](https://github.com/Shpries)           | UltiTools Developer, Main Maintainer of UltiKits Development Documentation         |
+| [@DevilJueChen](https://github.com/DevilJueChen) | Feedback on UltiKits Issues, Bugs & Suggestions                      |
+| 拾柒                                               | Graphic Designer                                      |
 
-## 发现问题？想提建议？
-[点击这里提交开启一个Issue！](https://github.com/wisdommen/UltiTools/issues/new/choose)
+## Found an Issue? Want to Make a Suggestion?
+[Click here to submit an Issue!](https://github.com/UltiKits/UltiTools-Reborn/issues/new/choose)
 
 
-## 鸣谢
+## Acknowledgments
 
 |                                                                                                                           |                        |
 |---------------------------------------------------------------------------------------------------------------------------|------------------------|
-| ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | 记录了我们开发途中的每一刻          |
-| ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | 地表最强 Java IDE 助力愉悦开发体验 |
-| ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | 帮助解决了许多重复且枯燥的工作        |
-| ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | 为插件带来了许多黑科技            |
-| ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | 官方构建工具                 |
-| ![wakatime](https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16)      | 官方内置 HTTP 服务端          |
+| ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | Recorded every moment of our development journey          |
+| ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | The strongest Java IDE for a pleasant development experience |
+| ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | Helped solve many repetitive and tedious tasks        |
+| ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | Brought many high-tech features to the plugin            |
+| ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | Official build tool                 |
+| ![wakatime](https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16)      | Official built-in HTTP server          |
