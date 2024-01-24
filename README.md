@@ -35,28 +35,18 @@
 
 </div>
 
-
-
 <br>
 <br>
 
-## 给各位服主的介绍
-
-UltiTools是一个高层的基础插件，包含了很多GUI和高级的玩法，而非仅仅所谓的“基础”。
-
-插件本身的详细介绍，请看mcbbs的帖子。
-
-[\[综合\]UltiTools —— 远程背包\|GUI登陆\|GUI邮箱\|礼包\|头显\|侧边栏~\[1.8.x-1.20.x\]](https://www.mcbbs.net/thread-1062730-1-1.html)
-
-用户使用文档
-
-[UltiTools 文档](https://doc.ultitools.ultikits.com/)
-
-## 给开发者的介绍
+## UltiTools-API 简介
 
 希望我的插件能够帮到你的插件开发！
 
 [详细开发文档](https://dev.ultikits.com/zh/)
+
+插件本身的详细介绍，请看mcbbs的帖子。
+
+[\[综合\]UltiTools —— 远程背包\|GUI登陆\|GUI邮箱\|礼包\|头显\|侧边栏~\[1.8.x-1.20.x\]](https://www.mcbbs.net/thread-1062730-1-1.html)
 
 ### 注解驱动的
 
@@ -225,10 +215,7 @@ UltiTools也提供了Adventure的API。
 以下是简单的快速开始
 <br>
 
-<details>
-<summary>快速开始</summary>
-
-### 快速开始
+### 安装依赖
 
 首先将UltiTools-API依赖加入到你的项目
 
@@ -330,8 +317,6 @@ public List<AbstractConfigEntity> getAllConfigs() {
     );
 }
 ```
-
-</details>
 
 <br>
 <br>
