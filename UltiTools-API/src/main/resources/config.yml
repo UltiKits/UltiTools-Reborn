@@ -4,7 +4,7 @@ datasource:
 language: "zh"
 
 web-editor:
-  enable: true
+  enable: false
   port: 4567
   https:
     enable: false

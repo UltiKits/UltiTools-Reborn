@@ -4,6 +4,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.webserver.service.ConfigEditorService;
 
+import java.io.IOException;
+
 public class ConfigEditorServiceImpl implements ConfigEditorService {
 
     @Override
@@ -19,7 +21,7 @@ public class ConfigEditorServiceImpl implements ConfigEditorService {
     }
 
     @Override
-    public void updateConfigMap(String configMapString) {
+    public void updateConfigMap(String configMapString) throws IOException {
         ConfigManager configManager = UltiTools.getInstance().getConfigManager();
         configManager.loadFromJson(configMapString);
     }

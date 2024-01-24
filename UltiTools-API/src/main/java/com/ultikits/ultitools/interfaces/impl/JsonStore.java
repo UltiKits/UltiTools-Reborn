@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
+ * Json Data store.
+ * <br>
  * Json存储方式抽象类
  *
  * @author wisdomme

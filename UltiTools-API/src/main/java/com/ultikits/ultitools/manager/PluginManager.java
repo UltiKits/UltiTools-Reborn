@@ -24,12 +24,26 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 
+/**
+ * UltiTools plugin manager.
+ * <p>
+ * UltiTools模块管理器
+ */
 public class PluginManager {
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+    @Getter
+    private ClassLoader classLoader;
 
+    /**
+     * Initialize plugin manager. Please do not call this method manually.
+     * <br>
+     * 初始化插件管理器。请不要手动调用此方法。
+     *
+     * @throws IOException IO exception <br> IO异常
+     */
     public void init() throws IOException {
         File dir = new File(UltiTools.class.getProtectionDomain().getCodeSource().getLocation().getPath().replaceAll("%20", " "));
         File pluginsFolder = new File(dir.getParentFile().getPath());
@@ -57,7 +71,7 @@ public class PluginManager {
             urls.add(new URL(URLDecoder.decode(file.toURI().toASCIIString(), "UTF-8")));
         }
 
-        URLClassLoader classLoader = new URLClassLoader(
+        classLoader = new URLClassLoader(
                 urls.toArray(new URL[0]),
                 UltiTools.getInstance().getPluginClassLoader()
         );
@@ -75,7 +89,7 @@ public class PluginManager {
         }
         Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
         for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
-            if (register(classLoader, pluginClass)) {
+            if (register(pluginClass)) {
                 success++;
             }
         }
@@ -86,7 +100,15 @@ public class PluginManager {
         );
     }
 
-    public boolean register(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+    /**
+     * Register plugin.
+     * <br>
+     * 注册插件。
+     *
+     * @param pluginClass Plugin class <br> 插件类
+     * @return Register result <br> 注册结果
+     */
+    public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(classLoader, pluginClass);
@@ -104,6 +126,20 @@ public class PluginManager {
         return result;
     }
 
+    /**
+     * Register plugin.
+     * <br>
+     * 注册插件。
+     *
+     * @param pluginClass UltiTools plugin class <br> UltiTools模块类
+     * @param pluginName Plugin name <br> 插件名称
+     * @param version Plugin version <br> 插件版本
+     * @param authors Plugin authors <br> 插件作者
+     * @param loadAfter Load after plugins <br> 加载在此插件之后的插件
+     * @param minUltiToolsVersion Min UltiTools version <br> 最低UltiTools版本
+     * @param mainClass Main class <br> 主类
+     * @return Register result <br> 注册结果
+     */
     public boolean register(
             Class<? extends UltiToolsPlugin> pluginClass,
             String pluginName,
@@ -116,7 +152,7 @@ public class PluginManager {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(
-                    pluginClass.getClassLoader(), pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
+                    classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
         } catch (Exception e) {
             Bukkit.getLogger().log(
@@ -132,13 +168,17 @@ public class PluginManager {
         return result;
     }
 
+    /**
+     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
+     * @return Register result <br> 注册结果
+     */
     public boolean register(UltiToolsPlugin plugin) {
         try {
             AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
             plugin.setContext(pluginContext);
             pluginContext.setParent(UltiTools.getInstance().getContext());
             pluginContext.registerShutdownHook();
-            pluginContext.setClassLoader(plugin.getClass().getClassLoader());
+            pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
@@ -162,12 +202,20 @@ public class PluginManager {
         return result;
     }
 
+    /**
+     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
+     */
     public void unregister(UltiToolsPlugin plugin) {
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         plugin.getContext().close();
     }
 
+    /**
+     * Unregister all plugins.
+     * <br>
+     * 注销所有插件。
+     */
     public void close() {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
@@ -177,6 +225,11 @@ public class PluginManager {
         pluginClassList.clear();
     }
 
+    /**
+     * Reload all plugins. This operation only reload plugin configuration.
+     * <br>
+     * 重载所有插件。此操作仅会重新加载插件配置。
+     */
     public void reload() {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Reloading all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {

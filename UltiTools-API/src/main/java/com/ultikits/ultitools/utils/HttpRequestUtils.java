@@ -14,7 +14,7 @@ import java.util.Map;
 public class HttpRequestUtils {
     private static final String BASE_URL = UltiTools.getEnv().getString("api-url");
 
-    public static TokenEntity getToken(String username, String password) {
+    protected static TokenEntity getToken(String username, String password) {
         Map<String, Object> paramMap = new HashMap<>();
         paramMap.put("username", username);
         paramMap.put("password", password);
@@ -22,13 +22,13 @@ public class HttpRequestUtils {
         return JSONObject.parseObject(tokenJson, TokenEntity.class);
     }
 
-    public static HttpResponse getServerByUUID(String uuid, TokenEntity token) {
+    protected static HttpResponse getServerByUUID(String uuid, TokenEntity token) {
         return HttpRequest.get(BASE_URL + "/server/getByUUID?uuid=" + uuid)
                 .bearerAuth(token.getAccess_token())
                 .execute();
     }
 
-    public static HttpResponse registerServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+    protected static HttpResponse registerServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
                 .name("MC Server")
@@ -42,7 +42,7 @@ public class HttpRequestUtils {
                 .execute();
     }
 
-    public static HttpResponse updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+    protected static HttpResponse updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
                 .port(port)

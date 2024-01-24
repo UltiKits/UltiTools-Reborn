@@ -24,9 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 /**
+ * Simple Json data operator.
+ * <br>
  * 简单Json存储操作类
  *
- * @param <T> 必须继承数据实体类
+ * @param <T> Date type inherited from AbstractDataEntity (数据类型，继承自AbstractDataEntity)
  * @author wisdomme
  * @version 1.0.0
  */

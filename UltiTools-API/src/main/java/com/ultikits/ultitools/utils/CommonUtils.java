@@ -22,6 +22,8 @@ public class CommonUtils {
 
     /**
      * get UltiTools UUID
+     * <br>
+     * 获取UltiTools UUID
      *
      * @return UUID
      * @throws IOException if an I/O error occurs
@@ -38,6 +40,14 @@ public class CommonUtils {
         return json.getByPath("uuid").toString();
     }
 
+    /**
+     * Get plugin packages.
+     * <br>
+     * 获取模块包。
+     *
+     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
+     * @return Plugin packages <br> 模块包
+     */
     public static String[] getPluginPackages(UltiToolsPlugin plugin) {
         Class<?> pluginClass = plugin.getClass();
         String[] packages;
@@ -45,7 +55,11 @@ public class CommonUtils {
         if (!pluginClass.isAnnotationPresent(ComponentScan.class)) {
             if (pluginClass.isAnnotationPresent(EnableAutoRegister.class)) {
                 EnableAutoRegister enableAutoRegister = pluginClass.getAnnotation(EnableAutoRegister.class);
-                packages = new String[]{enableAutoRegister.scanPackage()};
+                if (enableAutoRegister.scanPackage().isEmpty()) {
+                    packages = new String[]{pluginClass.getPackage().getName()};
+                } else {
+                    packages = new String[]{enableAutoRegister.scanPackage()};
+                }
             } else {
                 packages = new String[]{pluginClass.getPackage().getName()};
             }
@@ -59,6 +73,13 @@ public class CommonUtils {
         return packages;
     }
 
+    /**
+     * Get server jar file URL.
+     * <br>
+     * 获取服务器Jar文件URL。
+     *
+     * @return Server jar file URL <br> 服务器Jar文件URL
+     */
     public static URL getServerJar() {
         ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
         CodeSource codeSource = protectionDomain.getCodeSource();

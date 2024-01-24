@@ -31,6 +31,8 @@ import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**
+ * Abstract class representing a plugin module.
+ * <p>
  * 插件模块抽象类
  *
  * @author wisdomme
@@ -56,8 +58,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Getter
     private AnnotationConfigApplicationContext context;
 
+    /**
+     * Constructor for UltiToolsPlugin. For module development only.
+     * <p>
+     * UltiToolsPlugin的构造函数。仅用于模块开发。
+     */
     @SneakyThrows
-    public UltiToolsPlugin() {
+    protected UltiToolsPlugin() {
         InputStream inputStream = getInputStream();
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
@@ -85,6 +92,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         initConfig();
     }
 
+    /**
+     * Constructor for UltiToolsPlugin. For plugin connector.
+     * <p>
+     * UltiToolsPlugin的构造函数。用于插件连接器。
+     *
+     * @param pluginName          the name of the plugin <br> 插件名称
+     * @param version             the version of the plugin <br> 插件版本
+     * @param authors             the authors of the plugin <br> 插件作者
+     * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
+     * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
+     * @param mainClass           the main class of the plugin <br> 插件的主类
+     */
     @SneakyThrows
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
         this.pluginName = pluginName;
@@ -112,27 +131,47 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         initConfig();
     }
 
+    /**
+     * @return the config manager <br> 配置管理器
+     */
     public static ConfigManager getConfigManager() {
         return UltiTools.getInstance().getConfigManager();
     }
 
+    /**
+     * @return the listener manager <br> 监听器管理器
+     */
     public static ListenerManager getListenerManager() {
         return UltiTools.getInstance().getListenerManager();
     }
 
+    /**
+     * @return the command manager <br> 指令管理器
+     */
     public static CommandManager getCommandManager() {
         return UltiTools.getInstance().getCommandManager();
     }
 
+    /**
+     * @return the plugin manager <br> 插件管理器
+     */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
     }
 
+    /**
+     * @return the version wrapper <br> 版本包装器
+     */
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
     }
 
-    public final void initConfig() {
+    /**
+     * Initializes the configuration entity.
+     * <p>
+     * 初始化配置实体。
+     */
+    private void initConfig() {
         EnableAutoRegister annotation = AnnotationUtils.findAnnotation(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
             for (String packageName : CommonUtils.getPluginPackages(this)) {

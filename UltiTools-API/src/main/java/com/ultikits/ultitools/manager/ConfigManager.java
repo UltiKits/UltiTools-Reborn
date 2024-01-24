@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.manager;
 
+import cn.hutool.core.exceptions.ExceptionUtil;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.TypeReference;
@@ -25,7 +26,11 @@ public class ConfigManager {
     private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap = new HashMap<>();
 
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) {
-        configEntity.init(ultiToolsPlugin);
+        try {
+            configEntity.init(ultiToolsPlugin);
+        } catch (IOException e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
+        }
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
         if (configMap == null) {
             configMap = new HashMap<>();
@@ -88,7 +93,11 @@ public class ConfigManager {
             return;
         }
         for (AbstractConfigEntity configEntity : configMap.values()) {
-            configEntity.init(plugin);
+            try {
+                configEntity.init(plugin);
+            } catch (IOException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
+            }
         }
     }
 
@@ -128,7 +137,7 @@ public class ConfigManager {
         return JSON.toJSONString(res);
     }
 
-    public final void loadFromJson(String json) {
+    public final void loadFromJson(String json) throws IOException {
         Map<String, Map<String, JSONObject>> parseObject = JSONObject.parseObject(json, new TypeReference<Map<String, Map<String, JSONObject>>>() {
         });
         for (String pluginName : parseObject.keySet()) {

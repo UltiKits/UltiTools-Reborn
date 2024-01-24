@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.webserver.service;
 
+import java.io.IOException;
+
 public interface ConfigEditorService {
 
 
@@ -7,5 +9,5 @@ public interface ConfigEditorService {
 
     String getCommentMapString();
 
-    void updateConfigMap(String configMapString);
+    void updateConfigMap(String configMapString) throws IOException;
 }

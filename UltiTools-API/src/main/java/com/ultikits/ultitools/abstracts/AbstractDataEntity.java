@@ -6,6 +6,8 @@ import lombok.Data;
 import java.io.Serializable;
 
 /**
+ * Abstract class representing a persistent data entity.
+ * <p>
  * 持久化数据抽象类
  *
  * @author wisdomme

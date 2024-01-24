@@ -5,6 +5,7 @@ import cn.hutool.http.HttpResponse;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.webserver.controller.ConfigEditorController;
+import com.ultikits.ultitools.webserver.controller.PluginModuleController;
 import com.ultikits.ultitools.webserver.ws.HeartBeatWebSocket;
 import org.bukkit.Bukkit;
 
@@ -15,6 +16,13 @@ import static spark.Spark.*;
 
 public class PluginInitiationUtils {
 
+    /**
+     * Login account.
+     * <br>
+     * 登录账户。
+     *
+     * @throws IOException if an I/O error occurs
+     */
     public static void loginAccount() throws IOException {
         String username = UltiTools.getInstance().getConfig().getString("account.username");
         String password = UltiTools.getInstance().getConfig().getString("account.password");
@@ -43,6 +51,11 @@ public class PluginInitiationUtils {
         }
     }
 
+    /**
+     * Init embed web server.
+     * <br>
+     * 初始化嵌入式Web服务器。
+     */
     public static void initEmbedWebServer() {
         if (UltiTools.getInstance().getConfig().getBoolean("web-editor.enable")) {
             int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
@@ -57,6 +70,7 @@ public class PluginInitiationUtils {
                 init();
                 awaitInitialization();
                 new ConfigEditorController().init();
+                new PluginModuleController().init();
             }
         }
     }

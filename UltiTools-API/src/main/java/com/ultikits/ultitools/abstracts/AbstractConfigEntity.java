@@ -2,10 +2,10 @@ package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.annotation.AnnotationUtil;
 import cn.hutool.core.util.ObjectUtil;
+import cn.hutool.core.util.ReflectUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
-import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -15,26 +15,52 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Abstract class representing a configuration entity.
+ * <p>
+ * 配置实体的抽象类。
+ */
 @Getter
 public abstract class AbstractConfigEntity {
     private final String configFilePath;
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
 
+    /**
+     * Constructor for AbstractConfigEntity.
+     * <p>
+     * AbstractConfigEntity的构造函数。
+     *
+     * @param configFilePath the path to the configuration file, for example: config/config.yml <br> 配置文件在resource文件夹的路径，例如：config/config.yml
+     */
     public AbstractConfigEntity(String configFilePath) {
         this.configFilePath = configFilePath;
     }
 
+    /**
+     * Saves the configuration to the file.
+     * <p>
+     * 将配置保存到文件。
+     *
+     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     */
     public void save() throws IOException {
         config.save(new File(configFilePath));
     }
 
-    @SneakyThrows
-    public final void init(UltiToolsPlugin ultiToolsPlugin) {
+    /**
+     * Initializes the configuration entity.
+     * <p>
+     * 初始化配置实体。
+     *
+     * @param ultiToolsPlugin the plugin instance <br> 插件实例
+     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     */
+    public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
         this.ultiToolsPlugin = ultiToolsPlugin;
         config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
         boolean upToDate = true;
-        for (Field field : this.getClass().getDeclaredFields()) {
+        for (Field field : ReflectUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
                 ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
@@ -49,15 +75,15 @@ public abstract class AbstractConfigEntity {
                         for (Object o : (List<?>) configValue) {
                             list.add(o.toString());
                         }
-                        field.set(this, list);
+                        ReflectUtil.setFieldValue(this, field, list);
                     } else if (ObjectUtil.isBasicType(configValue) || configValue instanceof String) {
-                        field.set(this, configValue);
+                        ReflectUtil.setFieldValue(this, field, configValue);
                     } else {
-                        field.set(this, JSONObject.parseObject(configValue.toString(), field.getType()));
+                        ReflectUtil.setFieldValue(this, field, JSONObject.parseObject(configValue.toString(), field.getType()));
                     }
                 } else {
                     upToDate = false;
-                    config.set(path, field.get(this));
+                    config.set(path, ReflectUtil.getFieldValue(this, field));
                 }
             }
         }
@@ -66,8 +92,15 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    @SneakyThrows
-    public void updateProperties(JSONObject jsonObject) {
+    /**
+     * Updates the properties of the configuration entity.
+     * <p>
+     * 更新配置实体的属性。
+     *
+     * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
+     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     */
+    public void updateProperties(JSONObject jsonObject) throws IOException {
         for (Field field : this.getClass().getDeclaredFields()) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
@@ -75,7 +108,7 @@ public abstract class AbstractConfigEntity {
                 String path = annotation.path();
                 Object configValue = jsonObject.getObject(path, field.getType());
                 if (configValue != null) {
-                    field.set(this, configValue);
+                    ReflectUtil.setFieldValue(this, field, configValue);
                     config.set(path, configValue);
                 }
             }
@@ -83,6 +116,13 @@ public abstract class AbstractConfigEntity {
         config.save(ultiToolsPlugin.getConfigFile(configFilePath));
     }
 
+    /**
+     * Converts the configuration entity to a JSON object.
+     * <p>
+     * 将配置实体转换为JSON对象。
+     *
+     * @return the JSON object representation of the configuration entity <br> 配置实体的JSON对象表示
+     */
     public JSONObject toJsonObject() {
         JSONObject jsonObject = new JSONObject();
         Set<String> keys = config.getKeys(true);
@@ -94,6 +134,13 @@ public abstract class AbstractConfigEntity {
         return jsonObject;
     }
 
+    /**
+     * Gets the comments of the configuration entity.
+     * <p>
+     * 获取配置实体的注释。
+     *
+     * @return a JSON object containing the comments <br> 包含注释的JSON对象
+     */
     public JSONObject getComments() {
         JSONObject jsonObject = new JSONObject();
         Field[] declaredFields = this.getClass().getDeclaredFields();
