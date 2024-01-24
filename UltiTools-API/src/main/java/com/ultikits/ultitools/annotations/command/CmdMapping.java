@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
  * Command mapping annotation.
  * <p>
  * 指令映射注解。
+ *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#quick-start">Command Excutor</a>
  */
 @Retention(RetentionPolicy.RUNTIME)

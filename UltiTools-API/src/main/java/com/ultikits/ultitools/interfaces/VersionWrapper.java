@@ -14,7 +14,7 @@ import org.bukkit.scoreboard.Scoreboard;
 /**
  * Version wrapper interface.
  * <p>
- *     版本包装器接口
+ * 版本包装器接口
  */
 public interface VersionWrapper {
 

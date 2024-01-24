@@ -13,8 +13,8 @@ public class HttpDownloadUtils {
      * 从URL下载文件。
      *
      * @param urlString Download URL <br> 下载地址
-     * @param fileName File name <br> 文件名
-     * @param savePath Save path <br> 保存路径
+     * @param fileName  File name <br> 文件名
+     * @param savePath  Save path <br> 保存路径
      */
     @SneakyThrows
     public static void download(String urlString, String fileName, String savePath) {

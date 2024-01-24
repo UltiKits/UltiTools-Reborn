@@ -8,9 +8,9 @@ import java.lang.annotation.Target;
 /**
  * Config entry annotation.
  * <p>
- *     配置项注解。
+ * 配置项注解。
  *
- *     @see <a href="https://dev.ultikits.com/en/guide/essentials/config-file.html">Configuration</a>
+ * @see <a href="https://dev.ultikits.com/en/guide/essentials/config-file.html">Configuration</a>
  */
 @Target({ElementType.FIELD})
 @Retention(RetentionPolicy.RUNTIME)

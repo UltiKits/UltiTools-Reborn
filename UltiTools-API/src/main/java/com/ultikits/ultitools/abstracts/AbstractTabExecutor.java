@@ -13,6 +13,7 @@ import java.util.List;
  * Abstract class representing a tab command executor.
  * <p>
  * 支持Tab补全指令执行器的抽象类。
+ *
  * @see TabExecutor
  */
 public abstract class AbstractTabExecutor implements TabExecutor {

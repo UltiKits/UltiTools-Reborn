@@ -49,7 +49,7 @@ public class DependencyUtils {
      * <br>
      * 加载jar文件。
      *
-     * @param jar        jar file <br> jar文件
+     * @param jar         jar file <br> jar文件
      * @param classLoader Class loader <br> 类加载器
      */
     public static void loadJar(File jar, ClassLoader classLoader) {
