@@ -15,9 +15,9 @@ public class VersionUtils {
      * @return UltiTools newest version <br> UltiTools最新版本
      */
     public static String getUltiToolsNewestVersion() {
-        HttpRequest get = HttpUtil.createGet("https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn");
+        HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/ultitools/newest");
         HttpResponse httpResponse = get.execute();
-        String version = httpResponse.body().split(">v")[1].split("<")[0];
+        String version = httpResponse.body();
         httpResponse.close();
         return version;
     }
