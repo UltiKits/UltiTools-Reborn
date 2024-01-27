@@ -95,5 +95,12 @@
   "[名称]": "[name]",
   "[原因]": "[reason]",
   "%s请求传送到您的位置": "%s requests to teleport to your position",
-  "[备注]": "[remark]"
+  "[备注]": "[remark]",
+  "§e你被玩家§b%s§e艾特了": "§eYou were @ by §b%s",
+  "@过于频繁，请稍后再试": "@ too frequently, please try again later",
+  "权限不足": "No permissions",
+  "你艾特了 %d 名玩家！": "You @ %d player(s)!",
+  "艾特失败！玩家不在线或不存在": "Failed to @! Player is not online or does not exist",
+  "您没有权限发送彩色字体": "You do not have permission to send colored fonts",
+  "所有人": "everyone"
 }

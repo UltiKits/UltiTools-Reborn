@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.annotations;
 
+import com.ultikits.ultitools.interfaces.impl.pasers.BaseConfigParser;
+import com.ultikits.ultitools.interfaces.impl.pasers.BaseParser;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -24,4 +27,10 @@ public @interface ConfigEntry {
      * @return config entry comment <br> 配置项注释
      */
     String comment() default "";
+
+    /**
+     * @return config entry parser <br> 配置项解析器
+     * @see BaseConfigParser
+     */
+    Class<? extends BaseParser> parser() default BaseConfigParser.class;
 }

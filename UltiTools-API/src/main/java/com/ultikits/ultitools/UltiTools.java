@@ -210,19 +210,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
 
-        getServer().getScheduler().scheduleSyncDelayedTask(this, new Runnable() {
-            public void run() {
-                String ultiToolsNewestVersion = getUltiToolsNewestVersion();
-                String currentVersion = getEnv().getString("version");
-                Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
-                Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] 正在检查版本更新..."));
-                if (new VersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
-                    Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
-                    Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] 下载地址：§a%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
-                    return;
-                }
-                Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] UltiTools-API已是最新版本！"));
+        getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
+            String ultiToolsNewestVersion = getUltiToolsNewestVersion();
+            String currentVersion = getEnv().getString("version");
+            Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
+            Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] 正在检查版本更新..."));
+            if (new VersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
+                Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
+                Bukkit.getLogger().log(Level.INFO, String.format(i18n("[UltiTools-API] 下载地址：§a%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+                return;
             }
+            Bukkit.getLogger().log(Level.INFO, i18n("[UltiTools-API] UltiTools-API已是最新版本！"));
         });
     }
 

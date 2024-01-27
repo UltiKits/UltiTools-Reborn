@@ -30,3 +30,7 @@ enableHide: true
 enableTitle: true
 # 是否启用死亡惩罚功能
 enableDeathPunishment: true
+# 是否启用聊天功能
+enableChat: true
+# 是否启用@功能
+enableAt: true
