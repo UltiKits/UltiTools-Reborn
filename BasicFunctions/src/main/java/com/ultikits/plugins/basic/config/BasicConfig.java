@@ -42,6 +42,10 @@ public class BasicConfig extends AbstractConfigEntity {
     private boolean enableTitle = true;
     @ConfigEntry(path = "enableDeathPunishment", comment = "是否启用死亡惩罚功能")
     private boolean enableDeathPunishment = true;
+    @ConfigEntry(path = "enableChat", comment = "是否启用聊天功能")
+    private boolean enableChat= true;
+    @ConfigEntry(path = "enableAt", comment = "是否启用@功能")
+    private boolean enableAt = true;
 
     public BasicConfig(String configFilePath) {
         super(configFilePath);

@@ -28,7 +28,7 @@ public class BasicFunctions extends UltiToolsPlugin {
 
     @Override
     public boolean registerSelf() {
-        BasicConfig configEntity = getConfigManager().getConfigEntity(this, BasicConfig.class);
+        BasicConfig configEntity = getConfig(BasicConfig.class);
         if (configEntity.isEnableHeal()) {
             getCommandManager().register(this, HideCommands.class);
         }
@@ -89,6 +89,12 @@ public class BasicFunctions extends UltiToolsPlugin {
         }
         if (configEntity.isEnableDeathPunishment()) {
             getListenerManager().register(this, DeathListener.class);
+        }
+        if (configEntity.isEnableChat()) {
+            getListenerManager().register(this, ChatListener.class);
+        }
+        if (configEntity.isEnableAt()) {
+            getListenerManager().register(this, AtListener.class);
         }
         return true;
     }
