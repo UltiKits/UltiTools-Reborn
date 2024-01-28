@@ -6,7 +6,7 @@
 
     <groupId>com.ultikits.plugins</groupId>
     <artifactId>MysqlConnector</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>MysqlConnector</name>
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.0.6</version>
+            <version>6.0.8</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
