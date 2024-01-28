@@ -41,8 +41,6 @@ import java.util.stream.Collectors;
 public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
     private final Language language;
     @Getter
-    private final String resourceFolderPath;
-    @Getter
     private final String version;
     @Getter
     private final String pluginName;
@@ -54,9 +52,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private final int minUltiToolsVersion;
     @Getter
     private final String mainClass;
+    @Getter
+    @Setter
+    private String resourceFolderPath;
     @Setter
     @Getter
     private AnnotationConfigApplicationContext context;
+
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
@@ -77,10 +79,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         inputStream.close();
         reader.close();
 
-        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
-        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");
+        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
+        File file = new File(resourceFolderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
         if (!file.exists()) {
-            String lanPath = "lang/" + this.getLanguageCode() + ".json";
+            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
             InputStream in = getResource(lanPath);
             String result = new BufferedReader(new InputStreamReader(in))
                     .lines().collect(Collectors.joining(""));
@@ -105,6 +107,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param mainClass           the main class of the plugin <br> 插件的主类
      */
     @SneakyThrows
+    @Deprecated
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
         this.pluginName = pluginName;
         this.version = version;
@@ -129,6 +132,49 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
         saveResources();
         initConfig();
+    }
+
+    /**
+     * Constructor for UltiToolsPlugin. For plugin connector.
+     * <p>
+     * UltiToolsPlugin的构造函数。用于插件连接器。
+     *
+     * @param pluginName          the name of the plugin <br> 插件名称
+     * @param version             the version of the plugin <br> 插件版本
+     * @param authors             the authors of the plugin <br> 插件作者
+     * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
+     * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
+     * @param mainClass           the main class of the plugin <br> 插件的主类
+     * @param resourceFolderPath  the path to the resource folder <br> 资源文件夹的路径
+     */
+    public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass, String resourceFolderPath) {
+        this.pluginName = pluginName;
+        this.version = version;
+        this.authors = authors;
+        this.loadAfter = loadAfter;
+        this.minUltiToolsVersion = minUltiToolsVersion;
+        this.mainClass = mainClass;
+        this.resourceFolderPath = resourceFolderPath;
+        File file = new File(resourceFolderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
+        if (!file.exists()) {
+            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
+            InputStream in = getResource(lanPath);
+            if (in != null) {
+                String result = new BufferedReader(new InputStreamReader(in))
+                        .lines().collect(Collectors.joining(""));
+                language = new Language(result);
+            } else {
+                language = new Language("{}");
+            }
+        } else {
+            language = new Language(file);
+        }
+        saveResources();
+        try {
+            initConfig();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -171,7 +217,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * <p>
      * 初始化配置实体。
      */
-    private void initConfig() {
+    private void initConfig() throws IOException {
         EnableAutoRegister annotation = AnnotationUtils.findAnnotation(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
             for (String packageName : CommonUtils.getPluginPackages(this)) {
@@ -197,11 +243,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     protected final String getConfigFolder() {
-        return UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
+        return this.resourceFolderPath;
     }
 
     protected final File getConfigFile(String path) {
-        return new File(getConfigFolder() + "/" + path);
+        return new File(getConfigFolder() + File.separator + path);
     }
 
     public <T extends AbstractConfigEntity> T getConfig(Class<T> configType) {
@@ -210,6 +256,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     public <T extends AbstractConfigEntity> T getConfig(String path, Class<T> configType) {
         return getConfigManager().getConfigEntity(this, path, configType);
+    }
+
+    public <T extends AbstractConfigEntity> List<T> getConfigs(Class<T> configType) {
+        return getConfigManager().getConfigEntities(this, configType);
     }
 
     public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {

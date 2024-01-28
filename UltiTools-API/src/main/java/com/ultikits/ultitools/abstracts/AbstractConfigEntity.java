@@ -41,8 +41,26 @@ public abstract class AbstractConfigEntity {
      *
      * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
      */
+    @SuppressWarnings("unchecked")
     public void save() throws IOException {
-        config.save(new File(configFilePath));
+        for (Field field : ReflectUtil.getFields(this.getClass())) {
+            if (!field.isAnnotationPresent(ConfigEntry.class)) {
+                continue;
+            }
+            field.setAccessible(true);
+            ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
+            String path = annotation.path();
+            if (path.isEmpty()) {
+                path = field.getName();
+            }
+            Object fieldValue = ReflectUtil.getFieldValue(this, field);
+            if (fieldValue == null) {
+                continue;
+            }
+            Object serialized = ReflectUtil.newInstance(annotation.parser()).serialize(fieldValue);
+            config.set(path, serialized);
+        }
+        config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
     }
 
     /**

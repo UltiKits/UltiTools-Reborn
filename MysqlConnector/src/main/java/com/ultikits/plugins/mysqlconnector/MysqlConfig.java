@@ -1,12 +1,14 @@
 package com.ultikits.plugins.mysqlconnector;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
+@ConfigEntity("config/config.yml")
 public class MysqlConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "enable", comment = "")
     private boolean enable = false;
