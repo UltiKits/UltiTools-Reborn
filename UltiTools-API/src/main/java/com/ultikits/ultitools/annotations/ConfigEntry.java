@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.annotations;
 
-import com.ultikits.ultitools.interfaces.impl.pasers.BaseConfigParser;
-import com.ultikits.ultitools.interfaces.impl.pasers.BaseParser;
+import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
+import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -30,7 +30,7 @@ public @interface ConfigEntry {
 
     /**
      * @return config entry parser <br> 配置项解析器
-     * @see BaseConfigParser
+     * @see DefaultConfigParser
      */
-    Class<? extends BaseParser> parser() default BaseConfigParser.class;
+    Class<? extends ConfigParser> parser() default DefaultConfigParser.class;
 }

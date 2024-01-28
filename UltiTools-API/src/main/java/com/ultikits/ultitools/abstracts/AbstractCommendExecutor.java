@@ -37,9 +37,9 @@ import java.util.function.Function;
  */
 public abstract class AbstractCommendExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
-    private final BiMap<UUID, Method> SenderLock = HashBiMap.create();
-    private final BiMap<UUID, Method> ServerLock = HashBiMap.create();
-    private final BiMap<UUID, Method> CmdCoolDown = HashBiMap.create();
+    private final BiMap<UUID, Method> senderLock = HashBiMap.create();
+    private final BiMap<UUID, Method> serverLock = HashBiMap.create();
+    private final BiMap<UUID, Method> cmdCoolDown = HashBiMap.create();
 
     @Getter
     private final Map<List<Class<?>>, Function<String, ?>> parsers = new HashMap<>();
@@ -382,7 +382,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             if (!(sender instanceof Player || method.getAnnotation(UsageLimit.class).ContainConsole())) {
                 return false;
             }
-            if (sender instanceof Player && SenderLock.get(((Player) sender).getUniqueId()).equals(method)) {
+            if (sender instanceof Player && senderLock.get(((Player) sender).getUniqueId()).equals(method)) {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"));
                 return true;
             }
@@ -392,7 +392,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             if (!(sender instanceof Player || method.getAnnotation(UsageLimit.class).ContainConsole())) {
                 return false;
             }
-            if (sender instanceof Player && ServerLock.get(((Player) sender).getUniqueId()).equals(method)) {
+            if (sender instanceof Player && serverLock.get(((Player) sender).getUniqueId()).equals(method)) {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"));
                 return true;
             }
@@ -414,7 +414,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             return false;
         }
         Player player = (Player) sender;
-        if (CmdCoolDown.containsKey(player.getUniqueId())) {
+        if (cmdCoolDown.containsKey(player.getUniqueId())) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("操作频繁，请稍后再试"));
             return true;
         }
@@ -517,7 +517,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             return;
         }
         Player player = (Player) commandSender;
-        CmdCoolDown.put(player.getUniqueId(), method);
+        cmdCoolDown.put(player.getUniqueId(), method);
         new BukkitRunnable() {
             int time = cmdCD.value();
 
@@ -526,7 +526,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 if (time > 0) {
                     time--;
                 } else {
-                    CmdCoolDown.remove(player.getUniqueId(), method);
+                    cmdCoolDown.remove(player.getUniqueId(), method);
                     this.cancel();
                 }
             }
@@ -899,24 +899,21 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
 
                 if (usageLimit != null) {
                     if (usageLimit.value().equals(UsageLimit.LimitType.ALL)) {
-                        ServerLock.put(((Player) commandSender).getUniqueId(), method);
+                        serverLock.put(((Player) commandSender).getUniqueId(), method);
                     } else if (usageLimit.value().equals(UsageLimit.LimitType.SENDER) && commandSender instanceof Player) {
-                        SenderLock.put(((Player) commandSender).getUniqueId(), method);
+                        senderLock.put(((Player) commandSender).getUniqueId(), method);
                     }
                 }
 
                 try {
                     setCoolDown(commandSender, method);
-                    method.invoke(getInstance(), params);
-                } catch (IllegalAccessException | InvocationTargetException e) {
-                    sendErrorMessage(commandSender, command);
-                    throw new RuntimeException(e);
+                    ReflectUtil.invoke(getInstance(), method, params);
                 } finally {
                     if (usageLimit != null) {
                         if (usageLimit.value().equals(UsageLimit.LimitType.ALL)) {
-                            ServerLock.remove(((Player) commandSender).getUniqueId());
+                            serverLock.remove(((Player) commandSender).getUniqueId());
                         } else if (usageLimit.value().equals(UsageLimit.LimitType.SENDER) && commandSender instanceof Player) {
-                            SenderLock.remove(((Player) commandSender).getUniqueId());
+                            senderLock.remove(((Player) commandSender).getUniqueId());
                         }
                     }
                 }

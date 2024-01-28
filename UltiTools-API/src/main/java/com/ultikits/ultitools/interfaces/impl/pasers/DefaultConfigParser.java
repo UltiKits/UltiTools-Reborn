@@ -1,14 +1,18 @@
 package com.ultikits.ultitools.interfaces.impl.pasers;
 
 import cn.hutool.core.util.ObjectUtil;
+import cn.hutool.core.util.ReflectUtil;
 import com.alibaba.fastjson.JSONObject;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.MemoryConfiguration;
+import org.bukkit.configuration.MemorySection;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-public class BaseConfigParser extends BaseParser<Object> {
+public class DefaultConfigParser extends ConfigParser<Object> {
 
     @Override
     public Object parse(Object object) {
@@ -33,5 +37,16 @@ public class BaseConfigParser extends BaseParser<Object> {
             }
             return jsonObject;
         }
+    }
+
+    @Override
+    public MemorySection serializeToMemorySection(Object object) {
+        MemorySection memorySection = new MemoryConfiguration();
+        for (Field field : ReflectUtil.getFields(object.getClass())) {
+            field.setAccessible(true);
+            Object fieldValue = ReflectUtil.getFieldValue(object, field);
+            memorySection.set(field.getName(), serialize(fieldValue));
+        }
+        return memorySection;
     }
 }
