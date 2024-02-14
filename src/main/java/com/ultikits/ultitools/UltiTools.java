@@ -51,12 +51,12 @@ import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersio
  * @version 6.0.7
  */
 public final class UltiTools extends JavaPlugin implements Localized {
+    private boolean needLoadLib = false;
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
     @Getter
     private final CommandManager commandManager = new CommandManager();
-    private boolean needLoadLib = false;
     @Getter
     private DependenceManagers dependenceManagers;
     @Getter
@@ -422,7 +422,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         getLogger().log(Level.INFO, "If have problems in downloading，you can download full version.");
         for (int i = 0; i < missingLib.size(); i++) {
             String name = missingLib.get(i);
-            File file = new File(UltiTools.getInstance().getDataFolder() + "/lib", name);
             String url = env.getString("oss-url") + env.getString("lib-path") + name;
             double i1 = (double) i / missingLib.size();
             int percentage = (int) (i1 * 100);

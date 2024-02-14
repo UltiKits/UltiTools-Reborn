@@ -229,11 +229,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         this, packageName, this.getClass().getClassLoader()
                 );
             }
-        } else {
-            List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
-            for (AbstractConfigEntity configEntity : allConfigs) {
-                UltiToolsPlugin.getConfigManager().register(this, configEntity);
-            }
+            return;
+        }
+        List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
+        for (AbstractConfigEntity configEntity : allConfigs) {
+            UltiToolsPlugin.getConfigManager().register(this, configEntity);
         }
     }
 
@@ -274,32 +274,37 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
-        JarFile jarFile = new JarFile(jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1));
+        JarFile jarFile = new JarFile(
+                jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
+        );
         Enumeration<JarEntry> entries = jarFile.entries();
         while (entries.hasMoreElements()) {
             JarEntry jarEntry = entries.nextElement();
             String fileName = jarEntry.getName();
-            if ((fileName.startsWith("res") || fileName.startsWith("lang") || fileName.startsWith("config")) && fileName.contains(".")) {
-                InputStream inputStream = jarFile.getInputStream(jarEntry);
-                if (inputStream == null) {
-                    throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
+            if ((!fileName.startsWith("res") && !fileName.startsWith("lang")
+                    && !fileName.startsWith("config")) || !fileName.contains(".")) {
+                continue;
+            }
+            InputStream inputStream = jarFile.getInputStream(jarEntry);
+            if (inputStream == null) {
+                throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
+            }
+            File outFile = new File(resourceFolderPath, fileName);
+            try {
+                if (outFile.exists()) {
+                    continue;
                 }
-                File outFile = new File(resourceFolderPath, fileName);
-                try {
-                    if (!outFile.exists()) {
-                        FileUtil.touch(outFile);
-                        OutputStream out = Files.newOutputStream(outFile.toPath());
-                        byte[] buf = new byte[1024];
-                        int len;
-                        while ((len = inputStream.read(buf)) > 0) {
-                            out.write(buf, 0, len);
-                        }
-                        out.close();
-                        inputStream.close();
-                    }
-                } catch (IOException ex) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
+                FileUtil.touch(outFile);
+                OutputStream out = Files.newOutputStream(outFile.toPath());
+                byte[] buf = new byte[1024];
+                int len;
+                while ((len = inputStream.read(buf)) > 0) {
+                    out.write(buf, 0, len);
                 }
+                out.close();
+                inputStream.close();
+            } catch (IOException ex) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
             }
         }
     }

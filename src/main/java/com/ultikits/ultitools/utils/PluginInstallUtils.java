@@ -145,7 +145,7 @@ public class PluginInstallUtils {
      * @return 插件信息
      */
     public static PluginEntity getPlugin(String idString) {
-        HttpRequest get = HttpUtil.createGet(BASE_URL + "/get?identifyString=" + idString);
+        HttpRequest get = HttpUtil.createGet(BASE_URL + "/plugin/get?identifyString=" + idString);
         HttpResponse httpResponse = get.execute();
         if (!httpResponse.isOk()) {
             return null;

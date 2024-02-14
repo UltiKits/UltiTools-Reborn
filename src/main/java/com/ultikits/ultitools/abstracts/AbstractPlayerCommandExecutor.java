@@ -14,7 +14,7 @@ import org.bukkit.entity.Player;
  *
  * @see CommandExecutor
  */
-public abstract class AbstractPlayerCommandExecutor implements CommandExecutor {
+public abstract class AbstractPlayerCommandExecutor extends AbstractCommand {
     /**
      * @param commandSender the sender of the command <br> 指令发送者
      * @param command       the command which was executed <br> 被执行的指令
@@ -52,27 +52,4 @@ public abstract class AbstractPlayerCommandExecutor implements CommandExecutor {
      * @return whether the command was executed successfully <br> 指令是否执行成功
      */
     protected abstract boolean onPlayerCommand(Command command, String[] strings, Player player);
-
-    /**
-     * @param sender the sender of the command <br> 指令发送者
-     * @see AbstractConsoleCommandExecutor#sendHelpMessage(CommandSender)
-     */
-    protected abstract void sendHelpMessage(CommandSender sender);
-
-    /**
-     * @param sender  the sender of the command <br> 指令发送者
-     * @param command the command which was executed <br> 被执行的指令
-     * @see AbstractConsoleCommandExecutor#sendErrorMessage(CommandSender, Command)
-     */
-    protected void sendErrorMessage(CommandSender sender, Command command) {
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("指令执行错误，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
-    }
-
-    /**
-     * @return the help command <br> 帮助指令
-     * @see AbstractConsoleCommandExecutor#getHelpCommand()
-     */
-    protected String getHelpCommand() {
-        return "help";
-    }
 }

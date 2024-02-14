@@ -93,21 +93,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         Map<String, String[]> params = new HashMap<>();
         List<String> paramList = new ArrayList<>();
         int index = 0;
-
-//        for (String arg : args) {
-//            String currentFormatArg = formatArgs[index];
-//
-//            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith("...>")) {
-//                paramList.add(arg);
-//                continue;
-//            }
-//            if (currentFormatArg.startsWith("<") && currentFormatArg.endsWith(">")) {
-//                String paramName = currentFormatArg.substring(1, currentFormatArg.length() - 1);
-//                params.put(paramName, new String[]{arg});
-//            }
-//
-//            index++;
-//        }
         for (String arg : args) {
             String currentFormatArg = formatArgs[index];
             if (currentFormatArg.startsWith("<")) {
