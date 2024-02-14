@@ -24,7 +24,7 @@
 <img alt="wakatime" src="https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub issues" src="https://img.shields.io/github/issues/wisdommen/UltiTools?style=flat-square"/>
-<a href="https://app.codacy.com/gh/UltiKits/UltiTools-Reborn/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade"><img src="https://app.codacy.com/project/badge/Grade/21040d5821694352844a3d947d5f2dcb"/></a>
+<a href="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/overview/alpha"><img src="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge/alpha" alt="CodeFactor" /></a>
 </div>
 
 ---
