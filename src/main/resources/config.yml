@@ -1,0 +1,29 @@
+# 数据存储方式，内置json和mysql
+datasource:
+  type: "json"
+
+# en for English, zh 为中文
+language: "zh"
+
+web-editor:
+  enable: false
+
+account:
+  username: ""
+  password: ""
+
+mysql:
+  enable: false
+  host: localhost
+  port: 3306
+  username: root
+  password: password
+  database: ultitools
+  connectionTimeout: 30000
+  keepaliveTime: 60000
+  maxLifetime: 1800000
+  connectionTestQuery: "select 1"
+  maximumPoolSize: 8
+  cachePrepStmts: true
+  prepStmtCacheSize: 250
+  prepStmtCacheSqlLimit: 2048
