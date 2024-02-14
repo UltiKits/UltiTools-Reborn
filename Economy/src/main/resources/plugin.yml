@@ -1,5 +1,0 @@
-name: UltiEconomy
-version: '${project.version}'
-main: com.ultikits.plugins.economy.UltiEconomy
-api-version: 606
-authors: [ wisdomme ]

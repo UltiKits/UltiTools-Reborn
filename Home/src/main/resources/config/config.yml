@@ -1,8 +1,0 @@
-# 默认玩家权限可以创建的家数量
-home_normal: 3
-# pro权限可以创建的家数量
-home_pro: 5
-# ultimate权限可以创建的家数量
-home_ultimate: 10
-# 家传送等待时间（秒）
-home_tpwait: 3
