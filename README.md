@@ -340,9 +340,9 @@ public List<AbstractConfigEntity> getAllConfigs() {
 | Contributor                                              | Description                                      |
 |--------------------------------------------------|-----------------------------------------|
 | [@wisdommen](https://github.com/wisdommen)       | Founder, UltiKits Author                        |
-| [@qianmo2233](https://github.com/qianmo2233)     | UltiTools & UltiCore Developer, Main Maintainer of UltiKits Development Documentation |
-| [@Shpries](https://github.com/Shpries)           | UltiTools Developer, Main Maintainer of UltiKits Development Documentation         |
-| [@DevilJueChen](https://github.com/DevilJueChen) | Feedback on UltiKits Issues, Bugs & Suggestions                      |
+| [@qianmo2233](https://github.com/qianmo2233)     | UltiTools Developer, Main Maintainer of UltiKits Development Documentation |
+| [@Shpries](https://github.com/Shpries)           | UltiTools Developer |
+| [@JueChenChen](https://github.com/JueChenChen) | Feedback on UltiKits Issues, Bugs & Suggestions                      |
 | 拾柒                                               | Graphic Designer                                      |
 
 ## Found an Issue? Want to Make a Suggestion?
@@ -353,9 +353,12 @@ public List<AbstractConfigEntity> getAllConfigs() {
 
 |                                                                                                                           |                        |
 |---------------------------------------------------------------------------------------------------------------------------|------------------------|
+| ![Dependabot](https://img.shields.io/badge/dependabot-025E8C?style=for-the-badge&logo=dependabot&logoColor=white)         | Dep checker |
+| ![GitHub Actions](https://img.shields.io/badge/github%20actions-%232671E5.svg?style=for-the-badge&logo=githubactions&logoColor=white) | Offical CI Tool
+| ![Java](https://img.shields.io/badge/java-%23ED8B00.svg?style=for-the-badge&logo=openjdk&logoColor=white)                 | Development language |
 | ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | Recorded every moment of our development journey          |
 | ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | The strongest Java IDE for a pleasant development experience |
 | ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | Helped solve many repetitive and tedious tasks        |
 | ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | Brought many high-tech features to the plugin            |
 | ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | Official build tool                 |
-| ![wakatime](https://img.shields.io/badge/Apache_Spark-FFFFFF?style=for-the-badge&logo=apachespark&logoColor=#E35A16)      | Official built-in HTTP server          |
+| ![Socket.io](https://img.shields.io/badge/Socket.io-black?style=for-the-badge&logo=socket.io&badgeColor=010101)            | Official built-in WebSocket client          |
