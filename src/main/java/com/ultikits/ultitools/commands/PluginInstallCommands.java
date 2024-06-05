@@ -5,7 +5,6 @@ import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.entities.PluginEntity;
-import com.ultikits.ultitools.interfaces.TempListener;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import net.kyori.adventure.text.Component;
@@ -111,12 +110,6 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
                     sender.sendMessage(stringBuilder.toString());
                 }
             }.runTask(UltiTools.getInstance());
-            TempListener.common(PlayerJoinEvent.class)
-                    .filter(event -> event.getPlayer().getName().equals(sender.getName()))
-                    .listen(event -> {
-                        sender.sendMessage(stringBuilder.toString());
-                        return true;
-                    });
         }
     }
 
