@@ -3,8 +3,6 @@ name: UltiTools API CI with Maven
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - 'UltiTools-API/**'
 
 jobs:
   build:
@@ -21,21 +19,21 @@ jobs:
         cache: maven
         
     - name: Build with Maven
-      run: mvn -B package javadoc:javadoc --file UltiTools-API/pom.xml
+      run: mvn -B package javadoc:javadoc
 
     - name: Get Project Version from pom.xml
       id: version
       uses: avides/actions-project-version-check@v1.4.0
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: UltiTools-API/pom.xml
+        file-to-check: pom.xml
         only-return-version: true
 
     - name: Archive artifacts
       uses: actions/upload-artifact@v4.0.0
       with:
         name: ultitools-artifact
-        path: UltiTools-API/target/UltiTools-API-${{ steps.version.outputs.version }}.jar
+        path: target/UltiTools-API-${{ steps.version.outputs.version }}.jar
         
     - name: Deploy Java DOC
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
@@ -43,7 +41,7 @@ jobs:
         server: ${{ secrets.FTP_HOST }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
-        local-dir: "./UltiTools-API/target/site/apidocs/"
+        local-dir: "./target/site/apidocs/"
         
   release:
     needs: build
@@ -61,7 +59,7 @@ jobs:
       uses: avides/actions-project-version-check@v1.4.0
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: UltiTools-API/pom.xml
+        file-to-check: pom.xml
         only-return-version: true
 
     - name: Download artifacts

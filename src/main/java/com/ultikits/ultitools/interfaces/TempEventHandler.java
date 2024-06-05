@@ -9,6 +9,7 @@ import org.bukkit.event.Event;
  *
  * @param <E> Event type (事件类型)
  */
+@FunctionalInterface
 public interface TempEventHandler<E extends Event> {
     /**
      * @param event Event <br> 事件
