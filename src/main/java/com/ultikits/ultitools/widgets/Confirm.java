@@ -1,7 +1,8 @@
-package com.ultikits.ultitools.interfaces;
+package com.ultikits.ultitools.widgets;
 
 import cn.hutool.core.lang.func.VoidFunc0;
-import com.ultikits.ultitools.interfaces.impl.InventoryConfirm;
+import com.ultikits.ultitools.widgets.impl.ChatConfirm;
+import com.ultikits.ultitools.widgets.impl.InventoryConfirm;
 import org.bukkit.entity.Player;
 
 public interface Confirm {
