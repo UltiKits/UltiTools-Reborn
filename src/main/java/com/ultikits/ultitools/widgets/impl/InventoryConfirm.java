@@ -1,8 +1,8 @@
-package com.ultikits.ultitools.interfaces.impl;
+package com.ultikits.ultitools.widgets.impl;
 
 import cn.hutool.core.lang.func.VoidFunc0;
 import com.ultikits.ultitools.abstracts.guis.OkCancelPage;
-import com.ultikits.ultitools.interfaces.Confirm;
+import com.ultikits.ultitools.widgets.Confirm;
 import lombok.SneakyThrows;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;

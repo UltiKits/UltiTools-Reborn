@@ -52,7 +52,7 @@ public class MessageUtils {
     }
 
     /**
-     * Send a Adventure component message to player.
+     * Send an Adventure component message to player.
      * <br>
      * 给玩家发送一个Adventure组件消息
      *

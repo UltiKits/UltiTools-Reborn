@@ -1,7 +1,8 @@
-package com.ultikits.ultitools.interfaces;
+package com.ultikits.ultitools.widgets.impl;
 
 import cn.hutool.core.lang.func.VoidFunc0;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.widgets.Confirm;
 import com.ultikits.ultitools.utils.MessageUtils;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
@@ -10,7 +11,7 @@ import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.entity.Player;
 
-public class ChatConfirm implements Confirm{
+public class ChatConfirm implements Confirm {
     private String confirmText;
     private String cancelText;
 
