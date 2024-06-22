@@ -53,7 +53,6 @@ public class SpigotVersionManager {
                                 .loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                         if (VersionWrapper.class.isAssignableFrom(aClass)) {
                             versionWrapper = (VersionWrapper) aClass.newInstance();
-                            break;
                         }
                     } catch (NoClassDefFoundError ignored) {
                     }
