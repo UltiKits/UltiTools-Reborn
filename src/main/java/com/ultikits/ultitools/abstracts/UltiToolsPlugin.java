@@ -2,10 +2,13 @@ package com.ultikits.ultitools.abstracts;
 
 import cn.hutool.core.comparator.VersionComparator;
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.log.LogFactory;
+
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.*;
+import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
@@ -379,5 +382,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Override
     public void reloadSelf() {
         getConfigManager().reloadConfigs(this);
+    }
+
+    /**
+     * @return plugin logger <br> 插件日志发送器
+     */
+    public PluginLogger getLogger() {
+        return new PluginLogger(this.pluginName, LogFactory.get());
     }
 }

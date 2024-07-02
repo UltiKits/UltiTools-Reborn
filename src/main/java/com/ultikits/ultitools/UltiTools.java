@@ -7,11 +7,15 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+
+import cn.hutool.log.LogFactory;
 import lombok.Getter;
 import lombok.Setter;
 import net.milkbowl.vault.economy.Economy;
@@ -115,6 +119,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onLoad() {
+        LogFactory.setCurrentLogFactory(new BukkitLogFactory());
         saveDefaultConfig();
         ultiTools = this;
         // Plugin classloader initialization
@@ -172,6 +177,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 DataStoreManager.register(mysqlDataStore);
             }
         }
+        DataStoreManager.register(new SQLiteDataStore());
         String storeType = getConfig().getString("datasource.type");
         //noinspection DataFlowIssue
         dataStore = DataStoreManager.getDatastore(storeType);
