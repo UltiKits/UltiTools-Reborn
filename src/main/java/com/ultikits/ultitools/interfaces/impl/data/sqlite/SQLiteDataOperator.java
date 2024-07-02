@@ -1,11 +1,13 @@
-package com.ultikits.ultitools.interfaces.impl.data.mysql;
+package com.ultikits.ultitools.interfaces.impl.data.sqlite;
 
-import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.util.ClassUtil;
-import cn.hutool.core.util.ReflectUtil;
-import cn.hutool.db.Db;
-import cn.hutool.db.Entity;
-import cn.hutool.db.sql.Condition;
+import java.lang.reflect.Field;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import javax.sql.DataSource;
+
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
@@ -13,27 +15,27 @@ import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+
+import cn.hutool.core.annotation.AnnotationUtil;
+import cn.hutool.core.util.ClassUtil;
+import cn.hutool.core.util.ReflectUtil;
+import cn.hutool.db.Db;
+import cn.hutool.db.Entity;
+import cn.hutool.db.sql.Condition;
 import lombok.SneakyThrows;
 
-import javax.sql.DataSource;
-import java.lang.reflect.Field;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-
-public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
+public class SQLiteDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
     private final Class<T> type;
-    private final DataSource dataSource;
     private final String tableName;
+    private final DataSource dataSource;
 
-    public MysqlDataOperator(DataSource dataSource, Class<T> type) {
+    public SQLiteDataOperator(DataSource dataSource, Class<T> type) {
         this.type = type;
-        this.dataSource = dataSource;
         Table tableAnnotation = AnnotationUtil.getAnnotation(type, Table.class);
         this.tableName = tableAnnotation.value();
         try {
             String tableSqlFromClazz = createTableSqlFromClazz(type);
+            this.dataSource = dataSource;
             Db.use(dataSource).execute(tableSqlFromClazz);
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -232,7 +234,7 @@ public class MysqlDataOperator<T extends AbstractDataEntity> implements DataOper
                 }
             }
         }
-        stringBuilder.append("PRIMARY KEY (`id`))ENGINE=InnoDB DEFAULT CHARSET=utf8");
+        stringBuilder.append("PRIMARY KEY (`id`))");
         return stringBuilder.toString();
     }
 
