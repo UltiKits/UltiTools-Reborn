@@ -110,7 +110,7 @@ public class CommandManager {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
                 packageName,
-                UltiTools.getInstance().getClass().getClassLoader()
+                UltiTools.getInstance().getUltiToolsClassLoader()
         );
         for (Class<?> clazz : classes) {
             try {
@@ -233,7 +233,7 @@ public class CommandManager {
             c.setAccessible(true);
 
             command = c.newInstance(name, plugin);
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             e.printStackTrace();
         }
 
@@ -250,7 +250,7 @@ public class CommandManager {
 
                 commandMap = (CommandMap) f.get(Bukkit.getPluginManager());
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             e.printStackTrace();
         }
 

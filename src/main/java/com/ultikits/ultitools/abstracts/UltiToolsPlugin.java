@@ -68,9 +68,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * <p>
      * UltiToolsPlugin的构造函数。仅用于模块开发。
      */
-    @SneakyThrows
     protected UltiToolsPlugin() {
-        InputStream inputStream = getInputStream();
+        InputStream inputStream = null;
+        try {
+            inputStream = getInputStream();
+        }catch (IOException e){
+            getLogger().error(e);
+        }
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
         version = pluginConfig.getString("version");
@@ -79,8 +83,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         loadAfter = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion = pluginConfig.getInt("api-version");
         mainClass = pluginConfig.getString("main");
-        inputStream.close();
-        reader.close();
+        try{
+            inputStream.close();
+            reader.close();
+        } catch (IOException e) {
+            getLogger().error(e);
+        }
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
         File file = new File(resourceFolderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
@@ -98,7 +106,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             language = new Language(file);
         }
         saveResources();
-        initConfig();
+        try{
+            initConfig();
+        } catch (IOException e) {
+            getLogger().error(e);
+        }
     }
 
     /**
@@ -229,7 +241,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (annotation != null && annotation.config()) {
             for (String packageName : DependencyUtils.getPluginPackages(this)) {
                 UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, this.getClass().getClassLoader()
+                        this, packageName, UltiTools.getInstance().getUltiToolsClassLoader()
                 );
             }
             return;

@@ -1,8 +1,12 @@
 package com.ultikits.ultitools.manager;
 
 import cn.hutool.core.comparator.VersionComparator;
+import cn.hutool.log.LogFactory;
+
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.ContextConfig;
+import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
+
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
@@ -23,6 +27,7 @@ public class DependenceManagers {
 
     public DependenceManagers(UltiTools plugin, ClassLoader classLoader) {
         this.classLoader = classLoader;
+        LogFactory.setCurrentLogFactory(new BukkitLogFactory());
         initAdventure(plugin);
         initSpringContext();
         initInventoryAPI(plugin);
