@@ -8,14 +8,12 @@ import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
-import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
-import cn.hutool.log.LogFactory;
 import lombok.Getter;
 import lombok.Setter;
 import net.milkbowl.vault.economy.Economy;
@@ -73,6 +71,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     @Setter
     private DataStore dataStore;
+    @Getter
+    private URLClassLoader ultiToolsClassLoader;
 
     /**
      * Returns the instance of the UltiTools.
@@ -119,7 +119,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onLoad() {
-        LogFactory.setCurrentLogFactory(new BukkitLogFactory());
         saveDefaultConfig();
         ultiTools = this;
         // Plugin classloader initialization
@@ -139,10 +138,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onEnable() {
         // Load all lib
-        URLClassLoader urlClassLoader = new URLClassLoader(getLibs(), getClassLoader());
+        ultiToolsClassLoader = new URLClassLoader(getLibs(), getClassLoader());
         // External bukkit libraries initialization
         try {
-            dependenceManagers = new DependenceManagers(this, urlClassLoader);
+            dependenceManagers = new DependenceManagers(this, ultiToolsClassLoader);
         } catch (Exception | NoClassDefFoundError error) {
             needLoadLib = true;
         }
@@ -193,7 +192,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            pluginManager.init(urlClassLoader);
+            pluginManager.init(ultiToolsClassLoader);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

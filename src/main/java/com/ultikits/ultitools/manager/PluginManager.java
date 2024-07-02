@@ -88,7 +88,7 @@ public class PluginManager {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(classLoader, pluginClass);
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
                     String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
@@ -130,7 +130,7 @@ public class PluginManager {
             plugin = initializePlugin(
                     classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
                     String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
@@ -164,7 +164,7 @@ public class PluginManager {
                 pluginContext.refresh();
                 pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
                     String.format("[UltiTools-API] Cannot initialize plugin for %s", plugin.getPluginName())
@@ -301,7 +301,7 @@ public class PluginManager {
                 );
             }
             return registerSelf;
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
             return false;

@@ -29,7 +29,7 @@ public class PackageScanUtils {
                     classes.add(c);
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.SEVERE, "Failed to scan annotated classes", e);
         }
         return classes;

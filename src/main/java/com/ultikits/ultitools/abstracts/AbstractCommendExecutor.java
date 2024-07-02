@@ -458,7 +458,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 String[] value = params.get(cmdParam.value());
                 try {
                     paramList.add(parseType(value, paramType));
-                } catch (Exception e) {
+                } catch (Exception | Error e) {
                     commandSender.sendMessage(ChatColor.RED + e.getMessage());
                     //noinspection CallToPrintStackTrace
                     e.printStackTrace();
