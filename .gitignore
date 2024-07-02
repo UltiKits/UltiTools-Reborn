@@ -120,3 +120,4 @@ run/
 **/access_key.txt
 
 doc/
+.vscode/
