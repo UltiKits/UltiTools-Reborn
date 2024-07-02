@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <artifactId>UltiTools-API</artifactId>
     <groupId>com.ultikits</groupId>
-    <version>6.0.9</version>
+    <version>6.1.0</version>
     <modelVersion>4.0.0</modelVersion>
     <name>UltiTools-API</name>
     <description>This project is the base of the Ultitools plugin development.</description>
@@ -56,7 +56,7 @@
             <plugin>
                 <groupId>org.projectlombok</groupId>
                 <artifactId>lombok-maven-plugin</artifactId>
-                <version>1.18.0.0</version>
+                <version>1.18.20.0</version>
                 <configuration>
                     <encoding>UTF-8</encoding>
                     <sourceDirectory>src/main/java</sourceDirectory>
@@ -197,7 +197,7 @@
             <plugin>
                 <groupId>org.sonatype.plugins</groupId>
                 <artifactId>nexus-staging-maven-plugin</artifactId>
-                <version>1.6.7</version>
+                <version>1.7.0</version>
                 <extensions>true</extensions>
                 <configuration>
                     <serverId>ultikits-sonatype</serverId>
@@ -214,7 +214,7 @@
                     <identifyString>UltiTools-API</identifyString>
                     <shortDescription>UltiTools-API</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>F:\SpigotServers\Paper\1.20.4\plugins</pluginFolder>
+                    <pluginFolder>/home/wisdomme/servers/plugins</pluginFolder>
                 </configuration>
             </plugin>
         </plugins>
@@ -259,14 +259,13 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <version>1.18.24</version>
+            <version>1.18.32</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.github.MilkBowl</groupId>
             <artifactId>VaultAPI</artifactId>
             <version>1.7.1</version>
-            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.alibaba</groupId>
@@ -351,7 +350,6 @@
             <groupId>me.clip</groupId>
             <artifactId>placeholderapi</artifactId>
             <version>2.11.4</version>
-            <scope>provided</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.zaxxer/HikariCP -->
         <dependency>

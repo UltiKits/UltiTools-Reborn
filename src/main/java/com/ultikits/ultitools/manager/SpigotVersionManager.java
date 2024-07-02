@@ -14,21 +14,28 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 public class SpigotVersionManager {
-    private final String serverVersion = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3].substring(1);
-
     /**
      * Match version wrapper.
      * <br>
      * 匹配版本包装器。
      *
-     * @return Version wrapper <br> 版本包装器
+     * @return Version wrapper <br>
+     *         版本包装器
      */
     @SneakyThrows
     public VersionWrapper match() {
+        String serverVersion;
+        try {
+            serverVersion = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3].substring(1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            serverVersion = "1_20_R4";
+        }
         VersionWrapper versionWrapper = null;
         File file = new File(UltiTools.getInstance().getDataFolder(), "/versions/" + serverVersion + ".jar");
         if (!file.exists()) {
-            HttpDownloadUtils.download(UltiTools.getEnv().getString("oss-url") + "/versions/" + serverVersion + ".jar", serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
+            HttpDownloadUtils.download(
+                    UltiTools.getEnv().getString("oss-url") + "/versions/" + serverVersion + ".jar",
+                    serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
         }
         URL url = file.toURI().toURL();
         URL[] urls = new URL[1];
@@ -42,10 +49,10 @@ public class SpigotVersionManager {
                 // 获取当前JarEntry对象的路径+文件名
                 if (entry.getName().contains(".class") && !entry.getName().contains("META-INF")) {
                     try {
-                        Class<?> aClass = urlClassLoader.loadClass(entry.getName().replace("/", ".").replace(".class", ""));
+                        Class<?> aClass = urlClassLoader
+                                .loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                         if (VersionWrapper.class.isAssignableFrom(aClass)) {
                             versionWrapper = (VersionWrapper) aClass.newInstance();
-                            break;
                         }
                     } catch (NoClassDefFoundError ignored) {
                     }

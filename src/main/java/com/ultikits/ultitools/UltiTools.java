@@ -7,14 +7,17 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.*;
 import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+
+import cn.hutool.log.LogFactory;
 import lombok.Getter;
 import lombok.Setter;
-import lombok.SneakyThrows;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
@@ -116,6 +119,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onLoad() {
+        LogFactory.setCurrentLogFactory(new BukkitLogFactory());
         saveDefaultConfig();
         ultiTools = this;
         // Plugin classloader initialization
@@ -132,7 +136,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         downloadRequiredDependencies();
     }
 
-    @SneakyThrows
     @Override
     public void onEnable() {
         // Load all lib
@@ -140,12 +143,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // External bukkit libraries initialization
         try {
             dependenceManagers = new DependenceManagers(this, urlClassLoader);
-        } catch (Exception e) {
+        } catch (Exception | NoClassDefFoundError error) {
             needLoadLib = true;
         }
         if (needLoadLib) {
             getServer().getScheduler().scheduleSyncRepeatingTask(this, () -> {
-                getLogger().log(Level.WARNING, "UltiTools初始化完成，但是无法加载依赖，请重启服务端！");
+                getLogger().log(Level.WARNING, "UltiTools初始化完成，但是还需重启加载依赖，请重启服务端！");
             }, 0, 20 * 30);
             return;
         }
@@ -174,6 +177,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 DataStoreManager.register(mysqlDataStore);
             }
         }
+        DataStoreManager.register(new SQLiteDataStore());
         String storeType = getConfig().getString("datasource.type");
         //noinspection DataFlowIssue
         dataStore = DataStoreManager.getDatastore(storeType);
@@ -209,7 +213,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         if (loginSuccess && getConfig().getBoolean("web-editor.enable")) {
             getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
-            PluginInitiationUtils.initWebsocket();
+            try {
+                PluginInitiationUtils.initWebsocket();
+            } catch (URISyntaxException e) {
+                getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！"));
+            }
         }
 
         Bukkit.getServicesManager().register(
@@ -409,10 +417,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * 下载必要的依赖。
      */
     private void downloadRequiredDependencies() {
+        String libFolder = new File(System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped").exists() ? 
+        System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped" + File.separator + "UltiTools" + File.separator + "lib" 
+        : UltiTools.getInstance().getDataFolder() + File.separator + "lib";
+        if (!new File(libFolder).exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            new File(libFolder).mkdirs();
+        }
         YamlConfiguration env = UltiTools.getEnv();
         List<String> missingLib = env.getStringList("libraries")
                 .stream()
-                .map(lib -> new File(UltiTools.getInstance().getDataFolder() + "/lib", lib))
+                .map(lib -> new File(libFolder, lib))
                 .filter(file -> !file.exists()).map(File::getName)
                 .collect(Collectors.toList());
         if (missingLib.isEmpty()) {
@@ -426,7 +441,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             double i1 = (double) i / missingLib.size();
             int percentage = (int) (i1 * 100);
             printLoadingBar(percentage);
-            HttpDownloadUtils.download(url, name, UltiTools.getInstance().getDataFolder() + "/lib");
+            HttpDownloadUtils.download(url, name, libFolder);
             needLoadLib = true;
         }
         printLoadingBar(100);

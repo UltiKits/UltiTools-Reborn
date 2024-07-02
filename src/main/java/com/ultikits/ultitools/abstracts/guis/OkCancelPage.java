@@ -91,19 +91,27 @@ public abstract class OkCancelPage extends Gui {
         lastRowBackground.setName(" ");
         this.fillRow(lastRowBackground, getSize() / 9 - 1);
         Icon ok = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
-        ok.setName(coloredMsg(UltiTools.getInstance().i18n("OK")));
+        ok.setName(coloredMsg(getOkName()));
         ok.onClick((e) -> {
             onOk(e);
             player.closeInventory();
         });
         Icon cancel = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED));
-        cancel.setName(coloredMsg(UltiTools.getInstance().i18n("取消")));
+        cancel.setName(coloredMsg(getCancelName()));
         cancel.onClick((e) -> {
             onCancel(e);
             player.closeInventory();
         });
         this.addItem(getLastSlot() - 3, ok);
         this.addItem(getLastSlot() - 5, cancel);
+    }
+
+    public String getOkName() {
+        return UltiTools.getInstance().i18n("OK");
+    }
+
+    public String getCancelName() {
+        return UltiTools.getInstance().i18n("取消");
     }
 
     /**

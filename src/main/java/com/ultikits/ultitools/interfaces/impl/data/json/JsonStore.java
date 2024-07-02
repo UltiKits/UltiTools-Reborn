@@ -28,6 +28,8 @@ public class JsonStore implements DataStore {
     private static final Map<Class<?>, Cached> dataOperatorMap = new ConcurrentHashMap<>();
 
     static {
+        int flushRate = UltiTools.getInstance().getConfig().getInt("datasource.flushRate");
+        flushRate = flushRate == 0 ? 10 : flushRate;
         new BukkitRunnable() {
 
             @Override
@@ -37,7 +39,7 @@ public class JsonStore implements DataStore {
                     cached.gc();
                 }
             }
-        }.runTaskTimerAsynchronously(UltiTools.getInstance(), 20L, 200L);
+        }.runTaskTimerAsynchronously(UltiTools.getInstance(), 20L, 20L * flushRate);
     }
 
     private final String storeLocation;
