@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.services;
 
 import com.ultikits.ultitools.interfaces.BaseService;
+import com.ultikits.ultitools.widgets.Toast;
 import org.bukkit.Sound;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
@@ -123,4 +124,8 @@ public interface NotificationService extends BaseService {
      * @return Whether the title was sent successfully <p> 是否成功发送了标题
      */
     boolean sendTitleNotification(Player player, String title, String subtitle, Sound sound, int fadeIn, int stay, int fadeOut);
+
+    boolean sendActionBarNotification(Player player, String message);
+
+    boolean sendToastNotification(Player player, String icon, String message, Toast.Style style);
 }

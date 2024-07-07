@@ -2,6 +2,7 @@ package com.ultikits.ultitools.services.impl;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.widgets.Toast;
 import org.bukkit.Bukkit;
 import org.bukkit.Sound;
 import org.bukkit.boss.BarColor;
@@ -129,6 +130,18 @@ public class InMemoryNotificationService implements NotificationService {
             player.playSound(player.getLocation(), sound, 10, 1);
         }
         player.sendTitle(title, subtitle, fadeIn, stay, fadeOut);
+        return true;
+    }
+
+    @Override
+    public boolean sendActionBarNotification(Player player, String message) {
+        UltiTools.getInstance().getVersionWrapper().sendActionBar(player, message);
+        return true;
+    }
+
+    @Override
+    public boolean sendToastNotification(Player player, String icon, String message, Toast.Style style) {
+        Toast.displayTo(player, icon, message, style);
         return true;
     }
 }
