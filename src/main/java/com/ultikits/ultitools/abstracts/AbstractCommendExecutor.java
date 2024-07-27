@@ -193,6 +193,12 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             String format = entry.getKey();
             String[] formatArgs = format.split(" ");
+
+            // 对数组越界异常的处理
+            if (formatArgs.length > args.length) {
+                continue;
+            }
+
             boolean match = true;
 
             for (int i = 0; i < formatArgs.length - 1; i++) {
@@ -200,11 +206,6 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                     match = false;
                     break;
                 }
-            }
-
-            // 对数组越界异常的处理
-            if (match && formatArgs.length > args.length) {
-                continue;
             }
 
             if (match && matchesLastArgument(formatArgs[formatArgs.length - 1], args[formatArgs.length - 1])) {
