@@ -202,6 +202,10 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 }
             }
 
+            if(match && formatArgs.length > args.length){ // 对数组越界异常的处理
+                continue;
+            }
+
             if (match && matchesLastArgument(formatArgs[formatArgs.length - 1], args[formatArgs.length - 1])) {
                 return entry.getValue();
             }
@@ -867,7 +871,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         Method method = matchMethod(strings);
         if (method == null) {
             commandSender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("未知指令，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
-            handleHelp(commandSender);
+//            handleHelp(commandSender); 多余的处理
             return true;
         }
         if (!checkSender(commandSender) || !checkSender(commandSender, method)) {
