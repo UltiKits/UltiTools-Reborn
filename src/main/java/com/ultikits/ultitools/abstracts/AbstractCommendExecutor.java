@@ -202,7 +202,8 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 }
             }
 
-            if(match && formatArgs.length > args.length){ // 对数组越界异常的处理
+            // 对数组越界异常的处理
+            if (match && formatArgs.length > args.length) {
                 continue;
             }
 
