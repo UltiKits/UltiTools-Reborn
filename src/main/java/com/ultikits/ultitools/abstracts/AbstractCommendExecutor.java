@@ -871,7 +871,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         Method method = matchMethod(strings);
         if (method == null) {
             commandSender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("未知指令，请使用/%s %s获取帮助"), command.getName(), getHelpCommand()));
-//            handleHelp(commandSender); 多余的处理
+            handleHelp(commandSender);
             return true;
         }
         if (!checkSender(commandSender) || !checkSender(commandSender, method)) {
