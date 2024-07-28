@@ -313,7 +313,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (permission.isEmpty() || sender.hasPermission(permission)) {
             return true;
         }
-        sender.sendMessage(ChatColor.GRAY + "执行此命令需要 " + ChatColor.WHITE + permission + ChatColor.GRAY + " 权限");
+        sender.sendMessage(String.format(UltiTools.getInstance().i18n("需要权限"), permission));
         return false;
     }
 
@@ -339,7 +339,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (sender.hasPermission(permission)) {
             return true;
         }
-        sender.sendMessage(ChatColor.GRAY + "执行此命令需要 " + ChatColor.WHITE + permission + ChatColor.GRAY + " 权限");
+        sender.sendMessage(String.format(UltiTools.getInstance().i18n("需要权限"), permission));
         return false;
     }
 
@@ -976,7 +976,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                             commandArgsStr += ("§7" + args[j] + " ");
                         }
                         // 告知错误位置
-                        commandSender.sendMessage(ChatColor.RED + "参数错误: " + ChatColor.GRAY + "/" + command.getName() + commandArgsStr + ChatColor.RED + ChatColor.UNDERLINE + args[min] + ChatColor.RESET + " " + ChatColor.RED + "<--" + ChatColor.ITALIC + "[此处错误]");
+                        commandSender.sendMessage(String.format(UltiTools.getInstance().i18n("参数错误"), command.getName(), commandArgsStr, args[min]));
                         break;
                     }
                 }
@@ -994,10 +994,10 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
                 }
                 missingParameters = missingParameters.trim();
                 // 告知缺少参数的位置
-                commandSender.sendMessage(ChatColor.RED + "缺少参数: " + ChatColor.GRAY + "/" + command.getName() + commandArgsStr + ChatColor.RED + ChatColor.UNDERLINE + missingParameters + ChatColor.RESET + " " + ChatColor.RED + "<--" + ChatColor.ITALIC + "[缺少部分]");
+                commandSender.sendMessage(String.format(UltiTools.getInstance().i18n("缺少参数"), command.getName(), commandArgsStr, missingParameters));
             }
             // 提示正确用法
-            commandSender.sendMessage(ChatColor.YELLOW + "正确用法: " + ChatColor.GRAY + "/" + command.getName() + " " + format);
+            commandSender.sendMessage(String.format(UltiTools.getInstance().i18n("正确用法"), command.getName(), format));
             return false;
         }
         return true;
