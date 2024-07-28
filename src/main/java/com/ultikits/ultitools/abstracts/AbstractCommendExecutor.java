@@ -194,12 +194,29 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             String format = entry.getKey();
             String[] formatArgs = format.split(" ");
 
-            // 对数组越界异常的处理
-            if (formatArgs.length > args.length) {
+            boolean match = true;
+
+            // 检查参数长度是否一致
+            if (formatArgs.length != args.length) {
+                // 参数长度不一致 取可配对参数的最小值
+                int min = Math.min(formatArgs.length, args.length);
+
+                // 逐个匹配
+                for (int i = 0; i < min; i++) {
+                    if (!matchesArgument(formatArgs[i], args[i])) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                // 如果所有参数都匹配，返回这个方法
+                if (match) {
+                    return entry.getValue();
+                }
+
+                // 如果不完全匹配，继续下一次循环
                 continue;
             }
-
-            boolean match = true;
 
             for (int i = 0; i < formatArgs.length - 1; i++) {
                 if (!matchesArgument(formatArgs[i], args[i])) {
@@ -296,7 +313,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (permission.isEmpty() || sender.hasPermission(permission)) {
             return true;
         }
-        sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
+        sender.sendMessage(UltiTools.getInstance().i18n("§7执行此命令需要 §f"+ permission +" §7权限"));
         return false;
     }
 
@@ -322,7 +339,7 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
         if (sender.hasPermission(permission)) {
             return true;
         }
-        sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
+        sender.sendMessage(UltiTools.getInstance().i18n("§7执行此命令需要 §f"+ permission +" §7权限"));
         return false;
     }
 
@@ -876,6 +893,10 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             handleHelp(commandSender);
             return true;
         }
+        // 检查参数长度
+        if (!checkParameters(strings, method, commandSender,command)) {
+            return true;
+        }
         if (!checkSender(commandSender) || !checkSender(commandSender, method)) {
             return true;
         }
@@ -926,6 +947,58 @@ public abstract class AbstractCommendExecutor implements TabExecutor {
             bukkitRunnable.runTaskAsynchronously(UltiTools.getInstance());
         } else {
             bukkitRunnable.runTask(UltiTools.getInstance());
+        }
+        return true;
+    }
+
+    private boolean checkParameters(String[] args, Method method, CommandSender commandSender, Command command) {
+        // 从 mappings 中获取 method 对应的格式字符串
+        String format = mappings.inverse().get(method);
+        // 按空格分割格式字符串
+        String[] formatArgs = format.split(" ");
+
+        // 如果格式字符串中的参数数量与传入的参数数量不一致
+        if (formatArgs.length != args.length) {
+            int min = Math.min(formatArgs.length, args.length);
+
+            // 如果传入的参数多于格式字符串中的参数
+            if (formatArgs.length < args.length) {
+                for (int i = 0; i < min; i++) {
+                    // 检查最后一个格式参数是否是变长参数
+                    if (formatArgs[formatArgs.length - 1].endsWith("...>")) {
+                        return true;
+                    }
+                    // 如果当前参数不匹配
+                    if (matchesArgument(formatArgs[i], args[i])) {
+                        // 拼接传入的参数字符串
+                        String commandArgsStr = " ";
+                        for (int j = 0; j < min; j++) {
+                            commandArgsStr += ("§7" + args[j] + " ");
+                        }
+                        // 告知错误位置
+                        commandSender.sendMessage("§c参数错误: §7/" + command.getName() + commandArgsStr + "§c§n" + args[min] + "§r §c<--§o[此处错误]");
+                        break;
+                    }
+                }
+            } else {
+                // 如果传入的参数少于格式字符串中的参数
+                // 拼接传入的参数字符串
+                String commandArgsStr = " ";
+                for (int j = 0; j < min; j++) {
+                    commandArgsStr += ("§7" + args[j] + " ");
+                }
+                // 拼接缺少的参数字符串
+                String missingParameters = "";
+                for (int j = min; j < formatArgs.length; j++) {
+                    missingParameters += ("§c§n" + formatArgs[j] + " ");
+                }
+                missingParameters = missingParameters.trim();
+                // 告知缺少参数的位置
+                commandSender.sendMessage("§c缺少参数: §7/" + command.getName() + commandArgsStr + "§c§n" + missingParameters + "§r §c<--§o[缺少部分]");
+            }
+            // 提示正确用法
+            commandSender.sendMessage("§e正确用法: §7/" + command.getName() + " " + format);
+            return false;
         }
         return true;
     }
