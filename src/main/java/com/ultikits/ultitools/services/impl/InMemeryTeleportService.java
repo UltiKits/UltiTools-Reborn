@@ -9,7 +9,6 @@ import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;

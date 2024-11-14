@@ -2,7 +2,6 @@ package com.ultikits.ultitools.utils;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import org.springframework.context.annotation.ComponentScan;
 
 public class DependencyUtils {
 
