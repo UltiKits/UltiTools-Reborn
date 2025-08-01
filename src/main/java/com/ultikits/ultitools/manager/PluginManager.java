@@ -8,6 +8,8 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.SecurityPolicy;
 import lombok.Getter;
 import org.bukkit.Bukkit;
 
@@ -20,6 +22,8 @@ import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.Set;
+import java.util.HashSet;
 
 /**
  * UltiTools plugin manager.
@@ -238,28 +242,110 @@ public class PluginManager {
      * @return Plugin main class <br> 模块主类
      */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) {
+        // 验证jar文件安全性
+        if (!validateJarFile(pluginJar)) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
+            return null;
+        }
+        
         try (JarFile jarFile = new JarFile(pluginJar)) {
             Enumeration<JarEntry> entryEnumeration = jarFile.entries();
+            Set<String> scannedClasses = new HashSet<>();
+            
             while (entryEnumeration.hasMoreElements()) {
                 JarEntry entry = entryEnumeration.nextElement();
                 if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
                     continue;
                 }
+                
                 String className = entry
                         .getName()
                         .replace('/', '.')
                         .replace(".class", "");
+                
+                // 防止重复扫描同一个类
+                if (scannedClasses.contains(className)) {
+                    continue;
+                }
+                scannedClasses.add(className);
+                
+                // 限制扫描的类数量，防止拒绝服务攻击
+                if (scannedClasses.size() > 1000) {
+                    Bukkit.getLogger().log(Level.WARNING, 
+                        "[UltiTools-API] Too many classes in jar, scanning stopped: " + pluginJar.getName());
+                    break;
+                }
+                
                 try {
-                    Class<?> aClass = classLoader.loadClass(className);
+                    // 使用安全的类加载方法
+                    Class<?> aClass = ClassLoaderUtils.loadPluginClass(className);
                     if (IPlugin.class.isAssignableFrom(aClass)) {
                         return aClass.asSubclass(UltiToolsPlugin.class);
                     }
-                } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
+                } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                    // 记录但不中断，继续扫描其他类
+                    Bukkit.getLogger().log(Level.FINE, 
+                        "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
+                } catch (SecurityException e) {
+                    // 安全异常需要记录
+                    Bukkit.getLogger().log(Level.WARNING, 
+                        "[UltiTools-API] Security violation while loading class: " + className + " - " + e.getMessage());
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
         }
         return null;
+    }
+    
+    /**
+     * Validate jar file security.
+     * <br>
+     * 验证jar文件安全性。
+     *
+     * @param jarFile jar file to validate <br> 要验证的jar文件
+     * @return true if valid, false otherwise <br> 如果有效则为true，否则为false
+     */
+    private boolean validateJarFile(File jarFile) {
+        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
+            return false;
+        }
+        
+        // 检查文件扩展名
+        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
+            return false;
+        }
+        
+        // 验证jar文件结构
+        try (JarFile jar = new JarFile(jarFile)) {
+            // 检查是否有plugin.yml
+            if (jar.getEntry("plugin.yml") == null) {
+                Bukkit.getLogger().log(Level.WARNING, 
+                    "[UltiTools-API] No plugin.yml found in jar: " + jarFile.getName());
+                return false;
+            }
+            
+            // 统计条目数量
+            Enumeration<JarEntry> entries = jar.entries();
+            int entryCount = 0;
+            while (entries.hasMoreElements()) {
+                entries.nextElement();
+                entryCount++;
+            }
+            
+            // 使用 SecurityPolicy 验证文件结构
+            if (!SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount)) {
+                return false;
+            }
+            
+            return true;
+        } catch (IOException e) {
+            Bukkit.getLogger().log(Level.WARNING, 
+                "[UltiTools-API] Failed to validate jar file: " + jarFile.getName(), e);
+            return false;
+        }
     }
 
 
@@ -329,26 +415,97 @@ public class PluginManager {
      * @return UltiTools plugin instance <br> UltiTools模块实例
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        // 验证构造器参数安全性
+        if (!validateConstructorArgs(constructorArgs)) {
+            throw new SecurityException("Invalid constructor arguments provided");
+        }
+        
         SimpleContainer pluginContext = new SimpleContainer();
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(classLoader);
         try {
-            // Create instance with constructor arguments
-            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(
-                // Extract parameter types from constructor args
-                java.util.Arrays.stream(constructorArgs)
-                    .map(Object::getClass)
-                    .toArray(Class[]::new)
-            );
-            UltiToolsPlugin plugin = constructor.newInstance(constructorArgs);
+            UltiToolsPlugin plugin;
+            
+            if (constructorArgs.length == 0) {
+                // 使用默认构造器
+                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
+                plugin = constructor.newInstance();
+            } else {
+                // 验证构造器参数类型安全性
+                Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
+                for (int i = 0; i < constructorArgs.length; i++) {
+                    if (constructorArgs[i] == null) {
+                        throw new SecurityException("Null constructor argument not allowed at index: " + i);
+                    }
+                    paramTypes[i] = constructorArgs[i].getClass();
+                    
+                    // 验证参数类型是否安全
+                    if (!isSafeParameterType(paramTypes[i])) {
+                        throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
+                    }
+                }
+                
+                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
+                plugin = constructor.newInstance(constructorArgs);
+            }
+            
             pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to initialize plugin", e);
+            throw new RuntimeException("Failed to initialize plugin: " + pluginClass.getName(), e);
         }
+    }
+    
+    /**
+     * Validate constructor arguments for security.
+     * <br>
+     * 验证构造器参数的安全性。
+     *
+     * @param args constructor arguments <br> 构造器参数
+     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     */
+    private boolean validateConstructorArgs(Object... args) {
+        if (args == null) {
+            return true; // null args array is acceptable
+        }
+        
+        // 限制参数数量
+        if (args.length > 10) {
+            Bukkit.getLogger().log(Level.WARNING, 
+                "[UltiTools-API] Too many constructor arguments: " + args.length);
+            return false;
+        }
+        
+        for (Object arg : args) {
+            if (arg == null) {
+                continue; // null individual args will be checked later
+            }
+            
+            // 检查是否是危险类型
+            Class<?> argClass = arg.getClass();
+            if (!isSafeParameterType(argClass)) {
+                Bukkit.getLogger().log(Level.WARNING, 
+                    "[UltiTools-API] Unsafe constructor argument type: " + argClass.getName());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Check if parameter type is safe for constructor injection.
+     * <br>
+     * 检查参数类型是否对构造器注入安全。
+     *
+     * @param clazz parameter class <br> 参数类
+     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     */
+    private boolean isSafeParameterType(Class<?> clazz) {
+        return SecurityPolicy.isSafeParameterType(clazz);
     }
 
     /**
