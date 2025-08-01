@@ -1,0 +1,194 @@
+package com.ultikits.ultitools.context;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.*;
+
+import java.io.File;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Component scanner to find and register components.
+ * <br>
+ * 组件扫描器，用于查找和注册组件。
+ */
+public class ComponentScanner {
+    private final SimpleContainer container;
+
+    public ComponentScanner(SimpleContainer container) {
+        this.container = container;
+    }
+
+    /**
+     * Scan packages for components.
+     * <br>
+     * 扫描包以查找组件。
+     *
+     * @param basePackages packages to scan <br> 要扫描的包
+     */
+    public void scanPackages(String... basePackages) {
+        for (String basePackage : basePackages) {
+            scanPackage(basePackage);
+        }
+    }
+
+    /**
+     * Scan a single package for components.
+     * <br>
+     * 扫描单个包以查找组件。
+     *
+     * @param basePackage package to scan <br> 要扫描的包
+     */
+    public void scanPackage(String basePackage) {
+        try {
+            ClassLoader classLoader = container.getClassLoader() != null ? 
+                container.getClassLoader() : UltiTools.getJavaPluginClassLoader();
+            
+            String path = basePackage.replace('.', '/');
+            URL resource = classLoader.getResource(path);
+            
+            if (resource != null) {
+                File directory = new File(resource.getFile());
+                if (directory.exists()) {
+                    scanDirectory(directory, basePackage, classLoader);
+                }
+            }
+        } catch (Exception e) {
+            // Log warning and continue
+            System.err.println("Failed to scan package: " + basePackage + ", " + e.getMessage());
+        }
+    }
+
+    /**
+     * Scan directory for class files.
+     * <br>
+     * 扫描目录以查找类文件。
+     */
+    private void scanDirectory(File directory, String packageName, ClassLoader classLoader) {
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    scanDirectory(file, packageName + "." + file.getName(), classLoader);
+                } else if (file.getName().endsWith(".class")) {
+                    String className = packageName + "." + file.getName().substring(0, file.getName().length() - 6);
+                    try {
+                        Class<?> clazz = classLoader.loadClass(className);
+                        processClass(clazz);
+                    } catch (ClassNotFoundException e) {
+                        // Ignore and continue
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Process a class for component annotations.
+     * <br>
+     * 处理类的组件注解。
+     */
+    private void processClass(Class<?> clazz) {
+        // Check for component annotations
+        if (isComponent(clazz)) {
+            registerComponent(clazz);
+        }
+        
+        // Check for configuration annotations
+        if (clazz.isAnnotationPresent(Configuration.class)) {
+            registerConfiguration(clazz);
+        }
+    }
+
+    /**
+     * Check if class is a component.
+     * <br>
+     * 检查类是否是组件。
+     */
+    private boolean isComponent(Class<?> clazz) {
+        return clazz.isAnnotationPresent(Component.class) ||
+               clazz.isAnnotationPresent(Service.class) ||
+               clazz.isAnnotationPresent(EventListener.class) ||
+               hasComponentAnnotation(clazz);
+    }
+
+    /**
+     * Check if class has meta-component annotation.
+     * <br>
+     * 检查类是否有元组件注解。
+     */
+    private boolean hasComponentAnnotation(Class<?> clazz) {
+        for (Annotation annotation : clazz.getAnnotations()) {
+            if (annotation.annotationType().isAnnotationPresent(Component.class)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Register a component class.
+     * <br>
+     * 注册组件类。
+     */
+    private void registerComponent(Class<?> clazz) {
+        try {
+            String beanName = getBeanName(clazz);
+            BeanDefinition definition = new BeanDefinition(clazz, beanName);
+            container.registerBeanDefinition(beanName, definition);
+        } catch (Exception e) {
+            System.err.println("Failed to register component: " + clazz.getName() + ", " + e.getMessage());
+        }
+    }
+
+    /**
+     * Register a configuration class.
+     * <br>
+     * 注册配置类。
+     */
+    private void registerConfiguration(Class<?> clazz) {
+        try {
+            String beanName = getBeanName(clazz);
+            Object configInstance = clazz.getDeclaredConstructor().newInstance();
+            container.registerSingleton(beanName, configInstance);
+            
+            // Process @Bean methods
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(Bean.class)) {
+                    processBeanMethod(configInstance, method);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to register configuration: " + clazz.getName() + ", " + e.getMessage());
+        }
+    }
+
+    /**
+     * Process @Bean method.
+     * <br>
+     * 处理@Bean方法。
+     */
+    private void processBeanMethod(Object configInstance, Method method) {
+        try {
+            method.setAccessible(true);
+            Object bean = method.invoke(configInstance);
+            String beanName = method.getName();
+            container.registerSingleton(beanName, bean);
+        } catch (Exception e) {
+            System.err.println("Failed to process bean method: " + method.getName() + ", " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get bean name from class.
+     * <br>
+     * 从类获取Bean名称。
+     */
+    private String getBeanName(Class<?> clazz) {
+        String simpleName = clazz.getSimpleName();
+        return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
+    }
+}

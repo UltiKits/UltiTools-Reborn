@@ -6,13 +6,14 @@ import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.utils.DependencyUtils;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.utils.AnnotationUtils;
 import lombok.Getter;
 import org.bukkit.Bukkit;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -150,7 +151,7 @@ public class PluginManager {
      */
     public boolean register(UltiToolsPlugin plugin) {
         try {
-            AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+            SimpleContainer pluginContext = new SimpleContainer();
             plugin.setContext(pluginContext);
             pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
             pluginContext.registerShutdownHook();
@@ -160,7 +161,16 @@ public class PluginManager {
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
                 Class<?> clazz = contextEntry.value();
-                pluginContext.register(clazz);
+                // Register the context entry class as a bean
+                try {
+                    Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                    pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(
+                            Level.WARNING,
+                            String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                    );
+                }
                 pluginContext.refresh();
                 pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
             }
@@ -319,17 +329,26 @@ public class PluginManager {
      * @return UltiTools plugin instance <br> UltiTools模块实例
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
-        AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+        SimpleContainer pluginContext = new SimpleContainer();
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(classLoader);
-        pluginContext.registerBean(pluginClass, constructorArgs);
-        pluginContext.refresh();
-        UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
-        pluginContext.setDisplayName(plugin.getPluginName());
-        pluginContext.setId(plugin.getPluginName());
-        plugin.setContext(pluginContext);
-        return plugin;
+        try {
+            // Create instance with constructor arguments
+            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(
+                // Extract parameter types from constructor args
+                java.util.Arrays.stream(constructorArgs)
+                    .map(Object::getClass)
+                    .toArray(Class[]::new)
+            );
+            UltiToolsPlugin plugin = constructor.newInstance(constructorArgs);
+            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+            pluginContext.refresh();
+            plugin.setContext(pluginContext);
+            return plugin;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize plugin", e);
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.services.impl;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.Sounds;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.Bukkit;

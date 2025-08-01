@@ -18,8 +18,8 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.utils.AnnotationUtils;
 
 import java.io.*;
 import java.net.JarURLConnection;
@@ -60,7 +60,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private String resourceFolderPath;
     @Setter
     @Getter
-    private AnnotationConfigApplicationContext context;
+    private SimpleContainer context;
 
 
     /**
