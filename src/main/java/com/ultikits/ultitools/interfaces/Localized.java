@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import com.ultikits.ultitools.annotations.I18n;
-import org.springframework.core.annotation.AnnotationUtils;
+import com.ultikits.ultitools.utils.AnnotationUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;

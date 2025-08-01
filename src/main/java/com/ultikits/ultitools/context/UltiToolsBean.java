@@ -6,9 +6,8 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import com.ultikits.ultitools.annotations.Bean;
+import com.ultikits.ultitools.annotations.Configuration;
 
 @Configuration
 public class UltiToolsBean {

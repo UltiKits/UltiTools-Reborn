@@ -40,7 +40,7 @@ public class SpigotVersionManager {
         URL url = file.toURI().toURL();
         URL[] urls = new URL[1];
         urls[0] = url;
-        URLClassLoader urlClassLoader = new URLClassLoader(urls, SpigotVersionManager.class.getClassLoader());
+        URLClassLoader urlClassLoader = new URLClassLoader(urls, UltiTools.getJavaPluginClassLoader());
         try (JarFile jarFile = new JarFile(file)) {
             Enumeration<JarEntry> entryEnumeration = jarFile.entries();
             while (entryEnumeration.hasMoreElements()) {
@@ -52,7 +52,7 @@ public class SpigotVersionManager {
                         Class<?> aClass = urlClassLoader
                                 .loadClass(entry.getName().replace("/", ".").replace(".class", ""));
                         if (VersionWrapper.class.isAssignableFrom(aClass)) {
-                            versionWrapper = (VersionWrapper) aClass.newInstance();
+                            versionWrapper = (VersionWrapper) aClass.getDeclaredConstructor().newInstance();
                         }
                     } catch (NoClassDefFoundError ignored) {
                     }

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.services.impl;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.Sounds;
 import com.ultikits.ultitools.services.TeleportService;
 import org.bukkit.Bukkit;
@@ -9,7 +10,6 @@ import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;

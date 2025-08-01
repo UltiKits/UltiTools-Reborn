@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.services.impl;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.widgets.Toast;
 import org.bukkit.Bukkit;
@@ -10,7 +11,6 @@ import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;

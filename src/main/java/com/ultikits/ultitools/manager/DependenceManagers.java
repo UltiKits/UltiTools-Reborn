@@ -4,13 +4,12 @@ import cn.hutool.core.comparator.VersionComparator;
 import cn.hutool.log.LogFactory;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.context.ContextConfig;
+import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
 
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 /**
  * Dependence managers.
@@ -21,15 +20,14 @@ public class DependenceManagers {
     @Getter
     private BukkitAudiences adventure;
     @Getter
-    private AnnotationConfigApplicationContext context;
+    private SimpleContainer context;
     private VersionComparator versionComparator;
-    private final ClassLoader classLoader;
 
     public DependenceManagers(UltiTools plugin, ClassLoader classLoader) {
-        this.classLoader = classLoader;
         LogFactory.setCurrentLogFactory(new BukkitLogFactory());
+        this.context = new SimpleContainer();
+        this.context.setClassLoader(classLoader);
         initAdventure(plugin);
-        initSpringContext();
         initInventoryAPI(plugin);
     }
 
@@ -42,20 +40,6 @@ public class DependenceManagers {
      */
     public void initAdventure(UltiTools plugin) {
         adventure = BukkitAudiences.create(plugin);
-    }
-
-    /**
-     * Initialize spring context.
-     * <br>
-     * 初始化spring上下文。
-     */
-    public void initSpringContext() {
-        // Spring context initialization
-        context = new AnnotationConfigApplicationContext();
-        context.setClassLoader(classLoader);
-        context.register(ContextConfig.class);
-        context.refresh();
-        context.registerShutdownHook();
     }
 
     /**
@@ -95,11 +79,11 @@ public class DependenceManagers {
     }
 
     /**
-     * Close spring context.
+     * Close context.
      * <br>
-     * 关闭spring上下文。
+     * 关闭容器上下文。
      */
-    public void closeSpringContext() {
+    public void closeContext() {
         if (context != null) {
             context.close();
         }

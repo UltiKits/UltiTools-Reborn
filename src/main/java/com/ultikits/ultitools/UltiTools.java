@@ -269,7 +269,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         dependenceManagers.closeAdventure();
         stopWebsocket();
         pluginManager.close();
-        dependenceManagers.closeSpringContext();
+        dependenceManagers.closeContext();
         getCommandManager().close();
         DataStoreManager.close();
         getConfigManager().saveAll();
@@ -460,5 +460,23 @@ public final class UltiTools extends JavaPlugin implements Localized {
         loadingBar.append(percentage);
         loadingBar.append("%");
         Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + loadingBar);
+    }
+
+    /**
+     * Get the JavaPlugin class loader.
+     * This ensures all class loading operations use the correct parent class loader.
+     * <br>
+     * 获取JavaPlugin类加载器。
+     * 这确保所有类加载操作都使用正确的父类加载器。
+     *
+     * @return JavaPlugin class loader <br> JavaPlugin类加载器
+     */
+    public static ClassLoader getJavaPluginClassLoader() {
+        UltiTools instance = getInstance();
+        if (instance != null) {
+            return instance.getClass().getClassLoader();
+        }
+        // Fallback for testing environments where plugin is not initialized
+        return Thread.currentThread().getContextClassLoader();
     }
 }
