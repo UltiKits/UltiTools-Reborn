@@ -1,15 +1,24 @@
 package com.ultikits.ultitools.context;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for SimpleContainer class.
@@ -20,14 +29,27 @@ import static org.mockito.Mockito.*;
 class SimpleContainerTest {
 
     private SimpleContainer container;
+    private AutoCloseable mockitoCloseable;
 
     @Mock
     private BeanPostProcessor mockBeanPostProcessor;
 
     @BeforeEach
     void setUp() {
-        MockitoAnnotations.openMocks(this);
+        mockitoCloseable = MockitoAnnotations.openMocks(this);
         container = new SimpleContainer();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        // Close container to clean up beans
+        if (container != null) {
+            container.close();
+        }
+        // Close Mockito resources
+        if (mockitoCloseable != null) {
+            mockitoCloseable.close();
+        }
     }
 
     @Test
@@ -212,15 +234,16 @@ class SimpleContainerTest {
     @Test
     @DisplayName("Should close container properly")
     void testCloseContainer() {
-        // Given
-        container.registerSingleton("test", "instance");
-        assertTrue(container.containsBean("test"));
+        // Given - use a separate container for this test
+        SimpleContainer testContainer = new SimpleContainer();
+        testContainer.registerSingleton("test", "instance");
+        assertTrue(testContainer.containsBean("test"));
 
         // When
-        container.close();
+        testContainer.close();
 
         // Then
-        assertFalse(container.containsBean("test"));
+        assertFalse(testContainer.containsBean("test"));
     }
 
     @Test
@@ -228,16 +251,25 @@ class SimpleContainerTest {
     void testParentChildContainer() {
         // Given
         SimpleContainer parent = new SimpleContainer();
-        parent.registerSingleton("parentBean", "parentValue");
-        
-        SimpleContainer child = new SimpleContainer(parent);
+        SimpleContainer child = null;
+        try {
+            parent.registerSingleton("parentBean", "parentValue");
+            
+            child = new SimpleContainer(parent);
 
-        // When
-        Object parentBean = child.getBean("parentBean");
+            // When
+            Object parentBean = child.getBean("parentBean");
 
-        // Then
-        assertNotNull(parentBean);
-        assertEquals("parentValue", parentBean);
+            // Then
+            assertNotNull(parentBean);
+            assertEquals("parentValue", parentBean);
+        } finally {
+            // Clean up child first, then parent
+            if (child != null) {
+                child.close();
+            }
+            parent.close();
+        }
     }
 
     // Test helper class

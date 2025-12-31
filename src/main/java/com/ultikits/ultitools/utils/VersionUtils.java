@@ -1,18 +1,36 @@
 package com.ultikits.ultitools.utils;
 
+import static com.ultikits.ultitools.utils.PluginInstallUtils.getPlugin;
+import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVersion;
+
+import com.ultikits.ultitools.entities.PluginEntity;
+
 import cn.hutool.core.comparator.VersionComparator;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
-import com.ultikits.ultitools.entities.PluginEntity;
 
-import static com.ultikits.ultitools.utils.PluginInstallUtils.getPlugin;
-import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVersion;
-
+/**
+ * Utility class for version checking and comparison operations.
+ * Provides methods to check for plugin updates and compare semantic versions.
+ * Uses Hutool's VersionComparator for semantic version comparison.
+ * <br>
+ * 版本检查和比较操作的实用工具类。
+ * 提供检查插件更新和比较语义版本的方法。
+ * 使用 Hutool 的 VersionComparator 进行语义版本比较。
+ *
+ * @author wisdomme
+ * @since 6.0.0
+ * @see cn.hutool.core.comparator.VersionComparator
+ */
 public class VersionUtils {
 
     /**
-     * @return UltiTools newest version <br> UltiTools最新版本
+     * Get the newest version of UltiTools from the remote API.
+     * <br>
+     * 从远程API获取UltiTools的最新版本。
+     *
+     * @return the newest UltiTools version string <br> UltiTools最新版本字符串
      */
     public static String getUltiToolsNewestVersion() {
         HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/ultitools/newest");
@@ -23,9 +41,15 @@ public class VersionUtils {
     }
 
     /**
-     * @param pluginIdString 插件ID
-     * @param currentVersion 当前版本
-     * @return 插件是否有更新
+     * Check if a plugin has an available update.
+     * Compares the current version with the latest version from the remote API.
+     * <br>
+     * 检查插件是否有可用更新。
+     * 将当前版本与远程API的最新版本进行比较。
+     *
+     * @param pluginIdString the plugin identify string <br> 插件ID
+     * @param currentVersion the current version of the plugin <br> 当前版本
+     * @return true if an update is available, false otherwise <br> 插件是否有更新
      */
     public static boolean pluginHasUpdate(String pluginIdString, String currentVersion) {
         PluginEntity plugin = getPlugin(pluginIdString);

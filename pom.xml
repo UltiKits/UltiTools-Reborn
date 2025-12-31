@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <artifactId>UltiTools-API</artifactId>
     <groupId>com.ultikits</groupId>
     <version>6.1.2</version>
@@ -38,6 +38,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <gui.version>4.3.0</gui.version>
         <hutool.version>5.8.25</hutool.version>
+        <!-- Default excluded test groups - override with -DexcludedGroups= to run isolated tests -->
+        <excludedGroups>isolated</excludedGroups>
     </properties>
 
     <distributionManagement>
@@ -76,6 +78,16 @@
                             <version>1.18.38</version>
                         </path>
                     </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- Exclude tests tagged as 'isolated' - they must run separately -->
+                    <!-- To run isolated tests: mvn test -Dtest=JsonStoreTest -DskipExcludedGroups=true -->
+                    <excludedGroups>${excludedGroups}</excludedGroups>
                 </configuration>
             </plugin>
             <!--发布源码插件 -->
@@ -235,8 +247,12 @@
 
     <repositories>
         <repository>
+            <id>papermc</id>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+        <repository>
             <id>placeholderapi</id>
-            <url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url>
+            <url>https://repo.extendedclip.com/releases/</url>
         </repository>
         <repository>
             <id>spigotmc-repo</id>
@@ -254,11 +270,17 @@
 
     <dependencies>
         <dependency>
+            <groupId>io.papermc.paper</groupId>
+            <artifactId>paper-api</artifactId>
+            <version>1.19.4-R0.1-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>
             <version>1.19.3-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
-        </dependency>
+        </dependency> -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -334,6 +356,7 @@
             <groupId>me.clip</groupId>
             <artifactId>placeholderapi</artifactId>
             <version>2.11.6</version>
+            <scope>provided</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.zaxxer/HikariCP -->
         <dependency>
@@ -343,6 +366,25 @@
             <scope>provided</scope>
         </dependency>
         <!-- JUnit 5 dependencies for testing -->
+        <dependency>
+            <groupId>net.kyori</groupId>
+            <artifactId>adventure-text-minimessage</artifactId>
+            <version>4.13.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.seeseemelk</groupId>
+            <artifactId>MockBukkit-v1.19</artifactId>
+            <version>3.1.0</version>
+            <scope>test</scope>
+            <!-- <exclusions>
+                <exclusion>
+                    <groupId>io.papermc.paper</groupId>
+                    <artifactId>paper-api</artifactId>
+                </exclusion>
+            </exclusions> -->
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
@@ -371,6 +413,19 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <version>5.5.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.24.2</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- H2 Database for integration testing -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

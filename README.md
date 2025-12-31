@@ -59,7 +59,7 @@ You can also write your commands like a controller. You no longer need to make t
 ```java
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(alias = {"lore"}, manualRegister = true, permission = "ultikits.tools.command.lore", description = "Lore edit function")
-public class LoreCommands extends AbstractCommendExecutor {
+public class LoreCommands extends AbstractCommandExecutor {
 
     @CmdMapping(format = "add <lore...>")
     public void addLore(@CmdSender Player player, @CmdParam("lore...") String[] lore) {
@@ -174,7 +174,7 @@ public class BanPlayerService {
 ```java
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 @CmdExecutor(permission = "ultikits.ban.command.all", description = "Ban function", alias = {"uban"}, manualRegister = true)
-public class BanCommands extends AbstractCommendExecutor {
+public class BanCommands extends AbstractCommandExecutor {
     
     // Using the @Autowired annotation, UltiTools-API will automatically inject the dependency
     @Autowired

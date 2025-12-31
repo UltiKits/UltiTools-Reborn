@@ -34,7 +34,6 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -73,6 +72,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private DataStore dataStore;
     @Getter
     private URLClassLoader ultiToolsClassLoader;
+    @Getter
+    private ServerMonitorManager serverMonitorManager;
+    @Getter
+    private CommandExecutionManager commandExecutionManager;
+    @Getter
+    private FileOperationManager fileOperationManager;
+    @Getter
+    private LogStreamManager logStreamManager;
+    @Getter
+    private PlayerEventManager playerEventManager;
 
     /**
      * Returns the instance of the UltiTools.
@@ -110,9 +119,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public static YamlConfiguration getEnv() {
         YamlConfiguration config = new YamlConfiguration();
         try {
-            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
+            Reader envReader = getInstance().getTextResource("env.yml");
+            if (envReader == null) {
+                throw new RuntimeException("env.yml not found in resources!");
+            }
+            config.load(envReader);
         } catch (IOException | InvalidConfigurationException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Failed to load env.yml configuration", e);
         }
         return config;
     }
@@ -154,9 +167,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Language initialization
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
         InputStream in = getFileResource(lanPath);
-        @SuppressWarnings("DataFlowIssue")
-        String result = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
-        this.language = new Language(result);
+        if (in == null) {
+            getLogger().log(Level.WARNING, "Language file not found: " + lanPath + ", using default language");
+            this.language = new Language("{}");
+        } else {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
+                String result = reader.lines().collect(Collectors.joining(""));
+                this.language = new Language(result);
+            } catch (IOException e) {
+                getLogger().log(Level.WARNING, "Failed to read language file: " + lanPath, e);
+                this.language = new Language("{}");
+            }
+        }
 
         // Adopt server version
         this.versionWrapper = new SpigotVersionManager().match();
@@ -196,7 +218,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        Metrics metrics = new Metrics(this, 8652);
+        
+        // 初始化WebSocket管理器
+        serverMonitorManager = new ServerMonitorManager();
+        commandExecutionManager = new CommandExecutionManager();
+        fileOperationManager = new FileOperationManager();
+        logStreamManager = LogStreamManager.getInstance();
+        playerEventManager = new PlayerEventManager();
+        
+        // Initialize metrics
+        new Metrics(this, 8652);
 
         // Embed web server initialization & Account login
         String username = UltiTools.getInstance().getConfig().getString("account.username");
@@ -214,8 +245,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
             getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
             try {
                 PluginInitiationUtils.initWebsocket();
-            } catch (URISyntaxException e) {
-                getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！"));
+            } catch (Exception e) {
+                getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！") + e.getMessage());
             }
         }
 
@@ -226,8 +257,22 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 ServicePriority.Normal
         );
 
-        getCommandManager().register(new UltiToolsCommands());
-        getCommandManager().register(new PluginInstallCommands());
+        // Register core UltiTools commands using the dedicated method
+        // 使用专用方法注册核心UltiTools命令
+        CommandManager commandManager = getCommandManager();
+        commandManager.registerCoreCommand(new UltiToolsCommands());
+        commandManager.registerCoreCommand(new PluginInstallCommands());
+        
+        // Register log transmission test commands for development/testing
+        // 注册日志传输测试命令（用于开发/测试）
+        try {
+            com.ultikits.ultitools.commands.LogTransmissionCommands logTestCommands = 
+                new com.ultikits.ultitools.commands.LogTransmissionCommands();
+            commandManager.registerCoreCommand(logTestCommands);
+            getLogger().info("[UltiTools] 日志传输测试命令已注册: /logtest");
+        } catch (Exception e) {
+            getLogger().warning("[UltiTools] 注册日志传输测试命令失败: " + e.getMessage());
+        }
 
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
 
@@ -266,6 +311,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
             return;
         }
         // Plugin shutdown logic
+        
+        // 关闭日志流管理器
+        if (logStreamManager != null) {
+            logStreamManager.shutdown();
+        }
+        
         dependenceManagers.closeAdventure();
         stopWebsocket();
         pluginManager.close();
@@ -323,7 +374,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     private InputStream getFileResource(String filename) {
         try {
-            return Objects.requireNonNull(this.getClass().getClassLoader().getResource(filename)).openStream();
+            URL resource = this.getClass().getClassLoader().getResource(filename);
+            if (resource == null) {
+                return null;
+            }
+            return resource.openStream();
         } catch (IOException ex) {
             return null;
         }
@@ -363,8 +418,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (codeSource.getLocation().toString().startsWith("union:")) {
             String replace = codeSource.getLocation().toString().replace("union:", "file:").split("%")[0];
             try {
-                return new URL(replace);
-            } catch (MalformedURLException e) {
+                return new java.net.URI(replace).toURL();
+            } catch (MalformedURLException | URISyntaxException e) {
                 e.printStackTrace();
             }
         }
@@ -383,9 +438,14 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         List<File> files = new ArrayList<>(Arrays.asList(libFiles));
         File pluginsFolder = getDataFolder().getParentFile();
-        for (File file : Objects.requireNonNull(pluginsFolder.listFiles())) {
-            if (file.getName().endsWith(".jar")) {
-                files.add(file);
+        if (pluginsFolder != null) {
+            File[] folderFiles = pluginsFolder.listFiles();
+            if (folderFiles != null) {
+                for (File file : folderFiles) {
+                    if (file.getName().endsWith(".jar")) {
+                        files.add(file);
+                    }
+                }
             }
         }
 
@@ -419,29 +479,53 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String libFolder = new File(System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped").exists() ? 
         System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped" + File.separator + "UltiTools" + File.separator + "lib" 
         : UltiTools.getInstance().getDataFolder() + File.separator + "lib";
-        if (!new File(libFolder).exists()) {
+        
+        File libDir = new File(libFolder);
+        if (!libDir.exists()) {
             //noinspection ResultOfMethodCallIgnored
-            new File(libFolder).mkdirs();
+            libDir.mkdirs();
         }
+        
         YamlConfiguration env = UltiTools.getEnv();
-        List<String> missingLib = env.getStringList("libraries")
+        List<String> libraries = env.getStringList("libraries");
+        if (libraries.isEmpty()) {
+            getLogger().log(Level.WARNING, "No libraries defined in env.yml");
+            return;
+        }
+        
+        List<String> missingLib = libraries
                 .stream()
                 .map(lib -> new File(libFolder, lib))
                 .filter(file -> !file.exists()).map(File::getName)
                 .collect(Collectors.toList());
+                
         if (missingLib.isEmpty()) {
             return;
         }
-        getLogger().log(Level.INFO, "Missing required libraries，trying to download...");
-        getLogger().log(Level.INFO, "If have problems in downloading，you can download full version.");
+        
+        getLogger().log(Level.INFO, "Missing required libraries, trying to download...");
+        getLogger().log(Level.INFO, "If have problems in downloading, you can download full version.");
+        
+        String ossUrl = env.getString("oss-url");
+        String libPath = env.getString("lib-path");
+        if (ossUrl == null || libPath == null) {
+            getLogger().log(Level.SEVERE, "OSS URL or lib path not configured in env.yml");
+            return;
+        }
+        
         for (int i = 0; i < missingLib.size(); i++) {
             String name = missingLib.get(i);
-            String url = env.getString("oss-url") + env.getString("lib-path") + name;
-            double i1 = (double) i / missingLib.size();
-            int percentage = (int) (i1 * 100);
+            String url = ossUrl + libPath + name;
+            double progress = (double) i / missingLib.size();
+            int percentage = (int) (progress * 100);
             printLoadingBar(percentage);
-            HttpDownloadUtils.download(url, name, libFolder);
-            needLoadLib = true;
+            
+            try {
+                HttpDownloadUtils.download(url, name, libFolder);
+                needLoadLib = true;
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, "Failed to download library: " + name, e);
+            }
         }
         printLoadingBar(100);
         getLogger().log(Level.INFO, "All required libraries have been downloaded.");

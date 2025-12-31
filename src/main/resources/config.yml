@@ -15,6 +15,10 @@ language: "zh"
 
 web-editor:
   enable: false
+  port: 4567
+  https:
+    enable: true
+    domain: "api.ultikits.com"
 
 account:
   username: ""

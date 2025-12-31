@@ -1,15 +1,26 @@
 package com.ultikits.ultitools.utils;
 
-import cn.hutool.core.util.IdUtil;
-import cn.hutool.json.JSON;
-import cn.hutool.json.JSONUtil;
-import com.ultikits.ultitools.UltiTools;
-import lombok.SneakyThrows;
-
 import java.io.File;
 import java.io.FileWriter;
 import java.nio.charset.StandardCharsets;
 
+import com.ultikits.ultitools.UltiTools;
+
+import cn.hutool.core.util.IdUtil;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONUtil;
+import lombok.SneakyThrows;
+
+/**
+ * Common utility class providing general-purpose helper methods.
+ * This class contains utility methods used throughout the UltiTools plugin.
+ * <br>
+ * 通用工具类，提供通用的辅助方法。
+ * 此类包含在整个UltiTools插件中使用的实用方法。
+ *
+ * @author wisdomme
+ * @since 6.0.0
+ */
 public class CommonUtils {
 
     /**

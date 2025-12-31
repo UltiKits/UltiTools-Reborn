@@ -1,9 +1,9 @@
 package com.ultikits.ultitools.services.impl;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.services.NotificationService;
-import com.ultikits.ultitools.widgets.Toast;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
 import org.bukkit.Bukkit;
 import org.bukkit.Sound;
 import org.bukkit.boss.BarColor;
@@ -12,9 +12,10 @@ import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.widgets.Toast;
 
 @Service
 public class InMemoryNotificationService implements NotificationService {
@@ -75,13 +76,9 @@ public class InMemoryNotificationService implements NotificationService {
             new BukkitRunnable() {
                 @Override
                 public void run() {
-                    double progress = finalBossBar.getProgress();
-                    progress -= 1.0 / (seconds * 4);
-                    if (progress <= 0) {
-                        finalBossBar.removePlayer(player);
+                    BossBarTickResult result = processBossBarTick(finalBossBar, player, seconds);
+                    if (result.shouldCancel) {
                         this.cancel();
-                    } else {
-                        finalBossBar.setProgress(progress);
                     }
                 }
             }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, 5L);
@@ -89,6 +86,62 @@ public class InMemoryNotificationService implements NotificationService {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    /**
+     * Result object for BossBar tick processing.
+     */
+    static class BossBarTickResult {
+        final boolean shouldCancel;
+        final double newProgress;
+
+        BossBarTickResult(boolean shouldCancel, double newProgress) {
+            this.shouldCancel = shouldCancel;
+            this.newProgress = newProgress;
+        }
+    }
+
+    /**
+     * Process a single tick of the BossBar progress animation.
+     * This method is extracted from BukkitRunnable for testability.
+     *
+     * @param bossBar the BossBar to update
+     * @param player  the player viewing the BossBar
+     * @param seconds the total duration in seconds
+     * @return the result containing whether to cancel and the new progress
+     */
+    static BossBarTickResult processBossBarTick(BossBar bossBar, Player player, int seconds) {
+        double progress = bossBar.getProgress();
+        double decrement = 1.0 / (seconds * 4);
+        progress -= decrement;
+        if (progress <= 0) {
+            bossBar.removePlayer(player);
+            return new BossBarTickResult(true, 0);
+        } else {
+            bossBar.setProgress(progress);
+            return new BossBarTickResult(false, progress);
+        }
+    }
+
+    /**
+     * Get the cached BossBar for a player. Used for testing.
+     */
+    static BossBar getCachedBossBar(UUID playerUUID) {
+        return atedPlayer.get(playerUUID);
+    }
+
+    /**
+     * Put a BossBar into cache. Used for testing.
+     */
+    static void cacheBossBar(UUID playerUUID, BossBar bossBar) {
+        atedPlayer.put(playerUUID, bossBar);
+    }
+
+    /**
+     * Clear all cached BossBars. Used for testing.
+     */
+    static void clearBossBarCache() {
+        atedPlayer.clear();
     }
 
     public boolean sendMessageNotification(Player player, String message) {

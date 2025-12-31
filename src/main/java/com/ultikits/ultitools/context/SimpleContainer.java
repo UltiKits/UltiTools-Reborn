@@ -1,12 +1,24 @@
 package com.ultikits.ultitools.context;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.*;
-
 import java.lang.reflect.Constructor;
-import java.util.*;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Component;
+import com.ultikits.ultitools.annotations.ComponentScan;
+import com.ultikits.ultitools.annotations.PostConstruct;
+import com.ultikits.ultitools.annotations.PreDestroy;
+import com.ultikits.ultitools.annotations.Service;
 
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
@@ -14,15 +26,19 @@ import java.util.function.Supplier;
  * 简单的依赖注入容器，用于替换Spring ApplicationContext。
  */
 public class SimpleContainer {
+    private static final Logger LOGGER = Logger.getLogger(SimpleContainer.class.getName());
+    
     private final Map<String, Object> singletons = new ConcurrentHashMap<>();
     private final Map<String, Supplier<Object>> suppliers = new ConcurrentHashMap<>();
     private final Map<Class<?>, Object> typeMappings = new ConcurrentHashMap<>();
     private final Map<Class<?>, Supplier<Object>> typeSuppliers = new ConcurrentHashMap<>();
     private final Map<String, BeanScope> beanScopes = new ConcurrentHashMap<>();
     private final Map<String, Class<?>> beanTypes = new ConcurrentHashMap<>();
-    private final List<BeanPostProcessor> beanPostProcessors = new ArrayList<>();
+    private final List<BeanPostProcessor> beanPostProcessors = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final Map<String, BeanDefinition> beanDefinitions = new ConcurrentHashMap<>();
-    private final Set<String> currentlyCreating = new HashSet<>();
+    private final Set<String> currentlyCreating = ConcurrentHashMap.newKeySet();
+    // Cache for supplier types to avoid instantiation in getBeanNamesForType
+    private final Map<String, Class<?>> supplierTypes = new ConcurrentHashMap<>();
     private SimpleContainer parent;
     private ClassLoader classLoader;
     private boolean isStarted = false;
@@ -64,6 +80,20 @@ public class SimpleContainer {
     }
 
     /**
+     * Register a supplier for lazy initialization with type information.
+     * <br>
+     * 注册带类型信息的供应商用于延迟初始化。
+     *
+     * @param name supplier name <br> 供应商名称
+     * @param supplier supplier function <br> 供应商函数
+     * @param type the type of bean this supplier produces <br> 供应商生成的Bean类型
+     */
+    public void registerSupplier(String name, Supplier<Object> supplier, Class<?> type) {
+        suppliers.put(name, supplier);
+        supplierTypes.put(name, type);
+    }
+
+    /**
      * Register a type mapping.
      * <br>
      * 注册类型映射。
@@ -83,8 +113,9 @@ public class SimpleContainer {
      * @param type class type <br> 类类型
      * @param supplier supplier function <br> 供应商函数
      */
+    @SuppressWarnings("unchecked")
     public <T> void registerTypeSupplier(Class<T> type, Supplier<T> supplier) {
-        typeSuppliers.put(type, () -> supplier.get());
+        typeSuppliers.put(type, (Supplier<Object>) supplier);
     }
 
     /**
@@ -96,20 +127,40 @@ public class SimpleContainer {
      * @return bean instance <br> Bean实例
      */
     public Object getBean(String name) {
-        // Check if currently creating (circular dependency detection)
-        if (currentlyCreating.contains(name)) {
-            throw new RuntimeException("Circular dependency detected for bean: " + name);
-        }
-
         Object bean = singletons.get(name);
         if (bean != null) {
             return bean;
         }
 
-        // Check bean definition
+        // Check bean definition with double-checked locking for thread safety
         BeanDefinition definition = beanDefinitions.get(name);
         if (definition != null) {
-            return createBean(name, definition);
+            if (definition.isSingleton()) {
+                // Double-check for singleton beans
+                bean = singletons.get(name);
+                if (bean == null) {
+                    synchronized (this) {
+                        bean = singletons.get(name);
+                        if (bean == null) {
+                            // Check circular dependency inside synchronized block
+                            if (currentlyCreating.contains(name)) {
+                                throw new RuntimeException("Circular dependency detected for bean '" + name + 
+                                    "'. Currently creating beans: " + currentlyCreating);
+                            }
+                            bean = createBean(name, definition);
+                        }
+                    }
+                }
+                return bean;
+            } else {
+                // Prototype: always create new instance
+                // Check circular dependency for prototype
+                if (currentlyCreating.contains(name)) {
+                    throw new RuntimeException("Circular dependency detected for bean '" + name + 
+                        "'. Currently creating beans: " + currentlyCreating);
+                }
+                return createBean(name, definition);
+            }
         }
 
         Supplier<Object> supplier = suppliers.get(name);
@@ -146,8 +197,17 @@ public class SimpleContainer {
 
         Supplier<Object> supplier = typeSuppliers.get(type);
         if (supplier != null) {
-            bean = supplier.get();
-            typeMappings.put(type, bean);
+            // Double-check for thread safety
+            bean = typeMappings.get(type);
+            if (bean == null) {
+                synchronized (this) {
+                    bean = typeMappings.get(type);
+                    if (bean == null) {
+                        bean = supplier.get();
+                        typeMappings.put(type, bean);
+                    }
+                }
+            }
             return (T) bean;
         }
 
@@ -155,7 +215,7 @@ public class SimpleContainer {
         String beanName = getBeanName(type);
         BeanDefinition definition = beanDefinitions.get(beanName);
         if (definition != null) {
-            bean = createBean(beanName, definition);
+            bean = getBean(beanName); // Use getBean(name) for thread-safe creation
             return (T) bean;
         }
 
@@ -202,15 +262,17 @@ public class SimpleContainer {
             }
         }
         
-        // Check suppliers by creating instances (this might be expensive)
-        for (Map.Entry<String, Supplier<Object>> entry : suppliers.entrySet()) {
-            try {
-                Object bean = entry.getValue().get();
-                if (type.isInstance(bean)) {
-                    beanNames.add(entry.getKey());
-                }
-            } catch (Exception e) {
-                // Ignore failed instantiation
+        // Check bean definitions by class type (no instantiation needed)
+        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
+            if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
+                beanNames.add(entry.getKey());
+            }
+        }
+        
+        // Check suppliers using cached type information (avoiding instantiation)
+        for (Map.Entry<String, Class<?>> entry : supplierTypes.entrySet()) {
+            if (type.isAssignableFrom(entry.getValue())) {
+                beanNames.add(entry.getKey());
             }
         }
         
@@ -240,10 +302,26 @@ public class SimpleContainer {
      * 关闭容器。
      */
     public void close() {
+        LOGGER.info("Closing container...");
+        
+        // Invoke @PreDestroy methods on all singleton beans
+        for (Object bean : singletons.values()) {
+            invokePreDestroyMethods(bean);
+        }
+        
         singletons.clear();
         suppliers.clear();
         typeMappings.clear();
         typeSuppliers.clear();
+        beanScopes.clear();
+        beanTypes.clear();
+        beanDefinitions.clear();
+        beanPostProcessors.clear();
+        currentlyCreating.clear();
+        supplierTypes.clear();
+        isStarted = false;
+        
+        LOGGER.info("Container closed.");
     }
 
     /**
@@ -256,6 +334,7 @@ public class SimpleContainer {
      */
     public boolean containsBean(String name) {
         return singletons.containsKey(name) || suppliers.containsKey(name) ||
+                beanDefinitions.containsKey(name) ||
                 (parent != null && parent.containsBean(name));
     }
 
@@ -338,7 +417,7 @@ public class SimpleContainer {
      * @param classLoader class loader <br> 类加载器
      */
     public void setClassLoader(ClassLoader classLoader) {
-        // No-op for now
+        this.classLoader = classLoader;
     }
 
     /**
@@ -412,23 +491,19 @@ public class SimpleContainer {
     private Object createBean(String name, BeanDefinition definition) {
         try {
             currentlyCreating.add(name);
+            LOGGER.fine("Creating bean: " + name);
 
             Object bean;
             if (definition.getFactoryMethod() != null) {
                 // Factory method creation
                 bean = definition.getFactoryMethod().invoke(definition.getFactoryBean());
             } else {
-                // Constructor creation
+                // Constructor creation with smart matching
                 Class<?> beanClass = definition.getBeanClass();
                 Object[] constructorArgs = definition.getConstructorArgValues();
                 
                 if (constructorArgs != null && constructorArgs.length > 0) {
-                    // Find matching constructor
-                    Class<?>[] paramTypes = new Class[constructorArgs.length];
-                    for (int i = 0; i < constructorArgs.length; i++) {
-                        paramTypes[i] = constructorArgs[i].getClass();
-                    }
-                    Constructor<?> constructor = beanClass.getDeclaredConstructor(paramTypes);
+                    Constructor<?> constructor = findMatchingConstructor(beanClass, constructorArgs);
                     constructor.setAccessible(true);
                     bean = constructor.newInstance(constructorArgs);
                 } else {
@@ -446,6 +521,9 @@ public class SimpleContainer {
             // Autowire dependencies
             getAutowireCapableBeanFactory().autowireBean(bean);
 
+            // Invoke @PostConstruct methods
+            invokePostConstructMethods(bean);
+
             // Apply bean post processors after initialization
             for (BeanPostProcessor processor : beanPostProcessors) {
                 bean = processor.postProcessAfterInitialization(bean, name);
@@ -457,11 +535,155 @@ public class SimpleContainer {
                 typeMappings.put(definition.getBeanClass(), bean);
             }
 
+            LOGGER.fine("Successfully created bean: " + name);
             return bean;
         } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
             throw new RuntimeException("Failed to create bean: " + name, e);
         } finally {
             currentlyCreating.remove(name);
+        }
+    }
+
+    /**
+     * Find a matching constructor for the given arguments.
+     * Supports interface/superclass parameter types and primitive type boxing.
+     * <br>
+     * 为给定参数查找匹配的构造器。支持接口/父类参数类型和基本类型装箱。
+     *
+     * @param beanClass the class to find constructor for <br> 要查找构造器的类
+     * @param args constructor arguments <br> 构造器参数
+     * @return matching constructor <br> 匹配的构造器
+     */
+    private Constructor<?> findMatchingConstructor(Class<?> beanClass, Object[] args) throws NoSuchMethodException {
+        Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
+        
+        for (Constructor<?> constructor : constructors) {
+            Class<?>[] paramTypes = constructor.getParameterTypes();
+            if (paramTypes.length != args.length) {
+                continue;
+            }
+            
+            boolean matches = true;
+            for (int i = 0; i < paramTypes.length; i++) {
+                if (!isAssignable(paramTypes[i], args[i])) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                return constructor;
+            }
+        }
+        
+        // Fall back to exact type matching
+        Class<?>[] paramTypes = new Class[args.length];
+        for (int i = 0; i < args.length; i++) {
+            paramTypes[i] = args[i].getClass();
+        }
+        return beanClass.getDeclaredConstructor(paramTypes);
+    }
+
+    /**
+     * Check if a value can be assigned to a parameter type.
+     * Handles primitive types, interfaces, and inheritance.
+     * <br>
+     * 检查值是否可以分配给参数类型。处理基本类型、接口和继承。
+     *
+     * @param paramType the parameter type <br> 参数类型
+     * @param value the value to check <br> 要检查的值
+     * @return true if assignable <br> 如果可分配则返回true
+     */
+    private boolean isAssignable(Class<?> paramType, Object value) {
+        if (value == null) {
+            return !paramType.isPrimitive();
+        }
+        
+        Class<?> valueType = value.getClass();
+        
+        // Direct assignment
+        if (paramType.isAssignableFrom(valueType)) {
+            return true;
+        }
+        
+        // Primitive type handling
+        if (paramType.isPrimitive()) {
+            return isPrimitiveWrapperOf(paramType, valueType);
+        }
+        
+        // Wrapper to primitive
+        if (valueType.isPrimitive()) {
+            return isPrimitiveWrapperOf(valueType, paramType);
+        }
+        
+        return false;
+    }
+
+    /**
+     * Check if wrapper is the wrapper class for primitive type.
+     * <br>
+     * 检查wrapper是否是primitive类型的包装类。
+     */
+    private boolean isPrimitiveWrapperOf(Class<?> primitive, Class<?> wrapper) {
+        if (primitive == int.class) return wrapper == Integer.class;
+        if (primitive == long.class) return wrapper == Long.class;
+        if (primitive == double.class) return wrapper == Double.class;
+        if (primitive == float.class) return wrapper == Float.class;
+        if (primitive == boolean.class) return wrapper == Boolean.class;
+        if (primitive == byte.class) return wrapper == Byte.class;
+        if (primitive == short.class) return wrapper == Short.class;
+        if (primitive == char.class) return wrapper == Character.class;
+        return false;
+    }
+
+    /**
+     * Invoke methods annotated with @PostConstruct.
+     * <br>
+     * 调用带有@PostConstruct注解的方法。
+     *
+     * @param bean the bean instance <br> Bean实例
+     */
+    private void invokePostConstructMethods(Object bean) {
+        Class<?> clazz = bean.getClass();
+        while (clazz != null && clazz != Object.class) {
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(PostConstruct.class)) {
+                    try {
+                        method.setAccessible(true);
+                        method.invoke(bean);
+                        LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
+                    }
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
+    }
+
+    /**
+     * Invoke methods annotated with @PreDestroy on a bean.
+     * <br>
+     * 调用Bean上带有@PreDestroy注解的方法。
+     *
+     * @param bean the bean instance <br> Bean实例
+     */
+    private void invokePreDestroyMethods(Object bean) {
+        Class<?> clazz = bean.getClass();
+        while (clazz != null && clazz != Object.class) {
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(PreDestroy.class)) {
+                    try {
+                        method.setAccessible(true);
+                        method.invoke(bean);
+                        LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
+                    } catch (Exception e) {
+                        LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
+                    }
+                }
+            }
+            clazz = clazz.getSuperclass();
         }
     }
 

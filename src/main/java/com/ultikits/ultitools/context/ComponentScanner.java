@@ -1,14 +1,16 @@
 package com.ultikits.ultitools.context;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.*;
-
 import java.io.File;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Bean;
+import com.ultikits.ultitools.annotations.Component;
+import com.ultikits.ultitools.annotations.Configuration;
+import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.annotations.Service;
 
 /**
  * Component scanner to find and register components.
@@ -188,6 +190,18 @@ public class ComponentScanner {
      * 从类获取Bean名称。
      */
     private String getBeanName(Class<?> clazz) {
+        if (clazz.isAnnotationPresent(Component.class)) {
+            Component component = clazz.getAnnotation(Component.class);
+            if (!component.value().isEmpty()) {
+                return component.value();
+            }
+        }
+        if (clazz.isAnnotationPresent(Service.class)) {
+            Service service = clazz.getAnnotation(Service.class);
+            if (!service.value().isEmpty()) {
+                return service.value();
+            }
+        }
         String simpleName = clazz.getSimpleName();
         return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
     }

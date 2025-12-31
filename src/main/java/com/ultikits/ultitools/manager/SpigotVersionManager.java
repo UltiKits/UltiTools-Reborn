@@ -7,6 +7,7 @@ import lombok.SneakyThrows;
 import org.bukkit.Bukkit;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.Enumeration;
@@ -33,9 +34,13 @@ public class SpigotVersionManager {
         VersionWrapper versionWrapper = null;
         File file = new File(UltiTools.getInstance().getDataFolder(), "/versions/" + serverVersion + ".jar");
         if (!file.exists()) {
-            HttpDownloadUtils.download(
-                    UltiTools.getEnv().getString("oss-url") + "/versions/" + serverVersion + ".jar",
-                    serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
+            try {
+                HttpDownloadUtils.download(
+                        UltiTools.getEnv().getString("oss-url") + "/versions/" + serverVersion + ".jar",
+                        serverVersion + ".jar", UltiTools.getInstance().getDataFolder() + "/versions");
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to download version wrapper: " + serverVersion, e);
+            }
         }
         URL url = file.toURI().toURL();
         URL[] urls = new URL[1];

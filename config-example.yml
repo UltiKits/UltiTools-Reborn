@@ -1,0 +1,47 @@
+# UltiPanel 日志传输配置示例
+# 在config.yml中添加以下配置
+
+# UltiPanel 配置
+ultipanel:
+  # 服务器ID（从UltiPanel后台获取，通常自动生成）
+  server-id: "e502c24dd77c439791f75217d7243aab"
+  
+  # WebSocket连接配置
+  websocket:
+    url: "wss://api.ultikits.com/ws"
+    reconnect-interval: 30 # 重连间隔（秒）
+    max-reconnect-attempts: 10
+  
+  # 日志传输配置
+  logging:
+    enabled: true
+    
+    # 要传输的日志级别
+    levels:
+      - "info"
+      - "warning" 
+      - "error"
+      # - "debug"  # 调试日志默认禁用，生产环境不建议启用
+    
+    # 排除的记录器（避免传输过多日志）
+    excluded-loggers:
+      - "com.mojang.authlib"
+      - "net.minecraft.network"
+      - "org.apache.http"
+      - "com.zaxxer.hikari"
+      - "org.eclipse.jetty"
+    
+    # 批量发送配置
+    batch:
+      enabled: true
+      size: 10          # 批量大小（条数）
+      interval: 5000    # 发送间隔（毫秒）
+      
+  # 性能配置
+  performance:
+    # 是否启用性能优化
+    enable-optimization: true
+    # 最大队列大小
+    max-queue-size: 1000
+    # 日志级别过滤（最小级别）
+    minimum-level: "INFO"

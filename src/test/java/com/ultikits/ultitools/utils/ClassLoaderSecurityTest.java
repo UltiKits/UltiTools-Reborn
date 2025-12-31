@@ -54,8 +54,8 @@ public class ClassLoaderSecurityTest {
     @Test
     public void testAllowTrustedClasses() {
         String[] trustedClasses = {
-            "com.ultikits.ultitools.TestClass",
-            "org.bukkit.plugin.Plugin"
+            "com.ultikits.ultitools.NonExistentTestClass",
+            "org.bukkit.plugin.NonExistentPlugin"
         };
         
         for (String className : trustedClasses) {
