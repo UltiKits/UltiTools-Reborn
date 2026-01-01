@@ -16,14 +16,15 @@
 <div align="center">
 <img alt="GitHub License" src="https://img.shields.io/github/license/ultikits/ultitools-reborn?style=flat-square"/>
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
-<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/wisdommen/UltiTools?style=flat-square"/>
-<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.8--1.20-blue?style=flat-square"/>
+<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/UltiKits/UltiTools-Reborn?style=flat-square"/>
+<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.8--1.21-blue?style=flat-square"/>
+<img alt="Java Version" src="https://img.shields.io/badge/Java-8+-orange?style=flat-square"/>
 <img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
 <img alt="wakatime" src="https://wakatime.com/badge/user/d4b748db-828d-4641-b87e-85def2b4fc94/project/2ed8f867-16e0-4fd6-a5af-b18d50e59469.svg?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
-<img alt="GitHub issues" src="https://img.shields.io/github/issues/wisdommen/UltiTools?style=flat-square"/>
+<img alt="GitHub issues" src="https://img.shields.io/github/issues/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <a href="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/overview/alpha"><img src="https://www.codefactor.io/repository/github/ultikits/ultitools-reborn/badge/alpha" alt="CodeFactor" /></a>
 </div>
 
@@ -41,11 +42,22 @@
 
 ## UltiTools-API Introduction
 
-[中文文档](https://github.com/UltiKits/UltiTools-Reborn/wiki/%E4%B8%AD%E6%96%87%E4%BB%8B%E7%BB%8D)
+[中文文档](https://github.com/UltiKits/UltiTools-Reborn/wiki/%E4%B8%AD%E6%96%87%E4%BB%8B%E7%BB%8D) | [项目 Wiki](docs/wiki/README.md)
 
 I hope my plugin can help with your plugin development! XD
 
 [Detailed Dev Documents](https://dev.ultikits.com/en/)
+
+### Key Features
+
+- 🎯 **Annotation-Driven Development** - Commands, listeners, configs auto-registered via annotations
+- 🔧 **IoC Container** - Spring-like dependency injection with `@Service`, `@Autowired`
+- 💾 **Unified Data Storage** - Seamless MySQL/SQLite/JSON support with ORM-style API
+- ⚙️ **Config as Objects** - Type-safe configuration with auto-reload
+- 🖥️ **GUI Framework** - Easy inventory GUI development with pagination support
+- 🌐 **WebSocket Integration** - Remote server management via UltiPanel
+- 🌍 **i18n Support** - Built-in internationalization
+- 📦 **Hot Module Loading** - Load/unload modules without server restart
 
 
 ### Annotation-driven
@@ -200,7 +212,7 @@ BanPlayerService banPlayerService = getContext().getBean(BanPlayerService.class)
 
 UltiTools-API offers some functionalities of Hutool, including a large number of utility classes.
 
-[Hutool Documentation](ttps://hutoolkit.com/docs/)
+[Hutool Documentation](https://hutoolkit.com/docs/)
 
 In terms of GUI interfaces, UltiTools provides the obliviate-invs API, facilitating rapid GUI development.
 
@@ -210,12 +222,41 @@ UltiTools also offers the Adventure API.
 
 [Adventure Documentation](https://docs.adventure.kyori.net/)
 
+### WebSocket & UltiPanel Integration
+
+UltiTools-API includes built-in WebSocket support for remote server management through UltiPanel:
+
+- **Real-time Monitoring** - Server TPS, memory, CPU, online players
+- **Remote Commands** - Execute commands from web dashboard
+- **Log Streaming** - Real-time server log viewing
+- **File Management** - Remote config editing
+- **Plugin Control** - Enable/disable plugins remotely
+
+```java
+// Custom WebSocket message handling
+@Service
+public class MyWebSocketHandler {
+    @Autowired
+    private UltiPanelWebSocketClient webSocketClient;
+    
+    public void sendCustomMessage(String type, Object data) {
+        webSocketClient.send(new WebSocketMessage(type, data));
+    }
+}
+```
+
 ## Quick Start
 
-For more detailed documentation, please refer to [UltiTools API Documentation ](https://dev.ultikits.com/en/)
+For more detailed documentation, please refer to [UltiTools API Documentation](https://dev.ultikits.com/en/) or the [Project Wiki](docs/wiki/README.md)
 
 Below is a simple quick start guide.
 <br>
+
+### Requirements
+
+- **Java**: 8 or higher
+- **Minecraft**: 1.8 - 1.21 (Spigot/Paper)
+- **UltiTools Plugin**: Install on your server first
 
 ### Installing Dependencies
 
@@ -319,6 +360,57 @@ public List<AbstractConfigEntity> getAllConfigs() {
 }
 ```
 
+### Auto-Registration with Annotations
+
+For a more streamlined approach, use `@UltiToolsModule` to enable automatic scanning and registration:
+
+```java
+@UltiToolsModule(scanBasePackages = {"com.test.plugin"})
+public class MyPlugin extends UltiToolsPlugin {
+    @Override
+    public boolean registerSelf() {
+        // Commands, listeners, and services are auto-registered!
+        return true;
+    }
+    
+    @Override
+    public void unregisterSelf() { }
+}
+```
+
+With this annotation, any class marked with `@CmdExecutor`, `@EventListener`, or `@Service` in the specified packages will be automatically discovered and registered.
+
+## Project Structure
+
+```
+UltiTools-Reborn/
+├── src/main/java/com/ultikits/ultitools/
+│   ├── UltiTools.java           # Main plugin entry
+│   ├── abstracts/               # Base classes (UltiToolsPlugin, AbstractCommandExecutor, etc.)
+│   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Table, etc.)
+│   ├── context/                 # IoC container (SimpleContainer)
+│   ├── manager/                 # Core managers (Command, Listener, Config, Plugin)
+│   ├── interfaces/              # Core interfaces (DataOperator, DataStore)
+│   └── websocket/               # UltiPanel WebSocket integration
+├── docs/wiki/                   # Project documentation
+└── pom.xml                      # Maven build configuration
+```
+
+<br>
+<br>
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Project Wiki](docs/wiki/README.md) | Complete project documentation |
+| [Architecture Guide](docs/wiki/ARCHITECTURE.md) | System architecture overview |
+| [IoC Container](docs/wiki/modules/IOC_CONTAINER.md) | Dependency injection guide |
+| [Command System](docs/wiki/modules/COMMAND_SYSTEM.md) | Command development guide |
+| [Data Storage](docs/wiki/modules/DATA_STORAGE.md) | Database operations guide |
+| [Quick Start Tutorial](docs/wiki/tutorials/QUICK_START.md) | First module tutorial |
+| [API Reference](docs/wiki/api/INDEX.md) | API quick reference |
+
 <br>
 <br>
 
@@ -362,3 +454,13 @@ public List<AbstractConfigEntity> getAllConfigs() {
 | ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | Brought many high-tech features to the plugin            |
 | ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | Official build tool                 |
 | ![Socket.io](https://img.shields.io/badge/Socket.io-black?style=for-the-badge&logo=socket.io&badgeColor=010101)            | Official built-in WebSocket client          |
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Related Projects
+
+- [UltiCore-Core](https://github.com/wisdommen/UltiCore-Core) - Cross-version compatibility layer
+- [UltiPanel](https://panel.ultikits.com) - Web-based server management dashboard
+- [UltiKits Plugins](https://www.spigotmc.org/resources/authors/wisdomme.505795/) - Official UltiTools modules
