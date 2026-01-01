@@ -19,7 +19,7 @@ import org.bukkit.entity.ArmorStand;
  * 每行垂直间距 0.25 格。
  * </p>
  *
- * <h3>Example Usage / 使用示例:</h3>
+ * <p><strong>Example Usage / 使用示例:</strong></p>
  * <pre>{@code
  * Hologram hologram = new Hologram("Line 1", "Line 2", "Line 3");
  * ArmorStand[] stands = hologram.spawn(location);
@@ -30,7 +30,7 @@ import org.bukkit.entity.ArmorStand;
  * }
  * }</pre>
  *
- * <h3>ArmorStand Properties / 盔甲架属性:</h3>
+ * <p><strong>ArmorStand Properties / 盔甲架属性:</strong></p>
  * <ul>
  *   <li>Invisible (不可见)</li>
  *   <li>No gravity (无重力)</li>

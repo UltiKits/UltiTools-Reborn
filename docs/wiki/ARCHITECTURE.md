@@ -109,12 +109,50 @@ public final class UltiTools extends JavaPlugin implements Localized {
 | Bean 获取 | `getBean(name)` / `getBean(class)` |
 | 依赖注入 | 自动处理 `@Autowired` 字段 |
 | 生命周期 | `@PostConstruct` / `@PreDestroy` |
+| 三级缓存 | 解决循环依赖问题 |
 
 **作用域支持**:
 - `SINGLETON`: 单例模式（默认）
 - `PROTOTYPE`: 原型模式，每次获取创建新实例
 
-### 3. UltiToolsPlugin (模块基类)
+#### 三级缓存机制 (6.2.0 新增)
+
+SimpleContainer 实现了类似 Spring 的三级缓存，支持 setter 注入循环依赖解决：
+
+| 缓存级别 | 名称 | 存储内容 |
+|---------|------|---------|
+| 一级缓存 | singletonObjects | 完全初始化的 Bean 实例 |
+| 二级缓存 | earlySingletonObjects | 早期暴露的 Bean 实例 |
+| 三级缓存 | singletonFactories | Bean 工厂 |
+
+```java
+// 循环依赖现在可以正常工作
+@Service
+public class ServiceA {
+    @Autowired
+    private ServiceB serviceB;  // 通过三级缓存获取早期引用
+}
+
+@Service
+public class ServiceB {
+    @Autowired
+    private ServiceA serviceA;
+}
+```
+
+### 3. ContextHolder (6.2.0 新增)
+
+**位置**: `com.ultikits.ultitools.context.ContextHolder`
+
+静态持有器，用于在无法依赖注入的地方访问容器：
+
+```java
+// 获取 Bean
+MyService service = ContextHolder.getBean(MyService.class);
+String service = ContextHolder.getBean("myService");
+```
+
+### 4. UltiToolsPlugin (模块基类)
 
 **位置**: `com.ultikits.ultitools.abstracts.UltiToolsPlugin`
 
@@ -140,7 +178,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 }
 ```
 
-### 4. PluginManager (模块管理器)
+### 5. PluginManager (模块管理器)
 
 **位置**: `com.ultikits.ultitools.manager.PluginManager`
 
@@ -156,9 +194,66 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 **加载流程**:
 1. 扫描 `plugins/UltiTools/plugins/` 目录
 2. 加载 JAR 中的主类（继承 `UltiToolsPlugin`）
-3. 初始化 IoC 容器
-4. 自动注册组件（命令、监听器、配置）
-5. 调用 `registerSelf()`
+3. **依赖排序** - 使用 PluginDependencyResolver 进行拓扑排序 (6.2.0 新增)
+4. 初始化 IoC 容器
+5. 自动注册组件（命令、监听器、配置）
+6. 调用 `registerSelf()`
+
+### 6. PluginDependencyResolver (6.2.0 新增)
+
+**位置**: `com.ultikits.ultitools.manager.PluginDependencyResolver`
+
+使用 **Kahn 算法** 进行插件依赖的拓扑排序，确保正确的加载顺序：
+
+```java
+@PluginDependency(
+    depends = {"CorePlugin"},         // 硬依赖（必须存在）
+    softDepends = {"OptionalPlugin"}, // 软依赖（可选）
+    loadBefore = {"LatePlugin"}       // 先于某插件加载
+)
+public class MyPlugin extends UltiToolsPlugin { }
+```
+
+| 异常类型 | 说明 |
+|---------|------|
+| `CircularDependencyException` | 检测到循环依赖 |
+| `MissingDependencyException` | 缺少必要的硬依赖 |
+
+### 7. TransactionManager (6.2.0 新增)
+
+**位置**: `com.ultikits.ultitools.interfaces.TransactionManager`
+
+提供声明式事务支持，`DataSourceTransactionManager` 实现基于 ThreadLocal：
+
+```java
+TransactionManager txManager = new DataSourceTransactionManager(dataSource);
+txManager.begin();
+try {
+    userRepository.save(user);
+    orderRepository.save(order);
+    txManager.commit();
+} catch (Exception e) {
+    txManager.rollback();
+    throw e;
+}
+```
+
+支持嵌套事务 (depth 计数) 和事务隔离级别设置。
+
+### 8. ConfigChangeListener (6.2.0 新增)
+
+**位置**: `com.ultikits.ultitools.interfaces.ConfigChangeListener`
+
+配置变更监听器，支持配置热重载时的回调通知：
+
+```java
+config.addChangeListener(cfg -> {
+    logger.info("Config reloaded!");
+    refreshCache();
+});
+```
+
+支持多监听器，单个监听器异常不影响其他监听器执行。
 
 ---
 

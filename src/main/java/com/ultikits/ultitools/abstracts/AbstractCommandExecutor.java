@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.logging.Level;
 
 import javax.annotation.Nullable;
 
@@ -526,8 +527,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
                     paramList.add(parseType(value, paramType));
                 } catch (Exception | Error e) {
                     commandSender.sendMessage(ChatColor.RED + e.getMessage());
-                    //noinspection CallToPrintStackTrace
-                    e.printStackTrace();
+                    Bukkit.getLogger().log(Level.SEVERE, "Failed to parse command parameter: " + cmdParam.value(), e);
                     return null;
                 }
             } else {

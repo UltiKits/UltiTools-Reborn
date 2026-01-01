@@ -21,7 +21,7 @@ import lombok.SneakyThrows;
  * 继承 {@link OkCancelPage} 以获得标准的确定/取消按钮布局。
  * </p>
  *
- * <h3>Example Usage / 使用示例:</h3>
+ * <p><strong>Example Usage / 使用示例:</strong></p>
  * <pre>{@code
  * Confirm.gui(player, "Confirm Purchase", "Buy Diamond Sword for 100 coins?",
  *     () -> completePurchase(),

@@ -1,15 +1,17 @@
 package com.ultikits.ultitools.abstracts.command;
 
-import com.google.common.collect.BiMap;
-import com.google.common.collect.HashBiMap;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.command.parser.TypeParseException;
-import com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry;
-import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
-import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
-import com.ultikits.ultitools.abstracts.command.validation.validators.*;
-import com.ultikits.ultitools.annotations.command.*;
-import lombok.Getter;
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import javax.annotation.Nullable;
+
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -17,12 +19,26 @@ import org.bukkit.command.TabExecutor;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import javax.annotation.Nullable;
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Array;
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-import java.util.*;
+import com.google.common.collect.BiMap;
+import com.google.common.collect.HashBiMap;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.parser.TypeParseException;
+import com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry;
+import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
+import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.PermissionValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.SenderTypeValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
+import com.ultikits.ultitools.annotations.command.AsyncCommand;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
+import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.annotations.command.RunAsync;
+
+import lombok.Getter;
 
 /**
  * Base command executor with improved architecture using Chain of Responsibility pattern.
@@ -219,7 +235,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     cooldownValidator.applyCooldown(context);
                 } catch (Exception e) {
                     context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
-                    e.printStackTrace();
+                    Logger.getLogger(BaseCommandExecutor.class.getName())
+                            .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
                 } finally {
                     lockValidator.releaseLock(context);
                 }

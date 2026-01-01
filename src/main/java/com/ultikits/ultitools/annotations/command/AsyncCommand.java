@@ -1,6 +1,10 @@
 package com.ultikits.ultitools.annotations.command;
 
-import java.lang.annotation.*;
+import java.lang.annotation.Documented;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * Annotation to mark a command method as async execution.
@@ -16,7 +20,7 @@ import java.lang.annotation.*;
  * <b>警告：</b>异步命令不应直接访问必须在主线程运行的 Bukkit API。
  * 需要时使用 BukkitScheduler.runTask() 同步回主线程。
  *
- * <h3>Example / 示例:</h3>
+ * <p><strong>Example / 示例:</strong></p>
  * <pre>{@code
  * @CmdMapping(format = "backup")
  * @AsyncCommand

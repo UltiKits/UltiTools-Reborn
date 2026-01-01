@@ -13,7 +13,7 @@ package com.ultikits.ultitools.interfaces;
  * 实现类应处理配置文件、数据库存储或其他持久化机制的类型转换。
  * </p>
  *
- * <h3>Example Implementation / 实现示例:</h3>
+ * <p><strong>Example Implementation / 实现示例:</strong></p>
  * <pre>{@code
  * public class LocationParser implements Parser<Location> {
  *     public Location parse(Object object) {

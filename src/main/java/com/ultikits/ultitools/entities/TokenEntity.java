@@ -1,11 +1,13 @@
 package com.ultikits.ultitools.entities;
 
-import lombok.Data;
-import com.alibaba.fastjson.JSONObject;
-import java.util.Date;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
-import java.nio.charset.StandardCharsets;
+import java.util.Date;
+
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.Data;
 
 @Data
 public class TokenEntity {
@@ -82,8 +84,8 @@ public class TokenEntity {
             
         } catch (Exception e) {
             // 如果解码失败，记录错误但不抛出异常
-            System.err.println("Failed to decode JWT payload: " + e.getMessage());
-            e.printStackTrace();
+            java.util.logging.Logger.getLogger(TokenEntity.class.getName())
+                    .log(java.util.logging.Level.WARNING, "Failed to decode JWT payload", e);
         }
     }
     

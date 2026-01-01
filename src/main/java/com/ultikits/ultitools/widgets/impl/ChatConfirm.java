@@ -26,7 +26,7 @@ import net.kyori.adventure.text.format.TextDecoration;
  * 使用 Adventure API 进行富文本格式化。
  * </p>
  *
- * <h3>Example Usage / 使用示例:</h3>
+ * <p><strong>Example Usage / 使用示例:</strong></p>
  * <pre>{@code
  * Confirm.chat(player, "Delete Item", "Are you sure?",
  *     () -> deleteItem(),
@@ -97,7 +97,6 @@ public class ChatConfirm implements Confirm {
 
     /**
      * {@inheritDoc}
-     * <p>
      * Displays the confirmation dialog in player's chat with:
      * <ul>
      *   <li>Bold gold title text</li>
@@ -105,16 +104,15 @@ public class ChatConfirm implements Confirm {
      *   <li>Clickable green confirm button</li>
      *   <li>Clickable red cancel button</li>
      * </ul>
-     * </p>
      * <p>
      * 在玩家聊天中显示确认对话框，包含：
+     * </p>
      * <ul>
      *   <li>粗体金色标题文本</li>
      *   <li>描述文本</li>
      *   <li>可点击的绿色确认按钮</li>
      *   <li>可点击的红色取消按钮</li>
      * </ul>
-     * </p>
      */
     @Override
     public void show() {

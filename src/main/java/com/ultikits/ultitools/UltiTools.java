@@ -1,31 +1,16 @@
 package com.ultikits.ultitools;
 
-import com.ultikits.ultitools.commands.PluginInstallCommands;
-import com.ultikits.ultitools.commands.UltiToolsCommands;
-import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
-import com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper;
-import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
-import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
-import com.ultikits.ultitools.listeners.PlayerJoinListener;
-import com.ultikits.ultitools.manager.*;
-import com.ultikits.ultitools.utils.HttpDownloadUtils;
-import com.ultikits.ultitools.utils.Metrics;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
+import static com.ultikits.ultitools.utils.PluginInitiationUtils.loginAccount;
+import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
+import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
 
-import lombok.Getter;
-import lombok.Setter;
-import net.milkbowl.vault.economy.Economy;
-import org.bukkit.Bukkit;
-import org.bukkit.configuration.InvalidConfigurationException;
-import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.RegisteredServiceProvider;
-import org.bukkit.plugin.ServicePriority;
-import org.bukkit.plugin.java.JavaPlugin;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -38,10 +23,41 @@ import java.util.List;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
-import static com.ultikits.ultitools.utils.PluginInitiationUtils.loginAccount;
-import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
-import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
+import org.bukkit.Bukkit;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import com.ultikits.ultitools.commands.PluginInstallCommands;
+import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
+import com.ultikits.ultitools.manager.CommandExecutionManager;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.DataStoreManager;
+import com.ultikits.ultitools.manager.DependenceManagers;
+import com.ultikits.ultitools.manager.FileOperationManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.LogStreamManager;
+import com.ultikits.ultitools.manager.PlayerEventManager;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.utils.HttpDownloadUtils;
+import com.ultikits.ultitools.utils.Metrics;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
+
+import lombok.Getter;
+import lombok.Setter;
+import net.milkbowl.vault.economy.Economy;
 
 /**
  * UltiTools plugin main class.
@@ -418,7 +434,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             try {
                 return new java.net.URI(replace).toURL();
             } catch (MalformedURLException | URISyntaxException e) {
-                e.printStackTrace();
+                getLogger().log(Level.WARNING, "Failed to parse server JAR URL: " + replace, e);
             }
         }
         return codeSource.getLocation();
@@ -461,7 +477,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             try {
                 urls[i] = files.get(i).toURI().toURL();
             } catch (MalformedURLException e) {
-                e.printStackTrace();
+                getLogger().log(Level.WARNING, "Failed to convert file to URL: " + files.get(i), e);
             }
         }
         urls[files.size()] = getServerJar();

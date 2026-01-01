@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -260,7 +261,7 @@ public class CommandManager {
 
             command = c.newInstance(name, plugin);
         } catch (Exception | Error e) {
-            e.printStackTrace();
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to create PluginCommand: " + name, e);
         }
 
         return command;
@@ -277,7 +278,7 @@ public class CommandManager {
                 commandMap = (CommandMap) f.get(Bukkit.getPluginManager());
             }
         } catch (Exception | Error e) {
-            e.printStackTrace();
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to get CommandMap", e);
         }
 
         return commandMap;

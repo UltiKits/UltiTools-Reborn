@@ -15,7 +15,7 @@ import org.bukkit.configuration.MemorySection;
  * 实现类应将对象转换为可保存到配置文件并从中加载的 MemorySection 结构。
  * </p>
  *
- * <h3>Example Usage / 使用示例:</h3>
+ * <p><strong>Example Usage / 使用示例:</strong></p>
  * <pre>{@code
  * public class MyDataSerializer implements ObjectConfigSerializer<MyData> {
  *     public MemorySection serializeToMemorySection(MyData data) {

@@ -1,29 +1,33 @@
 package com.ultikits.ultitools.manager;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.ContextEntry;
-import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.interfaces.IPlugin;
-import com.ultikits.ultitools.utils.DependencyUtils;
-import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.utils.AnnotationUtils;
-import com.ultikits.ultitools.utils.ClassLoaderUtils;
-import com.ultikits.ultitools.utils.SecurityPolicy;
-import lombok.Getter;
-import org.bukkit.Bukkit;
-
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
-import java.util.Set;
-import java.util.HashSet;
+
+import org.bukkit.Bukkit;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ContextEntry;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.IPlugin;
+import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
+import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
+import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.DependencyUtils;
+import com.ultikits.ultitools.utils.SecurityPolicy;
+
+import lombok.Getter;
 
 /**
  * UltiTools plugin manager.
@@ -69,7 +73,11 @@ public class PluginManager {
             return;
         }
         Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
-        for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
+        
+        // Sort plugins by dependencies using Kahn's algorithm
+        List<Class<? extends UltiToolsPlugin>> sortedPlugins = sortPluginsByDependencies(pluginClassList);
+        
+        for (Class<? extends UltiToolsPlugin> pluginClass : sortedPlugins) {
             if (register(pluginClass)) {
                 success++;
             }
@@ -77,7 +85,7 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin Loading completed.");
         Bukkit.getLogger().log(
                 Level.INFO,
-                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, pluginClassList.size() - success)
+                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
         );
     }
 
@@ -537,6 +545,38 @@ public class PluginManager {
                     UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
                 }
             }
+        }
+    }
+    
+    /**
+     * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
+     * <br>
+     * 使用 Kahn 算法（拓扑排序）按依赖关系对插件进行排序。
+     *
+     * @param plugins list of plugin classes to sort <br> 要排序的插件类列表
+     * @return sorted list of plugin classes <br> 排序后的插件类列表
+     */
+    private List<Class<? extends UltiToolsPlugin>> sortPluginsByDependencies(
+            List<Class<? extends UltiToolsPlugin>> plugins) {
+        
+        PluginDependencyResolver resolver = new PluginDependencyResolver(Bukkit.getLogger());
+        
+        try {
+            List<Class<? extends UltiToolsPlugin>> sorted = resolver.resolve(plugins);
+            Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin load order resolved successfully.");
+            return sorted;
+        } catch (CircularDependencyException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] " + e.getMessage());
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
+            return new ArrayList<>(plugins);
+        } catch (MissingDependencyException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] " + e.getMessage());
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
+            return new ArrayList<>(plugins);
         }
     }
 }

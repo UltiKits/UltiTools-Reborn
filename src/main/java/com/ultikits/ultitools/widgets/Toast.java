@@ -21,7 +21,7 @@ import com.ultikits.ultitools.UltiTools;
  * 使用动态成就创建和自动清理机制。
  * </p>
  *
- * <h3>Example Usage / 使用示例:</h3>
+ * <p><strong>Example Usage / 使用示例:</strong></p>
  * <pre>{@code
  * // Display a goal-style toast / 显示目标样式提示
  * Toast.displayTo(player, "diamond", "You found a diamond!", Toast.Style.GOAL);
@@ -33,7 +33,7 @@ import com.ultikits.ultitools.UltiTools;
  * Toast.displayTo(player, "gold_ingot", "Welcome!|Enjoy your stay!", Toast.Style.CHALLENGE);
  * }</pre>
  *
- * <h3>Toast Styles / 提示样式:</h3>
+ * <p><strong>Toast Styles / 提示样式:</strong></p>
  * <ul>
  *   <li>{@link Style#GOAL} - Green background, for completed goals / 绿色背景，用于完成目标</li>
  *   <li>{@link Style#TASK} - Yellow background, for tasks / 黄色背景，用于任务</li>

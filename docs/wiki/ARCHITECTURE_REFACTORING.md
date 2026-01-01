@@ -438,12 +438,178 @@ void testValidatorChain() {
   - `processingMessageKey()` - 自定义 i18n 消息键
   - `timeout()` - 超时设置（秒）
 
-#### 单元测试覆盖
+---
+
+## 6.2.0 模块化重构 (P0/P1/P2)
+
+### P0 阶段：核心组件增强
+
+#### 统一异常体系
+
+新增统一的异常处理体系，所有异常携带错误码：
+
+```
+exceptions/
+├── UltiToolsException.java      # 抽象基类
+├── ErrorCode.java               # 错误码枚举
+├── ContainerException.java      # IoC 容器异常 (2000-2999)
+├── DataAccessException.java     # 数据访问异常 (3000-3999)
+├── CommandException.java        # 命令异常 (4000-4999)
+├── ConfigurationException.java  # 配置异常 (5000-5999)
+└── PluginModuleException.java   # 插件模块异常 (6000-6999)
+```
+
+使用示例：
+
+```java
+throw new DataAccessException(ErrorCode.ENTITY_NOT_FOUND, 
+    "User not found with id: " + id);
+
+// 工厂方法
+throw ContainerException.circularDependency("ServiceA");
+throw DataAccessException.entityNotFound(User.class, userId);
+```
+
+#### 事务管理器
+
+新增 `TransactionManager` 接口和 `DataSourceTransactionManager` 实现：
+
+```java
+public interface TransactionManager {
+    void begin();
+    void commit();
+    void rollback();
+    boolean hasActiveTransaction();
+    int getTransactionDepth();  // 支持嵌套事务
+}
+```
+
+特性：
+- 基于 ThreadLocal 的线程安全实现
+- 支持嵌套事务（depth 计数）
+- 支持事务隔离级别设置
+
+#### ContextHolder
+
+静态持有器，用于在无法依赖注入的场景访问 IoC 容器：
+
+```java
+ContextHolder.setContext(container);  // 启动时
+MyService service = ContextHolder.getBean(MyService.class);
+ContextHolder.clear();  // 关闭时
+```
+
+### P1 阶段：命令与 WebSocket
+
+#### Tab 补全系统
+
+新增策略模式的 Tab 补全系统：
+
+```
+commands/tabcomplete/
+├── TabCompleter.java              # 补全策略接口
+├── TabCompletionContext.java      # 补全上下文
+├── TabCompletionManager.java      # 中央管理器
+├── OnlinePlayersCompleter.java    # 在线玩家
+├── WorldsCompleter.java           # 世界名称
+├── MaterialsCompleter.java        # 材料/方块/物品
+├── StaticSuggestionsCompleter.java # 静态列表
+└── MethodInvocationCompleter.java  # 方法调用
+```
+
+内置快捷键：`@players`, `@worlds`, `@materials`, `@blocks`, `@items`, `@boolean`, `@toggle`
+
+#### WebSocket 重连机制
+
+新增指数退避重连策略和消息处理器注册表：
+
+```
+websocket/
+├── ReconnectStrategy.java              # 重连策略接口
+├── ExponentialBackoffStrategy.java     # 指数退避 (5s→5min)
+├── WebSocketMessageHandler.java        # 消息处理器接口
+├── MessageHandlerRegistry.java         # 处理器注册表
+└── handlers/
+    ├── PongHandler.java                # 心跳响应
+    ├── ServerStatusHandler.java        # 服务器状态
+    ├── CommandExecutionHandler.java    # 远程命令
+    ├── LogStreamHandler.java           # 日志流
+    └── FileOperationHandler.java       # 文件操作
+```
+
+#### 插件依赖排序
+
+新增 `@PluginDependency` 注解和 `PluginDependencyResolver`（Kahn 算法拓扑排序）：
+
+```java
+@PluginDependency(
+    depends = {"CorePlugin"},
+    softDepends = {"OptionalPlugin"},
+    loadBefore = {"LatePlugin"}
+)
+public class MyPlugin extends UltiToolsPlugin { }
+```
+
+#### 三级缓存
+
+SimpleContainer 新增三级缓存，解决 setter 注入循环依赖：
+
+| 缓存级别 | 名称 | 存储内容 |
+|---------|------|---------|
+| 一级缓存 | singletonObjects | 完全初始化的 Bean |
+| 二级缓存 | earlySingletonObjects | 早期暴露的 Bean |
+| 三级缓存 | singletonFactories | Bean 工厂 |
+
+### P2 阶段：配置与测试
+
+#### 配置变更监听
+
+新增 `ConfigChangeListener` 接口和 `AbstractConfigEntity` 支持：
+
+```java
+config.addChangeListener(cfg -> {
+    logger.info("Config reloaded!");
+    refreshCache();
+});
+config.reload();  // 手动触发重载
+```
+
+特性：异常隔离，单个监听器异常不影响其他监听器。
+
+#### JaCoCo 覆盖率
+
+Maven 集成 JaCoCo 插件，生成代码覆盖率报告：
+
+```xml
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <version>0.8.11</version>
+</plugin>
+```
+
+报告位置：`target/site/jacoco/index.html`
+
+#### 测试覆盖
+
+- 2696 个测试用例
+- 配置监听器测试 (16 cases)
+- 全栈集成测试 (11 cases)
+- 插件依赖排序测试
+- 三级缓存测试
+
+---
+
+## 单元测试覆盖
 - `TypeParserRegistryTest` - 类型解析器注册表测试
 - `GameModeParserTest` - 游戏模式解析器测试
 - `ValidationChainTest` - 验证链测试
 - `CommandContextTest` - 命令上下文测试
 - `DataEntityTest` - 数据实体测试
+- `ConfigChangeListenerTest` - 配置变更监听测试 (6.2.0)
+- `SimpleContainerThreeLevelCacheTest` - 三级缓存测试 (6.2.0)
+- `PluginDependencyResolverTest` - 插件依赖排序测试 (6.2.0)
+- `FullStackIntegrationTest` - 全栈集成测试 (6.2.0)
 
 ## 版本兼容性
 

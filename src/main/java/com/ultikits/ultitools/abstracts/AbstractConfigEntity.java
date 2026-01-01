@@ -1,16 +1,23 @@
 package com.ultikits.ultitools.abstracts;
 
-import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.util.ReflectUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.annotations.ConfigEntry;
-import lombok.Getter;
-import org.bukkit.configuration.file.YamlConfiguration;
-
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import org.bukkit.configuration.file.YamlConfiguration;
+
+import com.alibaba.fastjson.JSONObject;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.ConfigChangeListener;
+
+import cn.hutool.core.annotation.AnnotationUtil;
+import cn.hutool.core.util.ReflectUtil;
+import lombok.Getter;
 
 /**
  * Abstract class representing a configuration entity.
@@ -19,7 +26,10 @@ import java.util.Set;
  */
 @Getter
 public abstract class AbstractConfigEntity {
+    private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
+    
     private final String configFilePath;
+    private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
 
@@ -96,6 +106,9 @@ public abstract class AbstractConfigEntity {
         if (!upToDate) {
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
         }
+        
+        // Notify listeners after initialization
+        notifyChangeListeners();
     }
 
     /**
@@ -157,5 +170,105 @@ public abstract class AbstractConfigEntity {
             }
         }
         return jsonObject;
+    }
+    
+    // ==================== Configuration Change Listener Support ====================
+    
+    /**
+     * Adds a configuration change listener.
+     * The listener will be notified when the configuration is reloaded.
+     * <p>
+     * 添加配置变更监听器。当配置重载时，监听器将被通知。
+     *
+     * @param listener the listener to add <br> 要添加的监听器
+     */
+    public void addChangeListener(ConfigChangeListener listener) {
+        if (listener != null) {
+            changeListeners.add(listener);
+        }
+    }
+    
+    /**
+     * Removes a configuration change listener.
+     * <p>
+     * 移除配置变更监听器。
+     *
+     * @param listener the listener to remove <br> 要移除的监听器
+     */
+    public void removeChangeListener(ConfigChangeListener listener) {
+        changeListeners.remove(listener);
+    }
+    
+    /**
+     * Removes all configuration change listeners.
+     * <p>
+     * 移除所有配置变更监听器。
+     */
+    public void clearChangeListeners() {
+        changeListeners.clear();
+    }
+    
+    /**
+     * Gets the number of registered change listeners.
+     * <p>
+     * 获取已注册的变更监听器数量。
+     *
+     * @return the number of listeners <br> 监听器数量
+     */
+    public int getChangeListenerCount() {
+        return changeListeners.size();
+    }
+    
+    /**
+     * Notifies all registered listeners about the configuration change.
+     * Individual listener exceptions do not affect other listeners.
+     * <p>
+     * 通知所有已注册的监听器配置已变更。单个监听器的异常不影响其他监听器。
+     */
+    protected void notifyChangeListeners() {
+        for (ConfigChangeListener listener : changeListeners) {
+            try {
+                listener.onConfigReload(this);
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, 
+                    "Config change listener failed for " + this.getClass().getSimpleName(), e);
+            }
+        }
+    }
+    
+    /**
+     * Reloads the configuration from file and notifies all listeners.
+     * <p>
+     * 从文件重新加载配置并通知所有监听器。
+     *
+     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     */
+    public void reload() throws IOException {
+        if (ultiToolsPlugin == null) {
+            throw new IllegalStateException("Config not initialized. Call init() first.");
+        }
+        
+        // Reload from file
+        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
+        
+        // Update field values
+        for (Field field : ReflectUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                field.setAccessible(true);
+                ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
+                String path = annotation.path();
+                if (path.isEmpty()) {
+                    path = field.getName();
+                }
+                Object configValue = config.get(path);
+                if (configValue != null) {
+                    Object parse = ReflectUtil.newInstance(annotation.parser()).parse(configValue);
+                    ReflectUtil.setFieldValue(this, field, parse);
+                }
+            }
+        }
+        
+        // Notify listeners
+        notifyChangeListeners();
     }
 }

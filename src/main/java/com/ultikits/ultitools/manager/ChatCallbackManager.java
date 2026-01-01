@@ -4,6 +4,8 @@ import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -26,7 +28,7 @@ import cn.hutool.core.lang.func.VoidFunc0;
  * 注册一个隐藏命令 /ultitools_callback，通过 UUID 执行已注册的回调。
  * </p>
  *
- * <h3>Usage Example / 使用示例:</h3>
+ * <p><strong>Usage Example / 使用示例:</strong></p>
  * <pre>{@code
  * VoidFunc0 callback = () -> player.sendMessage("Clicked!");
  * UUID callbackId = ChatCallbackManager.registerCallback(callback);
@@ -116,7 +118,8 @@ public class ChatCallbackManager {
         } catch (Exception e) {
             // Mark as initialized even on failure to prevent repeated attempts
             initialized = true;
-            e.printStackTrace();
+            Logger.getLogger(ChatCallbackManager.class.getName())
+                    .log(Level.SEVERE, "Failed to initialize ChatCallbackManager", e);
         }
     }
 }

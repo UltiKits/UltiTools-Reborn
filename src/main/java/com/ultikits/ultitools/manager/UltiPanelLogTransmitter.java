@@ -1,13 +1,5 @@
 package com.ultikits.ultitools.manager;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.utils.CommonUtils;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
-import lombok.Getter;
-import lombok.Setter;
-
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -16,6 +8,15 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.CommonUtils;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * UltiPanel日志传输器
@@ -109,9 +110,8 @@ public class UltiPanelLogTransmitter {
             }
             
         } catch (Exception e) {
-            // 避免日志循环，只输出到控制台
-            System.err.println("[UltiPanel] 发送日志失败: " + e.getMessage());
-            e.printStackTrace();
+            // 避免日志循环，只输出到控制台（不使用日志记录器以避免循环）
+            System.err.println("[UltiPanel] 发送日志失败: " + e.getMessage() + " - " + e.getClass().getSimpleName());
         }
     }
     

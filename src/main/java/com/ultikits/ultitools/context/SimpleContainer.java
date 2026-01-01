@@ -28,7 +28,17 @@ import com.ultikits.ultitools.annotations.Service;
 public class SimpleContainer {
     private static final Logger LOGGER = Logger.getLogger(SimpleContainer.class.getName());
     
-    private final Map<String, Object> singletons = new ConcurrentHashMap<>();
+    // === Three-level cache for circular dependency resolution ===
+    // Level 1: Complete singleton objects (fully initialized)
+    private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>();
+    // Level 2: Early singleton objects (instantiated but not fully initialized - exposed for circular ref)
+    private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<>();
+    // Level 3: Singleton factories (ObjectFactory for creating early refs)
+    private final Map<String, Supplier<Object>> singletonFactories = new ConcurrentHashMap<>();
+    
+    // Legacy singletons reference (for backwards compatibility - points to singletonObjects)
+    private final Map<String, Object> singletons = singletonObjects;
+    
     private final Map<String, Supplier<Object>> suppliers = new ConcurrentHashMap<>();
     private final Map<Class<?>, Object> typeMappings = new ConcurrentHashMap<>();
     private final Map<Class<?>, Supplier<Object>> typeSuppliers = new ConcurrentHashMap<>();
@@ -55,6 +65,75 @@ public class SimpleContainer {
     }
 
     /**
+     * Get singleton from three-level cache.
+     * This method implements the circular dependency resolution through early singleton exposure.
+     * <br>
+     * 从三级缓存获取单例。此方法通过提前暴露单例来实现循环依赖解析。
+     *
+     * @param beanName bean name <br> Bean名称
+     * @param allowEarlyReference whether to allow early reference (level 2/3 cache) <br> 是否允许早期引用（二/三级缓存）
+     * @return singleton instance or null if not found <br> 单例实例，如果未找到则返回null
+     */
+    protected Object getSingleton(String beanName, boolean allowEarlyReference) {
+        // Level 1: Check complete singletons
+        Object singletonObject = singletonObjects.get(beanName);
+        
+        if (singletonObject == null && currentlyCreating.contains(beanName)) {
+            // Bean is currently being created - check early caches
+            if (allowEarlyReference) {
+                // Level 2: Check early singleton objects
+                singletonObject = earlySingletonObjects.get(beanName);
+                
+                if (singletonObject == null) {
+                    // Level 3: Check singleton factories
+                    Supplier<Object> factory = singletonFactories.get(beanName);
+                    if (factory != null) {
+                        // Create early singleton reference
+                        singletonObject = factory.get();
+                        // Promote to level 2 cache
+                        earlySingletonObjects.put(beanName, singletonObject);
+                        // Remove from level 3 cache
+                        singletonFactories.remove(beanName);
+                        LOGGER.fine("Early singleton reference created for: " + beanName);
+                    }
+                }
+            }
+        }
+        
+        return singletonObject;
+    }
+    
+    /**
+     * Add a singleton factory to level 3 cache for early reference support.
+     * <br>
+     * 向三级缓存添加单例工厂以支持早期引用。
+     *
+     * @param beanName bean name <br> Bean名称
+     * @param singletonFactory factory for creating early reference <br> 创建早期引用的工厂
+     */
+    protected void addSingletonFactory(String beanName, Supplier<Object> singletonFactory) {
+        if (!singletonObjects.containsKey(beanName)) {
+            singletonFactories.put(beanName, singletonFactory);
+            earlySingletonObjects.remove(beanName);
+        }
+    }
+    
+    /**
+     * Add a fully initialized singleton to level 1 cache.
+     * Clears from level 2 and level 3 caches.
+     * <br>
+     * 向一级缓存添加完全初始化的单例。从二级和三级缓存清除。
+     *
+     * @param beanName bean name <br> Bean名称
+     * @param singletonObject fully initialized singleton <br> 完全初始化的单例
+     */
+    protected void addSingleton(String beanName, Object singletonObject) {
+        singletonObjects.put(beanName, singletonObject);
+        singletonFactories.remove(beanName);
+        earlySingletonObjects.remove(beanName);
+    }
+
+    /**
      * Register a singleton instance.
      * <br>
      * 注册单例实例。
@@ -63,7 +142,7 @@ public class SimpleContainer {
      * @param instance instance object <br> 实例对象
      */
     public void registerSingleton(String name, Object instance) {
-        singletons.put(name, instance);
+        addSingleton(name, instance);
         typeMappings.put(instance.getClass(), instance);
     }
 
@@ -127,7 +206,8 @@ public class SimpleContainer {
      * @return bean instance <br> Bean实例
      */
     public Object getBean(String name) {
-        Object bean = singletons.get(name);
+        // Try three-level cache for singletons
+        Object bean = getSingleton(name, true);
         if (bean != null) {
             return bean;
         }
@@ -136,17 +216,12 @@ public class SimpleContainer {
         BeanDefinition definition = beanDefinitions.get(name);
         if (definition != null) {
             if (definition.isSingleton()) {
-                // Double-check for singleton beans
-                bean = singletons.get(name);
+                // Double-check for singleton beans using three-level cache
+                bean = getSingleton(name, true);
                 if (bean == null) {
                     synchronized (this) {
-                        bean = singletons.get(name);
+                        bean = getSingleton(name, true);
                         if (bean == null) {
-                            // Check circular dependency inside synchronized block
-                            if (currentlyCreating.contains(name)) {
-                                throw new RuntimeException("Circular dependency detected for bean '" + name + 
-                                    "'. Currently creating beans: " + currentlyCreating);
-                            }
                             bean = createBean(name, definition);
                         }
                     }
@@ -156,7 +231,7 @@ public class SimpleContainer {
                 // Prototype: always create new instance
                 // Check circular dependency for prototype
                 if (currentlyCreating.contains(name)) {
-                    throw new RuntimeException("Circular dependency detected for bean '" + name + 
+                    throw new RuntimeException("Circular dependency detected for prototype bean '" + name + 
                         "'. Currently creating beans: " + currentlyCreating);
                 }
                 return createBean(name, definition);
@@ -168,7 +243,7 @@ public class SimpleContainer {
             bean = supplier.get();
             BeanScope scope = beanScopes.getOrDefault(name, BeanScope.SINGLETON);
             if (scope == BeanScope.SINGLETON) {
-                singletons.put(name, bean);
+                singletonObjects.put(name, bean);
             }
             return bean;
         }
@@ -305,11 +380,15 @@ public class SimpleContainer {
         LOGGER.info("Closing container...");
         
         // Invoke @PreDestroy methods on all singleton beans
-        for (Object bean : singletons.values()) {
+        for (Object bean : singletonObjects.values()) {
             invokePreDestroyMethods(bean);
         }
         
-        singletons.clear();
+        // Clear three-level cache
+        singletonObjects.clear();
+        earlySingletonObjects.clear();
+        singletonFactories.clear();
+        
         suppliers.clear();
         typeMappings.clear();
         typeSuppliers.clear();
@@ -481,8 +560,9 @@ public class SimpleContainer {
 
     /**
      * Create bean from definition.
+     * Uses three-level cache to support circular dependency resolution for setter injection.
      * <br>
-     * 从定义创建Bean。
+     * 从定义创建Bean。使用三级缓存支持 setter 注入的循环依赖解析。
      *
      * @param name bean name <br> Bean名称
      * @param definition bean definition <br> Bean定义
@@ -513,12 +593,19 @@ public class SimpleContainer {
                 }
             }
 
+            // Add to level 3 cache for early reference support (before autowiring)
+            // This allows other beans being created to get a reference to this bean
+            if (definition.isSingleton()) {
+                final Object earlyBean = bean;
+                addSingletonFactory(name, () -> earlyBean);
+            }
+
             // Apply bean post processors before initialization
             for (BeanPostProcessor processor : beanPostProcessors) {
                 bean = processor.postProcessBeforeInitialization(bean, name);
             }
 
-            // Autowire dependencies
+            // Autowire dependencies (may trigger circular dependency resolution)
             getAutowireCapableBeanFactory().autowireBean(bean);
 
             // Invoke @PostConstruct methods
@@ -529,15 +616,26 @@ public class SimpleContainer {
                 bean = processor.postProcessAfterInitialization(bean, name);
             }
 
-            // Store singleton
+            // Store singleton in level 1 cache (final location)
             if (definition.isSingleton()) {
-                singletons.put(name, bean);
+                // Check if early reference was created and exposed
+                Object earlySingletonRef = earlySingletonObjects.get(name);
+                if (earlySingletonRef != null && earlySingletonRef != bean) {
+                    // Bean was modified during post-processing, but early ref was already exposed
+                    // This is a circular dependency issue - log warning
+                    LOGGER.warning("Bean '" + name + "' was modified after early exposure. " +
+                        "Circular dependency may cause issues with proxied beans.");
+                }
+                addSingleton(name, bean);
                 typeMappings.put(definition.getBeanClass(), bean);
             }
 
             LOGGER.fine("Successfully created bean: " + name);
             return bean;
         } catch (Exception e) {
+            // Clean up caches on failure
+            singletonFactories.remove(name);
+            earlySingletonObjects.remove(name);
             LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
             throw new RuntimeException("Failed to create bean: " + name, e);
         } finally {

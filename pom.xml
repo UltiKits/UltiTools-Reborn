@@ -90,6 +90,60 @@
                     <excludedGroups>${excludedGroups}</excludedGroups>
                 </configuration>
             </plugin>
+            <!-- JaCoCo 覆盖率插件 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <!-- 准备代理 -->
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <!-- 生成报告 -->
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <!-- 覆盖率检查 (可选，暂时注释以避免构建失败) -->
+                    <!--
+                    <execution>
+                        <id>check</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.70</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    -->
+                </executions>
+                <configuration>
+                    <excludes>
+                        <!-- 排除生成的代码 -->
+                        <exclude>**/*$$*</exclude>
+                        <!-- 排除纯数据类 -->
+                        <exclude>**/entity/*Entity.class</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
             <!--发布源码插件 -->
             <!--            <plugin>-->
             <!--                <groupId>org.apache.maven.plugins</groupId>-->
@@ -433,6 +487,12 @@
             <artifactId>h2</artifactId>
             <version>2.2.224</version>
             <scope>test</scope>
+        </dependency>
+        <!-- CGLIB for AOP proxy support (Spring-like experience without interface requirement) -->
+        <dependency>
+            <groupId>cglib</groupId>
+            <artifactId>cglib-nodep</artifactId>
+            <version>3.3.0</version>
         </dependency>
     </dependencies>
 </project>
