@@ -15,6 +15,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.utils.XVersionUtils;
 import com.ultikits.ultitools.widgets.Toast;
 
 @Service
@@ -188,7 +189,7 @@ public class InMemoryNotificationService implements NotificationService {
 
     @Override
     public boolean sendActionBarNotification(Player player, String message) {
-        UltiTools.getInstance().getVersionWrapper().sendActionBar(player, message);
+        XVersionUtils.sendActionBar(player, message);
         return true;
     }
 

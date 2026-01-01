@@ -3,7 +3,6 @@ package com.ultikits.ultitools.services.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -202,8 +201,9 @@ class InMemeryTeleportServiceTest {
             // Act
             teleportService.teleport(player, targetLocation);
 
-            // Assert - 验证 getSound 被调用
-            verify(mockVersionWrapper).getSound(any());
+            // Assert - 验证传送成功（音效现在通过 XVersionUtils 静态方法播放）
+            assertThat(player.getLocation().getBlockX()).isEqualTo(targetLocation.getBlockX());
+            assertThat(player.getLocation().getBlockZ()).isEqualTo(targetLocation.getBlockZ());
         }
 
         @Test

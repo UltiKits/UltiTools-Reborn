@@ -52,7 +52,17 @@ import lombok.Getter;
  * 它实现了Bukkit API中的TabExecutor接口。
  *
  * @see TabExecutor
+ * @see com.ultikits.ultitools.abstracts.command.BaseCommandExecutor
+ * @deprecated This class is maintained for backward compatibility. 
+ *             Use {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor} instead,
+ *             which provides better architecture with Chain of Responsibility pattern.
+ *             <p>
+ *             此类仅为向后兼容而保留。
+ *             请使用 {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}，
+ *             它提供了使用责任链模式的更好架构。
+ * @since 6.2.0 deprecated
  */
+@Deprecated(since = "6.2.0", forRemoval = true)
 public abstract class AbstractCommandExecutor implements TabExecutor {
     private final BiMap<String, Method> mappings = HashBiMap.create();
     private final Map<UUID, Method> senderLock = new ConcurrentHashMap<>();

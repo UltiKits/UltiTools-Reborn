@@ -21,6 +21,10 @@ public class UltiToolsBean {
         return UltiTools.getInstance().getDataStore();
     }
 
+    /**
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     */
+    @Deprecated
     @Bean
     public VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();

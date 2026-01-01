@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 import org.bukkit.inventory.ItemStack;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.XVersionUtils;
 
 /**
  * The enum Buttons.
@@ -16,27 +17,27 @@ public enum Buttons {
     /**
      * Previous buttons.
      */
-    PREVIOUS("上一页", () -> UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED)),
+    PREVIOUS("上一页", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED)),
     /**
      * Next buttons.
      */
-    NEXT("下一页", () -> UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED)),
+    NEXT("下一页", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED)),
     /**
      * Back buttons.
      */
-    BACK("返回", () -> UltiTools.getInstance().getVersionWrapper().getSign()),
+    BACK("返回", XVersionUtils::getSign),
     /**
      * Quit buttons.
      */
-    QUIT("退出", () -> UltiTools.getInstance().getVersionWrapper().getEndEye()),
+    QUIT("退出", XVersionUtils::getEndEye),
     /**
      * Ok buttons.
      */
-    OK("确认", () -> UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN)),
+    OK("确认", () -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN)),
     /**
      * Cancel buttons.
      */
-    CANCEL("取消", () -> UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED));
+    CANCEL("取消", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED));
 
     /**
      * The i18n key for the button name.

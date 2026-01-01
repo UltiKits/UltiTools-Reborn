@@ -228,7 +228,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * @return the version wrapper <br> 版本包装器
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
+    @Deprecated
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
     }

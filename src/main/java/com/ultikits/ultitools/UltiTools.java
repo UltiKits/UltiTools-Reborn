@@ -6,6 +6,7 @@ import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
@@ -59,6 +60,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private final CommandManager commandManager = new CommandManager();
     @Getter
     private DependenceManagers dependenceManagers;
+    /**
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     */
+    @Deprecated
     @Getter
     private VersionWrapper versionWrapper;
     @Getter
@@ -180,15 +185,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
             }
         }
 
-        // Adopt server version
-        this.versionWrapper = new SpigotVersionManager().match();
-        if (this.versionWrapper == null) {
-            Bukkit.getLogger().log(
-                    Level.SEVERE,
-                    "[UltiTools-API] Your server version isn't supported in UltiTools-API!"
-            );
-            return;
-        }
+        // Adopt server version (now using XSeries, no dynamic loading needed)
+        this.versionWrapper = new DefaultVersionWrapper();
 
         // Config initialization & DataStore initialization
         configManager = new ConfigManager();

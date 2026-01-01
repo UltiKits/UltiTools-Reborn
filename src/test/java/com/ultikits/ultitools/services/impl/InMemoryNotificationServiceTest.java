@@ -2,7 +2,6 @@ package com.ultikits.ultitools.services.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -401,9 +400,8 @@ class InMemoryNotificationServiceTest {
             // Act
             boolean result = notificationService.sendActionBarNotification(player, message);
 
-            // Assert
+            // Assert - 验证方法执行成功（ActionBar 现在通过 XVersionUtils 静态方法发送）
             assertThat(result).isTrue();
-            verify(mockVersionWrapper).sendActionBar(player, message);
         }
 
         @Test

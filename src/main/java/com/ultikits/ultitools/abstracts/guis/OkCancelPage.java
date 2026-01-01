@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.guis;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Colors;
+import com.ultikits.ultitools.utils.XVersionUtils;
 import mc.obliviate.inventory.Gui;
 import mc.obliviate.inventory.Icon;
 import net.kyori.adventure.text.Component;
@@ -18,7 +19,16 @@ import static com.ultikits.ultitools.utils.MessageUtils.coloredMsg;
  * It extends the Gui class from mc.obliviate.inventory package.
  * <p>
  * 这个抽象类代表了一个带有OK和Cancel选项的GUI页面。它继承了mc.obliviate.inventory包中的Gui类。
+ *
+ * @see com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage
+ * @deprecated Use {@link com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage} instead,
+ *             which provides better template method pattern, builder support, and code organization.
+ *             <p>
+ *             请使用 {@link com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage}，
+ *             它提供了更好的模板方法模式、构建器支持和代码组织。
+ * @since 6.2.0 deprecated
  */
+@Deprecated(since = "6.2.0", forRemoval = true)
 public abstract class OkCancelPage extends Gui {
 
     /**
@@ -87,16 +97,16 @@ public abstract class OkCancelPage extends Gui {
      */
     @Override
     public void onOpen(InventoryOpenEvent event) {
-        Icon lastRowBackground = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GRAY));
+        Icon lastRowBackground = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.GRAY));
         lastRowBackground.setName(" ");
         this.fillRow(lastRowBackground, getSize() / 9 - 1);
-        Icon ok = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
+        Icon ok = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.GREEN));
         ok.setName(coloredMsg(getOkName()));
         ok.onClick((e) -> {
             onOk(e);
             player.closeInventory();
         });
-        Icon cancel = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED));
+        Icon cancel = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.RED));
         cancel.setName(coloredMsg(getCancelName()));
         cancel.onClick((e) -> {
             onCancel(e);
