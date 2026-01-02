@@ -3,13 +3,13 @@ package com.ultikits.ultitools.utils;
 import java.io.IOException;
 import java.util.logging.Level;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
-
-import cn.hutool.http.HttpResponse;
 
 /**
  * Utility class for plugin initialization and WebSocket communication.
@@ -42,24 +42,25 @@ public class PluginInitiationUtils {
         boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
         token = HttpRequestUtils.getToken(username, password);
         String uuid = CommonUtils.getUltiToolsUUID();
-        HttpResponse uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token);
+        Response uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token);
         int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
         String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
         if (uuidResponse.getStatus() == 404) {
-            try (HttpResponse registerResponse = HttpRequestUtils.registerServer(uuid, port, domain, ssl, token)) {
+            try (Response registerResponse = HttpRequestUtils.registerServer(uuid, port, domain, ssl, token)) {
                 if (!registerResponse.isOk()) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, registerResponse.body());
                     return false;
                 }
             }
         } else {
-            try (HttpResponse registerResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token)) {
+            try (Response registerResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token)) {
                 if (!registerResponse.isOk()) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, registerResponse.body());
                     return false;
                 }
             }
         }
+        uuidResponse.close();
         return true;
     }
 
@@ -68,13 +69,13 @@ public class PluginInitiationUtils {
      * <br>
      * 初始化websocket。
      */
-    public static void initWebsocket() {
+    public static void initWebsocket() throws IOException {
         panelWS = getPanelWebsocketClient();
         
         // 设置消息处理器
         panelWS.setMessageHandler(message -> {
-            String type = message.getString("type");
-            JSONObject data = message.getJSONObject("data");
+            String type = message.get("type").getAsString();
+            JsonObject data = message.getAsJsonObject("data");
             
             // 记录接收到的消息处理日志
             UltiTools.getInstance().getLogger().log(Level.INFO, 
@@ -151,7 +152,7 @@ public class PluginInitiationUtils {
                     
                     default:
                         UltiTools.getInstance().getLogger().log(Level.WARNING, 
-                            String.format("未知的消息类型: %s，消息内容: %s", type, message.toJSONString()));
+                            String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
                         // 发送错误响应
                         sendErrorResponse("Unknown message type: " + type);
                         break;
@@ -221,34 +222,34 @@ public class PluginInitiationUtils {
     /**
      * 处理配置更新
      */
-    private static void handleConfigUpdate(JSONObject data) {
+    private static void handleConfigUpdate(JsonObject data) {
         if (data != null) {
             // 只处理明确的配置更新请求（包含requestId），忽略服务器的确认消息
-            if (data.containsKey("requestId")) {
-                String requestId = data.getString("requestId");
+            if (data.has("requestId")) {
+                String requestId = data.get("requestId").getAsString();
                 try {
-                    ConfigEditorUtils.updateConfigMap(data.getString("config"));
+                    ConfigEditorUtils.updateConfigMap(data.get("config").getAsString());
                     // 发送确认消息
-                    JSONObject response = new JSONObject();
-                    response.put("type", "config_update_response");
-                    response.put("status", "success");
-                    response.put("serverId", panelWS.getServerId());
-                    response.put("requestId", requestId);
+                    JsonObject response = new JsonObject();
+                    response.addProperty("type", "config_update_response");
+                    response.addProperty("status", "success");
+                    response.addProperty("serverId", panelWS.getServerId());
+                    response.addProperty("requestId", requestId);
                     panelWS.sendMessage(response);
                 } catch (IOException e) {
                     // 发送错误消息
-                    JSONObject response = new JSONObject();
-                    response.put("type", "config_update_response");
-                    response.put("status", "error");
-                    response.put("error", e.getMessage());
-                    response.put("serverId", panelWS.getServerId());
-                    response.put("requestId", requestId);
+                    JsonObject response = new JsonObject();
+                    response.addProperty("type", "config_update_response");
+                    response.addProperty("status", "error");
+                    response.addProperty("error", e.getMessage());
+                    response.addProperty("serverId", panelWS.getServerId());
+                    response.addProperty("requestId", requestId);
                     panelWS.sendMessage(response);
                 }
             } else {
                 // 识别并忽略服务器确认消息
-                if (data.containsKey("message")) {
-                    String message = data.getString("message");
+                if (data.has("message")) {
+                    String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器配置更新确认: %s", message));
                 } else {
@@ -264,15 +265,15 @@ public class PluginInitiationUtils {
     /**
      * 处理ping消息
      */
-    private static void handlePing(JSONObject message) {
+    private static void handlePing(JsonObject message) {
         // 发送pong响应
-        JSONObject pongResponse = new JSONObject();
-        pongResponse.put("type", "pong");
-        pongResponse.put("timestamp", System.currentTimeMillis());
+        JsonObject pongResponse = new JsonObject();
+        pongResponse.addProperty("type", "pong");
+        pongResponse.addProperty("timestamp", System.currentTimeMillis());
         
-        JSONObject pongData = new JSONObject();
-        pongData.put("timestamp", System.currentTimeMillis());
-        pongResponse.put("data", pongData);
+        JsonObject pongData = new JsonObject();
+        pongData.addProperty("timestamp", System.currentTimeMillis());
+        pongResponse.add("data", pongData);
         
         panelWS.sendMessage(pongResponse);
         UltiTools.getInstance().getLogger().log(Level.FINE, "Responded to ping with pong");
@@ -281,11 +282,11 @@ public class PluginInitiationUtils {
     /**
      * 处理pong消息
      */
-    private static void handlePong(JSONObject data) {
+    private static void handlePong(JsonObject data) {
         UltiTools.getInstance().getLogger().log(Level.FINE, "Received pong response");
         // 可以在这里更新连接状态或计算延迟
-        if (data != null && data.containsKey("timestamp")) {
-            long serverTimestamp = data.getLong("timestamp");
+        if (data != null && data.has("timestamp")) {
+            long serverTimestamp = data.get("timestamp").getAsLong();
             long currentTime = System.currentTimeMillis();
             long latency = currentTime - serverTimestamp;
             UltiTools.getInstance().getLogger().log(Level.FINE, "WebSocket latency: " + latency + "ms");
@@ -295,11 +296,11 @@ public class PluginInitiationUtils {
     /**
      * 处理订阅消息
      */
-    private static void handleSubscribe(JSONObject data) {
+    private static void handleSubscribe(JsonObject data) {
         if (data != null) {
-            boolean subscribed = data.getBooleanValue("subscribed");
-            String serverId = data.getString("serverId");
-            String message = data.getString("message");
+            boolean subscribed = data.get("subscribed").getAsBoolean();
+            String serverId = data.get("serverId").getAsString();
+            String message = data.get("message").getAsString();
             
             if (subscribed) {
                 UltiTools.getInstance().getLogger().log(Level.INFO, 
@@ -314,9 +315,9 @@ public class PluginInitiationUtils {
     /**
      * 处理取消订阅消息
      */
-    private static void handleUnsubscribe(JSONObject data) {
+    private static void handleUnsubscribe(JsonObject data) {
         if (data != null) {
-            String serverId = data.getString("serverId");
+            String serverId = data.get("serverId").getAsString();
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("已取消订阅服务器: %s", serverId));
         }
@@ -325,10 +326,10 @@ public class PluginInitiationUtils {
     /**
      * 处理通知消息
      */
-    private static void handleNotification(JSONObject data) {
+    private static void handleNotification(JsonObject data) {
         if (data != null) {
-            String message = data.getString("message");
-            String clientId = data.getString("clientId");
+            String message = data.get("message").getAsString();
+            String clientId = data.get("clientId").getAsString();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[服务器通知] %s (客户端ID: %s)", message, clientId));
@@ -338,9 +339,9 @@ public class PluginInitiationUtils {
     /**
      * 处理错误消息
      */
-    private static void handleError(JSONObject data) {
+    private static void handleError(JsonObject data) {
         if (data != null) {
-            String errorMessage = data.getString("message");
+            String errorMessage = data.get("message").getAsString();
             UltiTools.getInstance().getLogger().log(Level.SEVERE, 
                 String.format("[WebSocket错误] %s", errorMessage));
         }
@@ -351,20 +352,20 @@ public class PluginInitiationUtils {
     /**
      * 处理玩家事件
      */
-    private static void handlePlayerEvent(JSONObject data) {
+    private static void handlePlayerEvent(JsonObject data) {
         if (data != null) {
-            String eventType = data.getString("eventType");
-            JSONObject player = data.getJSONObject("player");
+            String eventType = data.get("eventType").getAsString();
+            JsonObject player = data.getAsJsonObject("player");
             
             if (player != null) {
-                String playerName = player.getString("name");
+                String playerName = player.get("name").getAsString();
                 UltiTools.getInstance().getLogger().log(Level.INFO, 
                     String.format("[玩家事件] %s: %s", eventType, playerName));
             }
             
             // 记录玩家事件信息，玩家事件管理器主要负责发送事件，而不是接收
             UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("收到玩家事件消息: %s", data.toJSONString()));
+                String.format("收到玩家事件消息: %s", new Gson().toJson(data)));
         }
     }
     
@@ -373,12 +374,12 @@ public class PluginInitiationUtils {
     /**
      * 处理命令执行结果
      */
-    private static void handleCommandResult(JSONObject data) {
+    private static void handleCommandResult(JsonObject data) {
         if (data != null) {
-            String commandId = data.getString("commandId");
-            boolean success = data.getBooleanValue("success");
-            String output = data.getString("output");
-            long executionTime = data.getLongValue("executionTime");
+            String commandId = data.get("commandId").getAsString();
+            boolean success = data.get("success").getAsBoolean();
+            String output = data.get("output").getAsString();
+            long executionTime = data.get("executionTime").getAsLong();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[命令执行结果] ID: %s, 成功: %s, 执行时间: %dms", 
@@ -394,13 +395,13 @@ public class PluginInitiationUtils {
     /**
      * 处理文件操作结果
      */
-    private static void handleFileOperationResult(JSONObject data) {
+    private static void handleFileOperationResult(JsonObject data) {
         if (data != null) {
-            String operationId = data.getString("operationId");
-            boolean success = data.getBooleanValue("success");
-            String operation = data.getString("operation");
-            String path = data.getString("path");
-            String message = data.getString("message");
+            String operationId = data.get("operationId").getAsString();
+            boolean success = data.get("success").getAsBoolean();
+            String operation = data.get("operation").getAsString();
+            String path = data.get("path").getAsString();
+            String message = data.get("message").getAsString();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[文件操作结果] ID: %s, 操作: %s, 路径: %s, 成功: %s, 消息: %s", 
@@ -419,10 +420,10 @@ public class PluginInitiationUtils {
     /**
      * 处理备份操作
      */
-    private static void handleBackupOperation(JSONObject data) {
+    private static void handleBackupOperation(JsonObject data) {
         if (data != null) {
-            String operation = data.getString("operation");
-            String operationId = data.getString("operationId");
+            String operation = data.get("operation").getAsString();
+            String operationId = data.get("operationId").getAsString();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[备份操作] 操作类型: %s, ID: %s", operation, operationId));
@@ -435,12 +436,12 @@ public class PluginInitiationUtils {
     /**
      * 处理备份进度
      */
-    private static void handleBackupProgress(JSONObject data) {
+    private static void handleBackupProgress(JsonObject data) {
         if (data != null) {
-            String operationId = data.getString("operationId");
-            double progress = data.getDoubleValue("progress");
-            String currentStep = data.getString("currentStep");
-            boolean completed = data.getBooleanValue("completed");
+            String operationId = data.get("operationId").getAsString();
+            double progress = data.get("progress").getAsDouble();
+            String currentStep = data.get("currentStep").getAsString();
+            boolean completed = data.get("completed").getAsBoolean();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[备份进度] ID: %s, 进度: %.1f%%, 当前步骤: %s, 完成: %s", 
@@ -453,13 +454,13 @@ public class PluginInitiationUtils {
     /**
      * 处理配置上传
      */
-    private static void handleConfigUpload(JSONObject data) {
+    private static void handleConfigUpload(JsonObject data) {
         if (data != null) {
             // 只处理明确的配置上传请求（包含requestId），忽略服务器的确认消息
-            if (data.containsKey("requestId")) {
-                String requestId = data.getString("requestId");
-                String configType = data.getString("configType");
-                String configName = data.getString("configName");
+            if (data.has("requestId")) {
+                String requestId = data.get("requestId").getAsString();
+                String configType = data.get("configType").getAsString();
+                String configName = data.get("configName").getAsString();
                 
                 if (configType == null || configType.trim().isEmpty()) {
                     sendErrorResponse("Valid configuration type is required");
@@ -474,11 +475,11 @@ public class PluginInitiationUtils {
                     handleConfigUploadLogic(data);
                     
                     // 发送成功响应
-                    JSONObject response = new JSONObject();
-                    response.put("type", "upload_config_response");
-                    response.put("status", "success");
-                    response.put("serverId", panelWS.getServerId());
-                    response.put("requestId", requestId);
+                    JsonObject response = new JsonObject();
+                    response.addProperty("type", "upload_config_response");
+                    response.addProperty("status", "success");
+                    response.addProperty("serverId", panelWS.getServerId());
+                    response.addProperty("requestId", requestId);
                     panelWS.sendMessage(response);
                     
                 } catch (Exception e) {
@@ -486,8 +487,8 @@ public class PluginInitiationUtils {
                 }
             } else {
                 // 识别并忽略服务器确认消息
-                if (data.containsKey("message")) {
-                    String message = data.getString("message");
+                if (data.has("message")) {
+                    String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器配置上传确认: %s", message));
                 } else {
@@ -501,12 +502,12 @@ public class PluginInitiationUtils {
     /**
      * 处理配置上传逻辑
      */
-    private static void handleConfigUploadLogic(JSONObject data) throws Exception {
-        String configType = data.getString("configType");
-        String configName = data.getString("configName");
+    private static void handleConfigUploadLogic(JsonObject data) throws Exception {
+        String configType = data.get("configType").getAsString();
+        String configName = data.get("configName").getAsString();
         Object configContent = data.get("configContent");
-        String format = data.getString("format");
-        boolean backup = data.getBooleanValue("backup");
+        String format = data.get("format").getAsString();
+        boolean backup = data.get("backup").getAsBoolean();
         
         UltiTools.getInstance().getLogger().log(Level.INFO, 
             String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s", 
@@ -516,8 +517,8 @@ public class PluginInitiationUtils {
         switch (configType) {
             case "plugin_config":
                 // 处理插件配置
-                if (configContent instanceof JSONObject) {
-                    ConfigEditorUtils.updateConfigMap(((JSONObject) configContent).toJSONString());
+                if (configContent instanceof JsonObject) {
+                    ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
                 }
                 break;
             case "server_properties":
@@ -539,13 +540,13 @@ public class PluginInitiationUtils {
      * 发送错误响应
      */
     private static void sendErrorResponse(String errorMessage) {
-        JSONObject errorResponse = new JSONObject();
-        errorResponse.put("type", "error");
-        errorResponse.put("timestamp", System.currentTimeMillis());
+        JsonObject errorResponse = new JsonObject();
+        errorResponse.addProperty("type", "error");
+        errorResponse.addProperty("timestamp", System.currentTimeMillis());
         
-        JSONObject errorData = new JSONObject();
-        errorData.put("message", errorMessage);
-        errorResponse.put("data", errorData);
+        JsonObject errorData = new JsonObject();
+        errorData.addProperty("message", errorMessage);
+        errorResponse.add("data", errorData);
         
         panelWS.sendMessage(errorResponse);
     }
@@ -553,41 +554,41 @@ public class PluginInitiationUtils {
     /**
      * 处理插件列表请求
      */
-    private static void handlePluginListRequest(JSONObject data) {
+    private static void handlePluginListRequest(JsonObject data) {
         try {
             // 只处理明确的插件列表请求（包含requestId），忽略服务器的确认消息
-            if (data != null && data.containsKey("requestId")) {
-                String requestId = data.getString("requestId");
+            if (data != null && data.has("requestId")) {
+                String requestId = data.get("requestId").getAsString();
                 
-                JSONObject response = new JSONObject();
-                response.put("type", "plugin_list");
-                response.put("serverId", panelWS.getServerId());
-                response.put("timestamp", System.currentTimeMillis());
-                response.put("requestId", requestId);
+                JsonObject response = new JsonObject();
+                response.addProperty("type", "plugin_list");
+                response.addProperty("serverId", panelWS.getServerId());
+                response.addProperty("timestamp", System.currentTimeMillis());
+                response.addProperty("requestId", requestId);
                 
-                JSONObject responseData = new JSONObject();
-                JSONArray plugins = new JSONArray();
+                JsonObject responseData = new JsonObject();
+                JsonArray plugins = new JsonArray();
                 
                 // 获取所有插件信息
                 for (org.bukkit.plugin.Plugin plugin : org.bukkit.Bukkit.getPluginManager().getPlugins()) {
-                    JSONObject pluginInfo = new JSONObject();
-                    pluginInfo.put("name", plugin.getName());
-                    pluginInfo.put("version", plugin.getDescription().getVersion());
-                    pluginInfo.put("enabled", plugin.isEnabled());
-                    pluginInfo.put("author", String.join(", ", plugin.getDescription().getAuthors()));
-                    pluginInfo.put("description", plugin.getDescription().getDescription());
+                    JsonObject pluginInfo = new JsonObject();
+                    pluginInfo.addProperty("name", plugin.getName());
+                    pluginInfo.addProperty("version", plugin.getDescription().getVersion());
+                    pluginInfo.addProperty("enabled", plugin.isEnabled());
+                    pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
+                    pluginInfo.addProperty("description", plugin.getDescription().getDescription());
                     plugins.add(pluginInfo);
                 }
                 
-                responseData.put("plugins", plugins);
-                responseData.put("totalCount", plugins.size());
-                response.put("data", responseData);
+                responseData.add("plugins", plugins);
+                responseData.addProperty("totalCount", plugins.size());
+                response.add("data", responseData);
                 
                 panelWS.sendMessage(response);
             } else {
                 // 识别并忽略服务器确认消息
-                if (data != null && data.containsKey("message")) {
-                    String message = data.getString("message");
+                if (data != null && data.has("message")) {
+                    String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器插件列表确认: %s", message));
                 } else {
@@ -603,11 +604,11 @@ public class PluginInitiationUtils {
     /**
      * 处理服务器状态请求
      */
-    private static void handleServerStatusRequest(JSONObject data) {
+    private static void handleServerStatusRequest(JsonObject data) {
         try {
             // 只处理明确的状态请求（包含requestId），忽略服务器的确认消息
-            if (data != null && data.containsKey("requestId")) {
-                String requestId = data.getString("requestId");
+            if (data != null && data.has("requestId")) {
+                String requestId = data.get("requestId").getAsString();
                 UltiTools.getInstance().getLogger().log(Level.INFO, 
                     String.format("收到服务器状态请求，请求ID: %s", requestId));
                 
@@ -615,8 +616,8 @@ public class PluginInitiationUtils {
                 UltiTools.getInstance().getServerMonitorManager().sendServerStatusWithRequestId(requestId);
             } else {
                 // 忽略服务器的确认消息和其他非请求消息
-                if (data != null && data.containsKey("message")) {
-                    String message = data.getString("message");
+                if (data != null && data.has("message")) {
+                    String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器状态确认: %s", message));
                 } else {
@@ -632,16 +633,16 @@ public class PluginInitiationUtils {
     /**
      * 处理性能数据请求
      */
-    private static void handleMetricsRequest(JSONObject data) {
+    private static void handleMetricsRequest(JsonObject data) {
         try {
             // 只处理明确的性能数据请求（包含requestId），忽略服务器的确认消息
-            if (data != null && data.containsKey("requestId")) {
-                String requestId = data.getString("requestId");
+            if (data != null && data.has("requestId")) {
+                String requestId = data.get("requestId").getAsString();
                 UltiTools.getInstance().getServerMonitorManager().sendMetricsDataWithRequestId(requestId);
             } else {
                 // 识别并忽略服务器确认消息
-                if (data != null && data.containsKey("message")) {
-                    String message = data.getString("message");
+                if (data != null && data.has("message")) {
+                    String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器性能数据确认: %s", message));
                 } else {
@@ -658,20 +659,20 @@ public class PluginInitiationUtils {
      * 上传本地配置到服务器
      */
     private static void uploadConfig() {
-        JSONObject configMessage = new JSONObject();
-        configMessage.put("type", "upload_config");
+        JsonObject configMessage = new JsonObject();
+        configMessage.addProperty("type", "upload_config");
         
-        JSONObject data = new JSONObject();
-        data.put("configType", "plugin_config");  // 添加必需的配置类型
-        data.put("configName", "UltiTools.yml");   // 添加配置文件名
-        data.put("configContent", ConfigEditorUtils.getConfigMapString());
-        data.put("format", "yaml");                // 添加格式信息
-        data.put("backup", true);                  // 添加备份标志
-        data.put("comment", ConfigEditorUtils.getCommentMapString());
-        data.put("serverId", panelWS.getServerId());
+        JsonObject data = new JsonObject();
+        data.addProperty("configType", "plugin_config");  // 添加必需的配置类型
+        data.addProperty("configName", "UltiTools.yml");   // 添加配置文件名
+        data.addProperty("configContent", ConfigEditorUtils.getConfigMapString());
+        data.addProperty("format", "yaml");                // 添加格式信息
+        data.addProperty("backup", true);                  // 添加备份标志
+        data.addProperty("comment", ConfigEditorUtils.getCommentMapString());
+        data.addProperty("serverId", panelWS.getServerId());
         
-        configMessage.put("data", data);
-        configMessage.put("serverId", panelWS.getServerId());
+        configMessage.add("data", data);
+        configMessage.addProperty("serverId", panelWS.getServerId());
         
         UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("正在上传本地配置..."));
         panelWS.sendMessage(configMessage);
@@ -685,7 +686,7 @@ public class PluginInitiationUtils {
         panelWS.disconnect();
     }
 
-    private static UltiPanelWebSocketClient getPanelWebsocketClient() {
+    private static UltiPanelWebSocketClient getPanelWebsocketClient() throws IOException {
         // 根据配置确定WebSocket URL
         boolean useHttps = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable", true);
         String wsUrl;
@@ -695,6 +696,10 @@ public class PluginInitiationUtils {
             wsUrl = "ws://localhost:8787/ws";
         }
         
-        return new UltiPanelWebSocketClient(wsUrl, CommonUtils.getUltiToolsUUID(), token.getAccess_token());
+        try {
+            return new UltiPanelWebSocketClient(wsUrl, CommonUtils.getUltiToolsUUID(), token.getAccess_token());
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("Invalid WebSocket URL", e);
+        }
     }
 }

@@ -1,9 +1,9 @@
 package com.ultikits.ultitools.widgets;
 
-import cn.hutool.core.lang.func.VoidFunc0;
+import org.bukkit.entity.Player;
+
 import com.ultikits.ultitools.widgets.impl.ChatConfirm;
 import com.ultikits.ultitools.widgets.impl.InventoryConfirm;
-import org.bukkit.entity.Player;
 
 public interface Confirm {
     /**
@@ -37,7 +37,7 @@ public interface Confirm {
      * @param onCancel   On cancel <br> 取消时
      * @return Confirm <br> 确认对话框
      */
-    static Confirm gui(Player player, String title, String description, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    static Confirm gui(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         return new InventoryConfirm(player, title, description, onConfirm, onCancel);
     }
 
@@ -57,8 +57,8 @@ public interface Confirm {
      * @param onCancel    On cancel <br> 取消时
      * @return Confirm <br> 确认对话框
      */
-    static Confirm gui(Player player, String title, String description, String confirmText, String cancelText, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
-        return new  InventoryConfirm(player, title, description, confirmText, cancelText, onConfirm, onCancel);
+    static Confirm gui(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
+        return new InventoryConfirm(player, title, description, confirmText, cancelText, onConfirm, onCancel);
     }
 
     /**
@@ -73,7 +73,7 @@ public interface Confirm {
      * @param onCancel   On cancel <br> 取消时
      * @return Confirm <br> 确认对话框
      */
-    static Confirm chat(Player player, String title, String description, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    static Confirm chat(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         return new ChatConfirm(player, title, description, onConfirm, onCancel);
     }
 
@@ -93,7 +93,7 @@ public interface Confirm {
      * @param onCancel    On cancel <br> 取消时
      * @return Confirm <br> 确认对话框
      */
-    static Confirm chat(Player player, String title, String description, String confirmText, String cancelText, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    static Confirm chat(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         return new ChatConfirm(player, title, description, confirmText, cancelText, onConfirm, onCancel);
     }
 }

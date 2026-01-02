@@ -1,15 +1,16 @@
 package com.ultikits.ultitools.interfaces.impl.pasers;
 
-import cn.hutool.core.util.ObjectUtil;
-import cn.hutool.core.util.ReflectUtil;
-import com.alibaba.fastjson.JSONObject;
+import com.ultikits.ultitools.utils.BasicTypeUtil;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.MemoryConfiguration;
 import org.bukkit.configuration.MemorySection;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class DefaultConfigParser extends ConfigParser<Object> {
@@ -22,10 +23,10 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 list.add(o.toString());
             }
             return list;
-        } else if (ObjectUtil.isBasicType(object) || object instanceof String) {
+        } else if (BasicTypeUtil.isBasicType(object) || object instanceof String) {
             return object;
         } else {
-            JSONObject jsonObject = new JSONObject();
+            Map<String, Object> map = new LinkedHashMap<>();
             ConfigurationSection section = (ConfigurationSection) object;
             Set<String> keys = section.getKeys(false);
             for (String key : keys) {
@@ -33,18 +34,18 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 if (value instanceof ConfigurationSection) {
                     value = parse(value);
                 }
-                jsonObject.put(key, value);
+                map.put(key, value);
             }
-            return jsonObject;
+            return map;
         }
     }
 
     @Override
     public MemorySection serializeToMemorySection(Object object) {
         MemorySection memorySection = new MemoryConfiguration();
-        for (Field field : ReflectUtil.getFields(object.getClass())) {
+        for (Field field : ReflectionUtil.getFields(object.getClass())) {
             field.setAccessible(true);
-            Object fieldValue = ReflectUtil.getFieldValue(object, field);
+            Object fieldValue = ReflectionUtil.getFieldValue(object, field);
             memorySection.set(field.getName(), serialize(fieldValue));
         }
         return memorySection;

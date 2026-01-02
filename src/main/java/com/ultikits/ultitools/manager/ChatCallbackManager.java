@@ -13,8 +13,6 @@ import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.SimplePluginManager;
 
-import cn.hutool.core.lang.func.VoidFunc0;
-
 /**
  * Manager for chat-based callback commands.
  * <p>
@@ -44,7 +42,7 @@ import cn.hutool.core.lang.func.VoidFunc0;
  */
 public class ChatCallbackManager {
     /** Thread-safe storage for pending callbacks / 待处理回调的线程安全存储 */
-    private static final Map<UUID, VoidFunc0> callbacks = new ConcurrentHashMap<>();
+    private static final Map<UUID, Runnable> callbacks = new ConcurrentHashMap<>();
     /** Initialization flag to prevent multiple command registrations / 防止多次命令注册的初始化标志 */
     private static boolean initialized = false;
 
@@ -62,7 +60,7 @@ public class ChatCallbackManager {
      * @param callback the callback to register / 要注册的回调
      * @return the UUID identifier for this callback / 此回调的 UUID 标识符
      */
-    public static synchronized UUID registerCallback(VoidFunc0 callback) {
+    public static synchronized UUID registerCallback(Runnable callback) {
         if (!initialized) {
             initialize();
         }
@@ -104,9 +102,9 @@ public class ChatCallbackManager {
                     if (args.length != 1) return false;
                     try {
                         UUID uuid = UUID.fromString(args[0]);
-                        VoidFunc0 callback = callbacks.remove(uuid);
+                        Runnable callback = callbacks.remove(uuid);
                         if (callback != null) {
-                            callback.call();
+                            callback.run();
                         }
                     } catch (Exception ignored) {
                     }

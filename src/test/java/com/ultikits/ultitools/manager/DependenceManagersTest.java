@@ -17,8 +17,10 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
-import cn.hutool.core.comparator.VersionComparator;
+import java.util.Comparator;
+
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 
 /**
@@ -58,11 +60,11 @@ class DependenceManagersTest {
             DependenceManagers managers = createManagersWithMockedFields();
 
             // Act
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Assert
             assertThat(comparator).isNotNull();
-            assertThat(comparator).isInstanceOf(VersionComparator.class);
+            assertThat(comparator).isInstanceOf(Comparator.class);
         }
 
         @Test
@@ -72,8 +74,8 @@ class DependenceManagersTest {
             DependenceManagers managers = createManagersWithMockedFields();
 
             // Act
-            VersionComparator comp1 = managers.getVersionComparator();
-            VersionComparator comp2 = managers.getVersionComparator();
+            Comparator<String> comp1 = managers.getVersionComparator();
+            Comparator<String> comp2 = managers.getVersionComparator();
 
             // Assert
             assertThat(comp1).isSameAs(comp2);
@@ -84,7 +86,7 @@ class DependenceManagersTest {
         void versionComparatorShouldWork() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Act & Assert
             assertThat(comparator.compare("1.0.0", "2.0.0")).isLessThan(0);
@@ -97,7 +99,7 @@ class DependenceManagersTest {
         void shouldCompareComplexVersions() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Act & Assert
             assertThat(comparator.compare("1.0.0", "1.0.1")).isLessThan(0);
@@ -221,14 +223,12 @@ class DependenceManagersTest {
     class StaticFieldTests {
 
         @Test
-        @DisplayName("versionComparator 是实例字段")
-        void versionComparatorIsInstanceField() throws Exception {
-            // 使用反射验证字段
-            Field field = DependenceManagers.class.getDeclaredField("versionComparator");
-            field.setAccessible(true);
-
-            // Assert - versionComparator 是实例字段，不是静态的
-            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers())).isFalse();
+        @DisplayName("getVersionComparator 返回静态 COMPARATOR")
+        void versionComparatorIsStaticConstant() throws Exception {
+            // getVersionComparator 现在直接返回 VersionComparatorUtil.COMPARATOR
+            DependenceManagers managers = createManagersWithMockedFields();
+            Comparator<String> comparator = managers.getVersionComparator();
+            assertThat(comparator).isSameAs(VersionComparatorUtil.COMPARATOR);
         }
     }
 
@@ -280,13 +280,6 @@ class DependenceManagersTest {
         @DisplayName("context 字段应该存在")
         void contextFieldShouldExist() throws Exception {
             Field field = DependenceManagers.class.getDeclaredField("context");
-            assertThat(field).isNotNull();
-        }
-
-        @Test
-        @DisplayName("versionComparator 字段应该存在")
-        void versionComparatorFieldShouldExist() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("versionComparator");
             assertThat(field).isNotNull();
         }
     }
@@ -387,52 +380,48 @@ class DependenceManagersTest {
     }
 
     @Nested
-    @DisplayName("VersionComparator 懒加载测试")
-    class VersionComparatorLazyLoadingTests {
+    @DisplayName("VersionComparator 测试")
+    class VersionComparatorStaticTests {
 
         @Test
-        @DisplayName("首次调用应该创建新实例")
-        void firstCallShouldCreateNewInstance() throws Exception {
+        @DisplayName("应该返回非空的比较器")
+        void firstCallShouldReturnNonNull() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            setField(managers, "versionComparator", null);
 
             // Act
-            VersionComparator result = managers.getVersionComparator();
+            Comparator<String> result = managers.getVersionComparator();
 
             // Assert
             assertThat(result).isNotNull();
         }
 
         @Test
-        @DisplayName("后续调用应该返回相同实例")
+        @DisplayName("多次调用应该返回相同实例")
         void subsequentCallsShouldReturnSameInstance() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            setField(managers, "versionComparator", null);
 
             // Act
-            VersionComparator first = managers.getVersionComparator();
-            VersionComparator second = managers.getVersionComparator();
-            VersionComparator third = managers.getVersionComparator();
+            Comparator<String> first = managers.getVersionComparator();
+            Comparator<String> second = managers.getVersionComparator();
+            Comparator<String> third = managers.getVersionComparator();
 
             // Assert
             assertThat(first).isSameAs(second).isSameAs(third);
         }
 
         @Test
-        @DisplayName("已设置的实例应该直接返回")
-        void presetInstanceShouldBeReturned() throws Exception {
+        @DisplayName("应该返回 VersionComparatorUtil.COMPARATOR")
+        void shouldReturnStaticComparator() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator preset = new VersionComparator();
-            setField(managers, "versionComparator", preset);
 
             // Act
-            VersionComparator result = managers.getVersionComparator();
+            Comparator<String> result = managers.getVersionComparator();
 
             // Assert
-            assertThat(result).isSameAs(preset);
+            assertThat(result).isSameAs(VersionComparatorUtil.COMPARATOR);
         }
     }
 
@@ -486,13 +475,6 @@ class DependenceManagersTest {
             Field field = DependenceManagers.class.getDeclaredField("context");
             assertThat(java.lang.reflect.Modifier.isPrivate(field.getModifiers())).isTrue();
         }
-
-        @Test
-        @DisplayName("versionComparator 是私有字段")
-        void versionComparatorIsPrivate() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("versionComparator");
-            assertThat(java.lang.reflect.Modifier.isPrivate(field.getModifiers())).isTrue();
-        }
     }
 
     @Nested
@@ -504,7 +486,7 @@ class DependenceManagersTest {
         void shouldCompareAlphaVersions() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Act & Assert - VersionComparator 按字典序比较，不特殊处理后缀
             // "1.0.0-alpha" 与 "1.0.0" 比较结果取决于实现
@@ -517,7 +499,7 @@ class DependenceManagersTest {
         void shouldCompareBetaVersions() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Act & Assert
             int result = comparator.compare("1.0.0-beta", "1.0.0");
@@ -529,7 +511,7 @@ class DependenceManagersTest {
         void shouldCompareSnapshotVersions() throws Exception {
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
-            VersionComparator comparator = managers.getVersionComparator();
+            Comparator<String> comparator = managers.getVersionComparator();
 
             // Act & Assert
             int result = comparator.compare("1.0.0-SNAPSHOT", "1.0.0");

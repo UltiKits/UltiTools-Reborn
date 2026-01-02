@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -128,7 +128,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerJoin(event);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -144,7 +144,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerJoin(event);
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -180,7 +180,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerQuit(event);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -196,7 +196,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerQuit(event);
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -223,18 +223,18 @@ class PlayerEventManagerTest {
         @DisplayName("应该能够通过反射调用私有方法")
         void shouldCallPrivateMethod() throws Exception {
             // Arrange
-            Method method = PlayerEventManager.class.getDeclaredMethod("sendPlayerEvent", JSONObject.class);
+            Method method = PlayerEventManager.class.getDeclaredMethod("sendPlayerEvent", JsonObject.class);
             method.setAccessible(true);
 
-            JSONObject data = new JSONObject();
-            data.put("event_type", "test");
+            JsonObject data = new JsonObject();
+            data.addProperty("event_type", "test");
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             // Act
             method.invoke(playerEventManager, data);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -268,7 +268,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerChat(event);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -285,7 +285,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerChat(event);
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -318,7 +318,7 @@ class PlayerEventManagerTest {
             playerEventManager.onPlayerChat(event);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -368,19 +368,19 @@ class PlayerEventManagerTest {
             
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            org.mockito.ArgumentCaptor<JSONObject> captor = 
-                org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = 
+                org.mockito.ArgumentCaptor.forClass(JsonObject.class);
 
             // Act
             playerEventManager.onPlayerJoin(event);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
-            JSONObject message = captor.getValue();
-            assertThat(message.getString("type")).isEqualTo("player_event");
-            assertThat(message.containsKey("timestamp")).isTrue();
-            assertThat(message.containsKey("serverId")).isTrue();
-            assertThat(message.containsKey("data")).isTrue();
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("player_event");
+            assertThat(message.has("timestamp")).isTrue();
+            assertThat(message.has("serverId")).isTrue();
+            assertThat(message.has("data")).isTrue();
         }
 
         @Test
@@ -392,16 +392,16 @@ class PlayerEventManagerTest {
             
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            org.mockito.ArgumentCaptor<JSONObject> captor = 
-                org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = 
+                org.mockito.ArgumentCaptor.forClass(JsonObject.class);
 
             // Act
             playerEventManager.onPlayerQuit(event);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
-            JSONObject message = captor.getValue();
-            assertThat(message.getString("type")).isEqualTo("player_event");
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("player_event");
         }
 
         @Test
@@ -414,16 +414,16 @@ class PlayerEventManagerTest {
             
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            org.mockito.ArgumentCaptor<JSONObject> captor = 
-                org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = 
+                org.mockito.ArgumentCaptor.forClass(JsonObject.class);
 
             // Act
             playerEventManager.onPlayerChat(event);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
-            JSONObject message = captor.getValue();
-            assertThat(message.getString("type")).isEqualTo("player_event");
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("player_event");
         }
 
         @Test
@@ -436,18 +436,18 @@ class PlayerEventManagerTest {
             
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            org.mockito.ArgumentCaptor<JSONObject> captor = 
-                org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = 
+                org.mockito.ArgumentCaptor.forClass(JsonObject.class);
 
             // Act
             playerEventManager.onPlayerJoin(event);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.getString("player_name")).isEqualTo("TestPlayer");
-            assertThat(data.getString("player_uuid")).isNotBlank();
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.get("player_name").getAsString()).isEqualTo("TestPlayer");
+            assertThat(data.get("player_uuid").getAsString()).isNotBlank();
         }
     }
 
@@ -469,7 +469,7 @@ class PlayerEventManagerTest {
             }
 
             // Assert
-            verify(mockWebSocketClient, times(3)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(3)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -484,17 +484,17 @@ class PlayerEventManagerTest {
             
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            org.mockito.ArgumentCaptor<JSONObject> captor = 
-                org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = 
+                org.mockito.ArgumentCaptor.forClass(JsonObject.class);
 
             // Act
             playerEventManager.onPlayerJoin(event);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.getIntValue("online_count")).isGreaterThanOrEqualTo(3);
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.get("online_count").getAsInt()).isGreaterThanOrEqualTo(3);
         }
     }
 

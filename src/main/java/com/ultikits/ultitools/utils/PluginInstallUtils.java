@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -14,17 +15,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
-
-import cn.hutool.core.lang.TypeReference;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import cn.hutool.http.HttpUtil;
-import cn.hutool.json.JSONArray;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
+import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
  * Utility class for plugin installation and management operations.
@@ -38,6 +34,8 @@ import cn.hutool.json.JSONUtil;
  * @since 6.0.0
  */
 public class PluginInstallUtils {
+    private static final Gson GSON = new Gson();
+
     // Use lazy initialization to avoid static initializer dependency on UltiTools
     private static volatile String baseUrl;
     
@@ -101,16 +99,14 @@ public class PluginInstallUtils {
      */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
         List<PluginEntity> pluginEntities = new ArrayList<>();
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/list?page=" + page + "&pageSize=" + pageSize);
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return pluginEntities;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/list?page=" + page + "&pageSize=" + pageSize)) {
+            if (!httpResponse.isOk()) {
+                return pluginEntities;
+            }
+            String body = httpResponse.body();
+            Type listType = new TypeToken<List<PluginEntity>>(){}.getType();
+            return GSON.fromJson(body, listType);
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        JSONArray jsonArray = JSONUtil.parseArray(body);
-        return jsonArray.toBean(new TypeReference<List<PluginEntity>>() {
-        });
     }
 
     /**
@@ -127,14 +123,12 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + version + "/download");
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return null;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + version + "/download")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            return httpResponse.body();
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        return body;
     }
 
     /**
@@ -150,15 +144,13 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/" + plugin.getId() + "/versions");
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return null;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/versions")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            Type listType = new TypeToken<List<String>>(){}.getType();
+            return GSON.fromJson(httpResponse.body(), listType);
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        JSONArray jsonArray = JSONUtil.parseArray(body);
-        return jsonArray.toList(String.class);
     }
 
     /**
@@ -174,14 +166,12 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest");
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return null;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            return httpResponse.body();
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        return body;
     }
 
     /**
@@ -197,14 +187,12 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest/download");
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return null;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest/download")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            return httpResponse.body();
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        return body;
     }
 
     /**
@@ -216,15 +204,12 @@ public class PluginInstallUtils {
      * @return Plugin entity or null if not found <br> 插件信息，未找到返回null
      */
     public static PluginEntity getPlugin(String idString) {
-        HttpRequest get = HttpUtil.createGet(getBaseUrl() + "/plugin/get?identifyString=" + idString);
-        HttpResponse httpResponse = get.execute();
-        if (!httpResponse.isOk()) {
-            return null;
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/get?identifyString=" + idString)) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            return GSON.fromJson(httpResponse.body(), PluginEntity.class);
         }
-        String body = httpResponse.body();
-        httpResponse.close();
-        JSONObject jsonObject = JSONUtil.parseObj(body);
-        return jsonObject.toBean(PluginEntity.class);
     }
 
     /**

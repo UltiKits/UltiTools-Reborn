@@ -1,10 +1,9 @@
 package com.ultikits.ultitools.interfaces;
 
-import cn.hutool.db.sql.Condition;
+import java.util.List;
+
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
-
-import java.util.List;
 
 /**
  * Data operation interface.
@@ -14,6 +13,10 @@ import java.util.List;
  * @param <T> 数据类型，继承自AbstractDataEntity
  */
 public interface DataOperator<T extends AbstractDataEntity> {
+
+    enum LikeType {
+        START, END, CONTAINS
+    }
 
     /**
      * Check if the data record exists.
@@ -71,10 +74,10 @@ public interface DataOperator<T extends AbstractDataEntity> {
      *
      * @param column   Column name <br> 列名
      * @param value    Query value <br> 查询值
-     * @param likeType Like type <br> 模糊查询类型 <br>{@link Condition.LikeType}
+     * @param likeType Like type <br> 模糊查询类型 <br>{@link LikeType}
      * @return Data record list <br> 数据记录列表
      */
-    List<T> getLike(String column, String value, Condition.LikeType likeType);
+    List<T> getLike(String column, String value, LikeType likeType);
 
     /**
      * Get data record by page.

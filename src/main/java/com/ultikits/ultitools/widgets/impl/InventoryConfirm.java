@@ -6,9 +6,6 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import com.ultikits.ultitools.abstracts.guis.OkCancelPage;
 import com.ultikits.ultitools.widgets.Confirm;
 
-import cn.hutool.core.lang.func.VoidFunc0;
-import lombok.SneakyThrows;
-
 /**
  * A GUI inventory-based confirmation dialog implementation.
  * <p>
@@ -42,9 +39,9 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
     private String cancelText;
 
     /** Callback executed when player clicks OK button / 玩家点击确定按钮时执行的回调 */
-    private final VoidFunc0 onConfirm;
+    private final Runnable onConfirm;
     /** Callback executed when player clicks Cancel button / 玩家点击取消按钮时执行的回调 */
-    private final VoidFunc0 onCancel;
+    private final Runnable onCancel;
 
     /** The unique GUI identifier / GUI 唯一标识符 */
     private static final String GUI_ID = "confirm_gui";
@@ -62,7 +59,7 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
      * @param onConfirm   callback for confirm action / 确认操作的回调
      * @param onCancel    callback for cancel action / 取消操作的回调
      */
-    public InventoryConfirm(Player player, String title, String description, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    public InventoryConfirm(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         super(player, GUI_ID, title + " - " + description, GUI_ROWS);
         this.onConfirm = onConfirm;
         this.onCancel = onCancel;
@@ -81,7 +78,7 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
      * @param onConfirm   callback for confirm action / 确认操作的回调
      * @param onCancel    callback for cancel action / 取消操作的回调
      */
-    public InventoryConfirm(Player player, String title, String description, String confirmText, String cancelText, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    public InventoryConfirm(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         this(player, title, description, onConfirm, onCancel);
         this.confirmText = confirmText;
         this.cancelText = cancelText;
@@ -112,15 +109,13 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
         this.open();
     }
 
-    @SneakyThrows
     @Override
     public void onOk(InventoryClickEvent clickEvent) {
-        onConfirm.call();
+        onConfirm.run();
     }
 
-    @SneakyThrows
     @Override
     public void onCancel(InventoryClickEvent clickEvent) {
-        onCancel.call();
+        onCancel.run();
     }
 }

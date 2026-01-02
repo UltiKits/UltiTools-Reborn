@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -226,10 +226,10 @@ class FileOperationManagerTest {
         @DisplayName("应该处理 read 操作")
         void shouldHandleReadOperation() throws Exception {
             // Arrange
-            JSONObject operationData = new JSONObject();
-            operationData.put("operation", "read");
-            operationData.put("path", "nonexistent.txt");
-            operationData.put("operationId", "test-op-1");
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "read");
+            operationData.addProperty("path", "nonexistent.txt");
+            operationData.addProperty("operationId", "test-op-1");
 
             // Act - 异步操作，不会立即完成
             fileOperationManager.handleFileOperation(operationData);
@@ -244,10 +244,10 @@ class FileOperationManagerTest {
         @DisplayName("应该处理不支持的操作")
         void shouldHandleUnsupportedOperation() throws Exception {
             // Arrange
-            JSONObject operationData = new JSONObject();
-            operationData.put("operation", "unsupported");
-            operationData.put("path", "test.txt");
-            operationData.put("operationId", "test-op-2");
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "unsupported");
+            operationData.addProperty("path", "test.txt");
+            operationData.addProperty("operationId", "test-op-2");
 
             // Act
             fileOperationManager.handleFileOperation(operationData);
@@ -262,7 +262,7 @@ class FileOperationManagerTest {
         @DisplayName("异常时应该发送错误结果")
         void shouldSendErrorResultOnException() {
             // Arrange - 创建一个会导致异常的 operationData
-            JSONObject operationData = new JSONObject();
+            JsonObject operationData = new JsonObject();
             // 缺少必要字段会导致 NPE，但方法会捕获
 
             // Act
@@ -281,11 +281,11 @@ class FileOperationManagerTest {
         void shouldReturnErrorWhenFileNotFound() throws Exception {
             // 通过反射调用私有方法
             Method handleRead = FileOperationManager.class.getDeclaredMethod(
-                "handleReadOperation", String.class, JSONObject.class, String.class);
+                "handleReadOperation", String.class, JsonObject.class, String.class);
             handleRead.setAccessible(true);
 
             // Act
-            handleRead.invoke(fileOperationManager, "nonexistent.txt", new JSONObject(), "op-1");
+            handleRead.invoke(fileOperationManager, "nonexistent.txt", new JsonObject(), "op-1");
 
             // 不会抛出异常
         }
@@ -307,10 +307,10 @@ class FileOperationManagerTest {
             serverRootField.set(fileOperationManager, tempDir);
 
             Method handleRead = FileOperationManager.class.getDeclaredMethod(
-                "handleReadOperation", String.class, JSONObject.class, String.class);
+                "handleReadOperation", String.class, JsonObject.class, String.class);
             handleRead.setAccessible(true);
 
-            JSONObject operationData = new JSONObject();
+            JsonObject operationData = new JsonObject();
             // limit 为 0 或负数时默认为 1000
 
             // Act
@@ -333,10 +333,10 @@ class FileOperationManagerTest {
             serverRootField.set(fileOperationManager, tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
-                "handleWriteOperation", String.class, JSONObject.class, String.class);
+                "handleWriteOperation", String.class, JsonObject.class, String.class);
             handleWrite.setAccessible(true);
 
-            JSONObject operationData = new JSONObject();
+            JsonObject operationData = new JsonObject();
             // content 为 null
 
             // Act
@@ -354,12 +354,12 @@ class FileOperationManagerTest {
             serverRootField.set(fileOperationManager, tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
-                "handleWriteOperation", String.class, JSONObject.class, String.class);
+                "handleWriteOperation", String.class, JsonObject.class, String.class);
             handleWrite.setAccessible(true);
 
-            JSONObject operationData = new JSONObject();
-            operationData.put("content", "test content");
-            operationData.put("append", false);
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("content", "test content");
+            operationData.addProperty("append", false);
 
             // Act
             handleWrite.invoke(fileOperationManager, "newdir/newfile.txt", operationData, "op-4");
@@ -384,12 +384,12 @@ class FileOperationManagerTest {
             }
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
-                "handleWriteOperation", String.class, JSONObject.class, String.class);
+                "handleWriteOperation", String.class, JsonObject.class, String.class);
             handleWrite.setAccessible(true);
 
-            JSONObject operationData = new JSONObject();
-            operationData.put("content", " appended");
-            operationData.put("append", true);
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("content", " appended");
+            operationData.addProperty("append", true);
 
             // Act
             handleWrite.invoke(fileOperationManager, "append.txt", operationData, "op-5");
@@ -413,11 +413,11 @@ class FileOperationManagerTest {
             serverRootField.set(fileOperationManager, tempDir);
 
             Method handleList = FileOperationManager.class.getDeclaredMethod(
-                "handleListOperation", String.class, JSONObject.class, String.class);
+                "handleListOperation", String.class, JsonObject.class, String.class);
             handleList.setAccessible(true);
 
             // Act
-            handleList.invoke(fileOperationManager, "nonexistent", new JSONObject(), "op-6");
+            handleList.invoke(fileOperationManager, "nonexistent", new JsonObject(), "op-6");
 
             // 不会抛出异常
         }
@@ -434,11 +434,11 @@ class FileOperationManagerTest {
             testFile.createNewFile();
 
             Method handleList = FileOperationManager.class.getDeclaredMethod(
-                "handleListOperation", String.class, JSONObject.class, String.class);
+                "handleListOperation", String.class, JsonObject.class, String.class);
             handleList.setAccessible(true);
 
             // Act
-            handleList.invoke(fileOperationManager, "notdir.txt", new JSONObject(), "op-7");
+            handleList.invoke(fileOperationManager, "notdir.txt", new JsonObject(), "op-7");
 
             // 不会抛出异常
         }
@@ -458,11 +458,11 @@ class FileOperationManagerTest {
             new File(subDir, "subdir").mkdirs();
 
             Method handleList = FileOperationManager.class.getDeclaredMethod(
-                "handleListOperation", String.class, JSONObject.class, String.class);
+                "handleListOperation", String.class, JsonObject.class, String.class);
             handleList.setAccessible(true);
 
             // Act
-            handleList.invoke(fileOperationManager, "listdir", new JSONObject(), "op-8");
+            handleList.invoke(fileOperationManager, "listdir", new JsonObject(), "op-8");
 
             // 不会抛出异常
         }
@@ -481,11 +481,11 @@ class FileOperationManagerTest {
             serverRootField.set(fileOperationManager, tempDir);
 
             Method handleDelete = FileOperationManager.class.getDeclaredMethod(
-                "handleDeleteOperation", String.class, JSONObject.class, String.class);
+                "handleDeleteOperation", String.class, JsonObject.class, String.class);
             handleDelete.setAccessible(true);
 
             // Act
-            handleDelete.invoke(fileOperationManager, "nonexistent.txt", new JSONObject(), "op-9");
+            handleDelete.invoke(fileOperationManager, "nonexistent.txt", new JsonObject(), "op-9");
 
             // 不会抛出异常
         }
@@ -502,11 +502,11 @@ class FileOperationManagerTest {
             testFile.createNewFile();
 
             Method handleDelete = FileOperationManager.class.getDeclaredMethod(
-                "handleDeleteOperation", String.class, JSONObject.class, String.class);
+                "handleDeleteOperation", String.class, JsonObject.class, String.class);
             handleDelete.setAccessible(true);
 
             // Act
-            handleDelete.invoke(fileOperationManager, "todelete.txt", new JSONObject(), "op-10");
+            handleDelete.invoke(fileOperationManager, "todelete.txt", new JsonObject(), "op-10");
 
             // Assert
             assertThat(testFile.exists()).isFalse();
@@ -525,11 +525,11 @@ class FileOperationManagerTest {
             new File(testDir, "file.txt").createNewFile();
 
             Method handleDelete = FileOperationManager.class.getDeclaredMethod(
-                "handleDeleteOperation", String.class, JSONObject.class, String.class);
+                "handleDeleteOperation", String.class, JsonObject.class, String.class);
             handleDelete.setAccessible(true);
 
             // Act
-            handleDelete.invoke(fileOperationManager, "todeleteDir", new JSONObject(), "op-11");
+            handleDelete.invoke(fileOperationManager, "todeleteDir", new JsonObject(), "op-11");
 
             // Assert
             assertThat(testDir.exists()).isFalse();

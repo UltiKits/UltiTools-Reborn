@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -179,7 +179,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendServerStatus();
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -192,7 +192,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendServerStatus();
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -210,7 +210,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendServerStatusWithRequestId("test-request-id");
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -223,7 +223,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendServerStatusWithRequestId("test-request-id");
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -339,7 +339,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendMetricsData();
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -371,7 +371,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendMetricsDataWithRequestId("test-request-id");
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -384,7 +384,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendMetricsDataWithRequestId(null);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -590,15 +590,15 @@ class ServerMonitorManagerTest {
         void shouldSendPlayerEventMessage() {
             // Arrange
             be.seeseemelk.mockbukkit.entity.PlayerMock player = server.addPlayer();
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("extra", "data");
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("extra", "data");
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             // Act
             serverMonitorManager.sendPlayerEvent("test_event", player, additionalData);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -612,7 +612,7 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendPlayerEvent("test_event", player, null);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -628,17 +628,17 @@ class ServerMonitorManagerTest {
             method.setAccessible(true);
 
             // Act
-            JSONObject data = (JSONObject) method.invoke(serverMonitorManager);
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
 
             // Assert
-            assertThat(data.containsKey("playerCount")).isTrue();
-            assertThat(data.containsKey("maxPlayers")).isTrue();
-            assertThat(data.containsKey("serverVersion")).isTrue();
-            assertThat(data.containsKey("tps")).isTrue();
-            assertThat(data.containsKey("memory")).isTrue();
-            assertThat(data.containsKey("cpu")).isTrue();
-            assertThat(data.containsKey("uptime")).isTrue();
-            assertThat(data.containsKey("worlds")).isTrue();
+            assertThat(data.has("playerCount")).isTrue();
+            assertThat(data.has("maxPlayers")).isTrue();
+            assertThat(data.has("serverVersion")).isTrue();
+            assertThat(data.has("tps")).isTrue();
+            assertThat(data.has("memory")).isTrue();
+            assertThat(data.has("cpu")).isTrue();
+            assertThat(data.has("uptime")).isTrue();
+            assertThat(data.has("worlds")).isTrue();
         }
 
         @Test
@@ -649,13 +649,13 @@ class ServerMonitorManagerTest {
             method.setAccessible(true);
 
             // Act
-            JSONObject data = (JSONObject) method.invoke(serverMonitorManager);
-            JSONObject memory = data.getJSONObject("memory");
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
+            JsonObject memory = data.getAsJsonObject("memory");
 
             // Assert
-            assertThat(memory.containsKey("used")).isTrue();
-            assertThat(memory.containsKey("max")).isTrue();
-            assertThat(memory.containsKey("free")).isTrue();
+            assertThat(memory.has("used")).isTrue();
+            assertThat(memory.has("max")).isTrue();
+            assertThat(memory.has("free")).isTrue();
         }
     }
 

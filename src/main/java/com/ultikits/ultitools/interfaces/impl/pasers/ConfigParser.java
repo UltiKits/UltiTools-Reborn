@@ -1,16 +1,16 @@
 package com.ultikits.ultitools.interfaces.impl.pasers;
 
-import cn.hutool.core.util.ObjectUtil;
+import java.util.List;
+
 import com.ultikits.ultitools.interfaces.ObjectConfigSerializer;
 import com.ultikits.ultitools.interfaces.Parser;
-
-import java.util.List;
+import com.ultikits.ultitools.utils.BasicTypeUtil;
 
 public abstract class ConfigParser<T> implements Parser<T>, ObjectConfigSerializer<T> {
 
     @Override
     public final Object serialize(T object) {
-        if (ObjectUtil.isBasicType(object) || object instanceof String || object instanceof List) {
+        if (BasicTypeUtil.isBasicType(object) || object instanceof String || object instanceof List) {
             return object;
         } else {
             return serializeToMemorySection(object);

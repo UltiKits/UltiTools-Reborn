@@ -1,18 +1,18 @@
 package com.ultikits.ultitools.manager;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
-
-import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.List;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
-import java.util.stream.Collectors;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * 文件操作管理器
@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 public class FileOperationManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
+    private final Gson gson = new Gson();
     
     public FileOperationManager() {
         this.serverRoot = new File(System.getProperty("user.dir"));
@@ -37,11 +38,14 @@ public class FileOperationManager {
     /**
      * 处理文件操作请求
      */
-    public void handleFileOperation(JSONObject operationData) {
+    public void handleFileOperation(JsonObject operationData) {
         try {
-            String operation = operationData.getString("operation");
-            String path = operationData.getString("path");
-            String operationId = operationData.getString("operationId");
+            String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull() 
+                ? operationData.get("operation").getAsString() : null;
+            String path = operationData.has("path") && !operationData.get("path").isJsonNull() 
+                ? operationData.get("path").getAsString() : null;
+            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull() 
+                ? operationData.get("operationId").getAsString() : null;
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("处理文件操作: %s, 路径: %s (ID: %s)", operation, path, operationId));
@@ -68,7 +72,8 @@ public class FileOperationManager {
             });
             
         } catch (Exception e) {
-            String operationId = operationData.getString("operationId");
+            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull() 
+                ? operationData.get("operationId").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.WARNING, "文件操作处理失败: " + e.getMessage());
             sendFileOperationResult(operationId, "unknown", "unknown", false, 
                 "Error processing file operation: " + e.getMessage(), null);
@@ -78,7 +83,7 @@ public class FileOperationManager {
     /**
      * 处理文件读取操作
      */
-    private void handleReadOperation(String path, JSONObject operationData, String operationId) {
+    private void handleReadOperation(String path, JsonObject operationData, String operationId) {
         try {
             File file = getSecureFile(path);
             if (!file.exists()) {
@@ -91,7 +96,8 @@ public class FileOperationManager {
                 return;
             }
             
-            int limit = operationData.getIntValue("limit");
+            int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull() 
+                ? operationData.get("limit").getAsInt() : 0;
             if (limit <= 0) limit = 1000; // 默认限制1000行
             
             StringBuilder content = new StringBuilder();
@@ -104,11 +110,11 @@ public class FileOperationManager {
                 }
             }
             
-            JSONObject resultData = new JSONObject();
-            resultData.put("content", content.toString().trim());
-            resultData.put("size", file.length());
-            resultData.put("lastModified", file.lastModified());
-            resultData.put("linesRead", content.toString().split("\n").length);
+            JsonObject resultData = new JsonObject();
+            resultData.addProperty("content", content.toString().trim());
+            resultData.addProperty("size", file.length());
+            resultData.addProperty("lastModified", file.lastModified());
+            resultData.addProperty("linesRead", content.toString().split("\n").length);
             
             sendFileOperationResult(operationId, "read", path, true, "File read successfully", resultData);
             
@@ -121,11 +127,13 @@ public class FileOperationManager {
     /**
      * 处理文件写入操作
      */
-    private void handleWriteOperation(String path, JSONObject operationData, String operationId) {
+    private void handleWriteOperation(String path, JsonObject operationData, String operationId) {
         try {
             File file = getSecureFile(path);
-            String content = operationData.getString("content");
-            boolean append = operationData.getBooleanValue("append");
+            String content = operationData.has("content") && !operationData.get("content").isJsonNull() 
+                ? operationData.get("content").getAsString() : null;
+            boolean append = operationData.has("append") && !operationData.get("append").isJsonNull() 
+                && operationData.get("append").getAsBoolean();
             
             if (content == null) {
                 sendFileOperationResult(operationId, "write", path, false, "Content cannot be null", null);
@@ -142,9 +150,9 @@ public class FileOperationManager {
                 writer.write(content);
             }
             
-            JSONObject resultData = new JSONObject();
-            resultData.put("bytesWritten", content.getBytes().length);
-            resultData.put("fileSize", file.length());
+            JsonObject resultData = new JsonObject();
+            resultData.addProperty("bytesWritten", content.getBytes().length);
+            resultData.addProperty("fileSize", file.length());
             
             sendFileOperationResult(operationId, "write", path, true, "File written successfully", resultData);
             
@@ -157,7 +165,7 @@ public class FileOperationManager {
     /**
      * 处理目录列表操作
      */
-    private void handleListOperation(String path, JSONObject operationData, String operationId) {
+    private void handleListOperation(String path, JsonObject operationData, String operationId) {
         try {
             File dir = getSecureFile(path);
             if (!dir.exists()) {
@@ -176,21 +184,21 @@ public class FileOperationManager {
                 return;
             }
             
-            JSONArray fileList = new JSONArray();
+            JsonArray fileList = new JsonArray();
             for (File file : files) {
-                JSONObject fileInfo = new JSONObject();
-                fileInfo.put("name", file.getName());
-                fileInfo.put("isDirectory", file.isDirectory());
-                fileInfo.put("size", file.isDirectory() ? 0 : file.length());
-                fileInfo.put("lastModified", file.lastModified());
-                fileInfo.put("readable", file.canRead());
-                fileInfo.put("writable", file.canWrite());
+                JsonObject fileInfo = new JsonObject();
+                fileInfo.addProperty("name", file.getName());
+                fileInfo.addProperty("isDirectory", file.isDirectory());
+                fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
+                fileInfo.addProperty("lastModified", file.lastModified());
+                fileInfo.addProperty("readable", file.canRead());
+                fileInfo.addProperty("writable", file.canWrite());
                 fileList.add(fileInfo);
             }
             
-            JSONObject resultData = new JSONObject();
-            resultData.put("files", fileList);
-            resultData.put("totalCount", fileList.size());
+            JsonObject resultData = new JsonObject();
+            resultData.add("files", fileList);
+            resultData.addProperty("totalCount", fileList.size());
             
             sendFileOperationResult(operationId, "list", path, true, "Directory listed successfully", resultData);
             
@@ -203,7 +211,7 @@ public class FileOperationManager {
     /**
      * 处理文件删除操作
      */
-    private void handleDeleteOperation(String path, JSONObject operationData, String operationId) {
+    private void handleDeleteOperation(String path, JsonObject operationData, String operationId) {
         try {
             File file = getSecureFile(path);
             if (!file.exists()) {
@@ -283,27 +291,27 @@ public class FileOperationManager {
      * 发送文件操作结果
      */
     private void sendFileOperationResult(String operationId, String operation, String path, 
-                                       boolean success, String message, JSONObject data) {
+                                       boolean success, String message, JsonObject data) {
         try {
-            JSONObject resultMessage = new JSONObject();
-            resultMessage.put("type", "file_operation_result");
+            JsonObject resultMessage = new JsonObject();
+            resultMessage.addProperty("type", "file_operation_result");
             
-            JSONObject resultData = new JSONObject();
-            resultData.put("operationId", operationId);
-            resultData.put("operation", operation);
-            resultData.put("path", path);
-            resultData.put("success", success);
-            resultData.put("message", message);
-            resultData.put("timestamp", System.currentTimeMillis());
+            JsonObject resultData = new JsonObject();
+            resultData.addProperty("operationId", operationId);
+            resultData.addProperty("operation", operation);
+            resultData.addProperty("path", path);
+            resultData.addProperty("success", success);
+            resultData.addProperty("message", message);
+            resultData.addProperty("timestamp", System.currentTimeMillis());
             
             if (data != null) {
                 for (String key : data.keySet()) {
-                    resultData.put(key, data.get(key));
+                    resultData.add(key, data.get(key));
                 }
             }
             
-            resultMessage.put("data", resultData);
-            resultMessage.put("serverId", webSocketClient.getServerId());
+            resultMessage.add("data", resultData);
+            resultMessage.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(resultMessage);
             

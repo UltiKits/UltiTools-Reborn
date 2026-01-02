@@ -2,7 +2,7 @@ package com.ultikits.ultitools.websocket.handlers;
 
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
 
@@ -37,8 +37,9 @@ public class LogStreamHandler implements WebSocketMessageHandler {
     }
     
     @Override
-    public void handle(JSONObject message) {
-        String action = message.getString("action");
+    public void handle(JsonObject message) {
+        String action = message.has("action") && !message.get("action").isJsonNull() 
+            ? message.get("action").getAsString() : null;
         
         if (action == null) {
             logger.warning("Received log_stream message without action");

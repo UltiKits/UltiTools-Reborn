@@ -1,19 +1,19 @@
 package com.ultikits.ultitools.manager;
 
-import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.util.ReflectUtil;
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
-import com.alibaba.fastjson.TypeReference;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.utils.PackageScanUtils;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
 import java.util.*;
 import java.util.logging.Level;
 
@@ -34,7 +34,7 @@ public class ConfigManager {
      * @param configEntity    Config entity <br> 配置实体
      */
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
-        ConfigEntity annotation = AnnotationUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
+        ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
         if (annotation == null) {
             return;
         }
@@ -52,7 +52,7 @@ public class ConfigManager {
                 if (!listFile.isFile() || !listFile.getName().endsWith(".yml")) {
                     continue;
                 }
-                AbstractConfigEntity abstractConfigEntity = ReflectUtil.newInstance(configEntity.getClass(), listFile.getPath().replace(ultiToolsPlugin.getResourceFolderPath() + File.separator, "").replaceAll("\\\\", "/"));
+                AbstractConfigEntity abstractConfigEntity = ReflectionUtil.newInstance(configEntity.getClass(), listFile.getPath().replace(ultiToolsPlugin.getResourceFolderPath() + File.separator, "").replaceAll("\\\\", "/"));
                 addConfigEntity(ultiToolsPlugin, abstractConfigEntity);
             }
         } else {
@@ -227,15 +227,16 @@ public class ConfigManager {
      * @return all comments <br> 所有注释
      */
     public final String getComments() {
-        Map<String, Map<String, JSONObject>> res = new HashMap<>();
+        Gson gson = new Gson();
+        Map<String, Map<String, JsonObject>> res = new HashMap<>();
         for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
+            Map<String, JsonObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
             for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().getComments());
             }
             res.put(entry.getKey().getPluginName(), stringStringMap);
         }
-        return JSON.toJSONString(res);
+        return gson.toJson(res);
     }
 
     /**
@@ -246,15 +247,16 @@ public class ConfigManager {
      * @return config in JSON format <br> JSON格式的配置
      */
     public final String toJson() {
-        Map<String, Map<String, JSONObject>> res = new HashMap<>();
+        Gson gson = new Gson();
+        Map<String, Map<String, JsonObject>> res = new HashMap<>();
         for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JSONObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
+            Map<String, JsonObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
             for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
                 stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().toJsonObject());
             }
             res.put(entry.getKey().getPluginName(), stringStringMap);
         }
-        return JSON.toJSONString(res);
+        return gson.toJson(res);
     }
 
     /**
@@ -266,8 +268,9 @@ public class ConfigManager {
      * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
      */
     public final void loadFromJson(String json) throws IOException {
-        Map<String, Map<String, JSONObject>> parseObject = JSONObject.parseObject(json, new TypeReference<Map<String, Map<String, JSONObject>>>() {
-        });
+        Gson gson = new Gson();
+        Type mapType = new TypeToken<Map<String, Map<String, JsonObject>>>() {}.getType();
+        Map<String, Map<String, JsonObject>> parseObject = gson.fromJson(json, mapType);
         for (String pluginName : parseObject.keySet()) {
             for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()) {
                 if (!ultiToolsPlugin.getPluginName().equals(pluginName)) {

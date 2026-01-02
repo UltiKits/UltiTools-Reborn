@@ -1,6 +1,6 @@
 package com.ultikits.ultitools.websocket;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 
 /**
  * Interface for handling specific types of WebSocket messages.
@@ -29,7 +29,7 @@ public interface WebSocketMessageHandler {
      *
      * @param message the JSON message to handle
      */
-    void handle(JSONObject message);
+    void handle(JsonObject message);
     
     /**
      * Gets the priority of this handler (higher values = higher priority).

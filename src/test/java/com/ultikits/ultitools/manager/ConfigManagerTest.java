@@ -641,7 +641,7 @@ class ConfigManagerTest {
                 (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
 
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            when(mockConfig.toJsonObject()).thenReturn(new com.alibaba.fastjson.JSONObject());
+            when(mockConfig.toJsonObject()).thenReturn(new com.google.gson.JsonObject());
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("config.yml", mockConfig);
@@ -671,8 +671,8 @@ class ConfigManagerTest {
                 (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
 
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            com.alibaba.fastjson.JSONObject commentsJson = new com.alibaba.fastjson.JSONObject();
-            commentsJson.put("testValue", "This is a comment");
+            com.google.gson.JsonObject commentsJson = new com.google.gson.JsonObject();
+            commentsJson.addProperty("testValue", "This is a comment");
             when(mockConfig.getComments()).thenReturn(commentsJson);
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
@@ -713,7 +713,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert
-            org.mockito.Mockito.verify(mockConfig).updateProperties(any(com.alibaba.fastjson.JSONObject.class));
+            org.mockito.Mockito.verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
         }
 
         @Test
@@ -738,7 +738,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - updateProperties 不应该被调用
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).updateProperties(any(com.alibaba.fastjson.JSONObject.class));
+            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).updateProperties(any(com.google.gson.JsonObject.class));
         }
     }
 

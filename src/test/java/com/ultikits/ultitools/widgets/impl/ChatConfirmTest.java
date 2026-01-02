@@ -33,7 +33,6 @@ import com.ultikits.ultitools.manager.ChatCallbackManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.widgets.Confirm;
 
-import cn.hutool.core.lang.func.VoidFunc0;
 import net.kyori.adventure.text.Component;
 
 /**
@@ -48,10 +47,10 @@ class ChatConfirmTest {
     private Player mockPlayer;
     
     @Mock
-    private VoidFunc0 mockOnConfirm;
+    private Runnable mockOnConfirm;
     
     @Mock
-    private VoidFunc0 mockOnCancel;
+    private Runnable mockOnCancel;
     
     @Mock
     private UltiTools mockUltiTools;
@@ -119,7 +118,7 @@ class ChatConfirmTest {
         @DisplayName("应该有 onConfirm 字段")
         void shouldHaveOnConfirmField() throws NoSuchFieldException {
             Field field = ChatConfirm.class.getDeclaredField("onConfirm");
-            assertThat(field.getType()).isEqualTo(VoidFunc0.class);
+            assertThat(field.getType()).isEqualTo(Runnable.class);
             assertThat(Modifier.isFinal(field.getModifiers())).isTrue();
         }
 
@@ -127,7 +126,7 @@ class ChatConfirmTest {
         @DisplayName("应该有 onCancel 字段")
         void shouldHaveOnCancelField() throws NoSuchFieldException {
             Field field = ChatConfirm.class.getDeclaredField("onCancel");
-            assertThat(field.getType()).isEqualTo(VoidFunc0.class);
+            assertThat(field.getType()).isEqualTo(Runnable.class);
             assertThat(Modifier.isFinal(field.getModifiers())).isTrue();
         }
     }
@@ -141,7 +140,7 @@ class ChatConfirmTest {
         void shouldHave5ParamConstructor() throws NoSuchMethodException {
             Constructor<?> constructor = ChatConfirm.class.getConstructor(
                 Player.class, String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(constructor).isNotNull();
             assertThat(Modifier.isPublic(constructor.getModifiers())).isTrue();
@@ -153,7 +152,7 @@ class ChatConfirmTest {
             Constructor<?> constructor = ChatConfirm.class.getConstructor(
                 Player.class, String.class, String.class,
                 String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(constructor).isNotNull();
             assertThat(Modifier.isPublic(constructor.getModifiers())).isTrue();

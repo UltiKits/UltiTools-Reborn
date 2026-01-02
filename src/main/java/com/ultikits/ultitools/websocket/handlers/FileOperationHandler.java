@@ -2,7 +2,7 @@ package com.ultikits.ultitools.websocket.handlers;
 
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
 
@@ -37,10 +37,13 @@ public class FileOperationHandler implements WebSocketMessageHandler {
     }
     
     @Override
-    public void handle(JSONObject message) {
-        String operation = message.getString("operation");
-        String path = message.getString("path");
-        String requestId = message.getString("requestId");
+    public void handle(JsonObject message) {
+        String operation = message.has("operation") && !message.get("operation").isJsonNull() 
+            ? message.get("operation").getAsString() : null;
+        String path = message.has("path") && !message.get("path").isJsonNull() 
+            ? message.get("path").getAsString() : null;
+        String requestId = message.has("requestId") && !message.get("requestId").isJsonNull() 
+            ? message.get("requestId").getAsString() : null;
         
         if (operation == null) {
             logger.warning("Received file_operation without operation type");

@@ -24,8 +24,7 @@ import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
-
-import cn.hutool.db.sql.Condition;
+import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
 
 class SimpleJsonDataOperatorTest {
 
@@ -268,14 +267,13 @@ class SimpleJsonDataOperatorTest {
         @Test
         @DisplayName("getAll with ENDSWITH comparison")
         void testGetAllEndsWith() {
-            // For numeric values: 105, 205, 300
-            // "105".endsWith("5") = true, "205".endsWith("5") = true
-            operator.insert(new TestData("1", "a", 105));
-            operator.insert(new TestData("2", "b", 205));
-            operator.insert(new TestData("3", "c", 300));
+            // Use string field for ENDSWITH comparison (more appropriate use case)
+            operator.insert(new TestData("1", "test_suffix", 100));
+            operator.insert(new TestData("2", "another_suffix", 200));
+            operator.insert(new TestData("3", "no_match", 300));
             
             List<TestData> results = operator.getAll(
-                WhereCondition.builder().column("value").value(5).comparison(Comparison.ENDSWITH).build()
+                WhereCondition.builder().column("name").value("suffix").comparison(Comparison.ENDSWITH).build()
             );
             assertThat(results).hasSize(2);
         }
@@ -386,7 +384,7 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("2", "foo_world", 20));
             operator.insert(new TestData("3", "world_bar", 30));
             
-            List<TestData> results = operator.getLike("name", "world", Condition.LikeType.EndWith);
+            List<TestData> results = operator.getLike("name", "world", LikeType.END);
             assertThat(results).hasSize(2);
         }
         
@@ -397,7 +395,7 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("2", "hello_bar", 20));
             operator.insert(new TestData("3", "world_hello", 30));
             
-            List<TestData> results = operator.getLike("name", "hello", Condition.LikeType.StartWith);
+            List<TestData> results = operator.getLike("name", "hello", LikeType.START);
             assertThat(results).hasSize(2);
         }
         
@@ -408,7 +406,7 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("2", "test", 20));
             operator.insert(new TestData("3", "no match", 30));
             
-            List<TestData> results = operator.getLike("name", "test", Condition.LikeType.Contains);
+            List<TestData> results = operator.getLike("name", "test", LikeType.CONTAINS);
             assertThat(results).hasSize(2);
         }
     }

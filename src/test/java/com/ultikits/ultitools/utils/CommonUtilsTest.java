@@ -3,11 +3,10 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -23,11 +22,10 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-
-import cn.hutool.core.util.IdUtil;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
 
 /**
  * CommonUtils 测试类
@@ -88,8 +86,8 @@ class CommonUtilsTest {
         @Test
         @DisplayName("简单UUID格式应该是32个字符")
         void simpleUUIDShouldBe32Characters() {
-            // 测试 Hutool IdUtil.simpleUUID() 的格式
-            String simpleUUID = cn.hutool.core.util.IdUtil.simpleUUID();
+            // 测试 UUID.randomUUID().toString().replace("-", "") 的格式
+            String simpleUUID = java.util.UUID.randomUUID().toString().replace("-", "");
             assertThat(simpleUUID).hasSize(32);
             assertThat(simpleUUID).matches("[a-f0-9]{32}");
         }
@@ -97,15 +95,15 @@ class CommonUtilsTest {
         @Test
         @DisplayName("简单UUID应该不包含连字符")
         void simpleUUIDShouldNotContainHyphens() {
-            String simpleUUID = cn.hutool.core.util.IdUtil.simpleUUID();
+            String simpleUUID = java.util.UUID.randomUUID().toString().replace("-", "");
             assertThat(simpleUUID).doesNotContain("-");
         }
 
         @Test
         @DisplayName("每次生成的UUID应该不同")
         void eachUUIDShouldBeUnique() {
-            String uuid1 = cn.hutool.core.util.IdUtil.simpleUUID();
-            String uuid2 = cn.hutool.core.util.IdUtil.simpleUUID();
+            String uuid1 = java.util.UUID.randomUUID().toString().replace("-", "");
+            String uuid2 = java.util.UUID.randomUUID().toString().replace("-", "");
             assertThat(uuid1).isNotEqualTo(uuid2);
         }
     }
@@ -115,24 +113,24 @@ class CommonUtilsTest {
     class JSONUtilsTests {
 
         @Test
-        @DisplayName("JSONObject应该能存储和读取path值")
-        void jsonObjectShouldStoreAndRetrievePathValue() {
-            cn.hutool.json.JSON json = new cn.hutool.json.JSONObject();
+        @DisplayName("JsonPathUtil应该能存储和读取path值")
+        void jsonPathUtilShouldStoreAndRetrievePathValue() {
+            java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
             String testUUID = "test-uuid-12345";
-            json.putByPath("uuid", testUUID);
+            JsonPathUtil.putByPath(map, "uuid", testUUID);
             
-            Object retrieved = json.getByPath("uuid");
+            Object retrieved = JsonPathUtil.getByPath(map, "uuid");
             assertThat(retrieved).isNotNull();
             assertThat(retrieved.toString()).isEqualTo(testUUID);
         }
 
         @Test
-        @DisplayName("JSONObject应该支持嵌套路径")
-        void jsonObjectShouldSupportNestedPath() {
-            cn.hutool.json.JSON json = new cn.hutool.json.JSONObject();
-            json.putByPath("data.uuid", "nested-uuid");
+        @DisplayName("JsonPathUtil应该支持嵌套路径")
+        void jsonPathUtilShouldSupportNestedPath() {
+            java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+            JsonPathUtil.putByPath(map, "data.uuid", "nested-uuid");
             
-            Object retrieved = json.getByPath("data.uuid");
+            Object retrieved = JsonPathUtil.getByPath(map, "data.uuid");
             assertThat(retrieved).isNotNull();
             assertThat(retrieved.toString()).isEqualTo("nested-uuid");
         }
@@ -188,10 +186,11 @@ class CommonUtilsTest {
             // 预先创建文件
             File dataFile = new File(tempDir, "data.json");
             String existingUUID = "abcd1234efgh5678ijkl9012mnop3456";
-            JSONObject json = new JSONObject();
-            json.putByPath("uuid", existingUUID);
+            JsonObject json = new JsonObject();
+            json.addProperty("uuid", existingUUID);
+            Gson gson = new GsonBuilder().setPrettyPrinting().create();
             try (FileWriter writer = new FileWriter(dataFile)) {
-                json.write(writer);
+                writer.write(gson.toJson(json));
             }
             
             // 调用方法
@@ -207,10 +206,10 @@ class CommonUtilsTest {
             // 预先创建文件
             File dataFile = new File(tempDir, "data.json");
             String existingUUID = "test1234test5678test9012test3456";
-            JSONObject json = new JSONObject();
-            json.putByPath("uuid", existingUUID);
+            JsonObject json = new JsonObject();
+            json.addProperty("uuid", existingUUID);
             try (FileWriter writer = new FileWriter(dataFile)) {
-                json.write(writer);
+                writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
             }
             
             // 多次调用
@@ -235,8 +234,8 @@ class CommonUtilsTest {
             String generatedUUID = CommonUtils.getUltiToolsUUID();
             
             // 读取文件验证 UUID 已持久化
-            cn.hutool.json.JSON savedJson = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
-            String savedUUID = savedJson.getByPath("uuid").toString();
+            JsonObject savedJson; try (FileReader reader = new FileReader(dataFile)) { savedJson = new Gson().fromJson(reader, JsonObject.class); }
+            String savedUUID = savedJson.get("uuid").getAsString();
             
             assertThat(savedUUID).isEqualTo(generatedUUID);
         }
@@ -247,12 +246,12 @@ class CommonUtilsTest {
             // 创建包含其他数据的 JSON 文件
             File dataFile = new File(tempDir, "data.json");
             String existingUUID = "uuid1234uuid5678uuid9012uuid3456";
-            JSONObject json = new JSONObject();
-            json.putByPath("uuid", existingUUID);
-            json.putByPath("version", "6.0.0");
-            json.putByPath("settings.enabled", true);
+            JsonObject json = new JsonObject();
+            json.addProperty("uuid", existingUUID);
+            json.addProperty("version", "6.0.0");
+            JsonObject settings = new JsonObject(); settings.addProperty("enabled", true); json.add("settings", settings);
             try (FileWriter writer = new FileWriter(dataFile)) {
-                json.write(writer);
+                writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
             }
             
             // 调用方法
@@ -293,9 +292,9 @@ class CommonUtilsTest {
         void shouldHandleEmptyJsonObject() throws Exception {
             // 创建空 JSON 文件
             File dataFile = new File(tempDir, "data.json");
-            JSONObject json = new JSONObject();
+            JsonObject json = new JsonObject();
             try (FileWriter writer = new FileWriter(dataFile)) {
-                json.write(writer);
+                writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
             }
             
             // 调用方法 - getByPath 会返回 null，可能导致 NPE
@@ -324,8 +323,8 @@ class CommonUtilsTest {
             
             // 验证是有效的 JSON
             assertThat(content).isNotEmpty();
-            JSONObject parsed = JSONUtil.parseObj(content);
-            assertThat(parsed.containsKey("uuid")).isTrue();
+            JsonObject parsed = new Gson().fromJson(content, JsonObject.class);
+            assertThat(parsed.has("uuid")).isTrue();
         }
 
         @Test
@@ -336,8 +335,11 @@ class CommonUtilsTest {
             
             // 读取文件验证类型
             File dataFile = new File(tempDir, "data.json");
-            cn.hutool.json.JSON json = JSONUtil.readJSON(dataFile, StandardCharsets.UTF_8);
-            Object uuidValue = json.getByPath("uuid");
+            JsonObject jsonRead;
+            try (FileReader reader = new FileReader(dataFile)) {
+                jsonRead = new Gson().fromJson(reader, JsonObject.class);
+            }
+            Object uuidValue = jsonRead.get("uuid").getAsString();
             
             assertThat(uuidValue).isInstanceOf(String.class);
             assertThat(uuidValue.toString()).isEqualTo(uuid);
@@ -345,8 +347,8 @@ class CommonUtilsTest {
     }
 
     @Nested
-    @DisplayName("IdUtil Mock 测试")
-    class IdUtilMockTests {
+    @DisplayName("UUID 生成测试")
+    class UuidGenerationTests {
 
         @TempDir
         File tempDir;
@@ -370,41 +372,37 @@ class CommonUtilsTest {
         }
 
         @Test
-        @DisplayName("当文件不存在时应该使用 IdUtil.simpleUUID() 生成 UUID")
-        void shouldUseIdUtilSimpleUUIDWhenFileNotExists() throws Exception {
-            String expectedUUID = "mockeduuid12345678901234567890ab";
+        @DisplayName("当文件不存在时应该生成新的 UUID")
+        void shouldGenerateNewUUIDWhenFileNotExists() throws Exception {
+            File dataFile = new File(tempDir, "data.json");
+            assertThat(dataFile.exists()).isFalse();
             
-            try (MockedStatic<IdUtil> mockedIdUtil = mockStatic(IdUtil.class)) {
-                mockedIdUtil.when(IdUtil::simpleUUID).thenReturn(expectedUUID);
-                
-                File dataFile = new File(tempDir, "data.json");
-                assertThat(dataFile.exists()).isFalse();
-                
-                String uuid = CommonUtils.getUltiToolsUUID();
-                
-                assertThat(uuid).isEqualTo(expectedUUID);
-                mockedIdUtil.verify(IdUtil::simpleUUID, times(1));
-            }
+            String uuid = CommonUtils.getUltiToolsUUID();
+            
+            // UUID 应该是 32 位 hex 字符串 (不带横杠)
+            assertThat(uuid).isNotNull();
+            assertThat(uuid).hasSize(32);
+            assertThat(uuid).matches("[0-9a-f]{32}");
+            
+            // 验证文件已创建
+            assertThat(dataFile.exists()).isTrue();
         }
 
         @Test
-        @DisplayName("当文件存在时不应该调用 IdUtil.simpleUUID()")
-        void shouldNotCallIdUtilSimpleUUIDWhenFileExists() throws Exception {
+        @DisplayName("当文件存在时应该返回已保存的 UUID")
+        void shouldReturnExistingUUIDWhenFileExists() throws Exception {
             // 预先创建文件
             File dataFile = new File(tempDir, "data.json");
             String existingUUID = "existinguuid123456789012345678ab";
-            JSONObject json = new JSONObject();
-            json.putByPath("uuid", existingUUID);
+            JsonObject json = new JsonObject();
+            json.addProperty("uuid", existingUUID);
             try (FileWriter writer = new FileWriter(dataFile)) {
-                json.write(writer);
+                writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
             }
             
-            try (MockedStatic<IdUtil> mockedIdUtil = mockStatic(IdUtil.class)) {
-                String uuid = CommonUtils.getUltiToolsUUID();
-                
-                assertThat(uuid).isEqualTo(existingUUID);
-                mockedIdUtil.verify(IdUtil::simpleUUID, never());
-            }
+            String uuid = CommonUtils.getUltiToolsUUID();
+            
+            assertThat(uuid).isEqualTo(existingUUID);
         }
     }
 }

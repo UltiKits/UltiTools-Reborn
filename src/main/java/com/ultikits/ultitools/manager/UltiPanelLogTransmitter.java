@@ -9,8 +9,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -40,7 +40,7 @@ public class UltiPanelLogTransmitter {
     private int intervalMs = 5000; // 5秒间隔
     
     // 批量发送队列和调度器
-    private final ConcurrentLinkedQueue<JSONObject> logQueue;
+    private final ConcurrentLinkedQueue<JsonObject> logQueue;
     private final ScheduledExecutorService batchScheduler;
     
     /**
@@ -84,21 +84,21 @@ public class UltiPanelLogTransmitter {
         }
         
         try {
-            JSONObject logData = new JSONObject();
-            logData.put("level", level);
-            logData.put("message", message != null ? message : "");
-            logData.put("timestamp", System.currentTimeMillis());
-            logData.put("source", source);
-            logData.put("thread", Thread.currentThread().getName());
+            JsonObject logData = new JsonObject();
+            logData.addProperty("level", level);
+            logData.addProperty("message", message != null ? message : "");
+            logData.addProperty("timestamp", System.currentTimeMillis());
+            logData.addProperty("source", source);
+            logData.addProperty("thread", Thread.currentThread().getName());
             
             // 添加记录器名称（可选）
-            logData.put("logger", determineLoggerName(source));
+            logData.addProperty("logger", determineLoggerName(source));
             
             // 如果有异常，添加堆栈跟踪
             if (throwable != null) {
-                logData.put("stackTrace", getStackTrace(throwable));
+                logData.addProperty("stackTrace", getStackTrace(throwable));
             } else {
-                logData.put("stackTrace", null);
+                logData.add("stackTrace", null);
             }
             
             if (batchEnabled) {
@@ -137,12 +137,12 @@ public class UltiPanelLogTransmitter {
     /**
      * 立即发送单条日志
      */
-    private void sendLogImmediately(JSONObject logData) {
-        JSONObject wsMessage = new JSONObject();
-        wsMessage.put("type", "log_stream");
-        wsMessage.put("serverId", serverId);
-        wsMessage.put("data", logData);
-        wsMessage.put("timestamp", System.currentTimeMillis());
+    private void sendLogImmediately(JsonObject logData) {
+        JsonObject wsMessage = new JsonObject();
+        wsMessage.addProperty("type", "log_stream");
+        wsMessage.addProperty("serverId", serverId);
+        wsMessage.add("data", logData);
+        wsMessage.addProperty("timestamp", System.currentTimeMillis());
         
         webSocketClient.sendMessage(wsMessage);
     }
@@ -150,7 +150,7 @@ public class UltiPanelLogTransmitter {
     /**
      * 添加日志到批量队列
      */
-    private void addToBatch(JSONObject logData) {
+    private void addToBatch(JsonObject logData) {
         logQueue.offer(logData);
         
         // 如果队列满了，立即发送
@@ -176,11 +176,11 @@ public class UltiPanelLogTransmitter {
         }
         
         try {
-            JSONArray logs = new JSONArray();
+            JsonArray logs = new JsonArray();
             
             // 从队列中取出日志
             for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
-                JSONObject log = logQueue.poll();
+                JsonObject log = logQueue.poll();
                 if (log != null) {
                     logs.add(log);
                 }
@@ -188,11 +188,11 @@ public class UltiPanelLogTransmitter {
             
             if (logs.size() > 0) {
                 // 发送批量日志消息
-                JSONObject batchMessage = new JSONObject();
-                batchMessage.put("type", "log_batch");
-                batchMessage.put("serverId", serverId);
-                batchMessage.put("data", logs);
-                batchMessage.put("timestamp", System.currentTimeMillis());
+                JsonObject batchMessage = new JsonObject();
+                batchMessage.addProperty("type", "log_batch");
+                batchMessage.addProperty("serverId", serverId);
+                batchMessage.add("data", logs);
+                batchMessage.addProperty("timestamp", System.currentTimeMillis());
                 
                 webSocketClient.sendMessage(batchMessage);
                 

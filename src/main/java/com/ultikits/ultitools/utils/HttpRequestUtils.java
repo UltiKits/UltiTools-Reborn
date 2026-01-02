@@ -3,13 +3,11 @@ package com.ultikits.ultitools.utils;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.entities.vo.ServerEntityVO;
-
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
+import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
  * Utility class for HTTP request operations.
@@ -104,13 +102,13 @@ public class HttpRequestUtils {
         String fullUrl = cleanBaseUrl + "/user/getToken";
         
         // 使用 application/x-www-form-urlencoded 格式发送请求
-        HttpResponse response = HttpRequest.post(fullUrl)
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .form(paramMap)
-                .execute();
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/x-www-form-urlencoded");
+        
+        Response response = SimpleHttpClient.post(fullUrl, headers, paramMap);
         
         String tokenJson = response.body();
-        TokenEntity tokenEntity = JSONObject.parseObject(tokenJson, TokenEntity.class);
+        TokenEntity tokenEntity = new Gson().fromJson(tokenJson, TokenEntity.class);
         
         // 解码JWT payload以填充用户信息
         tokenEntity.decodeJwtPayload();
@@ -127,12 +125,12 @@ public class HttpRequestUtils {
      * @param token the authentication token <br> 身份验证令牌
      * @return HttpResponse containing the server information <br> 包含服务器信息的HttpResponse
      */
-    protected static HttpResponse getServerByUUID(String uuid, TokenEntity token) {
+    protected static Response getServerByUUID(String uuid, TokenEntity token) {
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
-        return HttpRequest.get(cleanBaseUrl + "/server/getByUUID?uuid=" + uuid)
-                .header("Authorization", "Bearer " + token.getAccess_token())
-                .header("Content-Type", "application/json")
-                .execute();
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + token.getAccess_token());
+        headers.put("Content-Type", "application/json");
+        return SimpleHttpClient.get(cleanBaseUrl + "/server/getByUUID?uuid=" + uuid, headers);
     }
 
     /**
@@ -147,7 +145,7 @@ public class HttpRequestUtils {
      * @param token  the authentication token <br> 身份验证令牌
      * @return HttpResponse containing the registration result <br> 包含注册结果的HttpResponse
      */
-    protected static HttpResponse registerServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+    protected static Response registerServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
@@ -159,17 +157,17 @@ public class HttpRequestUtils {
         
         // 使用 FormData 格式发送请求
         Map<String, Object> formMap = new HashMap<>();
-        System.out.println("Server data: " + JSONObject.toJSONString(serverEntityVO));
+        System.out.println("Server data: " + new Gson().toJson(serverEntityVO));
         System.out.println("Token user ID: " + token.getUser_id());
         System.out.println("Decoded token info: " + token.getDecodedInfo());
 
         formMap.put("id", token.getUser_id());  // 使用token中的用户ID
-        formMap.put("serverData", JSONObject.toJSONString(serverEntityVO));  // 使用JSON序列化确保格式正确
+        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
         
-        return HttpRequest.post(cleanBaseUrl + "/editor/register")
-                .header("Authorization", "Bearer " + token.getAccess_token())
-                .form(formMap)
-                .execute();
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + token.getAccess_token());
+        
+        return SimpleHttpClient.post(cleanBaseUrl + "/editor/register", headers, formMap);
     }
 
     /**
@@ -184,7 +182,7 @@ public class HttpRequestUtils {
      * @param token  the authentication token <br> 身份验证令牌
      * @return HttpResponse containing the update result <br> 包含更新结果的HttpResponse
      */
-    protected static HttpResponse updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+    protected static Response updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
@@ -196,12 +194,12 @@ public class HttpRequestUtils {
         // 使用 FormData 格式发送请求
         Map<String, Object> formMap = new HashMap<>();
         formMap.put("id", token.getUser_id());  // 使用token中的用户ID
-        formMap.put("serverData", JSONObject.toJSONString(serverEntityVO));  // 使用JSON序列化确保格式正确
+        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
         
-        return HttpRequest.post(cleanBaseUrl + "/editor/updateServer")
-                .header("Authorization", "Bearer " + token.getAccess_token())
-                .form(formMap)
-                .execute();
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + token.getAccess_token());
+        
+        return SimpleHttpClient.post(cleanBaseUrl + "/editor/updateServer", headers, formMap);
     }
 
 }

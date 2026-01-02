@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -156,7 +156,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog(null, "test message", "server", null);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -170,7 +170,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("info", "test message", null, null);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -186,7 +186,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("error", "error message", "server", testException);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -205,7 +205,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.info("test info", "server");
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -219,7 +219,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.warning("test warning", "server");
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -233,7 +233,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.error("test error", "server", null);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -247,7 +247,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.debug("test debug", "server");
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -354,17 +354,17 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("应该直接发送消息")
         void shouldSendMessageDirectly() throws Exception {
             // Arrange
-            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("sendLogImmediately", JSONObject.class);
+            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("sendLogImmediately", JsonObject.class);
             method.setAccessible(true);
 
-            JSONObject logData = new JSONObject();
-            logData.put("message", "test");
+            JsonObject logData = new JsonObject();
+            logData.addProperty("message", "test");
 
             // Act
             method.invoke(logTransmitter, logData);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -395,7 +395,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("info", "test", "server", null);
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -506,7 +506,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.flushLogs();
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -645,21 +645,21 @@ class UltiPanelLogTransmitterTest {
             Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
             queueField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            ConcurrentLinkedQueue<JSONObject> queue = (ConcurrentLinkedQueue<JSONObject>) queueField.get(logTransmitter);
+            ConcurrentLinkedQueue<JsonObject> queue = (ConcurrentLinkedQueue<JsonObject>) queueField.get(logTransmitter);
             
-            JSONObject log1 = new JSONObject();
-            log1.put("message", "test1");
+            JsonObject log1 = new JsonObject();
+            log1.addProperty("message", "test1");
             queue.add(log1);
 
-            JSONObject log2 = new JSONObject();
-            log2.put("message", "test2");
+            JsonObject log2 = new JsonObject();
+            log2.addProperty("message", "test2");
             queue.add(log2);
 
             // Act
             method.invoke(logTransmitter);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -680,7 +680,7 @@ class UltiPanelLogTransmitterTest {
             method.invoke(logTransmitter);
 
             // Assert
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -699,7 +699,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("info", "test message", "server", null);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -714,7 +714,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("error", "test", "server", exception);
 
             // Assert
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -748,7 +748,7 @@ class UltiPanelLogTransmitterTest {
             logTransmitter.sendLog("info", "test2", "server", null);
 
             // Assert
-            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 

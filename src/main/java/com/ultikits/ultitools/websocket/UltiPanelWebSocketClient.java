@@ -1,38 +1,44 @@
 package com.ultikits.ultitools.websocket;
 
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.UltiTools;
-import lombok.Getter;
-import okhttp3.*;
-import okio.ByteString;
-
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ScheduledExecutorService;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Level;
+
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.UltiTools;
+
+import lombok.Getter;
 
 /**
  * UltiPanel WebSocket Client
  * <p>
- * 新的WebSocket客户端，基于RFC 6455 WebSocket标准
+ * 新的WebSocket客户端，基于Java-WebSocket库
  * <p>
- * New WebSocket client based on RFC 6455 WebSocket standard
+ * New WebSocket client based on Java-WebSocket library
  */
 @Getter
-public class UltiPanelWebSocketClient extends WebSocketListener {
-    private final String url;
+public class UltiPanelWebSocketClient extends WebSocketClient {
     private final String serverId;
     private final String token;
-    private final OkHttpClient client;
     private final ScheduledExecutorService heartbeatExecutor;
     
-    private WebSocket webSocket;
     private boolean isConnected = false;
     private ScheduledFuture<?> heartbeatTask;
     
-    private Consumer<JSONObject> messageHandler;
+    private final Gson gson = new Gson();
+    private Consumer<JsonObject> messageHandler;
     private Runnable onConnectHandler;
     private Runnable onDisconnectHandler;
     private Consumer<String> onErrorHandler;
@@ -43,34 +49,31 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      * @param url      WebSocket服务器URL
      * @param serverId 服务器ID
      * @param token    认证token
+     * @throws URISyntaxException 如果URL格式不正确
      */
-    public UltiPanelWebSocketClient(String url, String serverId, String token) {
-        this.url = url;
+    public UltiPanelWebSocketClient(String url, String serverId, String token) throws URISyntaxException {
+        super(new URI(url), getHeaders(token));
         this.serverId = serverId;
         this.token = token;
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(10, TimeUnit.SECONDS)
-                .build();
+    }
+
+    private static Map<String, String> getHeaders(String token) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + token);
+        return headers;
     }
 
     /**
      * 连接到WebSocket服务器
      */
+    @Override
     public void connect() {
         if (isConnected) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket已经连接，请勿重复连接");
             return;
         }
-
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + token)
-                .build();
-
-        webSocket = client.newWebSocket(request, this);
+        super.connect();
     }
 
     /**
@@ -82,9 +85,7 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
             heartbeatTask.cancel(false);
         }
         
-        if (webSocket != null) {
-            webSocket.close(1000, "Client disconnect");
-        }
+        close(1000, "Client disconnect");
         isConnected = false;
         
         // 关闭心跳执行器
@@ -96,34 +97,35 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      *
      * @param message JSON消息对象
      */
-    public void sendMessage(JSONObject message) {
-        if (!isConnected || webSocket == null) {
+    public void sendMessage(JsonObject message) {
+        if (!isOpen()) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送消息");
             return;
         }
 
         // 添加时间戳
-        if (!message.containsKey("timestamp")) {
-            message.put("timestamp", System.currentTimeMillis());
+        if (!message.has("timestamp")) {
+            message.addProperty("timestamp", System.currentTimeMillis());
         }
 
-        String messageStr = message.toJSONString();
+        String messageStr = gson.toJson(message);
         
         // 记录发送的消息日志
+        String msgType = message.has("type") && !message.get("type").isJsonNull() 
+            ? message.get("type").getAsString() : "未知";
         UltiTools.getInstance().getLogger().log(Level.INFO, 
-            String.format("[WebSocket发送] 类型: %s, 消息: %s", 
-                message.getString("type"), messageStr));
+            String.format("[WebSocket发送] 类型: %s, 消息: %s", msgType, messageStr));
         
-        webSocket.send(messageStr);
+        send(messageStr);
     }
 
     /**
      * 发送Ping消息
      */
     public void sendPing() {
-        JSONObject pingMessage = new JSONObject();
-        pingMessage.put("type", "ping");
-        pingMessage.put("timestamp", System.currentTimeMillis());
+        JsonObject pingMessage = new JsonObject();
+        pingMessage.addProperty("type", "ping");
+        pingMessage.addProperty("timestamp", System.currentTimeMillis());
         sendMessage(pingMessage);
     }
 
@@ -133,10 +135,10 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      * @param serverId 要订阅的服务器ID
      */
     public void subscribeToServer(String serverId) {
-        JSONObject subscribeMessage = new JSONObject();
-        subscribeMessage.put("type", "subscribe");
-        subscribeMessage.put("serverId", serverId);
-        subscribeMessage.put("timestamp", System.currentTimeMillis());
+        JsonObject subscribeMessage = new JsonObject();
+        subscribeMessage.addProperty("type", "subscribe");
+        subscribeMessage.addProperty("serverId", serverId);
+        subscribeMessage.addProperty("timestamp", System.currentTimeMillis());
         sendMessage(subscribeMessage);
     }
 
@@ -146,10 +148,10 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      * @param serverId 要取消订阅的服务器ID
      */
     public void unsubscribeFromServer(String serverId) {
-        JSONObject unsubscribeMessage = new JSONObject();
-        unsubscribeMessage.put("type", "unsubscribe");
-        unsubscribeMessage.put("serverId", serverId);
-        unsubscribeMessage.put("timestamp", System.currentTimeMillis());
+        JsonObject unsubscribeMessage = new JsonObject();
+        unsubscribeMessage.addProperty("type", "unsubscribe");
+        unsubscribeMessage.addProperty("serverId", serverId);
+        unsubscribeMessage.addProperty("timestamp", System.currentTimeMillis());
         sendMessage(unsubscribeMessage);
     }
 
@@ -158,7 +160,7 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      *
      * @param handler 消息处理器
      */
-    public void setMessageHandler(Consumer<JSONObject> handler) {
+    public void setMessageHandler(Consumer<JsonObject> handler) {
         this.messageHandler = handler;
     }
 
@@ -195,18 +197,17 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
     private void startHeartbeat() {
         // 按照文档建议，每60秒发送一次ping消息（而不是30秒）
         heartbeatTask = heartbeatExecutor.scheduleWithFixedDelay(() -> {
-            if (isConnected) {
+            if (isOpen()) {
                 sendPing();
                 UltiTools.getInstance().getLogger().log(Level.FINE, "发送心跳ping消息");
             }
         }, 60, 60, TimeUnit.SECONDS); // 修改为60秒间隔
     }
 
-    // WebSocketListener实现
+    // WebSocketClient实现
 
     @Override
-    public void onOpen(WebSocket webSocket, Response response) {
-        super.onOpen(webSocket, response);
+    public void onOpen(ServerHandshake handshakedata) {
         isConnected = true;
         UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("成功连接到UltiPanel WebSocket服务器！"));
         
@@ -217,51 +218,36 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
         // 发送初始ping消息
         sendPing();
         
-        // 启动心跳任务，每30秒发送一次ping
+        // 启动心跳任务
         startHeartbeat();
     }
 
     @Override
-    public void onMessage(WebSocket webSocket, String text) {
-        super.onMessage(webSocket, text);
-        
+    public void onMessage(String message) {
         try {
-            JSONObject message = JSONObject.parseObject(text);
+            JsonObject jsonMessage = JsonParser.parseString(message).getAsJsonObject();
             
             // 记录接收的消息日志
-            String messageType = message.getString("type");
+            String messageType = jsonMessage.has("type") && !jsonMessage.get("type").isJsonNull() 
+                ? jsonMessage.get("type").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("[WebSocket接收] 类型: %s, 消息: %s", 
-                    messageType != null ? messageType : "未知", text));
+                    messageType != null ? messageType : "未知", message));
             
-            handleMessage(message);
+            handleMessage(jsonMessage);
             
             if (messageHandler != null) {
-                messageHandler.accept(message);
+                messageHandler.accept(jsonMessage);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket消息解析失败: " + e.getMessage() + ", 原始消息: " + text);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket消息解析失败: " + e.getMessage() + ", 原始消息: " + message);
         }
     }
 
     @Override
-    public void onMessage(WebSocket webSocket, ByteString bytes) {
-        super.onMessage(webSocket, bytes);
-        onMessage(webSocket, bytes.utf8());
-    }
-
-    @Override
-    public void onClosing(WebSocket webSocket, int code, String reason) {
-        super.onClosing(webSocket, code, reason);
+    public void onClose(int code, String reason, boolean remote) {
         isConnected = false;
-        UltiTools.getInstance().getLogger().log(Level.INFO, "WebSocket连接正在关闭: " + reason);
-    }
-
-    @Override
-    public void onClosed(WebSocket webSocket, int code, String reason) {
-        super.onClosed(webSocket, code, reason);
-        isConnected = false;
-        UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("已与UltiPanel WebSocket服务器断开连接！"));
+        UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("已与UltiPanel WebSocket服务器断开连接！") + " Reason: " + reason);
         
         if (onDisconnectHandler != null) {
             onDisconnectHandler.run();
@@ -269,11 +255,10 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
     }
 
     @Override
-    public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-        super.onFailure(webSocket, t, response);
+    public void onError(Exception ex) {
         isConnected = false;
-        String errorMessage = "WebSocket连接失败: " + t.getMessage();
-        UltiTools.getInstance().getLogger().log(Level.WARNING, UltiTools.getInstance().i18n("无法连接到UltiPanel WebSocket服务器：") + t.getMessage());
+        String errorMessage = "WebSocket连接失败: " + ex.getMessage();
+        UltiTools.getInstance().getLogger().log(Level.WARNING, UltiTools.getInstance().i18n("无法连接到UltiPanel WebSocket服务器：") + ex.getMessage());
         
         if (onErrorHandler != null) {
             onErrorHandler.accept(errorMessage);
@@ -285,8 +270,9 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
      *
      * @param message 接收到的JSON消息
      */
-    private void handleMessage(JSONObject message) {
-        String type = message.getString("type");
+    private void handleMessage(JsonObject message) {
+        String type = message.has("type") && !message.get("type").isJsonNull() 
+            ? message.get("type").getAsString() : null;
         if (type == null) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "收到无效的WebSocket消息：缺少type字段");
             return;
@@ -299,31 +285,45 @@ public class UltiPanelWebSocketClient extends WebSocketListener {
                 break;
             case "notification":
                 // 处理通知消息
-                JSONObject data = message.getJSONObject("data");
+                JsonObject data = message.has("data") && message.get("data").isJsonObject() 
+                    ? message.getAsJsonObject("data") : null;
                 if (data != null) {
-                    String notificationMessage = data.getString("message");
+                    String notificationMessage = data.has("message") && !data.get("message").isJsonNull() 
+                        ? data.get("message").getAsString() : null;
                     UltiTools.getInstance().getLogger().log(Level.INFO, "收到通知: " + notificationMessage);
                 }
                 break;
             case "subscribe":
                 // 处理订阅响应
-                JSONObject subscribeData = message.getJSONObject("data");
-                if (subscribeData != null && subscribeData.getBooleanValue("subscribed")) {
-                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功订阅服务器: " + subscribeData.getString("serverId"));
+                JsonObject subscribeData = message.has("data") && message.get("data").isJsonObject() 
+                    ? message.getAsJsonObject("data") : null;
+                if (subscribeData != null && subscribeData.has("subscribed") 
+                    && !subscribeData.get("subscribed").isJsonNull() 
+                    && subscribeData.get("subscribed").getAsBoolean()) {
+                    String serverId = subscribeData.has("serverId") && !subscribeData.get("serverId").isJsonNull() 
+                        ? subscribeData.get("serverId").getAsString() : null;
+                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功订阅服务器: " + serverId);
                 }
                 break;
             case "unsubscribe":
                 // 处理取消订阅响应
-                JSONObject unsubscribeData = message.getJSONObject("data");
-                if (unsubscribeData != null && unsubscribeData.getBooleanValue("unsubscribed")) {
-                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功取消订阅服务器: " + unsubscribeData.getString("serverId"));
+                JsonObject unsubscribeData = message.has("data") && message.get("data").isJsonObject() 
+                    ? message.getAsJsonObject("data") : null;
+                if (unsubscribeData != null && unsubscribeData.has("unsubscribed") 
+                    && !unsubscribeData.get("unsubscribed").isJsonNull() 
+                    && unsubscribeData.get("unsubscribed").getAsBoolean()) {
+                    String serverId = unsubscribeData.has("serverId") && !unsubscribeData.get("serverId").isJsonNull() 
+                        ? unsubscribeData.get("serverId").getAsString() : null;
+                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功取消订阅服务器: " + serverId);
                 }
                 break;
             case "error":
                 // 处理错误消息
-                JSONObject errorData = message.getJSONObject("data");
+                JsonObject errorData = message.has("data") && message.get("data").isJsonObject() 
+                    ? message.getAsJsonObject("data") : null;
                 if (errorData != null) {
-                    String errorMessage = errorData.getString("message");
+                    String errorMessage = errorData.has("message") && !errorData.get("message").isJsonNull() 
+                        ? errorData.get("message").getAsString() : null;
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "服务器错误: " + errorMessage);
                 }
                 break;

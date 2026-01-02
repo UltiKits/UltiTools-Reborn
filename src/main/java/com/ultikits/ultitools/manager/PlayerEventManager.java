@@ -1,18 +1,19 @@
 package com.ultikits.ultitools.manager;
 
-import com.alibaba.fastjson.JSONObject;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import java.time.Instant;
+
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChatEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.event.player.PlayerChatEvent;
 
-import java.time.Instant;
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * 玩家事件管理器
@@ -43,12 +44,12 @@ public class PlayerEventManager implements Listener {
         }
         
         Player player = event.getPlayer();
-        JSONObject data = new JSONObject();
-        data.put("event_type", "player_join");
-        data.put("player_name", player.getName());
-        data.put("player_uuid", player.getUniqueId().toString());
-        data.put("join_message", event.getJoinMessage());
-        data.put("online_count", Bukkit.getOnlinePlayers().size());
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_join");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("join_message", event.getJoinMessage());
+        data.addProperty("online_count", Bukkit.getOnlinePlayers().size());
         
         sendPlayerEvent(data);
         
@@ -69,12 +70,12 @@ public class PlayerEventManager implements Listener {
         }
         
         Player player = event.getPlayer();
-        JSONObject data = new JSONObject();
-        data.put("event_type", "player_quit");
-        data.put("player_name", player.getName());
-        data.put("player_uuid", player.getUniqueId().toString());
-        data.put("quit_message", event.getQuitMessage());
-        data.put("online_count", Math.max(0, Bukkit.getOnlinePlayers().size() - 1));
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_quit");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("quit_message", event.getQuitMessage());
+        data.addProperty("online_count", Math.max(0, Bukkit.getOnlinePlayers().size() - 1));
         
         sendPlayerEvent(data);
         
@@ -95,12 +96,12 @@ public class PlayerEventManager implements Listener {
         }
         
         Player player = event.getPlayer();
-        JSONObject data = new JSONObject();
-        data.put("event_type", "player_chat");
-        data.put("player_name", player.getName());
-        data.put("player_uuid", player.getUniqueId().toString());
-        data.put("message", event.getMessage());
-        data.put("format", event.getFormat());
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_chat");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("message", event.getMessage());
+        data.addProperty("format", event.getFormat());
         
         sendPlayerEvent(data);
         
@@ -116,12 +117,12 @@ public class PlayerEventManager implements Listener {
      * 发送玩家事件到UltiPanel
      * @param data 事件数据
      */
-    private void sendPlayerEvent(JSONObject data) {
-        JSONObject message = new JSONObject();
-        message.put("type", "player_event");
-        message.put("data", data);
-        message.put("timestamp", Instant.now().toEpochMilli());
-        message.put("serverId", getServerId());
+    private void sendPlayerEvent(JsonObject data) {
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "player_event");
+        message.add("data", data);
+        message.addProperty("timestamp", Instant.now().toEpochMilli());
+        message.addProperty("serverId", getServerId());
         
         webSocketClient.sendMessage(message);
     }

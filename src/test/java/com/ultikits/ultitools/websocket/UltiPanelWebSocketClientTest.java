@@ -5,18 +5,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.net.URISyntaxException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.alibaba.fastjson.JSONObject;
-
-import okhttp3.OkHttpClient;
+import com.google.gson.JsonObject;
 
 /**
  * Unit tests for {@link UltiPanelWebSocketClient}.
@@ -37,27 +38,14 @@ class UltiPanelWebSocketClientTest {
 
         @Test
         @DisplayName("构造函数应该正确初始化所有字段")
-        void constructorShouldInitializeAllFields() {
+        void constructorShouldInitializeAllFields() throws URISyntaxException {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
-            assertThat(client.getUrl()).isEqualTo(TEST_URL);
+            assertThat(client.getURI().toString()).isEqualTo(TEST_URL);
             assertThat(client.getServerId()).isEqualTo(TEST_SERVER_ID);
             assertThat(client.getToken()).isEqualTo(TEST_TOKEN);
             assertThat(client.isConnected()).isFalse();
-        }
-
-        @Test
-        @DisplayName("构造函数应该创建 OkHttpClient 实例")
-        void constructorShouldCreateOkHttpClient() throws Exception {
-            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
-                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
-
-            Field clientField = UltiPanelWebSocketClient.class.getDeclaredField("client");
-            clientField.setAccessible(true);
-            OkHttpClient okHttpClient = (OkHttpClient) clientField.get(client);
-
-            assertThat(okHttpClient).isNotNull();
         }
 
         @Test
@@ -82,7 +70,7 @@ class UltiPanelWebSocketClientTest {
         @Test
         @DisplayName("connect 方法应该存在且签名正确")
         void connectMethodShouldExist() throws NoSuchMethodException {
-            Method method = UltiPanelWebSocketClient.class.getDeclaredMethod("connect");
+            Method method = UltiPanelWebSocketClient.class.getMethod("connect");
 
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(void.class);
@@ -101,7 +89,7 @@ class UltiPanelWebSocketClientTest {
         @DisplayName("sendMessage 方法应该存在且签名正确")
         void sendMessageMethodShouldExist() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "sendMessage", JSONObject.class);
+                "sendMessage", JsonObject.class);
 
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(void.class);
@@ -183,7 +171,7 @@ class UltiPanelWebSocketClientTest {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
-            Consumer<JSONObject> handler = msg -> {};
+            Consumer<JsonObject> handler = msg -> {};
             client.setMessageHandler(handler);
 
             Field handlerField = UltiPanelWebSocketClient.class.getDeclaredField("messageHandler");
@@ -207,13 +195,13 @@ class UltiPanelWebSocketClientTest {
     }
 
     @Nested
-    @DisplayName("WebSocketListener 实现测试")
-    class WebSocketListenerTests {
+    @DisplayName("WebSocketClient 实现测试")
+    class WebSocketClientTests {
 
         @Test
-        @DisplayName("UltiPanelWebSocketClient 应该继承 WebSocketListener")
-        void shouldExtendWebSocketListener() {
-            assertThat(okhttp3.WebSocketListener.class.isAssignableFrom(
+        @DisplayName("UltiPanelWebSocketClient 应该继承 WebSocketClient")
+        void shouldExtendWebSocketClient() {
+            assertThat(WebSocketClient.class.isAssignableFrom(
                 UltiPanelWebSocketClient.class)).isTrue();
         }
 
@@ -221,7 +209,7 @@ class UltiPanelWebSocketClientTest {
         @DisplayName("应该实现 onOpen 方法")
         void shouldImplementOnOpen() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "onOpen", okhttp3.WebSocket.class, okhttp3.Response.class);
+                "onOpen", ServerHandshake.class);
 
             assertThat(method).isNotNull();
         }
@@ -230,34 +218,25 @@ class UltiPanelWebSocketClientTest {
         @DisplayName("应该实现 onMessage(String) 方法")
         void shouldImplementOnMessageString() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "onMessage", okhttp3.WebSocket.class, String.class);
+                "onMessage", String.class);
 
             assertThat(method).isNotNull();
         }
 
         @Test
-        @DisplayName("应该实现 onClosing 方法")
-        void shouldImplementOnClosing() throws NoSuchMethodException {
+        @DisplayName("应该实现 onClose 方法")
+        void shouldImplementOnClose() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "onClosing", okhttp3.WebSocket.class, int.class, String.class);
+                "onClose", int.class, String.class, boolean.class);
 
             assertThat(method).isNotNull();
         }
 
         @Test
-        @DisplayName("应该实现 onClosed 方法")
-        void shouldImplementOnClosed() throws NoSuchMethodException {
+        @DisplayName("应该实现 onError 方法")
+        void shouldImplementOnError() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "onClosed", okhttp3.WebSocket.class, int.class, String.class);
-
-            assertThat(method).isNotNull();
-        }
-
-        @Test
-        @DisplayName("应该实现 onFailure 方法")
-        void shouldImplementOnFailure() throws NoSuchMethodException {
-            Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "onFailure", okhttp3.WebSocket.class, Throwable.class, okhttp3.Response.class);
+                "onError", Exception.class);
 
             assertThat(method).isNotNull();
         }
@@ -270,53 +249,53 @@ class UltiPanelWebSocketClientTest {
         @Test
         @DisplayName("应该能构建 ping 消息")
         void shouldBuildPingMessage() {
-            JSONObject pingMessage = new JSONObject();
-            pingMessage.put("type", "ping");
-            pingMessage.put("timestamp", System.currentTimeMillis());
+            JsonObject pingMessage = new JsonObject();
+            pingMessage.addProperty("type", "ping");
+            pingMessage.addProperty("timestamp", System.currentTimeMillis());
 
-            assertThat(pingMessage.getString("type")).isEqualTo("ping");
-            assertThat(pingMessage.containsKey("timestamp")).isTrue();
+            assertThat(pingMessage.get("type").getAsString()).isEqualTo("ping");
+            assertThat(pingMessage.has("timestamp")).isTrue();
         }
 
         @Test
         @DisplayName("应该能构建 subscribe 消息")
         void shouldBuildSubscribeMessage() {
             String serverId = "test-server";
-            JSONObject subscribeMessage = new JSONObject();
-            subscribeMessage.put("type", "subscribe");
-            subscribeMessage.put("serverId", serverId);
-            subscribeMessage.put("timestamp", System.currentTimeMillis());
+            JsonObject subscribeMessage = new JsonObject();
+            subscribeMessage.addProperty("type", "subscribe");
+            subscribeMessage.addProperty("serverId", serverId);
+            subscribeMessage.addProperty("timestamp", System.currentTimeMillis());
 
-            assertThat(subscribeMessage.getString("type")).isEqualTo("subscribe");
-            assertThat(subscribeMessage.getString("serverId")).isEqualTo(serverId);
+            assertThat(subscribeMessage.get("type").getAsString()).isEqualTo("subscribe");
+            assertThat(subscribeMessage.get("serverId").getAsString()).isEqualTo(serverId);
         }
 
         @Test
         @DisplayName("应该能构建 unsubscribe 消息")
         void shouldBuildUnsubscribeMessage() {
             String serverId = "test-server";
-            JSONObject unsubscribeMessage = new JSONObject();
-            unsubscribeMessage.put("type", "unsubscribe");
-            unsubscribeMessage.put("serverId", serverId);
-            unsubscribeMessage.put("timestamp", System.currentTimeMillis());
+            JsonObject unsubscribeMessage = new JsonObject();
+            unsubscribeMessage.addProperty("type", "unsubscribe");
+            unsubscribeMessage.addProperty("serverId", serverId);
+            unsubscribeMessage.addProperty("timestamp", System.currentTimeMillis());
 
-            assertThat(unsubscribeMessage.getString("type")).isEqualTo("unsubscribe");
-            assertThat(unsubscribeMessage.getString("serverId")).isEqualTo(serverId);
+            assertThat(unsubscribeMessage.get("type").getAsString()).isEqualTo("unsubscribe");
+            assertThat(unsubscribeMessage.get("serverId").getAsString()).isEqualTo(serverId);
         }
 
         @Test
         @DisplayName("消息应该自动添加时间戳")
         void messageShouldHaveTimestamp() {
-            JSONObject message = new JSONObject();
-            message.put("type", "test");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "test");
 
             // 模拟 sendMessage 的时间戳添加逻辑
-            if (!message.containsKey("timestamp")) {
-                message.put("timestamp", System.currentTimeMillis());
+            if (!message.has("timestamp")) {
+                message.addProperty("timestamp", System.currentTimeMillis());
             }
 
-            assertThat(message.containsKey("timestamp")).isTrue();
-            assertThat(message.getLong("timestamp")).isGreaterThan(0);
+            assertThat(message.has("timestamp")).isTrue();
+            assertThat(message.get("timestamp").getAsLong()).isGreaterThan(0);
         }
     }
 
@@ -326,7 +305,7 @@ class UltiPanelWebSocketClientTest {
 
         @Test
         @DisplayName("初始状态应该是未连接")
-        void initialStateShouldBeDisconnected() {
+        void initialStateShouldBeDisconnected() throws URISyntaxException {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
@@ -350,7 +329,7 @@ class UltiPanelWebSocketClientTest {
         @DisplayName("handleMessage 方法应该存在")
         void handleMessageMethodShouldExist() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "handleMessage", JSONObject.class);
+                "handleMessage", JsonObject.class);
 
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
         }
@@ -371,56 +350,56 @@ class UltiPanelWebSocketClientTest {
         @Test
         @DisplayName("应该能解析 pong 响应")
         void shouldParsePongResponse() {
-            JSONObject pongMessage = new JSONObject();
-            pongMessage.put("type", "pong");
-            pongMessage.put("timestamp", System.currentTimeMillis());
+            JsonObject pongMessage = new JsonObject();
+            pongMessage.addProperty("type", "pong");
+            pongMessage.addProperty("timestamp", System.currentTimeMillis());
 
-            assertThat(pongMessage.getString("type")).isEqualTo("pong");
+            assertThat(pongMessage.get("type").getAsString()).isEqualTo("pong");
         }
 
         @Test
         @DisplayName("应该能解析 notification 消息")
         void shouldParseNotificationMessage() {
-            JSONObject notification = new JSONObject();
-            notification.put("type", "notification");
+            JsonObject notification = new JsonObject();
+            notification.addProperty("type", "notification");
 
-            JSONObject data = new JSONObject();
-            data.put("message", "Test notification");
-            notification.put("data", data);
+            JsonObject data = new JsonObject();
+            data.addProperty("message", "Test notification");
+            notification.add("data", data);
 
-            assertThat(notification.getString("type")).isEqualTo("notification");
-            assertThat(notification.getJSONObject("data").getString("message"))
+            assertThat(notification.get("type").getAsString()).isEqualTo("notification");
+            assertThat(notification.getAsJsonObject("data").get("message").getAsString())
                 .isEqualTo("Test notification");
         }
 
         @Test
         @DisplayName("应该能解析 error 消息")
         void shouldParseErrorMessage() {
-            JSONObject errorMessage = new JSONObject();
-            errorMessage.put("type", "error");
+            JsonObject errorMessage = new JsonObject();
+            errorMessage.addProperty("type", "error");
 
-            JSONObject data = new JSONObject();
-            data.put("message", "Test error");
-            data.put("code", 500);
-            errorMessage.put("data", data);
+            JsonObject data = new JsonObject();
+            data.addProperty("message", "Test error");
+            data.addProperty("code", 500);
+            errorMessage.add("data", data);
 
-            assertThat(errorMessage.getString("type")).isEqualTo("error");
-            assertThat(errorMessage.getJSONObject("data").getString("message"))
+            assertThat(errorMessage.get("type").getAsString()).isEqualTo("error");
+            assertThat(errorMessage.getAsJsonObject("data").get("message").getAsString())
                 .isEqualTo("Test error");
         }
 
         @Test
         @DisplayName("应该能解析 subscribe 响应")
         void shouldParseSubscribeResponse() {
-            JSONObject subscribeResponse = new JSONObject();
-            subscribeResponse.put("type", "subscribe");
+            JsonObject subscribeResponse = new JsonObject();
+            subscribeResponse.addProperty("type", "subscribe");
 
-            JSONObject data = new JSONObject();
-            data.put("subscribed", true);
-            data.put("serverId", "test-server");
-            subscribeResponse.put("data", data);
+            JsonObject data = new JsonObject();
+            data.addProperty("subscribed", true);
+            data.addProperty("serverId", "test-server");
+            subscribeResponse.add("data", data);
 
-            assertThat(subscribeResponse.getJSONObject("data").getBooleanValue("subscribed"))
+            assertThat(subscribeResponse.getAsJsonObject("data").get("subscribed").getAsBoolean())
                 .isTrue();
         }
     }
@@ -430,17 +409,17 @@ class UltiPanelWebSocketClientTest {
     class GetterMethodTests {
 
         @Test
-        @DisplayName("getUrl 应该返回正确的 URL")
-        void getUrlShouldReturnCorrectUrl() {
+        @DisplayName("getURI 应该返回正确的 URL")
+        void getUrlShouldReturnCorrectUrl() throws URISyntaxException {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
-            assertThat(client.getUrl()).isEqualTo(TEST_URL);
+            assertThat(client.getURI().toString()).isEqualTo(TEST_URL);
         }
 
         @Test
         @DisplayName("getServerId 应该返回正确的服务器 ID")
-        void getServerIdShouldReturnCorrectServerId() {
+        void getServerIdShouldReturnCorrectServerId() throws URISyntaxException {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
@@ -449,7 +428,7 @@ class UltiPanelWebSocketClientTest {
 
         @Test
         @DisplayName("getToken 应该返回正确的 Token")
-        void getTokenShouldReturnCorrectToken() {
+        void getTokenShouldReturnCorrectToken() throws URISyntaxException {
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 

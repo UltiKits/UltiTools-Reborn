@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -102,45 +102,45 @@ class CommandExecutionManagerTest {
         @DisplayName("空命令应该发送错误结果")
         void emptyCommandShouldSendError() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "test-cmd-id");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "test-cmd-id");
 
             // Act
             manager.executeCommand(commandData);
 
             // Assert
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
         @DisplayName("null 命令应该发送错误结果")
         void nullCommandShouldSendError() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", null);
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "test-cmd-id");
+            JsonObject commandData = new JsonObject();
+            commandData.add("command", com.google.gson.JsonNull.INSTANCE);
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "test-cmd-id");
 
             // Act
             manager.executeCommand(commandData);
 
             // Assert
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
         @DisplayName("有效命令应该被调度执行")
         void validCommandShouldBeScheduled() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "help");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "test-cmd-id");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "help");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "test-cmd-id");
 
             // Act
             manager.executeCommand(commandData);
@@ -153,11 +153,11 @@ class CommandExecutionManagerTest {
         @DisplayName("异步命令应该异步执行")
         void asyncCommandShouldExecuteAsync() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "help");
-            commandData.put("executor", "console");
-            commandData.put("async", true);
-            commandData.put("commandId", "test-async-cmd");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "help");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", true);
+            commandData.addProperty("commandId", "test-async-cmd");
 
             // Act
             manager.executeCommand(commandData);
@@ -170,18 +170,18 @@ class CommandExecutionManagerTest {
         @DisplayName("console 执行者应该使用控制台发送者")
         void consoleExecutorShouldUseConsoleSender() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "version");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "test-console-cmd");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "version");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "test-console-cmd");
 
             // Act
             manager.executeCommand(commandData);
             server.getScheduler().performOneTick();
 
             // Assert - 命令被执行
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -249,7 +249,7 @@ class CommandExecutionManagerTest {
         @DisplayName("JSON 解析异常应该被捕获")
         void jsonParseExceptionShouldBeCaught() {
             // Arrange
-            JSONObject invalidData = new JSONObject();
+            JsonObject invalidData = new JsonObject();
             // 缺少必要字段
 
             // Act & Assert - 不应该抛出异常
@@ -263,9 +263,9 @@ class CommandExecutionManagerTest {
             CommandExecutionManager newManager = new CommandExecutionManager();
             // 不设置 WebSocket 客户端
 
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "");
-            commandData.put("commandId", "test");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "");
+            commandData.addProperty("commandId", "test");
 
             // Act & Assert - 不应该抛出 NPE
             // 由于没有设置 webSocketClient，sendCommandResult 会抛出 NPE
@@ -286,17 +286,17 @@ class CommandExecutionManagerTest {
         @DisplayName("多个命令应该独立执行")
         void multipleCommandsShouldExecuteIndependently() {
             // Arrange
-            JSONObject cmd1 = new JSONObject();
-            cmd1.put("command", "help");
-            cmd1.put("executor", "console");
-            cmd1.put("async", false);
-            cmd1.put("commandId", "cmd-1");
+            JsonObject cmd1 = new JsonObject();
+            cmd1.addProperty("command", "help");
+            cmd1.addProperty("executor", "console");
+            cmd1.addProperty("async", false);
+            cmd1.addProperty("commandId", "cmd-1");
 
-            JSONObject cmd2 = new JSONObject();
-            cmd2.put("command", "version");
-            cmd2.put("executor", "console");
-            cmd2.put("async", false);
-            cmd2.put("commandId", "cmd-2");
+            JsonObject cmd2 = new JsonObject();
+            cmd2.addProperty("command", "version");
+            cmd2.addProperty("executor", "console");
+            cmd2.addProperty("async", false);
+            cmd2.addProperty("commandId", "cmd-2");
 
             // Act
             manager.executeCommand(cmd1);
@@ -589,58 +589,58 @@ class CommandExecutionManagerTest {
         @DisplayName("玩家执行者应该回退到控制台")
         void playerExecutorShouldFallbackToConsole() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "help");
-            commandData.put("executor", "player-uuid-12345"); // 非 "console"
-            commandData.put("async", false);
-            commandData.put("commandId", "player-cmd");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "help");
+            commandData.addProperty("executor", "player-uuid-12345"); // 非 "console"
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "player-cmd");
 
             // Act
             manager.executeCommand(commandData);
             server.getScheduler().performOneTick();
 
             // Assert - 命令应该被执行（使用控制台作为回退）
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
         @DisplayName("命令执行成功应该发送正确的结果")
         void successfulCommandShouldSendCorrectResult() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "help");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "success-cmd");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "help");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "success-cmd");
 
             // Act
             manager.executeCommand(commandData);
             server.getScheduler().performOneTick();
 
             // Assert
-            org.mockito.ArgumentCaptor<JSONObject> captor = org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject result = captor.getValue();
-            assertThat(result.getString("type")).isEqualTo("command_result");
+            JsonObject result = captor.getValue();
+            assertThat(result.get("type").getAsString()).isEqualTo("command_result");
         }
 
         @Test
         @DisplayName("空输出应该显示默认消息")
         void emptyOutputShouldShowDefaultMessage() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "nonexistent_command_that_wont_have_output");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "empty-output-cmd");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "nonexistent_command_that_wont_have_output");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "empty-output-cmd");
 
             // Act
             manager.executeCommand(commandData);
             server.getScheduler().performOneTick();
 
             // Assert
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -652,47 +652,47 @@ class CommandExecutionManagerTest {
         @DisplayName("结果消息应该包含所有必要字段")
         void resultShouldContainAllFields() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "field-test");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "field-test");
 
             // Act
             manager.executeCommand(commandData);
 
             // Assert
-            org.mockito.ArgumentCaptor<JSONObject> captor = org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject result = captor.getValue();
-            assertThat(result.containsKey("type")).isTrue();
-            assertThat(result.containsKey("data")).isTrue();
-            assertThat(result.containsKey("serverId")).isTrue();
+            JsonObject result = captor.getValue();
+            assertThat(result.has("type")).isTrue();
+            assertThat(result.has("data")).isTrue();
+            assertThat(result.has("serverId")).isTrue();
             
-            JSONObject data = result.getJSONObject("data");
-            assertThat(data.containsKey("commandId")).isTrue();
-            assertThat(data.containsKey("success")).isTrue();
-            assertThat(data.containsKey("output")).isTrue();
-            assertThat(data.containsKey("executionTime")).isTrue();
+            JsonObject data = result.getAsJsonObject("data");
+            assertThat(data.has("commandId")).isTrue();
+            assertThat(data.has("success")).isTrue();
+            assertThat(data.has("output")).isTrue();
+            assertThat(data.has("executionTime")).isTrue();
         }
 
         @Test
         @DisplayName("serverId 应该从 WebSocket 客户端获取")
         void serverIdShouldBeFromWebSocketClient() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "");
-            commandData.put("commandId", "serverid-test");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "");
+            commandData.addProperty("commandId", "serverid-test");
 
             // Act
             manager.executeCommand(commandData);
 
             // Assert
-            org.mockito.ArgumentCaptor<JSONObject> captor = org.mockito.ArgumentCaptor.forClass(JSONObject.class);
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            assertThat(captor.getValue().getString("serverId")).isEqualTo("test-server-id");
+            assertThat(captor.getValue().get("serverId").getAsString()).isEqualTo("test-server-id");
         }
     }
 
@@ -761,11 +761,11 @@ class CommandExecutionManagerTest {
         @DisplayName("执行命令时应该记录 INFO 日志")
         void shouldLogInfoOnCommandExecution() {
             // Arrange
-            JSONObject commandData = new JSONObject();
-            commandData.put("command", "test");
-            commandData.put("executor", "console");
-            commandData.put("async", false);
-            commandData.put("commandId", "log-test");
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "test");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "log-test");
 
             // Act
             manager.executeCommand(commandData);

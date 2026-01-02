@@ -5,8 +5,7 @@ import javax.sql.DataSource;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.impl.data.AbstractRelationalDataOperator;
-
-import cn.hutool.core.annotation.AnnotationUtil;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * MySQL implementation of the data operator.
@@ -32,7 +31,7 @@ public class MysqlDataOperator<T extends AbstractDataEntity> extends AbstractRel
 
     @Override
     protected String createTableSqlFromClazz(Class<T> type) {
-        Table table = AnnotationUtil.getAnnotation(type, Table.class);
+        Table table = ReflectionUtil.getAnnotation(type, Table.class);
         String tableName = table.value();
         StringBuilder stringBuilder = new StringBuilder();
         stringBuilder.append("CREATE TABLE IF NOT EXISTS `").append(tableName).append("`(");

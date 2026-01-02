@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 
@@ -78,7 +78,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerJoin(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("join"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("join"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -125,7 +125,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerQuit(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("leave"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("leave"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -161,7 +161,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerChat(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("chat"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("chat"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -175,7 +175,7 @@ class EnhancedPlayerEventListenerTest {
             event.setCancelled(true);
 
             // Capture the JSONObject
-            final JSONObject[] capturedJson = new JSONObject[1];
+            final JsonObject[] capturedJson = new JsonObject[1];
             when(mockMonitorManager.isMonitoring()).thenReturn(true);
             org.mockito.Mockito.doAnswer(invocation -> {
                 capturedJson[0] = invocation.getArgument(2);
@@ -187,8 +187,8 @@ class EnhancedPlayerEventListenerTest {
 
             // Assert
             assertThat(capturedJson[0]).isNotNull();
-            assertThat(capturedJson[0].getString("message")).isEqualTo("Test Message");
-            assertThat(capturedJson[0].getBoolean("cancelled")).isTrue();
+            assertThat(capturedJson[0].get("message").getAsString()).isEqualTo("Test Message");
+            assertThat(capturedJson[0].get("cancelled").getAsBoolean()).isTrue();
         }
     }
 
@@ -208,7 +208,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerDeath(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("death"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("death"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -227,7 +227,7 @@ class EnhancedPlayerEventListenerTest {
             PlayerDeathEvent event = new PlayerDeathEvent(mockedVictim, new java.util.ArrayList<>(), 0, "Victim was slain by Killer");
 
             // Capture the JSONObject
-            final JSONObject[] capturedJson = new JSONObject[1];
+            final JsonObject[] capturedJson = new JsonObject[1];
             org.mockito.Mockito.doAnswer(invocation -> {
                 capturedJson[0] = invocation.getArgument(2);
                 return null;
@@ -238,7 +238,7 @@ class EnhancedPlayerEventListenerTest {
 
             // Assert
             assertThat(capturedJson[0]).isNotNull();
-            assertThat(capturedJson[0].getString("killer")).isEqualTo("Killer");
+            assertThat(capturedJson[0].get("killer").getAsString()).isEqualTo("Killer");
         }
     }
 
@@ -258,7 +258,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerKick(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("kick"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("kick"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -270,7 +270,7 @@ class EnhancedPlayerEventListenerTest {
             PlayerKickEvent event = new PlayerKickEvent(player, "Bad behavior", "You were kicked");
 
             // Capture the JSONObject
-            final JSONObject[] capturedJson = new JSONObject[1];
+            final JsonObject[] capturedJson = new JsonObject[1];
             org.mockito.Mockito.doAnswer(invocation -> {
                 capturedJson[0] = invocation.getArgument(2);
                 return null;
@@ -281,7 +281,7 @@ class EnhancedPlayerEventListenerTest {
 
             // Assert
             assertThat(capturedJson[0]).isNotNull();
-            assertThat(capturedJson[0].getString("reason")).isEqualTo("Bad behavior");
+            assertThat(capturedJson[0].get("reason").getAsString()).isEqualTo("Bad behavior");
         }
     }
 
@@ -301,7 +301,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerCommandPreprocess(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("command"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("command"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -313,7 +313,7 @@ class EnhancedPlayerEventListenerTest {
             PlayerCommandPreprocessEvent event = new PlayerCommandPreprocessEvent(player, "/gamemode creative");
 
             // Capture the JSONObject
-            final JSONObject[] capturedJson = new JSONObject[1];
+            final JsonObject[] capturedJson = new JsonObject[1];
             org.mockito.Mockito.doAnswer(invocation -> {
                 capturedJson[0] = invocation.getArgument(2);
                 return null;
@@ -324,7 +324,7 @@ class EnhancedPlayerEventListenerTest {
 
             // Assert
             assertThat(capturedJson[0]).isNotNull();
-            assertThat(capturedJson[0].getString("command")).isEqualTo("/gamemode creative");
+            assertThat(capturedJson[0].get("command").getAsString()).isEqualTo("/gamemode creative");
         }
     }
 
@@ -348,7 +348,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerChangedWorld(event);
 
             // Assert
-            verify(mockMonitorManager).sendPlayerEvent(eq("world_change"), eq(player), any(JSONObject.class));
+            verify(mockMonitorManager).sendPlayerEvent(eq("world_change"), eq(player), any(JsonObject.class));
         }
 
         @Test
@@ -364,7 +364,7 @@ class EnhancedPlayerEventListenerTest {
             PlayerChangedWorldEvent event = new PlayerChangedWorldEvent(player, fromWorld);
 
             // Capture the JSONObject
-            final JSONObject[] capturedJson = new JSONObject[1];
+            final JsonObject[] capturedJson = new JsonObject[1];
             org.mockito.Mockito.doAnswer(invocation -> {
                 capturedJson[0] = invocation.getArgument(2);
                 return null;
@@ -375,8 +375,8 @@ class EnhancedPlayerEventListenerTest {
 
             // Assert
             assertThat(capturedJson[0]).isNotNull();
-            assertThat(capturedJson[0].getString("fromWorld")).isEqualTo("overworld");
-            assertThat(capturedJson[0].getString("toWorld")).isEqualTo("the_end");
+            assertThat(capturedJson[0].get("fromWorld").getAsString()).isEqualTo("overworld");
+            assertThat(capturedJson[0].get("toWorld").getAsString()).isEqualTo("the_end");
         }
     }
 

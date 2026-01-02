@@ -2,7 +2,7 @@ package com.ultikits.ultitools.websocket.handlers;
 
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
 
@@ -37,10 +37,11 @@ public class ServerStatusHandler implements WebSocketMessageHandler {
     }
     
     @Override
-    public void handle(JSONObject message) {
+    public void handle(JsonObject message) {
         logger.fine("Received server status request");
         
-        String requestId = message.getString("requestId");
+        String requestId = message.has("requestId") && !message.get("requestId").isJsonNull() 
+            ? message.get("requestId").getAsString() : null;
         
         if (monitorManager != null) {
             if (requestId != null && !requestId.isEmpty()) {

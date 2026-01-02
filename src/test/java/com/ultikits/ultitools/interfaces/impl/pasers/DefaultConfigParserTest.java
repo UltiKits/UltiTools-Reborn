@@ -8,13 +8,12 @@ import static org.mockito.Mockito.when;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.MemorySection;
 import org.junit.jupiter.api.Test;
-
-import com.alibaba.fastjson.JSONObject;
 
 class DefaultConfigParserTest {
 
@@ -43,6 +42,7 @@ class DefaultConfigParserTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void testParseConfigurationSection() {
         DefaultConfigParser parser = new DefaultConfigParser();
         ConfigurationSection section = mock(ConfigurationSection.class);
@@ -54,10 +54,10 @@ class DefaultConfigParserTest {
         
         Object result = parser.parse(section);
         
-        assertTrue(result instanceof JSONObject);
-        JSONObject json = (JSONObject) result;
-        assertEquals("value1", json.get("key1"));
-        assertEquals(100, json.get("key2"));
+        assertTrue(result instanceof Map);
+        Map<String, Object> map = (Map<String, Object>) result;
+        assertEquals("value1", map.get("key1"));
+        assertEquals(100, map.get("key2"));
     }
 
     @Test

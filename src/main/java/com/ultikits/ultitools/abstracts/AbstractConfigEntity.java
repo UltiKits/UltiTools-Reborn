@@ -11,12 +11,12 @@ import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
-import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.util.ReflectUtil;
 import lombok.Getter;
 
 /**
@@ -53,21 +53,21 @@ public abstract class AbstractConfigEntity {
      */
     @SuppressWarnings("unchecked")
     public void save() throws IOException {
-        for (Field field : ReflectUtil.getFields(this.getClass())) {
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
             }
             field.setAccessible(true);
-            ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
+            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path();
             if (path.isEmpty()) {
                 path = field.getName();
             }
-            Object fieldValue = ReflectUtil.getFieldValue(this, field);
+            Object fieldValue = ReflectionUtil.getFieldValue(this, field);
             if (fieldValue == null) {
                 continue;
             }
-            Object serialized = ReflectUtil.newInstance(annotation.parser()).serialize(fieldValue);
+            Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
             config.set(path, serialized);
         }
         config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
@@ -85,21 +85,21 @@ public abstract class AbstractConfigEntity {
         this.ultiToolsPlugin = ultiToolsPlugin;
         config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
         boolean upToDate = true;
-        for (Field field : ReflectUtil.getFields(this.getClass())) {
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
-                ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
+                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
                 String path = annotation.path();
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
                 Object configValue = config.get(path);
                 if (configValue != null) {
-                    Object parse = ReflectUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectUtil.setFieldValue(this, field, parse);
+                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
+                    ReflectionUtil.setFieldValue(this, field, parse);
                 } else {
                     upToDate = false;
-                    config.set(path, ReflectUtil.getFieldValue(this, field));
+                    config.set(path, ReflectionUtil.getFieldValue(this, field));
                 }
             }
         }
@@ -119,16 +119,19 @@ public abstract class AbstractConfigEntity {
      * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
      * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
      */
-    public void updateProperties(JSONObject jsonObject) throws IOException {
+    public void updateProperties(JsonObject jsonObject) throws IOException {
+        Gson gson = new Gson();
         for (Field field : this.getClass().getDeclaredFields()) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
                 String path = annotation.path();
-                Object configValue = jsonObject.getObject(path, field.getType());
-                if (configValue != null) {
-                    ReflectUtil.setFieldValue(this, field, configValue);
-                    config.set(path, configValue);
+                if (jsonObject.has(path)) {
+                    Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
+                    if (configValue != null) {
+                        ReflectionUtil.setFieldValue(this, field, configValue);
+                        config.set(path, configValue);
+                    }
                 }
             }
         }
@@ -142,12 +145,14 @@ public abstract class AbstractConfigEntity {
      *
      * @return the JSON object representation of the configuration entity <br> 配置实体的JSON对象表示
      */
-    public JSONObject toJsonObject() {
-        JSONObject jsonObject = new JSONObject();
+    public JsonObject toJsonObject() {
+        Gson gson = new Gson();
+        JsonObject jsonObject = new JsonObject();
         Set<String> keys = config.getKeys(true);
         for (String key : keys) {
             if (!config.isConfigurationSection(key)) {
-                jsonObject.put(key, config.get(key));
+                Object value = config.get(key);
+                jsonObject.add(key, gson.toJsonTree(value));
             }
         }
         return jsonObject;
@@ -160,13 +165,13 @@ public abstract class AbstractConfigEntity {
      *
      * @return a JSON object containing the comments <br> 包含注释的JSON对象
      */
-    public JSONObject getComments() {
-        JSONObject jsonObject = new JSONObject();
+    public JsonObject getComments() {
+        JsonObject jsonObject = new JsonObject();
         Field[] declaredFields = this.getClass().getDeclaredFields();
         for (Field field : declaredFields) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                jsonObject.put(annotation.path(), annotation.comment());
+                jsonObject.addProperty(annotation.path(), annotation.comment());
             }
         }
         return jsonObject;
@@ -252,18 +257,18 @@ public abstract class AbstractConfigEntity {
         config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
         
         // Update field values
-        for (Field field : ReflectUtil.getFields(this.getClass())) {
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
-                ConfigEntry annotation = AnnotationUtil.getAnnotation(field, ConfigEntry.class);
+                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
                 String path = annotation.path();
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
                 Object configValue = config.get(path);
                 if (configValue != null) {
-                    Object parse = ReflectUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectUtil.setFieldValue(this, field, parse);
+                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
+                    ReflectionUtil.setFieldValue(this, field, parse);
                 }
             }
         }

@@ -38,7 +38,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -201,10 +202,10 @@ class LogStreamManagerTest {
         @Test
         @DisplayName("处理 start action - 应该启动日志流")
         void shouldHandleStartAction() throws Exception {
-            JSONObject data = new JSONObject();
-            data.put("action", "start");
-            data.put("clientId", "client-123");
-            data.put("level", "info");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "start");
+            data.addProperty("clientId", "client-123");
+            data.addProperty("level", "info");
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -222,9 +223,9 @@ class LogStreamManagerTest {
             assertThat(logStreamManager.isStreaming()).isTrue();
 
             // 停止
-            JSONObject data = new JSONObject();
-            data.put("action", "stop");
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "stop");
+            data.addProperty("clientId", "client-123");
             
             logStreamManager.handleLogStreamMessage(data);
 
@@ -238,9 +239,9 @@ class LogStreamManagerTest {
         void shouldHandlePauseAction() throws Exception {
             logStreamManager.startLogStream("client-123", "info");
 
-            JSONObject data = new JSONObject();
-            data.put("action", "pause");
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "pause");
+            data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -254,9 +255,9 @@ class LogStreamManagerTest {
             logStreamManager.startLogStream("client-123", "info");
             logStreamManager.pauseLogStream("client-123");
 
-            JSONObject data = new JSONObject();
-            data.put("action", "resume");
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "resume");
+            data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -269,13 +270,13 @@ class LogStreamManagerTest {
         void shouldHandleStatusAction() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            JSONObject data = new JSONObject();
-            data.put("action", "status");
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "status");
+            data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
 
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -285,15 +286,15 @@ class LogStreamManagerTest {
             UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
             setLogTransmitter(mockTransmitter);
 
-            JSONObject batchConfig = new JSONObject();
-            batchConfig.put("enabled", true);
-            batchConfig.put("size", 20);
-            batchConfig.put("interval", 3000);
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("enabled", true);
+            batchConfig.addProperty("size", 20);
+            batchConfig.addProperty("interval", 3000);
 
-            JSONObject data = new JSONObject();
-            data.put("action", "config");
-            data.put("clientId", "client-123");
-            data.put("batchConfig", batchConfig);
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-123");
+            data.add("batchConfig", batchConfig);
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -307,9 +308,9 @@ class LogStreamManagerTest {
         void shouldHandleUnknownAction() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            JSONObject data = new JSONObject();
-            data.put("action", "unknown_action");
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "unknown_action");
+            data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -319,8 +320,8 @@ class LogStreamManagerTest {
         @Test
         @DisplayName("空 action 应该视为未知操作")
         void shouldHandleEmptyAction() {
-            JSONObject data = new JSONObject();
-            data.put("clientId", "client-123");
+            JsonObject data = new JsonObject();
+            data.addProperty("clientId", "client-123");
             // action 为 null
 
             logStreamManager.handleLogStreamMessage(data);
@@ -331,8 +332,8 @@ class LogStreamManagerTest {
         @Test
         @DisplayName("空 clientId 应该使用默认值 'default'")
         void shouldUseDefaultClientIdWhenNull() throws Exception {
-            JSONObject data = new JSONObject();
-            data.put("action", "start");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "start");
             // clientId 为 null
 
             logStreamManager.handleLogStreamMessage(data);
@@ -350,10 +351,15 @@ class LogStreamManagerTest {
             SystemLogHandler mockHandler = mock(SystemLogHandler.class);
             setSystemLogHandler(mockHandler);
 
-            JSONObject data = new JSONObject();
-            data.put("action", "config");
-            data.put("clientId", "client-123");
-            data.put("levels", new String[]{"info", "warning", "error"});
+            JsonArray levelsArray = new JsonArray();
+            levelsArray.add("info");
+            levelsArray.add("warning");
+            levelsArray.add("error");
+
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-123");
+            data.add("levels", levelsArray);
 
             logStreamManager.handleLogStreamMessage(data);
 
@@ -406,7 +412,7 @@ class LogStreamManagerTest {
             
             logStreamManager.startLogStream("client-1", "info");
 
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -417,7 +423,7 @@ class LogStreamManagerTest {
             
             logStreamManager.startLogStream("client-1", "info");
 
-            verify(mockWebSocketClient, never()).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -794,13 +800,13 @@ class LogStreamManagerTest {
             
             method.invoke(logStreamManager, "client-1", "started", "Test message");
 
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
 
         @Test
         @DisplayName("发送异常时不应抛出")
         void shouldNotThrowOnSendException() throws Exception {
-            doThrow(new RuntimeException("Send failed")).when(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            doThrow(new RuntimeException("Send failed")).when(mockWebSocketClient).sendMessage(any(JsonObject.class));
             setWebSocketClient(mockWebSocketClient);
             
             Method method = LogStreamManager.class.getDeclaredMethod(
@@ -840,7 +846,7 @@ class LogStreamManagerTest {
             
             method.invoke(logStreamManager, "client-1", "Error message");
 
-            verify(mockWebSocketClient).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
 
@@ -860,7 +866,7 @@ class LogStreamManagerTest {
             
             method.invoke(logStreamManager, "client-1");
 
-            verify(mockWebSocketClient, atLeast(1)).sendMessage(any(JSONObject.class));
+            verify(mockWebSocketClient, atLeast(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
@@ -872,7 +878,7 @@ class LogStreamManagerTest {
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
             // 捕获发送的消息
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             Method method = LogStreamManager.class.getDeclaredMethod("sendStreamStatus", String.class);
             method.setAccessible(true);
@@ -880,16 +886,16 @@ class LogStreamManagerTest {
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject sentMessage = captor.getValue();
-            assertThat(sentMessage.getString("type")).isEqualTo("log_stream");
-            assertThat(sentMessage.containsKey("timestamp")).isTrue();
-            assertThat(sentMessage.containsKey("serverId")).isTrue();
-            assertThat(sentMessage.containsKey("data")).isTrue();
+            JsonObject sentMessage = captor.getValue();
+            assertThat(sentMessage.get("type").getAsString()).isEqualTo("log_stream");
+            assertThat(sentMessage.has("timestamp")).isTrue();
+            assertThat(sentMessage.has("serverId")).isTrue();
+            assertThat(sentMessage.has("data")).isTrue();
             
-            JSONObject data = sentMessage.getJSONObject("data");
-            assertThat(data.getString("action")).isEqualTo("status");
-            assertThat(data.containsKey("streaming")).isTrue();
-            assertThat(data.containsKey("subscriberCount")).isTrue();
+            JsonObject data = sentMessage.getAsJsonObject("data");
+            assertThat(data.get("action").getAsString()).isEqualTo("status");
+            assertThat(data.has("streaming")).isTrue();
+            assertThat(data.has("subscriberCount")).isTrue();
         }
     }
 
@@ -968,14 +974,14 @@ class LogStreamManagerTest {
             
             doThrow(new RuntimeException("Update failed")).when(mockTransmitter).setBatchEnabled(anyBoolean());
             
-            JSONObject batchConfig = new JSONObject();
-            batchConfig.put("enabled", true);
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("enabled", true);
             
-            JSONObject data = new JSONObject();
-            data.put("batchConfig", batchConfig);
+            JsonObject data = new JsonObject();
+            data.add("batchConfig", batchConfig);
             
             Method method = LogStreamManager.class.getDeclaredMethod(
-                "handleConfigUpdate", JSONObject.class, String.class);
+                "handleConfigUpdate", JsonObject.class, String.class);
             method.setAccessible(true);
             
             method.invoke(logStreamManager, data, "client-1");
@@ -1127,14 +1133,14 @@ class LogStreamManagerTest {
         void responseMessageShouldHaveCorrectType() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.startLogStream("client-1", "info");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            assertThat(message.getString("type")).isEqualTo("log_stream");
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream");
         }
 
         @Test
@@ -1142,14 +1148,14 @@ class LogStreamManagerTest {
         void responseMessageShouldHaveServerId() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.startLogStream("client-1", "info");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            assertThat(message.containsKey("serverId")).isTrue();
+            JsonObject message = captor.getValue();
+            assertThat(message.has("serverId")).isTrue();
         }
 
         @Test
@@ -1157,15 +1163,15 @@ class LogStreamManagerTest {
         void responseMessageShouldHaveTimestamp() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.startLogStream("client-1", "info");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            assertThat(message.containsKey("timestamp")).isTrue();
-            assertThat(message.getLong("timestamp")).isGreaterThan(0);
+            JsonObject message = captor.getValue();
+            assertThat(message.has("timestamp")).isTrue();
+            assertThat(message.get("timestamp").getAsLong()).isGreaterThan(0);
         }
 
         @Test
@@ -1173,16 +1179,16 @@ class LogStreamManagerTest {
         void responseDataShouldHaveStatusField() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.startLogStream("client-1", "info");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.containsKey("status")).isTrue();
-            assertThat(data.getString("status")).isEqualTo("started");
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.has("status")).isTrue();
+            assertThat(data.get("status").getAsString()).isEqualTo("started");
         }
 
         @Test
@@ -1193,15 +1199,15 @@ class LogStreamManagerTest {
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.stopLogStream("client-1");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.getString("status")).isEqualTo("stopped");
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.get("status").getAsString()).isEqualTo("stopped");
         }
 
         @Test
@@ -1212,15 +1218,15 @@ class LogStreamManagerTest {
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.pauseLogStream("client-1");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.getString("status")).isEqualTo("paused");
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.get("status").getAsString()).isEqualTo("paused");
         }
 
         @Test
@@ -1232,15 +1238,15 @@ class LogStreamManagerTest {
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             
-            ArgumentCaptor<JSONObject> captor = ArgumentCaptor.forClass(JSONObject.class);
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             
             logStreamManager.resumeLogStream("client-1");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
-            JSONObject message = captor.getValue();
-            JSONObject data = message.getJSONObject("data");
-            assertThat(data.getString("status")).isEqualTo("resumed");
+            JsonObject message = captor.getValue();
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.get("status").getAsString()).isEqualTo("resumed");
         }
     }
 

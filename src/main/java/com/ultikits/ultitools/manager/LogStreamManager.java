@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -29,6 +30,7 @@ public class LogStreamManager implements Listener {
     private UltiPanelWebSocketClient webSocketClient;
     private final AtomicBoolean streaming = new AtomicBoolean(false);
     private final ConcurrentHashMap<String, Boolean> subscribedClients = new ConcurrentHashMap<>();
+    private final Gson gson = new Gson();
     
     @Getter
     private UltiPanelLogTransmitter logTransmitter;
@@ -135,15 +137,18 @@ public class LogStreamManager implements Listener {
     /**
      * 处理日志流消息
      */
-    public void handleLogStreamMessage(JSONObject data) {
+    public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
             UltiTools.getInstance().getLogger().warning("LogStreamManager: 收到空的日志流消息");
             return;
         }
         
-        String action = data.getString("action");
-        String clientId = data.getString("clientId");
-        String level = data.getString("level"); // 可选的日志级别过滤
+        String action = data.has("action") && !data.get("action").isJsonNull() 
+            ? data.get("action").getAsString() : null;
+        String clientId = data.has("clientId") && !data.get("clientId").isJsonNull() 
+            ? data.get("clientId").getAsString() : null;
+        String level = data.has("level") && !data.get("level").isJsonNull() 
+            ? data.get("level").getAsString() : null; // 可选的日志级别过滤
         
         if (clientId == null) {
             clientId = "default";
@@ -183,25 +188,25 @@ public class LogStreamManager implements Listener {
     /**
      * 处理配置更新
      */
-    private void handleConfigUpdate(JSONObject data, String clientId) {
+    private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
             // 更新日志级别配置
-            if (data.containsKey("levels") && systemLogHandler != null) {
+            if (data.has("levels") && systemLogHandler != null) {
                 // 这里可以动态更新日志级别配置
                 UltiTools.getInstance().getLogger().info("[UltiPanel] 收到日志级别配置更新请求");
             }
             
             // 更新批量发送配置
-            if (data.containsKey("batchConfig") && logTransmitter != null) {
-                JSONObject batchConfig = data.getJSONObject("batchConfig");
-                if (batchConfig.containsKey("enabled")) {
-                    logTransmitter.setBatchEnabled(batchConfig.getBooleanValue("enabled"));
+            if (data.has("batchConfig") && logTransmitter != null) {
+                JsonObject batchConfig = data.getAsJsonObject("batchConfig");
+                if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
+                    logTransmitter.setBatchEnabled(batchConfig.get("enabled").getAsBoolean());
                 }
-                if (batchConfig.containsKey("size")) {
-                    logTransmitter.setBatchSize(batchConfig.getIntValue("size"));
+                if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
+                    logTransmitter.setBatchSize(batchConfig.get("size").getAsInt());
                 }
-                if (batchConfig.containsKey("interval")) {
-                    logTransmitter.setIntervalMs(batchConfig.getIntValue("interval"));
+                if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
+                    logTransmitter.setIntervalMs(batchConfig.get("interval").getAsInt());
                 }
                 UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
             }
@@ -285,19 +290,19 @@ public class LogStreamManager implements Listener {
         }
         
         try {
-            JSONObject response = new JSONObject();
-            response.put("type", "log_stream");
-            response.put("serverId", getServerId());
-            response.put("timestamp", System.currentTimeMillis());
+            JsonObject response = new JsonObject();
+            response.addProperty("type", "log_stream");
+            response.addProperty("serverId", getServerId());
+            response.addProperty("timestamp", System.currentTimeMillis());
             
-            JSONObject data = new JSONObject();
-            data.put("status", status);
-            data.put("message", message);
-            data.put("clientId", clientId);
-            data.put("subscriberCount", subscribedClients.size());
-            data.put("streaming", streaming.get());
+            JsonObject data = new JsonObject();
+            data.addProperty("status", status);
+            data.addProperty("message", message);
+            data.addProperty("clientId", clientId);
+            data.addProperty("subscriberCount", subscribedClients.size());
+            data.addProperty("streaming", streaming.get());
             
-            response.put("data", data);
+            response.add("data", data);
             webSocketClient.sendMessage(response);
             
         } catch (Exception e) {
@@ -315,17 +320,17 @@ public class LogStreamManager implements Listener {
         }
         
         try {
-            JSONObject response = new JSONObject();
-            response.put("type", "error");
-            response.put("serverId", getServerId());
-            response.put("timestamp", System.currentTimeMillis());
+            JsonObject response = new JsonObject();
+            response.addProperty("type", "error");
+            response.addProperty("serverId", getServerId());
+            response.addProperty("timestamp", System.currentTimeMillis());
             
-            JSONObject data = new JSONObject();
-            data.put("message", error);
-            data.put("clientId", clientId);
-            data.put("context", "log_stream");
+            JsonObject data = new JsonObject();
+            data.addProperty("message", error);
+            data.addProperty("clientId", clientId);
+            data.addProperty("context", "log_stream");
             
-            response.put("data", data);
+            response.add("data", data);
             webSocketClient.sendMessage(response);
             
         } catch (Exception e) {
@@ -338,19 +343,19 @@ public class LogStreamManager implements Listener {
      * 发送流状态
      */
     private void sendStreamStatus(String clientId) {
-        JSONObject message = new JSONObject();
-        message.put("type", "log_stream");
-        message.put("timestamp", System.currentTimeMillis());
-        message.put("serverId", getServerId());
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "log_stream");
+        message.addProperty("timestamp", System.currentTimeMillis());
+        message.addProperty("serverId", getServerId());
         
-        JSONObject data = new JSONObject();
-        data.put("action", "status");
-        data.put("streaming", streaming.get());
-        data.put("subscriberCount", subscribedClients.size());
-        data.put("clientId", clientId);
-        data.put("logTransmitterEnabled", logTransmitter != null && logTransmitter.isLogTransmissionEnabled());
-        data.put("queueSize", logTransmitter != null ? logTransmitter.getQueueSize() : 0);
-        message.put("data", data);
+        JsonObject data = new JsonObject();
+        data.addProperty("action", "status");
+        data.addProperty("streaming", streaming.get());
+        data.addProperty("subscriberCount", subscribedClients.size());
+        data.addProperty("clientId", clientId);
+        data.addProperty("logTransmitterEnabled", logTransmitter != null && logTransmitter.isLogTransmissionEnabled());
+        data.addProperty("queueSize", logTransmitter != null ? logTransmitter.getQueueSize() : 0);
+        message.add("data", data);
         
         if (webSocketClient != null) {
             webSocketClient.sendMessage(message);

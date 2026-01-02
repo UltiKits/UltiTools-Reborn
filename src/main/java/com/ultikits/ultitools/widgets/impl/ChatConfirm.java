@@ -7,7 +7,6 @@ import com.ultikits.ultitools.manager.ChatCallbackManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.widgets.Confirm;
 
-import cn.hutool.core.lang.func.VoidFunc0;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -53,9 +52,9 @@ public class ChatConfirm implements Confirm {
     /** The description text displayed below title / 显示在标题下方的描述文本 */
     private final String description;
     /** Callback executed when player clicks confirm / 玩家点击确认时执行的回调 */
-    private final VoidFunc0 onConfirm;
+    private final Runnable onConfirm;
     /** Callback executed when player clicks cancel / 玩家点击取消时执行的回调 */
-    private final VoidFunc0 onCancel;
+    private final Runnable onCancel;
 
     /**
      * Creates a chat confirmation dialog with default button text.
@@ -68,7 +67,7 @@ public class ChatConfirm implements Confirm {
      * @param onConfirm   callback for confirm action / 确认操作的回调
      * @param onCancel    callback for cancel action / 取消操作的回调
      */
-    public ChatConfirm(Player player, String title, String description, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    public ChatConfirm(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         this.player = player;
         this.title = title;
         this.description = description;
@@ -89,7 +88,7 @@ public class ChatConfirm implements Confirm {
      * @param onConfirm   callback for confirm action / 确认操作的回调
      * @param onCancel    callback for cancel action / 取消操作的回调
      */
-    public ChatConfirm(Player player, String title, String description, String confirmText, String cancelText, VoidFunc0 onConfirm, VoidFunc0 onCancel) {
+    public ChatConfirm(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         this(player, title, description, onConfirm, onCancel);
         this.confirmText = confirmText;
         this.cancelText = cancelText;

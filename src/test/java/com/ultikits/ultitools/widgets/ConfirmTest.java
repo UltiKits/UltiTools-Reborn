@@ -17,8 +17,6 @@ import org.junit.jupiter.api.Timeout;
 import com.ultikits.ultitools.widgets.impl.ChatConfirm;
 import com.ultikits.ultitools.widgets.impl.InventoryConfirm;
 
-import cn.hutool.core.lang.func.VoidFunc0;
-
 /**
  * Unit tests for {@link Confirm} interface.
  */
@@ -70,7 +68,7 @@ class ConfirmTest {
         void guiFactoryMethodWith5ParamsShouldExist() throws NoSuchMethodException {
             Method method = Confirm.class.getDeclaredMethod("gui",
                 Player.class, String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(Confirm.class);
@@ -82,7 +80,7 @@ class ConfirmTest {
             Method method = Confirm.class.getDeclaredMethod("gui",
                 Player.class, String.class, String.class,
                 String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(Confirm.class);
@@ -93,7 +91,7 @@ class ConfirmTest {
         void chatFactoryMethodWith5ParamsShouldExist() throws NoSuchMethodException {
             Method method = Confirm.class.getDeclaredMethod("chat",
                 Player.class, String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(Confirm.class);
@@ -105,7 +103,7 @@ class ConfirmTest {
             Method method = Confirm.class.getDeclaredMethod("chat",
                 Player.class, String.class, String.class,
                 String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(Confirm.class);
@@ -117,14 +115,14 @@ class ConfirmTest {
     class FactoryMethodReturnTypeTests {
 
         private Player mockPlayer;
-        private VoidFunc0 mockOnConfirm;
-        private VoidFunc0 mockOnCancel;
+        private Runnable mockOnConfirm;
+        private Runnable mockOnCancel;
 
         @BeforeEach
         void setUp() {
             mockPlayer = mock(Player.class);
-            mockOnConfirm = mock(VoidFunc0.class);
-            mockOnCancel = mock(VoidFunc0.class);
+            mockOnConfirm = mock(Runnable.class);
+            mockOnCancel = mock(Runnable.class);
         }
 
         @Test

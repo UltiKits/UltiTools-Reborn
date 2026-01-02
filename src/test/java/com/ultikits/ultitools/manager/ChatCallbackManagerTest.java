@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Timeout;
 
 import be.seeseemelk.mockbukkit.MockBukkit;
 import be.seeseemelk.mockbukkit.ServerMock;
-import cn.hutool.core.lang.func.VoidFunc0;
 
 /**
  * ChatCallbackManager 测试
@@ -58,7 +57,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             callbacks.clear();
 
             // 重置 initialized 为 false，让 initialize() 可以重新运行
@@ -78,9 +77,9 @@ class ChatCallbackManagerTest {
         @DisplayName("应该返回唯一的 UUID")
         void shouldReturnUniqueUUID() {
             // Arrange
-            VoidFunc0 callback1 = () -> {
+            Runnable callback1 = () -> {
             };
-            VoidFunc0 callback2 = () -> {
+            Runnable callback2 = () -> {
             };
 
             // Act
@@ -98,7 +97,7 @@ class ChatCallbackManagerTest {
         void shouldStoreCallbackInMap() throws Exception {
             // Arrange
             AtomicBoolean called = new AtomicBoolean(false);
-            VoidFunc0 callback = () -> called.set(true);
+            Runnable callback = () -> called.set(true);
 
             // Act
             UUID uuid = ChatCallbackManager.registerCallback(callback);
@@ -107,7 +106,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             assertThat(callbacks).containsKey(uuid);
             assertThat(callbacks.get(uuid)).isEqualTo(callback);
@@ -117,7 +116,7 @@ class ChatCallbackManagerTest {
         @DisplayName("注册后 initialized 应该为 true（如果初始化成功）")
         void shouldSetInitializedFlag() throws Exception {
             // Arrange
-            VoidFunc0 callback = () -> {
+            Runnable callback = () -> {
             };
 
             // Act
@@ -131,7 +130,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             assertThat(callbacks).isNotEmpty();
         }
 
@@ -150,7 +149,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             assertThat(callbacks).hasSize(3);
             assertThat(callbacks).containsKeys(uuid1, uuid2, uuid3);
@@ -235,7 +234,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             assertThat(callbacks.size()).isEqualTo(threadCount * callbacksPerThread);
             assertThat(successCount.get()).isEqualTo(threadCount * callbacksPerThread);
@@ -251,7 +250,7 @@ class ChatCallbackManagerTest {
         void callbackShouldBeCallable() throws Exception {
             // Arrange
             AtomicBoolean called = new AtomicBoolean(false);
-            VoidFunc0 callback = () -> called.set(true);
+            Runnable callback = () -> called.set(true);
 
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
@@ -259,10 +258,10 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 storedCallback = callbacks.get(uuid);
-            storedCallback.call();
+            Runnable storedCallback = callbacks.get(uuid);
+            storedCallback.run();
 
             // Assert
             assertThat(called.get()).isTrue();
@@ -273,7 +272,7 @@ class ChatCallbackManagerTest {
         void callbackShouldBeRemovableAndCallable() throws Exception {
             // Arrange
             AtomicBoolean called = new AtomicBoolean(false);
-            VoidFunc0 callback = () -> called.set(true);
+            Runnable callback = () -> called.set(true);
 
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
@@ -281,11 +280,11 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 removedCallback = callbacks.remove(uuid);
+            Runnable removedCallback = callbacks.remove(uuid);
             if (removedCallback != null) {
-                removedCallback.call();
+                removedCallback.run();
             }
 
             // Assert
@@ -338,18 +337,18 @@ class ChatCallbackManagerTest {
         void executingCommandViaReflectionShouldTriggerCallback() throws Exception {
             // Arrange
             AtomicBoolean called = new AtomicBoolean(false);
-            VoidFunc0 callback = () -> called.set(true);
+            Runnable callback = () -> called.set(true);
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
             // Act - 直接从 callbacks map 中获取并执行（模拟命令执行逻辑）
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 storedCallback = callbacks.remove(uuid);
+            Runnable storedCallback = callbacks.remove(uuid);
             if (storedCallback != null) {
-                storedCallback.call();
+                storedCallback.run();
             }
 
             // Assert
@@ -362,18 +361,18 @@ class ChatCallbackManagerTest {
         void mapRemoveShouldReturnAndRemoveCallback() throws Exception {
             // Arrange
             AtomicInteger callCount = new AtomicInteger(0);
-            VoidFunc0 callback = () -> callCount.incrementAndGet();
+            Runnable callback = () -> callCount.incrementAndGet();
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
             // Act - 模拟命令逻辑：remove 并调用
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 removed = callbacks.remove(uuid);
+            Runnable removed = callbacks.remove(uuid);
             assertThat(removed).isNotNull();
-            removed.call();
+            removed.run();
 
             // Assert
             assertThat(callCount.get()).isEqualTo(1);
@@ -392,8 +391,8 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
-            VoidFunc0 result = callbacks.remove(nonExistent);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
+            Runnable result = callbacks.remove(nonExistent);
 
             // Assert
             assertThat(result).isNull();
@@ -403,7 +402,7 @@ class ChatCallbackManagerTest {
         @DisplayName("多次 remove 同一 UUID 第二次应返回 null")
         void multipleRemovesShouldReturnNullOnSecondAttempt() throws Exception {
             // Arrange
-            VoidFunc0 callback = () -> {
+            Runnable callback = () -> {
             };
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
@@ -411,10 +410,10 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 first = callbacks.remove(uuid);
-            VoidFunc0 second = callbacks.remove(uuid);
+            Runnable first = callbacks.remove(uuid);
+            Runnable second = callbacks.remove(uuid);
 
             // Assert
             assertThat(first).isNotNull();
@@ -430,7 +429,7 @@ class ChatCallbackManagerTest {
         @DisplayName("回调抛出异常时 remove 仍应返回回调对象")
         void callbackExceptionShouldStillAllowRemove() throws Exception {
             // Arrange
-            VoidFunc0 throwingCallback = () -> {
+            Runnable throwingCallback = () -> {
                 throw new RuntimeException("Test exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
@@ -439,9 +438,9 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 removed = callbacks.remove(uuid);
+            Runnable removed = callbacks.remove(uuid);
 
             // Assert
             assertThat(removed).isNotNull();
@@ -449,7 +448,7 @@ class ChatCallbackManagerTest {
 
             // 尝试调用会抛出异常（但这是预期的）
             try {
-                removed.call();
+                removed.run();
             } catch (Exception e) {
                 assertThat(e).isInstanceOf(RuntimeException.class);
                 assertThat(e.getMessage()).isEqualTo("Test exception");
@@ -461,10 +460,10 @@ class ChatCallbackManagerTest {
         void multipleCallbacksAreIndependent() throws Exception {
             // Arrange
             AtomicInteger successCount = new AtomicInteger(0);
-            VoidFunc0 throwingCallback = () -> {
+            Runnable throwingCallback = () -> {
                 throw new RuntimeException("Test exception");
             };
-            VoidFunc0 successCallback = () -> successCount.incrementAndGet();
+            Runnable successCallback = () -> successCount.incrementAndGet();
 
             UUID uuid1 = ChatCallbackManager.registerCallback(throwingCallback);
             UUID uuid2 = ChatCallbackManager.registerCallback(successCallback);
@@ -473,19 +472,19 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 cb1 = callbacks.remove(uuid1);
-            VoidFunc0 cb2 = callbacks.remove(uuid2);
+            Runnable cb1 = callbacks.remove(uuid1);
+            Runnable cb2 = callbacks.remove(uuid2);
 
             // 执行第一个（会抛出异常）
             try {
-                cb1.call();
+                cb1.run();
             } catch (Exception ignored) {
             }
 
             // 执行第二个（不应受影响）
-            cb2.call();
+            cb2.run();
 
             // Assert
             assertThat(successCount.get()).isEqualTo(1);
@@ -518,7 +517,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             assertThat(callbacks).isNotEmpty();
         }
 
@@ -542,7 +541,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             assertThat(callbacks).hasSize(3);
         }
 
@@ -579,7 +578,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             assertThat(callbacks).hasSize(threadCount);
         }
     }
@@ -593,7 +592,7 @@ class ChatCallbackManagerTest {
         void registeringSameCallbackMultipleTimes() throws Exception {
             // Arrange
             AtomicInteger callCount = new AtomicInteger(0);
-            VoidFunc0 callback = () -> callCount.incrementAndGet();
+            Runnable callback = () -> callCount.incrementAndGet();
 
             // Act - 注册同一个回调多次
             UUID uuid1 = ChatCallbackManager.registerCallback(callback);
@@ -609,11 +608,11 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            callbacks.remove(uuid1).call();
-            callbacks.remove(uuid2).call();
-            callbacks.remove(uuid3).call();
+            callbacks.remove(uuid1).run();
+            callbacks.remove(uuid2).run();
+            callbacks.remove(uuid3).run();
 
             assertThat(callCount.get()).isEqualTo(3);
         }
@@ -622,7 +621,7 @@ class ChatCallbackManagerTest {
         @DisplayName("registerCallback 是同步方法")
         void registerCallbackIsSynchronized() throws Exception {
             // Arrange
-            java.lang.reflect.Method method = ChatCallbackManager.class.getDeclaredMethod("registerCallback", VoidFunc0.class);
+            java.lang.reflect.Method method = ChatCallbackManager.class.getDeclaredMethod("registerCallback", Runnable.class);
 
             // Assert
             assertThat(java.lang.reflect.Modifier.isSynchronized(method.getModifiers())).isTrue();
@@ -648,7 +647,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             assertThat(callbacks).hasSizeGreaterThanOrEqualTo(count);
             assertThat(registrationTime).isLessThan(5000); // 应该在5秒内完成
@@ -663,7 +662,7 @@ class ChatCallbackManagerTest {
         @DisplayName("空回调 lambda 应该能被执行")
         void emptyLambdaCallbackShouldBeExecutable() throws Exception {
             // Arrange
-            VoidFunc0 emptyCallback = () -> {
+            Runnable emptyCallback = () -> {
             };
             UUID uuid = ChatCallbackManager.registerCallback(emptyCallback);
 
@@ -671,13 +670,13 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
-            VoidFunc0 removed = callbacks.remove(uuid);
+            Runnable removed = callbacks.remove(uuid);
 
             // Assert & Act - 不应该抛出异常
             assertThat(removed).isNotNull();
-            removed.call(); // 应该成功执行
+            removed.run(); // 应该成功执行
         }
     }
 
@@ -843,10 +842,10 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             // Act
-            VoidFunc0 callback = callbacks.remove(nonExistentUUID);
+            Runnable callback = callbacks.remove(nonExistentUUID);
 
             // Assert - 应该返回 null
             assertThat(callback).isNull();
@@ -857,22 +856,22 @@ class ChatCallbackManagerTest {
         void executeCompleteSuccessPath() throws Exception {
             // Arrange
             AtomicBoolean executed = new AtomicBoolean(false);
-            VoidFunc0 callback = () -> executed.set(true);
+            Runnable callback = () -> executed.set(true);
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             // Act - 模拟 Command.execute 的逻辑
             String[] args = new String[]{uuid.toString()};
             if (args.length == 1) {
                 try {
                     UUID parsedUUID = UUID.fromString(args[0]);
-                    VoidFunc0 cb = callbacks.remove(parsedUUID);
+                    Runnable cb = callbacks.remove(parsedUUID);
                     if (cb != null) {
-                        cb.call();
+                        cb.run();
                     }
                 } catch (Exception ignored) {
                 }
@@ -887,7 +886,7 @@ class ChatCallbackManagerTest {
         @DisplayName("模拟命令执行 - 回调抛出异常应该被捕获")
         void executeWithThrowingCallbackShouldCatchException() throws Exception {
             // Arrange
-            VoidFunc0 throwingCallback = () -> {
+            Runnable throwingCallback = () -> {
                 throw new RuntimeException("Callback exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
@@ -895,7 +894,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             // Act - 模拟 Command.execute 的逻辑（异常应该被捕获）
             String[] args = new String[]{uuid.toString()};
@@ -903,9 +902,9 @@ class ChatCallbackManagerTest {
             if (args.length == 1) {
                 try {
                     UUID parsedUUID = UUID.fromString(args[0]);
-                    VoidFunc0 cb = callbacks.remove(parsedUUID);
+                    Runnable cb = callbacks.remove(parsedUUID);
                     if (cb != null) {
-                        cb.call();
+                        cb.run();
                     }
                 } catch (Exception ignored) {
                     exceptionCaught = true;
@@ -958,7 +957,7 @@ class ChatCallbackManagerTest {
         @DisplayName("回调注册后应该立即可用")
         void callbackShouldBeAvailableImmediatelyAfterRegistration() throws Exception {
             // Arrange
-            VoidFunc0 callback = () -> {};
+            Runnable callback = () -> {};
 
             // Act
             UUID uuid = ChatCallbackManager.registerCallback(callback);
@@ -967,7 +966,7 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             assertThat(callbacks.containsKey(uuid)).isTrue();
             assertThat(callbacks.get(uuid)).isSameAs(callback);
@@ -977,13 +976,13 @@ class ChatCallbackManagerTest {
         @DisplayName("回调移除后应该不再可用")
         void callbackShouldNotBeAvailableAfterRemoval() throws Exception {
             // Arrange
-            VoidFunc0 callback = () -> {};
+            Runnable callback = () -> {};
             UUID uuid = ChatCallbackManager.registerCallback(callback);
 
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
 
             // Act
             callbacks.remove(uuid);
@@ -998,7 +997,7 @@ class ChatCallbackManagerTest {
         void callbackCanStoreComplexState() throws Exception {
             // Arrange
             java.util.List<String> messages = new java.util.ArrayList<>();
-            VoidFunc0 callback = () -> {
+            Runnable callback = () -> {
                 messages.add("first");
                 messages.add("second");
                 messages.add("third");
@@ -1010,10 +1009,10 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             
-            VoidFunc0 stored = callbacks.remove(uuid);
-            stored.call();
+            Runnable stored = callbacks.remove(uuid);
+            stored.run();
 
             // Assert
             assertThat(messages).containsExactly("first", "second", "third");
@@ -1024,7 +1023,7 @@ class ChatCallbackManagerTest {
         void callbackCanModifyExternalState() throws Exception {
             // Arrange
             AtomicInteger counter = new AtomicInteger(0);
-            VoidFunc0 callback = () -> {
+            Runnable callback = () -> {
                 counter.incrementAndGet();
                 counter.incrementAndGet();
             };
@@ -1035,10 +1034,10 @@ class ChatCallbackManagerTest {
             Field callbacksField = ChatCallbackManager.class.getDeclaredField("callbacks");
             callbacksField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            Map<UUID, VoidFunc0> callbacks = (Map<UUID, VoidFunc0>) callbacksField.get(null);
+            Map<UUID, Runnable> callbacks = (Map<UUID, Runnable>) callbacksField.get(null);
             
-            VoidFunc0 stored = callbacks.remove(uuid);
-            stored.call();
+            Runnable stored = callbacks.remove(uuid);
+            stored.run();
 
             // Assert
             assertThat(counter.get()).isEqualTo(2);

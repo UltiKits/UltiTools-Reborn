@@ -15,8 +15,7 @@ import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.DataStoreManager;
-
-import cn.hutool.core.annotation.AnnotationUtil;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Json Data store.
@@ -100,7 +99,7 @@ public class JsonStore implements DataStore {
                             File.separator +
                             plugin.getPluginName() +
                             File.separator +
-                            AnnotationUtil.getAnnotation(dataEntity, Table.class).value()
+                            ReflectionUtil.getAnnotation(dataEntity, Table.class).value()
                     , dataEntity
             );
             dataOperatorMap.putIfAbsent(dataEntity, tSimpleJsonDataOperator);

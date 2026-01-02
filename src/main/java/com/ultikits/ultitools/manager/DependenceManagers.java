@@ -1,11 +1,8 @@
 package com.ultikits.ultitools.manager;
 
-import cn.hutool.core.comparator.VersionComparator;
-import cn.hutool.log.LogFactory;
-
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.interfaces.impl.logger.BukkitLogFactory;
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
@@ -21,10 +18,8 @@ public class DependenceManagers {
     private BukkitAudiences adventure;
     @Getter
     private SimpleContainer context;
-    private VersionComparator versionComparator;
 
     public DependenceManagers(UltiTools plugin, ClassLoader classLoader) {
-        LogFactory.setCurrentLogFactory(new BukkitLogFactory());
         this.context = new SimpleContainer();
         this.context.setClassLoader(classLoader);
         initAdventure(plugin);
@@ -58,13 +53,10 @@ public class DependenceManagers {
      * <br>
      * 获取版本比较器。
      *
-     * @return version comparator <br> 版本比较器
+     * @return version comparator / 版本比较器
      */
-    public VersionComparator getVersionComparator() {
-        if (versionComparator == null) {
-            versionComparator = new VersionComparator();
-        }
-        return versionComparator;
+    public java.util.Comparator<String> getVersionComparator() {
+        return VersionComparatorUtil.COMPARATOR;
     }
 
     /**

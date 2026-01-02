@@ -37,7 +37,6 @@
         <java.version>1.8</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <gui.version>4.3.0</gui.version>
-        <hutool.version>5.8.25</hutool.version>
         <!-- Default excluded test groups - override with -DexcludedGroups= to run isolated tests -->
         <excludedGroups>isolated</excludedGroups>
     </properties>
@@ -166,11 +165,8 @@
                     <archive>
                         <addMavenDescriptor>false</addMavenDescriptor>
                         <!-- 清单文件 -->
-                        <!-- 打包jar文件时，配置manifest文件，加入lib包的jar依赖 -->
                         <manifest>
                             <mainClass>com.ultikits.ultitools.UltiTools</mainClass>
-                            <addClasspath>true</addClasspath>
-                            <classpathPrefix>UltiTools/lib/</classpathPrefix>
                         </manifest>
                     </archive>
                     <!-- 指定需要把哪些文件打入到jar包中,  -->
@@ -187,28 +183,65 @@
                     </excludes>
                 </configuration>
             </plugin>
-            <!-- 拷贝依赖的jar包到lib目录 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <version>3.1.0</version>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
-                        <id>copy</id>
                         <phase>package</phase>
                         <goals>
-                            <goal>copy-dependencies</goal>
+                            <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <!-- 拷贝依赖的jar包到lib目录 -->
-                            <outputDirectory>
-                                ${project.build.directory}/UltiTools/lib
-                            </outputDirectory>
-                            <excludeScope>provided</excludeScope>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <minimizeJar>true</minimizeJar>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
+                                        <exclude>META-INF/LICENSE*</exclude>
+                                        <exclude>META-INF/NOTICE*</exclude>
+                                        <exclude>META-INF/DEPENDENCIES</exclude>
+                                        <exclude>META-INF/maven/**</exclude>
+                                        <exclude>META-INF/versions/**</exclude>
+                                        <exclude>META-INF/native-image/**</exclude>
+                                        <exclude>META-INF/proguard/**</exclude>
+                                        <exclude>META-INF/services/java.sql.Driver</exclude>
+                                        <exclude>META-INF/*.kotlin_module</exclude>
+                                        <exclude>**/module-info.class</exclude>
+                                        <exclude>LICENSE*</exclude>
+                                        <exclude>NOTICE*</exclude>
+                                        <exclude>about.html</exclude>
+                                        <exclude>changelog.txt</exclude>
+                                        <exclude>DebugProbesKt.bin</exclude>
+                                    </excludes>
+                                </filter>
+                                <!-- MySQL Connector - 排除 X DevAPI -->
+                                <filter>
+                                    <artifact>com.mysql:mysql-connector-j</artifact>
+                                    <excludes>
+                                        <exclude>com/mysql/cj/x/**</exclude>
+                                        <exclude>com/mysql/cj/xdevapi/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <!-- 防止 minimizeJar 移除反射加载的类 -->
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.ultikits.ultitools.UltiTools</mainClass>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
+            <!-- 拷贝依赖的jar包到lib目录 (已移除，改为shade打包) -->
+
             <!-- 解决资源文件的编码问题 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -347,54 +380,37 @@
             <version>1.7.1</version>
             <scope>provided</scope>
         </dependency>
+        <!-- JSON 统一使用 Gson -->
         <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>fastjson</artifactId>
-            <version>1.2.83</version>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
         </dependency>
+        <!-- fastjson 已迁移到 Gson，不再需要 -->
         <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-core</artifactId>
-            <version>${hutool.version}</version>
+            <groupId>commons-dbutils</groupId>
+            <artifactId>commons-dbutils</artifactId>
+            <version>1.8.1</version>
         </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-db</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-json</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-http</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
+
         <!-- https://mvnrepository.com/artifact/com.mysql/mysql-connector-j -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>8.3.0</version>
+            <exclusions>
+                <!-- 排除 protobuf，只有 X DevAPI 需要它 -->
+                <exclusion>
+                    <groupId>com.google.protobuf</groupId>
+                    <artifactId>protobuf-java</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/io.socket/socket.io-client -->
+        <!-- https://mvnrepository.com/artifact/org.java-websocket/Java-WebSocket -->
         <dependency>
-            <groupId>io.socket</groupId>
-            <artifactId>socket.io-client</artifactId>
-            <version>2.1.0</version>
-        </dependency>
-        <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp -->
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.12.0</version>
-        </dependency>
-        <!-- https://mvnrepository.com/artifact/org.json/json -->
-        <dependency>
-            <groupId>org.json</groupId>
-            <artifactId>json</artifactId>
-            <version>20231013</version>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>1.5.4</version>
         </dependency>
         <dependency>
             <groupId>net.kyori</groupId>

@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 
 /**
@@ -115,9 +115,9 @@ class AbstractConfigEntityTest {
         TestConfigEntity entity = new TestConfigEntity("test-config.yml");
         entity.init(mockPlugin);
         
-        JSONObject json = new JSONObject();
-        json.put("test.string", "updated");
-        json.put("test.int", 777);
+        JsonObject json = new JsonObject();
+        json.addProperty("test.string", "updated");
+        json.addProperty("test.int", 777);
         
         entity.updateProperties(json);
         
@@ -135,9 +135,9 @@ class AbstractConfigEntityTest {
         entity.setTestInt(666);
         entity.save();
         
-        JSONObject json = entity.toJsonObject();
-        assertThat(json.getString("test.string")).isEqualTo("json-test");
-        assertThat(json.getInteger("test.int")).isEqualTo(666);
+        JsonObject json = entity.toJsonObject();
+        assertThat(json.get("test.string").getAsString()).isEqualTo("json-test");
+        assertThat(json.get("test.int").getAsInt()).isEqualTo(666);
     }
 
     @Test
@@ -146,9 +146,9 @@ class AbstractConfigEntityTest {
         TestConfigEntity entity = new TestConfigEntity("test-config.yml");
         entity.init(mockPlugin);
         
-        JSONObject comments = entity.getComments();
-        assertThat(comments.getString("test.string")).isEqualTo("Test string config");
-        assertThat(comments.getString("test.int")).isEqualTo("Test integer config");
+        JsonObject comments = entity.getComments();
+        assertThat(comments.get("test.string").getAsString()).isEqualTo("Test string config");
+        assertThat(comments.get("test.int").getAsString()).isEqualTo("Test integer config");
     }
 
     @Test

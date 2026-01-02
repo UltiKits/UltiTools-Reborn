@@ -29,8 +29,6 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.guis.OkCancelPage;
 import com.ultikits.ultitools.widgets.Confirm;
 
-import cn.hutool.core.lang.func.VoidFunc0;
-
 /**
  * Unit tests for {@link InventoryConfirm}.
  */
@@ -43,10 +41,10 @@ class InventoryConfirmTest {
     private Player mockPlayer;
     
     @Mock
-    private VoidFunc0 mockOnConfirm;
+    private Runnable mockOnConfirm;
     
     @Mock
-    private VoidFunc0 mockOnCancel;
+    private Runnable mockOnCancel;
     
     @Mock
     private InventoryClickEvent mockClickEvent;
@@ -137,7 +135,7 @@ class InventoryConfirmTest {
         @DisplayName("应该有 onConfirm 字段")
         void shouldHaveOnConfirmField() throws NoSuchFieldException {
             Field field = InventoryConfirm.class.getDeclaredField("onConfirm");
-            assertThat(field.getType()).isEqualTo(VoidFunc0.class);
+            assertThat(field.getType()).isEqualTo(Runnable.class);
             assertThat(Modifier.isFinal(field.getModifiers())).isTrue();
         }
 
@@ -145,7 +143,7 @@ class InventoryConfirmTest {
         @DisplayName("应该有 onCancel 字段")
         void shouldHaveOnCancelField() throws NoSuchFieldException {
             Field field = InventoryConfirm.class.getDeclaredField("onCancel");
-            assertThat(field.getType()).isEqualTo(VoidFunc0.class);
+            assertThat(field.getType()).isEqualTo(Runnable.class);
             assertThat(Modifier.isFinal(field.getModifiers())).isTrue();
         }
     }
@@ -159,7 +157,7 @@ class InventoryConfirmTest {
         void shouldHave5ParamConstructor() throws NoSuchMethodException {
             Constructor<?> constructor = InventoryConfirm.class.getConstructor(
                 Player.class, String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(constructor).isNotNull();
             assertThat(Modifier.isPublic(constructor.getModifiers())).isTrue();
@@ -171,7 +169,7 @@ class InventoryConfirmTest {
             Constructor<?> constructor = InventoryConfirm.class.getConstructor(
                 Player.class, String.class, String.class,
                 String.class, String.class,
-                VoidFunc0.class, VoidFunc0.class);
+                Runnable.class, Runnable.class);
 
             assertThat(constructor).isNotNull();
             assertThat(Modifier.isPublic(constructor.getModifiers())).isTrue();
@@ -287,8 +285,8 @@ class InventoryConfirmTest {
             
             confirm.onOk(mockClickEvent);
             
-            verify(mockOnConfirm).call();
-            verify(mockOnCancel, never()).call();
+            verify(mockOnConfirm).run();
+            verify(mockOnCancel, never()).run();
         }
         
         @Test
@@ -299,8 +297,8 @@ class InventoryConfirmTest {
             
             confirm.onCancel(mockClickEvent);
             
-            verify(mockOnCancel).call();
-            verify(mockOnConfirm, never()).call();
+            verify(mockOnCancel).run();
+            verify(mockOnConfirm, never()).run();
         }
         
         @Test
@@ -311,7 +309,7 @@ class InventoryConfirmTest {
             
             confirm.onOk(mockClickEvent);
             
-            verify(mockOnConfirm, times(1)).call();
+            verify(mockOnConfirm, times(1)).run();
         }
         
         @Test
@@ -323,8 +321,8 @@ class InventoryConfirmTest {
             confirm.onOk(mockClickEvent);
             confirm.onCancel(mockClickEvent);
             
-            verify(mockOnConfirm, times(1)).call();
-            verify(mockOnCancel, times(1)).call();
+            verify(mockOnConfirm, times(1)).run();
+            verify(mockOnCancel, times(1)).run();
         }
     }
     
@@ -478,7 +476,7 @@ class InventoryConfirmTest {
             confirm.onOk(mockClickEvent);
             
             // 验证确认回调被调用
-            verify(mockOnConfirm).call();
+            verify(mockOnConfirm).run();
         }
         
         @Test
@@ -491,7 +489,7 @@ class InventoryConfirmTest {
             confirm.onCancel(mockClickEvent);
             
             // 验证取消回调被调用
-            verify(mockOnCancel).call();
+            verify(mockOnCancel).run();
         }
         
         @Test
@@ -504,7 +502,7 @@ class InventoryConfirmTest {
             assertThat(confirm.getCancelName()).isEqualTo("Keep It");
             
             confirm.onOk(mockClickEvent);
-            verify(mockOnConfirm).call();
+            verify(mockOnConfirm).run();
         }
     }
 }

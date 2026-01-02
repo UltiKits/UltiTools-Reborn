@@ -7,7 +7,8 @@ import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -18,6 +19,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 public class CommandExecutionManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;
+    private final Gson gson = new Gson();
     
     public CommandExecutionManager() {
         this.pendingCommands = new ConcurrentHashMap<>();
@@ -34,12 +36,16 @@ public class CommandExecutionManager {
     /**
      * 执行命令
      */
-    public void executeCommand(JSONObject commandData) {
+    public void executeCommand(JsonObject commandData) {
         try {
-            String command = commandData.getString("command");
-            String executor = commandData.getString("executor");
-            boolean async = commandData.getBooleanValue("async");
-            String commandId = commandData.getString("commandId");
+            String command = commandData.has("command") && !commandData.get("command").isJsonNull() 
+                ? commandData.get("command").getAsString() : null;
+            String executor = commandData.has("executor") && !commandData.get("executor").isJsonNull() 
+                ? commandData.get("executor").getAsString() : null;
+            boolean async = commandData.has("async") && !commandData.get("async").isJsonNull() 
+                && commandData.get("async").getAsBoolean();
+            String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
+                ? commandData.get("commandId").getAsString() : null;
             
             if (command == null || command.trim().isEmpty()) {
                 sendCommandResult(commandId, false, "Command cannot be empty", 0);
@@ -67,7 +73,8 @@ public class CommandExecutionManager {
             
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "执行命令时发生错误: " + e.getMessage());
-            String commandId = commandData.getString("commandId");
+            String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
+                ? commandData.get("commandId").getAsString() : null;
             sendCommandResult(commandId, false, "Internal error: " + e.getMessage(), 0);
         }
     }
@@ -116,17 +123,17 @@ public class CommandExecutionManager {
      */
     private void sendCommandResult(String commandId, boolean success, String output, long executionTime) {
         try {
-            JSONObject message = new JSONObject();
-            message.put("type", "command_result");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "command_result");
             
-            JSONObject data = new JSONObject();
-            data.put("commandId", commandId);
-            data.put("success", success);
-            data.put("output", output);
-            data.put("executionTime", executionTime);
+            JsonObject data = new JsonObject();
+            data.addProperty("commandId", commandId);
+            data.addProperty("success", success);
+            data.addProperty("output", output);
+            data.addProperty("executionTime", executionTime);
             
-            message.put("data", data);
-            message.put("serverId", webSocketClient.getServerId());
+            message.add("data", data);
+            message.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(message);
             

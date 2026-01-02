@@ -5,7 +5,9 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import lombok.Data;
 
@@ -54,32 +56,36 @@ public class TokenEntity {
             String decodedPayload = new String(decodedBytes, StandardCharsets.UTF_8);
             
             // 解析JSON payload
-            JSONObject payloadJson = JSONObject.parseObject(decodedPayload);
+            JsonObject payloadJson = JsonParser.parseString(decodedPayload).getAsJsonObject();
             
             // 填充字段
-            if (payloadJson.containsKey("user_id")) {
-                this.user_id = payloadJson.getLong("user_id");
+            if (payloadJson.has("user_id")) {
+                this.user_id = payloadJson.get("user_id").getAsLong();
             }
-            if (payloadJson.containsKey("user_name")) {
-                this.user_name = payloadJson.getString("user_name");
+            if (payloadJson.has("user_name")) {
+                this.user_name = payloadJson.get("user_name").getAsString();
             }
-            if (payloadJson.containsKey("email")) {
-                this.email = payloadJson.getString("email");
+            if (payloadJson.has("email")) {
+                this.email = payloadJson.get("email").getAsString();
             }
-            if (payloadJson.containsKey("authorities")) {
-                this.authorities = payloadJson.getObject("authorities", String[].class);
+            if (payloadJson.has("authorities")) {
+                JsonArray arr = payloadJson.getAsJsonArray("authorities");
+                this.authorities = new String[arr.size()];
+                for (int i = 0; i < arr.size(); i++) {
+                    this.authorities[i] = arr.get(i).getAsString();
+                }
             }
-            if (payloadJson.containsKey("exp")) {
-                this.exp = payloadJson.getLong("exp");
+            if (payloadJson.has("exp")) {
+                this.exp = payloadJson.get("exp").getAsLong();
             }
-            if (payloadJson.containsKey("iat")) {
-                this.iat = payloadJson.getLong("iat");
+            if (payloadJson.has("iat")) {
+                this.iat = payloadJson.get("iat").getAsLong();
             }
-            if (payloadJson.containsKey("client_id")) {
-                this.client_id = payloadJson.getString("client_id");
+            if (payloadJson.has("client_id")) {
+                this.client_id = payloadJson.get("client_id").getAsString();
             }
-            if (payloadJson.containsKey("scope")) {
-                this.scope = payloadJson.getString("scope");
+            if (payloadJson.has("scope")) {
+                this.scope = payloadJson.get("scope").getAsString();
             }
             
         } catch (Exception e) {

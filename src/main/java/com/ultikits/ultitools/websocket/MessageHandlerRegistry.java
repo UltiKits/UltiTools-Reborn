@@ -9,7 +9,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Registry for WebSocket message handlers.
@@ -122,12 +123,13 @@ public class MessageHandlerRegistry {
      * @param message the JSON message to dispatch
      * @return true if at least one handler processed the message
      */
-    public boolean dispatch(JSONObject message) {
+    public boolean dispatch(JsonObject message) {
         if (message == null) {
             return false;
         }
         
-        String type = message.getString(TYPE_FIELD);
+        String type = message.has(TYPE_FIELD) && !message.get(TYPE_FIELD).isJsonNull() 
+            ? message.get(TYPE_FIELD).getAsString() : null;
         boolean handled = false;
         
         // Process global handlers first
@@ -173,7 +175,7 @@ public class MessageHandlerRegistry {
         }
         
         try {
-            JSONObject message = JSONObject.parseObject(jsonString);
+            JsonObject message = JsonParser.parseString(jsonString).getAsJsonObject();
             return dispatch(message);
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to parse message: " + jsonString, e);

@@ -1,6 +1,6 @@
 package com.ultikits.ultitools.listeners;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
@@ -24,8 +24,8 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("joinMessage", event.getJoinMessage());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("joinMessage", event.getJoinMessage());
             
             getMonitorManager().sendPlayerEvent("join", event.getPlayer(), additionalData);
         }
@@ -34,8 +34,8 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("quitMessage", event.getQuitMessage());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("quitMessage", event.getQuitMessage());
             
             getMonitorManager().sendPlayerEvent("leave", event.getPlayer(), additionalData);
         }
@@ -44,9 +44,9 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChat(AsyncPlayerChatEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("message", event.getMessage());
-            additionalData.put("cancelled", event.isCancelled());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("message", event.getMessage());
+            additionalData.addProperty("cancelled", event.isCancelled());
             
             getMonitorManager().sendPlayerEvent("chat", event.getPlayer(), additionalData);
         }
@@ -55,10 +55,10 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerDeath(PlayerDeathEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("deathMessage", event.getDeathMessage());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("deathMessage", event.getDeathMessage());
             if (event.getEntity().getKiller() != null) {
-                additionalData.put("killer", event.getEntity().getKiller().getName());
+                additionalData.addProperty("killer", event.getEntity().getKiller().getName());
             }
             
             getMonitorManager().sendPlayerEvent("death", event.getEntity(), additionalData);
@@ -68,9 +68,9 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerKick(PlayerKickEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("reason", event.getReason());
-            additionalData.put("cancelled", event.isCancelled());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("reason", event.getReason());
+            additionalData.addProperty("cancelled", event.isCancelled());
             
             getMonitorManager().sendPlayerEvent("kick", event.getPlayer(), additionalData);
         }
@@ -79,9 +79,9 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerCommandPreprocess(PlayerCommandPreprocessEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("command", event.getMessage());
-            additionalData.put("cancelled", event.isCancelled());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("command", event.getMessage());
+            additionalData.addProperty("cancelled", event.isCancelled());
             
             getMonitorManager().sendPlayerEvent("command", event.getPlayer(), additionalData);
         }
@@ -90,9 +90,9 @@ public class EnhancedPlayerEventListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
         if (getMonitorManager() != null && getMonitorManager().isMonitoring()) {
-            JSONObject additionalData = new JSONObject();
-            additionalData.put("fromWorld", event.getFrom().getName());
-            additionalData.put("toWorld", event.getPlayer().getWorld().getName());
+            JsonObject additionalData = new JsonObject();
+            additionalData.addProperty("fromWorld", event.getFrom().getName());
+            additionalData.addProperty("toWorld", event.getPlayer().getWorld().getName());
             
             getMonitorManager().sendPlayerEvent("world_change", event.getPlayer(), additionalData);
         }

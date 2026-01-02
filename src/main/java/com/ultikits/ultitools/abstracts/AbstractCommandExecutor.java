@@ -41,8 +41,8 @@ import com.ultikits.ultitools.annotations.command.CmdSuggest;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
-import cn.hutool.core.util.ReflectUtil;
 import lombok.Getter;
 
 /**
@@ -657,7 +657,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
 
         try {
             setCoolDown(commandSender, method);
-            ReflectUtil.invoke(getInstance(), method, params);
+            ReflectionUtil.invoke(getInstance(), method, params);
         } finally {
             if (usageLimit != null) {
                 if (usageLimit.value().equals(UsageLimit.LimitType.ALL)) {
@@ -896,7 +896,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
      */
     @Nullable
     private Method[] getMethod(Class<?> clazz, String suggestName) {
-        return ReflectUtil.getMethods(clazz, method -> method.getName().equals(suggestName));
+        return ReflectionUtil.getMethods(clazz, method -> method.getName().equals(suggestName));
     }
 
     /**
@@ -925,7 +925,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
                 params[i] = strings;
             }
         }
-        return ReflectUtil.invoke(object, method, params);
+        return ReflectionUtil.invoke(object, method, params);
     }
 
     /**

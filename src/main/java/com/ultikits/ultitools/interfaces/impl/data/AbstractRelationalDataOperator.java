@@ -1,16 +1,21 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import java.lang.reflect.Field;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
+import org.apache.commons.dbutils.QueryRunner;
+import org.apache.commons.dbutils.ResultSetHandler;
+import org.apache.commons.dbutils.handlers.ScalarHandler;
+
+import com.google.gson.Gson;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -19,13 +24,8 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.TransactionManager;
-
-import cn.hutool.core.annotation.AnnotationUtil;
-import cn.hutool.core.util.ClassUtil;
-import cn.hutool.core.util.ReflectUtil;
-import cn.hutool.db.Db;
-import cn.hutool.db.Entity;
-import cn.hutool.db.sql.Condition;
+import com.ultikits.ultitools.utils.BasicTypeUtil;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Abstract base class for relational database data operators.
@@ -41,10 +41,12 @@ import cn.hutool.db.sql.Condition;
 public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
+    private static final Gson GSON = new Gson();
 
     protected final Class<T> type;
     protected final DataSource dataSource;
     protected final String tableName;
+    protected final QueryRunner queryRunner;
     protected TransactionManager transactionManager;
 
     /**
@@ -56,7 +58,8 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
     protected AbstractRelationalDataOperator(DataSource dataSource, Class<T> type) {
         this.type = type;
         this.dataSource = dataSource;
-        Table tableAnnotation = AnnotationUtil.getAnnotation(type, Table.class);
+        this.queryRunner = new QueryRunner(dataSource);
+        Table tableAnnotation = ReflectionUtil.getAnnotation(type, Table.class);
         if (tableAnnotation == null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                     "Entity class " + type.getName() + " must have @Table annotation");
@@ -75,29 +78,35 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
     }
 
     /**
-     * Gets the Db instance, using transaction connection if available.
-     * <p>
-     * Note: When using transactions, the TransactionManager provides connections
-     * from the same DataSource but with proper transaction context.
-     */
-    protected Db getDb() {
-        // Hutool's Db.use() works with DataSource, not raw Connection
-        // Transaction awareness is handled by DataSourceTransactionManager
-        // which wraps the DataSource connections with transaction context
-        return Db.use(dataSource);
-    }
-
-    /**
      * Initializes the database table.
      */
     private void initializeTable() {
         try {
             String createTableSql = createTableSqlFromClazz(type);
-            Db.use(dataSource).execute(createTableSql);
+            queryRunner.update(createTableSql);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to create table: " + tableName, e);
         }
+    }
+
+    protected ResultSetHandler<List<T>> getListHandler() {
+        return rs -> {
+            List<T> list = new ArrayList<>();
+            ResultSetMetaData meta = rs.getMetaData();
+            int cols = meta.getColumnCount();
+            while (rs.next()) {
+                Map<String, Object> map = new LinkedHashMap<>();
+                for (int i = 1; i <= cols; i++) {
+                    // Convert column name to lowercase for consistent matching with Java field names
+                    String colName = meta.getColumnLabel(i).toLowerCase();
+                    map.put(colName, rs.getObject(i));
+                }
+                String json = GSON.toJson(map);
+                list.add(GSON.fromJson(json, type));
+            }
+            return list;
+        };
     }
 
     @Override
@@ -107,9 +116,22 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public boolean exist(WhereCondition... whereConditions) {
-        Entity entity = createQueryEntity(whereConditions);
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
+        List<Object> params = new ArrayList<>();
+        if (whereConditions != null && whereConditions.length > 0) {
+            sql.append(" WHERE ");
+            for (int i = 0; i < whereConditions.length; i++) {
+                WhereCondition condition = whereConditions[i];
+                sql.append(condition.getColumn()).append(" = ?");
+                params.add(condition.getValue());
+                if (i < whereConditions.length - 1) {
+                    sql.append(" AND ");
+                }
+            }
+        }
         try {
-            return getDb().find(entity).size() > 0;
+            Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
+            return count != null && count > 0;
         } catch (SQLException e) {
             LOGGER.warning("Failed to check existence: " + e.getMessage());
             return false;
@@ -118,14 +140,10 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public T getById(Object id) {
+        String sql = "SELECT * FROM " + tableName + " WHERE id = ?";
         try {
-            Entity entity = getDb().get(
-                    Entity.create(tableName).set("id", id)
-            );
-            if (entity == null) {
-                return null;
-            }
-            return entity.toBean(type);
+            List<T> list = queryRunner.query(sql, getListHandler(), id);
+            return list.isEmpty() ? null : list.get(0);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to get entity by id: " + id, e);
@@ -139,59 +157,122 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
-        Entity entity = createQueryEntity(whereConditions);
-        List<T> collection = new ArrayList<>();
-        try {
-            List<Entity> entities = getDb().find(entity);
-            for (Entity res : entities) {
-                collection.add(entityToBean(res));
+        StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
+        List<Object> params = new ArrayList<>();
+        if (whereConditions != null && whereConditions.length > 0) {
+            // Filter out empty conditions
+            boolean first = true;
+            for (WhereCondition condition : whereConditions) {
+                if (condition.isEmpty()) {
+                    continue;
+                }
+                if (first) {
+                    sql.append(" WHERE ");
+                    first = false;
+                } else {
+                    sql.append(" AND ");
+                }
+                sql.append(condition.getColumn()).append(" = ?");
+                params.add(condition.getValue());
             }
+        }
+        try {
+            return queryRunner.query(sql.toString(), getListHandler(), params.toArray());
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to get all entities", e);
         }
-        return collection;
     }
 
     @Override
-    public List<T> getLike(String column, String value, Condition.LikeType likeType) {
-        List<T> collection = new ArrayList<>();
+    public List<T> getLike(String column, String value, LikeType likeType) {
+        String sql = "SELECT * FROM " + tableName + " WHERE " + column + " LIKE ?";
+        String likeValue = value;
+        switch (likeType) {
+            case START:
+                likeValue = value + "%";
+                break;
+            case END:
+                likeValue = "%" + value;
+                break;
+            case CONTAINS:
+                likeValue = "%" + value + "%";
+                break;
+        }
         try {
-            List<Entity> like = getDb().findLike(tableName, column, value, likeType);
-            for (Entity entity : like) {
-                collection.add(entity.toBean(type));
-            }
+            return queryRunner.query(sql, getListHandler(), likeValue);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to query with LIKE", e);
         }
-        return collection;
     }
 
     @Override
     public List<T> page(int page, int size, WhereCondition... whereConditions) {
-        Entity entity = createQueryEntity(whereConditions);
-        List<T> collection = new ArrayList<>();
-        try {
-            List<Entity> entities = getDb().page(entity, page, size);
-            for (Entity res : entities) {
-                collection.add(entityToBean(res));
+        StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
+        List<Object> params = new ArrayList<>();
+        if (whereConditions != null && whereConditions.length > 0) {
+            sql.append(" WHERE ");
+            for (int i = 0; i < whereConditions.length; i++) {
+                WhereCondition condition = whereConditions[i];
+                sql.append(condition.getColumn()).append(" = ?");
+                params.add(condition.getValue());
+                if (i < whereConditions.length - 1) {
+                    sql.append(" AND ");
+                }
             }
+        }
+        sql.append(" LIMIT ? OFFSET ?");
+        params.add(size);
+        params.add((page - 1) * size);
+        try {
+            return queryRunner.query(sql.toString(), getListHandler(), params.toArray());
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to page entities", e);
         }
-        return collection;
     }
 
     @Override
     public void insert(T obj) {
+        StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
+        StringBuilder values = new StringBuilder(") VALUES (");
+        List<Object> params = new ArrayList<>();
+        Field[] fields = ReflectionUtil.getFields(obj.getClass());
+        boolean first = true;
+        for (Field field : fields) {
+            if (field.isAnnotationPresent(Column.class)) {
+                field.setAccessible(true);
+                Column column = field.getAnnotation(Column.class);
+                if (!first) {
+                    sql.append(", ");
+                    values.append(", ");
+                }
+                sql.append("`").append(column.value()).append("`");
+                values.append("?");
+                try {
+                    Object value = field.get(obj);
+                    if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
+                        String jsonString = GSON.toJson(value);
+                        // Remove surrounding quotes for simple string values if needed, but usually GSON handles objects correctly.
+                        // The original code had logic to remove quotes, let's keep it simple for now or replicate if necessary.
+                        // Original logic:
+                        if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
+                            jsonString = jsonString.substring(1, jsonString.length() - 1);
+                        }
+                        value = jsonString;
+                    }
+                    params.add(value);
+                } catch (IllegalAccessException e) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "Failed to access entity fields", e);
+                }
+                first = false;
+            }
+        }
+        sql.append(values).append(")");
         try {
-            Entity entity = copyEntity(obj);
-            getDb().insert(entity);
-        } catch (IllegalAccessException e) {
-            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
-                    "Failed to access entity fields", e);
+            queryRunner.update(sql.toString(), params.toArray());
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to insert entity", e);
@@ -200,9 +281,21 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public void del(WhereCondition... whereConditions) {
-        Entity entity = createQueryEntity(whereConditions);
+        StringBuilder sql = new StringBuilder("DELETE FROM ").append(tableName);
+        List<Object> params = new ArrayList<>();
+        if (whereConditions != null && whereConditions.length > 0) {
+            sql.append(" WHERE ");
+            for (int i = 0; i < whereConditions.length; i++) {
+                WhereCondition condition = whereConditions[i];
+                sql.append(condition.getColumn()).append(" = ?");
+                params.add(condition.getValue());
+                if (i < whereConditions.length - 1) {
+                    sql.append(" AND ");
+                }
+            }
+        }
         try {
-            getDb().del(entity);
+            queryRunner.update(sql.toString(), params.toArray());
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to delete entities", e);
@@ -211,10 +304,9 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public void delById(Object id) {
+        String sql = "DELETE FROM " + tableName + " WHERE id = ?";
         try {
-            getDb().del(
-                    Entity.create(tableName).set("id", id)
-            );
+            queryRunner.update(sql, id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to delete entity by id: " + id, e);
@@ -223,14 +315,12 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public void update(String column, Object value, Object id) {
-        if (!ClassUtil.isBasicType(value.getClass())) {
-            value = JSON.toJSONString(value);
+        if (value != null && !BasicTypeUtil.isBasicType(value.getClass())) {
+            value = GSON.toJson(value);
         }
+        String sql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
         try {
-            getDb().update(
-                    Entity.create(tableName).set(column, value),
-                    Entity.create(tableName).set("id", id)
-            );
+            queryRunner.update(sql, value, id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to update column: " + column, e);
@@ -239,73 +329,38 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public void update(T obj) throws IllegalAccessException {
-        try {
-            Entity entity = copyEntity(obj);
-            getDb().update(
-                    entity,
-                    Entity.create(tableName).set("id", obj.getId())
-            );
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to update entity", e);
-        }
-    }
-
-    /**
-     * Converts a database entity to a Java bean.
-     */
-    protected T entityToBean(Entity res) {
-        JSONObject jsonObject = new JSONObject();
-        Set<String> fieldNames = res.getFieldNames();
-        for (String field : fieldNames) {
-            jsonObject.put(field, res.get(field));
-        }
-        return jsonObject.toJavaObject(type);
-    }
-
-    /**
-     * Copies entity fields to a database entity.
-     */
-    protected Entity copyEntity(T obj) throws IllegalAccessException {
-        Entity entity = Entity.create(tableName);
-        Field[] fields = ReflectUtil.getFields(obj.getClass());
+        StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+        List<Object> params = new ArrayList<>();
+        Field[] fields = ReflectionUtil.getFields(obj.getClass());
+        boolean first = true;
         for (Field field : fields) {
             if (field.isAnnotationPresent(Column.class)) {
                 field.setAccessible(true);
                 Column column = field.getAnnotation(Column.class);
+                if (!first) {
+                    sql.append(", ");
+                }
+                sql.append("`").append(column.value()).append("` = ?");
                 Object value = field.get(obj);
-                if (!ClassUtil.isBasicType(field.getType())) {
-                    String jsonString = JSON.toJSONString(field.get(obj));
+                if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
+                    String jsonString = GSON.toJson(value);
                     if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                        jsonString = jsonString.substring(1);
-                        jsonString = jsonString.substring(0, jsonString.lastIndexOf("\""));
+                        jsonString = jsonString.substring(1, jsonString.length() - 1);
                     }
                     value = jsonString;
                 }
-                if (entity.get(column.value()) == null) {
-                    entity.set(column.value(), value);
-                }
+                params.add(value);
+                first = false;
             }
         }
-        return entity;
-    }
-
-    /**
-     * Creates a query entity from where conditions.
-     */
-    protected Entity createQueryEntity(WhereCondition[] whereConditions) {
-        Entity entity = Entity.create(tableName);
-        for (WhereCondition whereCondition : whereConditions) {
-            if (whereCondition.isEmpty()) {
-                return entity;
-            }
-            if (ClassUtil.isBasicType(whereCondition.getValue().getClass())) {
-                entity.set(whereCondition.getColumn(), whereCondition.getValue());
-            } else {
-                entity.set(whereCondition.getColumn(), whereCondition.getValue().toString());
-            }
+        sql.append(" WHERE id = ?");
+        params.add(obj.getId());
+        try {
+            queryRunner.update(sql.toString(), params.toArray());
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to update entity", e);
         }
-        return entity;
     }
 
     /**
@@ -323,11 +378,11 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
      */
     protected String buildColumnDefinitions(Class<T> type) {
         StringBuilder stringBuilder = new StringBuilder();
-        Field[] fields = ReflectUtil.getFields(type);
+        Field[] fields = ReflectionUtil.getFields(type);
         for (Field field : fields) {
             if (field.isAnnotationPresent(Column.class)) {
                 field.setAccessible(true);
-                Column column = AnnotationUtil.getAnnotation(field, Column.class);
+                Column column = ReflectionUtil.getAnnotation(field, Column.class);
                 StringBuilder partSql = new StringBuilder();
                 partSql.append("`").append(column.value()).append("` ").append(column.type()).append(",");
                 String sql = partSql.toString();

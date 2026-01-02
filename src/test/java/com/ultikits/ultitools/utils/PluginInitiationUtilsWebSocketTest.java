@@ -95,7 +95,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handlePing 方法应该存在")
         void handlePingMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePing", com.alibaba.fastjson.JSONObject.class);
+                "handlePing", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -105,7 +105,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handlePong 方法应该存在")
         void handlePongMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePong", com.alibaba.fastjson.JSONObject.class);
+                "handlePong", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -115,7 +115,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleSubscribe 方法应该存在")
         void handleSubscribeMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleSubscribe", com.alibaba.fastjson.JSONObject.class);
+                "handleSubscribe", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -125,7 +125,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleUnsubscribe 方法应该存在")
         void handleUnsubscribeMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleUnsubscribe", com.alibaba.fastjson.JSONObject.class);
+                "handleUnsubscribe", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -135,7 +135,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleNotification 方法应该存在")
         void handleNotificationMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleNotification", com.alibaba.fastjson.JSONObject.class);
+                "handleNotification", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -145,7 +145,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleError 方法应该存在")
         void handleErrorMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleError", com.alibaba.fastjson.JSONObject.class);
+                "handleError", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -155,7 +155,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handlePlayerEvent 方法应该存在")
         void handlePlayerEventMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handlePlayerEvent", com.alibaba.fastjson.JSONObject.class);
+                "handlePlayerEvent", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -165,7 +165,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleCommandResult 方法应该存在")
         void handleCommandResultMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleCommandResult", com.alibaba.fastjson.JSONObject.class);
+                "handleCommandResult", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -175,7 +175,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleFileOperationResult 方法应该存在")
         void handleFileOperationResultMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleFileOperationResult", com.alibaba.fastjson.JSONObject.class);
+                "handleFileOperationResult", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -185,7 +185,7 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("handleConfigUpload 方法应该存在")
         void handleConfigUploadMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "handleConfigUpload", com.alibaba.fastjson.JSONObject.class);
+                "handleConfigUpload", com.google.gson.JsonObject.class);
             
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
@@ -269,47 +269,47 @@ class PluginInitiationUtilsWebSocketTest {
         @Test
         @DisplayName("应该能构建 pong 响应消息")
         void shouldBuildPongResponseMessage() {
-            com.alibaba.fastjson.JSONObject pongResponse = new com.alibaba.fastjson.JSONObject();
-            pongResponse.put("type", "pong");
-            pongResponse.put("timestamp", System.currentTimeMillis());
+            com.google.gson.JsonObject pongResponse = new com.google.gson.JsonObject();
+            pongResponse.addProperty("type", "pong");
+            pongResponse.addProperty("timestamp", System.currentTimeMillis());
             
-            com.alibaba.fastjson.JSONObject pongData = new com.alibaba.fastjson.JSONObject();
-            pongData.put("timestamp", System.currentTimeMillis());
-            pongResponse.put("data", pongData);
+            com.google.gson.JsonObject pongData = new com.google.gson.JsonObject();
+            pongData.addProperty("timestamp", System.currentTimeMillis());
+            pongResponse.add("data", pongData);
             
-            assertThat(pongResponse.getString("type")).isEqualTo("pong");
-            assertThat(pongResponse.containsKey("timestamp")).isTrue();
-            assertThat(pongResponse.containsKey("data")).isTrue();
+            assertThat(pongResponse.get("type").getAsString()).isEqualTo("pong");
+            assertThat(pongResponse.has("timestamp")).isTrue();
+            assertThat(pongResponse.has("data")).isTrue();
         }
 
         @Test
         @DisplayName("应该能构建错误响应消息")
         void shouldBuildErrorResponseMessage() {
-            com.alibaba.fastjson.JSONObject errorResponse = new com.alibaba.fastjson.JSONObject();
-            errorResponse.put("type", "error");
-            errorResponse.put("message", "Test error message");
+            com.google.gson.JsonObject errorResponse = new com.google.gson.JsonObject();
+            errorResponse.addProperty("type", "error");
+            errorResponse.addProperty("message", "Test error message");
             
-            assertThat(errorResponse.getString("type")).isEqualTo("error");
-            assertThat(errorResponse.getString("message")).isEqualTo("Test error message");
+            assertThat(errorResponse.get("type").getAsString()).isEqualTo("error");
+            assertThat(errorResponse.get("message").getAsString()).isEqualTo("Test error message");
         }
 
         @Test
         @DisplayName("应该能解析带 data 字段的消息")
         void shouldParseMessageWithDataField() {
-            com.alibaba.fastjson.JSONObject message = new com.alibaba.fastjson.JSONObject();
-            message.put("type", "server_status");
+            com.google.gson.JsonObject message = new com.google.gson.JsonObject();
+            message.addProperty("type", "server_status");
             
-            com.alibaba.fastjson.JSONObject data = new com.alibaba.fastjson.JSONObject();
-            data.put("players", 10);
-            data.put("tps", 20.0);
-            message.put("data", data);
+            com.google.gson.JsonObject data = new com.google.gson.JsonObject();
+            data.addProperty("players", 10);
+            data.addProperty("tps", 20.0);
+            message.add("data", data);
             
-            String type = message.getString("type");
-            com.alibaba.fastjson.JSONObject extractedData = message.getJSONObject("data");
+            String type = message.get("type").getAsString();
+            com.google.gson.JsonObject extractedData = message.getAsJsonObject("data");
             
             assertThat(type).isEqualTo("server_status");
-            assertThat(extractedData.getIntValue("players")).isEqualTo(10);
-            assertThat(extractedData.getDoubleValue("tps")).isEqualTo(20.0);
+            assertThat(extractedData.get("players").getAsInt()).isEqualTo(10);
+            assertThat(extractedData.get("tps").getAsDouble()).isEqualTo(20.0);
         }
     }
 

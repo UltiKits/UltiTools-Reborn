@@ -2,7 +2,7 @@ package com.ultikits.ultitools.websocket.handlers;
 
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
 
@@ -37,11 +37,15 @@ public class CommandExecutionHandler implements WebSocketMessageHandler {
     }
     
     @Override
-    public void handle(JSONObject message) {
-        String command = message.getString("command");
-        String executor = message.getString("executor");
-        String requestId = message.getString("requestId");
-        boolean async = message.getBooleanValue("async");
+    public void handle(JsonObject message) {
+        String command = message.has("command") && !message.get("command").isJsonNull() 
+            ? message.get("command").getAsString() : null;
+        String executor = message.has("executor") && !message.get("executor").isJsonNull() 
+            ? message.get("executor").getAsString() : null;
+        String requestId = message.has("requestId") && !message.get("requestId").isJsonNull() 
+            ? message.get("requestId").getAsString() : null;
+        boolean async = message.has("async") && !message.get("async").isJsonNull() 
+            && message.get("async").getAsBoolean();
         
         if (command == null || command.isEmpty()) {
             logger.warning("Received execute_command with empty command");

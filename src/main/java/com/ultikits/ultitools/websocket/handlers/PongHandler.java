@@ -2,7 +2,7 @@ package com.ultikits.ultitools.websocket.handlers;
 
 import java.util.logging.Logger;
 
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
 
 /**
@@ -28,7 +28,7 @@ public class PongHandler implements WebSocketMessageHandler {
     }
     
     @Override
-    public void handle(JSONObject message) {
+    public void handle(JsonObject message) {
         lastPongTime = System.currentTimeMillis();
         
         // Calculate latency if we have a ping timestamp

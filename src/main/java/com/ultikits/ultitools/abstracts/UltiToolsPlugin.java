@@ -1,27 +1,11 @@
 package com.ultikits.ultitools.abstracts;
 
-import cn.hutool.core.comparator.VersionComparator;
-import cn.hutool.core.io.FileUtil;
-import cn.hutool.log.LogFactory;
-
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.interfaces.*;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
-import com.ultikits.ultitools.manager.CommandManager;
-import com.ultikits.ultitools.manager.ConfigManager;
-import com.ultikits.ultitools.manager.ListenerManager;
-import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.DependencyUtils;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.SneakyThrows;
-import org.bukkit.configuration.file.YamlConfiguration;
-import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.utils.AnnotationUtils;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
@@ -32,6 +16,30 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
+
+import org.bukkit.configuration.file.YamlConfiguration;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.interfaces.Configurable;
+import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.IPlugin;
+import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.DependencyUtils;
+import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
+
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * Abstract class representing a plugin module.
@@ -153,7 +161,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
      * @param mainClass           the main class of the plugin <br> 插件的主类
      */
-    @SneakyThrows
     @Deprecated
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
         this.pluginName = pluginName;
@@ -165,7 +172,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
         language = createLanguageFromPath(resourceFolderPath);
         saveResources();
-        initConfig();
+        try {
+            initConfig();
+        } catch (IOException e) {
+            getLogger().error("Failed to initialize config", e);
+        }
     }
 
     /**
@@ -245,7 +256,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (annotation != null && annotation.config()) {
             for (String packageName : DependencyUtils.getPluginPackages(this)) {
                 UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, UltiTools.getInstance().getUltiToolsClassLoader()
+                        this, packageName, UltiTools.getJavaPluginClassLoader()
                 );
             }
             return;
@@ -293,7 +304,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
-    @SneakyThrows
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
@@ -317,7 +327,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         if (outFile.exists()) {
                             continue;
                         }
-                        FileUtil.touch(outFile);
+                        FileUtils.touch(outFile);
                         try (OutputStream out = Files.newOutputStream(outFile.toPath())) {
                             byte[] buf = new byte[1024];
                             int len;
@@ -330,6 +340,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                     }
                 }
             }
+        } catch (IOException e) {
+            getLogger().error("Failed to save resources from jar", e);
         }
     }
 
@@ -394,7 +406,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (plugin == null || plugin.getVersion() == null || this.getVersion() == null) {
             return false;
         }
-        return VersionComparator.INSTANCE.compare(this.getVersion(), plugin.getVersion()) > 0;
+        return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
     @Override
@@ -412,6 +424,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @return plugin logger <br> 插件日志发送器
      */
     public PluginLogger getLogger() {
-        return new PluginLogger(this.pluginName, LogFactory.get());
+        return new PluginLogger(this.pluginName, UltiTools.getInstance().getLogger());
     }
 }

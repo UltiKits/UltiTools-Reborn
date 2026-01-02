@@ -1,7 +1,8 @@
 package com.ultikits.ultitools.manager;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
@@ -98,13 +99,13 @@ public class ServerMonitorManager {
                 return;
             }
             
-            JSONObject message = new JSONObject();
-            message.put("type", "server_status");
-            message.put("serverId", webSocketClient.getServerId());
-            message.put("timestamp", System.currentTimeMillis());
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "server_status");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
             
-            JSONObject data = getCurrentServerStatusData();
-            message.put("data", data);
+            JsonObject data = getCurrentServerStatusData();
+            message.add("data", data);
             
             // 发送消息
             webSocketClient.sendMessage(message);
@@ -187,14 +188,14 @@ public class ServerMonitorManager {
                 return;
             }
             
-            JSONObject message = new JSONObject();
-            message.put("type", "server_status");
-            message.put("serverId", webSocketClient.getServerId());
-            message.put("timestamp", System.currentTimeMillis());
-            message.put("requestId", requestId); // 包含请求ID
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "server_status");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
+            message.addProperty("requestId", requestId); // 包含请求ID
             
-            JSONObject data = getCurrentServerStatusData();
-            message.put("data", data);
+            JsonObject data = getCurrentServerStatusData();
+            message.add("data", data);
             
             // 发送消息
             webSocketClient.sendMessage(message);
@@ -210,26 +211,26 @@ public class ServerMonitorManager {
     /**
      * 获取当前服务器状态数据
      */
-    private JSONObject getCurrentServerStatusData() {
-        JSONObject data = new JSONObject();
+    private JsonObject getCurrentServerStatusData() {
+        JsonObject data = new JsonObject();
         
         // 玩家信息
-        data.put("playerCount", Bukkit.getOnlinePlayers().size());
-        data.put("maxPlayers", Bukkit.getMaxPlayers());
-        data.put("onlineMode", Bukkit.getOnlineMode());
+        data.addProperty("playerCount", Bukkit.getOnlinePlayers().size());
+        data.addProperty("maxPlayers", Bukkit.getMaxPlayers());
+        data.addProperty("onlineMode", Bukkit.getOnlineMode());
         
         // 服务器版本信息
         String version = Bukkit.getVersion();
         String serverVersion = extractVersionNumber(version);
-        data.put("serverVersion", serverVersion);
+        data.addProperty("serverVersion", serverVersion);
         
         // TPS信息
-        JSONArray tpsArray = new JSONArray();
+        JsonArray tpsArray = new JsonArray();
         double[] tps = calculateTPS();
         for (double tpsValue : tps) {
             tpsArray.add(Math.round(tpsValue * 10.0) / 10.0);
         }
-        data.put("tps", tpsArray);
+        data.add("tps", tpsArray);
         
         // 内存信息
         Runtime runtime = Runtime.getRuntime();
@@ -238,25 +239,25 @@ public class ServerMonitorManager {
         long freeMemory = runtime.freeMemory() / 1024 / 1024; // MB
         long usedMemory = totalMemory - freeMemory;
         
-        JSONObject memory = new JSONObject();
-        memory.put("used", usedMemory);
-        memory.put("max", maxMemory);
-        memory.put("free", maxMemory - usedMemory);
-        data.put("memory", memory);
+        JsonObject memory = new JsonObject();
+        memory.addProperty("used", usedMemory);
+        memory.addProperty("max", maxMemory);
+        memory.addProperty("free", maxMemory - usedMemory);
+        data.add("memory", memory);
         
         // CPU使用率
         double cpuUsage = getCPUUsage();
-        data.put("cpu", Math.round(cpuUsage * 10.0) / 10.0);
+        data.addProperty("cpu", Math.round(cpuUsage * 10.0) / 10.0);
         
         // 运行时间
-        data.put("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
+        data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
         
         // 世界列表
-        JSONArray worlds = new JSONArray();
+        JsonArray worlds = new JsonArray();
         for (World world : Bukkit.getWorlds()) {
             worlds.add(world.getName());
         }
-        data.put("worlds", worlds);
+        data.add("worlds", worlds);
         
         return data;
     }
@@ -266,33 +267,33 @@ public class ServerMonitorManager {
      */
     private void sendPluginList() {
         try {
-            JSONObject message = new JSONObject();
-            message.put("type", "plugin_list");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "plugin_list");
             
-            JSONObject data = new JSONObject();
-            JSONArray plugins = new JSONArray();
+            JsonObject data = new JsonObject();
+            JsonArray plugins = new JsonArray();
             
             for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
-                JSONObject pluginInfo = new JSONObject();
-                pluginInfo.put("name", plugin.getName());
-                pluginInfo.put("version", plugin.getDescription().getVersion());
-                pluginInfo.put("enabled", plugin.isEnabled());
+                JsonObject pluginInfo = new JsonObject();
+                pluginInfo.addProperty("name", plugin.getName());
+                pluginInfo.addProperty("version", plugin.getDescription().getVersion());
+                pluginInfo.addProperty("enabled", plugin.isEnabled());
                 
                 if (!plugin.getDescription().getAuthors().isEmpty()) {
-                    pluginInfo.put("author", String.join(", ", plugin.getDescription().getAuthors()));
+                    pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
                 } else {
-                    pluginInfo.put("author", "Unknown");
+                    pluginInfo.addProperty("author", "Unknown");
                 }
                 
-                pluginInfo.put("description", plugin.getDescription().getDescription());
+                pluginInfo.addProperty("description", plugin.getDescription().getDescription());
                 plugins.add(pluginInfo);
             }
             
-            data.put("plugins", plugins);
-            data.put("totalCount", plugins.size());
+            data.add("plugins", plugins);
+            data.addProperty("totalCount", plugins.size());
             
-            message.put("data", data);
-            message.put("serverId", webSocketClient.getServerId());
+            message.add("data", data);
+            message.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(message);
             
@@ -306,47 +307,47 @@ public class ServerMonitorManager {
      */
     public void sendMetricsData() {
         try {
-            JSONObject message = new JSONObject();
-            message.put("type", "metrics_data");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "metrics_data");
             
-            JSONObject data = new JSONObject();
+            JsonObject data = new JsonObject();
             
             // 玩家活动统计
-            JSONObject playerActivity = new JSONObject();
-            playerActivity.put("currentOnline", Bukkit.getOnlinePlayers().size());
-            playerActivity.put("maxPlayers", Bukkit.getMaxPlayers());
+            JsonObject playerActivity = new JsonObject();
+            playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
+            playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
             // TODO: 这里可以添加更多统计信息，如每日登录数等
-            data.put("playerActivity", playerActivity);
+            data.add("playerActivity", playerActivity);
             
             // 服务器性能
-            JSONObject serverPerformance = new JSONObject();
+            JsonObject serverPerformance = new JsonObject();
             double[] tps = calculateTPS();
             double avgTPS = 0;
             for (double t : tps) {
                 avgTPS += t;
             }
             avgTPS /= tps.length;
-            serverPerformance.put("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
+            serverPerformance.addProperty("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
             
             Runtime runtime = Runtime.getRuntime();
             long maxMemory = runtime.maxMemory();
             long usedMemory = runtime.totalMemory() - runtime.freeMemory();
             double memoryUsage = ((double) usedMemory / maxMemory) * 100;
-            serverPerformance.put("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
+            serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
             
             // 磁盘使用率（简化实现）
-            serverPerformance.put("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
+            serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
             
-            data.put("serverPerformance", serverPerformance);
+            data.add("serverPerformance", serverPerformance);
             
             // 插件使用情况
-            JSONObject pluginUsage = new JSONObject();
-            pluginUsage.put("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
-            pluginUsage.put("loadedWorlds", Bukkit.getWorlds().size());
-            data.put("pluginUsage", pluginUsage);
+            JsonObject pluginUsage = new JsonObject();
+            pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
+            pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
+            data.add("pluginUsage", pluginUsage);
             
-            message.put("data", data);
-            message.put("serverId", webSocketClient.getServerId());
+            message.add("data", data);
+            message.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(message);
             
@@ -360,48 +361,48 @@ public class ServerMonitorManager {
      */
     public void sendMetricsDataWithRequestId(String requestId) {
         try {
-            JSONObject message = new JSONObject();
-            message.put("type", "metrics_data");
-            message.put("requestId", requestId);
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "metrics_data");
+            message.addProperty("requestId", requestId);
             
-            JSONObject data = new JSONObject();
+            JsonObject data = new JsonObject();
             
             // 玩家活动统计
-            JSONObject playerActivity = new JSONObject();
-            playerActivity.put("currentOnline", Bukkit.getOnlinePlayers().size());
-            playerActivity.put("maxPlayers", Bukkit.getMaxPlayers());
+            JsonObject playerActivity = new JsonObject();
+            playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
+            playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
             // TODO: 这里可以添加更多统计信息，如每日登录数等
-            data.put("playerActivity", playerActivity);
+            data.add("playerActivity", playerActivity);
             
             // 服务器性能
-            JSONObject serverPerformance = new JSONObject();
+            JsonObject serverPerformance = new JsonObject();
             double[] tps = calculateTPS();
             double avgTPS = 0;
             for (double t : tps) {
                 avgTPS += t;
             }
             avgTPS /= tps.length;
-            serverPerformance.put("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
+            serverPerformance.addProperty("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
             
             Runtime runtime = Runtime.getRuntime();
             long maxMemory = runtime.maxMemory();
             long usedMemory = runtime.totalMemory() - runtime.freeMemory();
             double memoryUsage = ((double) usedMemory / maxMemory) * 100;
-            serverPerformance.put("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
+            serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
             
             // 磁盘使用率（简化实现）
-            serverPerformance.put("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
+            serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
             
-            data.put("serverPerformance", serverPerformance);
+            data.add("serverPerformance", serverPerformance);
             
             // 插件使用情况
-            JSONObject pluginUsage = new JSONObject();
-            pluginUsage.put("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
-            pluginUsage.put("loadedWorlds", Bukkit.getWorlds().size());
-            data.put("pluginUsage", pluginUsage);
+            JsonObject pluginUsage = new JsonObject();
+            pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
+            pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
+            data.add("pluginUsage", pluginUsage);
             
-            message.put("data", data);
-            message.put("serverId", webSocketClient.getServerId());
+            message.add("data", data);
+            message.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(message);
             
@@ -491,42 +492,42 @@ public class ServerMonitorManager {
     /**
      * 发送玩家事件
      */
-    public void sendPlayerEvent(String eventType, Player player, JSONObject additionalData) {
+    public void sendPlayerEvent(String eventType, Player player, JsonObject additionalData) {
         try {
-            JSONObject message = new JSONObject();
-            message.put("type", "player_event");
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "player_event");
             
-            JSONObject data = new JSONObject();
-            data.put("eventType", eventType);
+            JsonObject data = new JsonObject();
+            data.addProperty("eventType", eventType);
             
             // 玩家信息
-            JSONObject playerInfo = new JSONObject();
-            playerInfo.put("uuid", player.getUniqueId().toString());
-            playerInfo.put("name", player.getName());
-            playerInfo.put("ip", player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
-            data.put("player", playerInfo);
+            JsonObject playerInfo = new JsonObject();
+            playerInfo.addProperty("uuid", player.getUniqueId().toString());
+            playerInfo.addProperty("name", player.getName());
+            playerInfo.addProperty("ip", player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
+            data.add("player", playerInfo);
             
             // 位置信息
             if (player.getLocation() != null) {
-                JSONObject location = new JSONObject();
-                location.put("world", player.getWorld().getName());
-                location.put("x", Math.round(player.getLocation().getX() * 100.0) / 100.0);
-                location.put("y", Math.round(player.getLocation().getY() * 100.0) / 100.0);
-                location.put("z", Math.round(player.getLocation().getZ() * 100.0) / 100.0);
-                data.put("location", location);
+                JsonObject location = new JsonObject();
+                location.addProperty("world", player.getWorld().getName());
+                location.addProperty("x", Math.round(player.getLocation().getX() * 100.0) / 100.0);
+                location.addProperty("y", Math.round(player.getLocation().getY() * 100.0) / 100.0);
+                location.addProperty("z", Math.round(player.getLocation().getZ() * 100.0) / 100.0);
+                data.add("location", location);
             }
             
             // 添加额外数据
             if (additionalData != null) {
                 for (String key : additionalData.keySet()) {
-                    data.put(key, additionalData.get(key));
+                    data.add(key, additionalData.get(key));
                 }
             }
             
-            data.put("timestamp", System.currentTimeMillis());
+            data.addProperty("timestamp", System.currentTimeMillis());
             
-            message.put("data", data);
-            message.put("serverId", webSocketClient.getServerId());
+            message.add("data", data);
+            message.addProperty("serverId", webSocketClient.getServerId());
             
             webSocketClient.sendMessage(message);
             

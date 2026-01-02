@@ -4,24 +4,18 @@ import static com.ultikits.ultitools.utils.PluginInstallUtils.getPlugin;
 import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVersion;
 
 import com.ultikits.ultitools.entities.PluginEntity;
-
-import cn.hutool.core.comparator.VersionComparator;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import cn.hutool.http.HttpUtil;
+import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
  * Utility class for version checking and comparison operations.
  * Provides methods to check for plugin updates and compare semantic versions.
- * Uses Hutool's VersionComparator for semantic version comparison.
  * <br>
  * 版本检查和比较操作的实用工具类。
  * 提供检查插件更新和比较语义版本的方法。
- * 使用 Hutool 的 VersionComparator 进行语义版本比较。
  *
  * @author wisdomme
  * @since 6.0.0
- * @see cn.hutool.core.comparator.VersionComparator
+ * @see VersionComparatorUtil
  */
 public class VersionUtils {
 
@@ -33,11 +27,9 @@ public class VersionUtils {
      * @return the newest UltiTools version string <br> UltiTools最新版本字符串
      */
     public static String getUltiToolsNewestVersion() {
-        HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/ultitools/newest");
-        HttpResponse httpResponse = get.execute();
-        String version = httpResponse.body();
-        httpResponse.close();
-        return version;
+        try (Response httpResponse = SimpleHttpClient.get("https://api.ultikits.com/plugin/ultitools/newest")) {
+            return httpResponse.body();
+        }
     }
 
     /**
@@ -57,6 +49,6 @@ public class VersionUtils {
             return false;
         }
         String pluginLatestVersion = getPluginLatestVersion(pluginIdString);
-        return new VersionComparator().compare(currentVersion, pluginLatestVersion) < 0;
+        return VersionComparatorUtil.compare(currentVersion, pluginLatestVersion) < 0;
     }
 }

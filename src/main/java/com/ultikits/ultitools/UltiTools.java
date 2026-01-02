@@ -14,10 +14,8 @@ import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.net.URLClassLoader;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
@@ -51,7 +49,6 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
-import com.ultikits.ultitools.utils.HttpDownloadUtils;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
@@ -68,7 +65,6 @@ import net.milkbowl.vault.economy.Economy;
  * @version 6.0.7
  */
 public final class UltiTools extends JavaPlugin implements Localized {
-    private boolean needLoadLib = false;
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
@@ -91,8 +87,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     @Setter
     private DataStore dataStore;
-    @Getter
-    private URLClassLoader ultiToolsClassLoader;
     @Getter
     private ServerMonitorManager serverMonitorManager;
     @Getter
@@ -166,23 +160,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
         }
-        downloadRequiredDependencies();
     }
 
     @Override
     public void onEnable() {
-        // Load all lib
-        ultiToolsClassLoader = new URLClassLoader(getLibs(), getClassLoader());
         // External bukkit libraries initialization
         try {
-            dependenceManagers = new DependenceManagers(this, ultiToolsClassLoader);
+            dependenceManagers = new DependenceManagers(this, getClassLoader());
         } catch (Exception | NoClassDefFoundError error) {
-            needLoadLib = true;
-        }
-        if (needLoadLib) {
-            getServer().getScheduler().scheduleSyncRepeatingTask(this, () -> {
-                getLogger().log(Level.WARNING, "UltiTools初始化完成，但是还需重启加载依赖，请重启服务端！");
-            }, 0, 20 * 30);
+            getLogger().log(Level.SEVERE, "Failed to initialize dependence managers", error);
+            getServer().getPluginManager().disablePlugin(this);
             return;
         }
         // Language initialization
@@ -228,7 +215,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            pluginManager.init(ultiToolsClassLoader);
+            pluginManager.init(getClassLoader());
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -308,7 +295,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
             String ultiToolsNewestVersion = getUltiToolsNewestVersion();
             String currentVersion = getEnv().getString("version");
             getLogger().log(Level.INFO, String.format(i18n("UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
-            getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
+            try {
+                getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
+            } catch (IOException e) {
+                getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
+            }
             getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
             if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
                 getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
@@ -321,9 +312,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onDisable() {
-        if (needLoadLib) {
-            return;
-        }
         // Plugin shutdown logic
         
         // 关闭日志流管理器
@@ -438,126 +426,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
             }
         }
         return codeSource.getLocation();
-    }
-
-    private URL[] getLibs() {
-        File libDir = new File(getDataFolder(), "lib");
-        if (!libDir.exists()) {
-            libDir.mkdirs();
-        }
-        File[] libFiles = libDir.listFiles();
-        if (libFiles == null) {
-            return new URL[]{getServerJar()};
-        }
-
-        List<File> files = new ArrayList<>(Arrays.asList(libFiles));
-        File pluginsFolder = getDataFolder().getParentFile();
-        if (pluginsFolder != null) {
-            File[] folderFiles = pluginsFolder.listFiles();
-            if (folderFiles != null) {
-                for (File file : folderFiles) {
-                    if (file.getName().endsWith(".jar")) {
-                        files.add(file);
-                    }
-                }
-            }
-        }
-
-        File pluginDir = new File(getDataFolder(), "plugins");
-        if (!pluginDir.exists()) {
-            pluginDir.mkdirs();
-        }
-        File[] pluginFiles = pluginDir.listFiles();
-        if (pluginFiles != null) {
-            files.addAll(Arrays.asList(pluginFiles));
-        }
-
-        URL[] urls = new URL[files.size() + 1];
-        for (int i = 0; i < files.size(); i++) {
-            try {
-                urls[i] = files.get(i).toURI().toURL();
-            } catch (MalformedURLException e) {
-                getLogger().log(Level.WARNING, "Failed to convert file to URL: " + files.get(i), e);
-            }
-        }
-        urls[files.size()] = getServerJar();
-        return urls;
-    }
-
-    /**
-     * Download required dependencies.
-     * <br>
-     * 下载必要的依赖。
-     */
-    private void downloadRequiredDependencies() {
-        String libFolder = new File(System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped").exists() ? 
-        System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped" + File.separator + "UltiTools" + File.separator + "lib" 
-        : UltiTools.getInstance().getDataFolder() + File.separator + "lib";
-        
-        File libDir = new File(libFolder);
-        if (!libDir.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            libDir.mkdirs();
-        }
-        
-        YamlConfiguration env = UltiTools.getEnv();
-        List<String> libraries = env.getStringList("libraries");
-        if (libraries.isEmpty()) {
-            getLogger().log(Level.WARNING, "No libraries defined in env.yml");
-            return;
-        }
-        
-        List<String> missingLib = libraries
-                .stream()
-                .map(lib -> new File(libFolder, lib))
-                .filter(file -> !file.exists()).map(File::getName)
-                .collect(Collectors.toList());
-                
-        if (missingLib.isEmpty()) {
-            return;
-        }
-        
-        getLogger().log(Level.INFO, "Missing required libraries, trying to download...");
-        getLogger().log(Level.INFO, "If have problems in downloading, you can download full version.");
-        
-        String ossUrl = env.getString("oss-url");
-        String libPath = env.getString("lib-path");
-        if (ossUrl == null || libPath == null) {
-            getLogger().log(Level.SEVERE, "OSS URL or lib path not configured in env.yml");
-            return;
-        }
-        
-        for (int i = 0; i < missingLib.size(); i++) {
-            String name = missingLib.get(i);
-            String url = ossUrl + libPath + name;
-            double progress = (double) i / missingLib.size();
-            int percentage = (int) (progress * 100);
-            printLoadingBar(percentage);
-            
-            try {
-                HttpDownloadUtils.download(url, name, libFolder);
-                needLoadLib = true;
-            } catch (Exception e) {
-                getLogger().log(Level.SEVERE, "Failed to download library: " + name, e);
-            }
-        }
-        printLoadingBar(100);
-        getLogger().log(Level.INFO, "All required libraries have been downloaded.");
-    }
-
-    private void printLoadingBar(final int percentage) {
-        StringBuilder loadingBar = new StringBuilder("[");
-        int progress = percentage / 10;
-        for (int i = 0; i < progress; i++) {
-            loadingBar.append("*");
-        }
-        for (int i = progress; i < 10; i++) {
-            loadingBar.append("-");
-        }
-        loadingBar.append("] ");
-        loadingBar.append(percentage);
-        loadingBar.append("%");
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + loadingBar);
     }
 
     /**
