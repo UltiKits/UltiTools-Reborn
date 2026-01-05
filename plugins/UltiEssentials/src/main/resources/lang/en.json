@@ -1,0 +1,77 @@
+{
+  "UltiEssentials 已启用！": "UltiEssentials enabled!",
+  "UltiEssentials 已禁用！": "UltiEssentials disabled!",
+  "UltiEssentials 配置已重载！": "UltiEssentials config reloaded!",
+
+  "该功能已禁用": "This feature is disabled",
+  "玩家不存在或不在线": "Player not found or offline",
+  "玩家不存在": "Player not found",
+
+  "没有可返回的位置": "No location to return to",
+  "已传送到上一个位置": "Teleported to previous location",
+
+  "出生点世界不存在": "Spawn world does not exist",
+  "已传送到出生点": "Teleported to spawn",
+  "出生点已设置": "Spawn point set",
+  "保存出生点失败": "Failed to save spawn point",
+
+  "主城世界不存在": "Lobby world does not exist",
+  "已传送到主城": "Teleported to lobby",
+  "主城已设置": "Lobby set",
+  "保存主城失败": "Failed to save lobby",
+
+  "正在寻找安全位置...": "Finding a safe location...",
+  "已随机传送到 X:%d Y:%d Z:%d": "Randomly teleported to X:%d Y:%d Z:%d",
+  "未能找到安全位置，请稍后再试": "Could not find a safe location, please try again later",
+
+  "不能召回自己": "You cannot recall yourself",
+  "已将 %s 召回到你的位置": "Recalled %s to your location",
+  "你被 %s 召回": "You were recalled by %s",
+
+  "飞行模式已开启": "Flight mode enabled",
+  "飞行模式已关闭": "Flight mode disabled",
+  "已为 %s 开启飞行模式": "Enabled flight mode for %s",
+  "已为 %s 关闭飞行模式": "Disabled flight mode for %s",
+  "你的飞行模式已被开启": "Your flight mode has been enabled",
+  "你的飞行模式已被关闭": "Your flight mode has been disabled",
+
+  "生命值已恢复": "Health restored",
+  "已恢复 %s 的生命值": "Restored %s's health",
+  "你的生命值已被恢复": "Your health has been restored",
+
+  "饱食度已恢复": "Hunger restored",
+  "已恢复 %s 的饱食度": "Restored %s's hunger",
+  "你的饱食度已被恢复": "Your hunger has been restored",
+
+  "速度必须在 0-%d 之间": "Speed must be between 0-%d",
+  "速度已重置为默认值": "Speed reset to default",
+  "速度已设置为 %d": "Speed set to %d",
+
+  "无效的游戏模式，可用: 0/s/survival, 1/c/creative, 2/a/adventure, 3/sp/spectator": "Invalid game mode. Available: 0/s/survival, 1/c/creative, 2/a/adventure, 3/sp/spectator",
+  "无效的游戏模式": "Invalid game mode",
+  "游戏模式已切换为 %s": "Game mode changed to %s",
+  "已将 %s 的游戏模式切换为 %s": "Changed %s's game mode to %s",
+  "你的游戏模式已被切换为 %s": "Your game mode has been changed to %s",
+  "游戏模式已切换为 SURVIVAL": "Game mode changed to SURVIVAL",
+  "游戏模式已切换为 CREATIVE": "Game mode changed to CREATIVE",
+  "游戏模式已切换为 SPECTATOR": "Game mode changed to SPECTATOR",
+
+  "隐身模式已开启": "Vanish mode enabled",
+  "隐身模式已关闭": "Vanish mode disabled",
+
+  "不能查看自己的背包": "Cannot view your own inventory",
+  "正在查看 %s 的背包": "Viewing %s's inventory",
+  "正在查看 %s 的末影箱": "Viewing %s's ender chest",
+  "%s 的装备": "%s's equipment",
+  "正在查看 %s 的装备": "Viewing %s's equipment",
+
+  "已将 %s 添加到白名单": "Added %s to whitelist",
+  "已将 %s 从白名单移除": "Removed %s from whitelist",
+  "白名单为空": "Whitelist is empty",
+  "白名单 (%d): %s": "Whitelist (%d): %s",
+  "白名单已启用": "Whitelist enabled",
+  "白名单已禁用": "Whitelist disabled",
+  "白名单状态: %s, 人数: %d": "Whitelist status: %s, count: %d",
+  "已启用": "Enabled",
+  "已禁用": "Disabled"
+}

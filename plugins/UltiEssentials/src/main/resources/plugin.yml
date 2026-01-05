@@ -1,0 +1,8 @@
+name: UltiEssentials
+version: '${project.version}'
+main: com.ultikits.plugins.essentials.UltiEssentials
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []
