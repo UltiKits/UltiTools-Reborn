@@ -1271,4 +1271,134 @@ class LogStreamManagerTest {
             assertThat(logStreamManager.getLogTransmitter()).isSameAs(mockTransmitter);
         }
     }
+
+    // ==================== initialize 方法测试 ====================
+    @Nested
+    @DisplayName("initialize 方法测试")
+    class InitializeTests {
+
+        @Test
+        @DisplayName("initialize 应该设置 webSocketClient")
+        void shouldSetWebSocketClient() throws Exception {
+            // Arrange - 配置 mock 避免 NPE
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            
+            // 模拟配置返回值
+            when(mockConfig.contains(anyString())).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert
+            Field wsField = LogStreamManager.class.getDeclaredField("webSocketClient");
+            wsField.setAccessible(true);
+            assertThat(wsField.get(logStreamManager)).isSameAs(mockWebSocketClient);
+        }
+
+        @Test
+        @DisplayName("initialize 应该创建 logTransmitter")
+        void shouldCreateLogTransmitter() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            when(mockConfig.contains(anyString())).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert
+            assertThat(logStreamManager.getLogTransmitter()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("initialize 应该创建 systemLogHandler")
+        void shouldCreateSystemLogHandler() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            when(mockConfig.contains(anyString())).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert
+            Field field = LogStreamManager.class.getDeclaredField("systemLogHandler");
+            field.setAccessible(true);
+            assertThat(field.get(logStreamManager)).isNotNull();
+        }
+
+        @Test
+        @DisplayName("initialize 应该启动日志流")
+        void shouldStartLogStream() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            when(mockConfig.contains(anyString())).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert - 日志流应该已启动
+            assertThat(logStreamManager.isStreaming()).isTrue();
+        }
+
+        @Test
+        @DisplayName("initialize 应该记录初始化日志")
+        void shouldLogInitialization() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            when(mockConfig.contains(anyString())).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert
+            verify(mockLogger).info(contains("initialized"));
+        }
+
+        @Test
+        @DisplayName("initialize 应该加载批量配置")
+        void shouldLoadBatchConfiguration() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+            when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
+            when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
+            
+            // Act
+            logStreamManager.initialize(mockWebSocketClient);
+            
+            // Assert
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            assertThat(transmitter.isBatchEnabled()).isFalse();
+        }
+    }
+
+    // ==================== sendInitializationLogs 方法测试 ====================
+    @Nested
+    @DisplayName("sendInitializationLogs 方法测试")
+    class SendInitializationLogsTests {
+
+        @Test
+        @DisplayName("应该发送初始化日志")
+        void shouldSendInitializationLogs() throws Exception {
+            // Arrange
+            UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
+            setLogTransmitter(mockTransmitter);
+            
+            SystemLogHandler mockHandler = mock(SystemLogHandler.class);
+            when(mockHandler.getConfigurationInfo()).thenReturn("test config info");
+            setSystemLogHandler(mockHandler);
+            
+            // Act - 调用 sendInitializationLogs
+            Method method = LogStreamManager.class.getDeclaredMethod("sendInitializationLogs");
+            method.setAccessible(true);
+            method.invoke(logStreamManager);
+            
+            // Assert
+            verify(mockTransmitter, atLeast(1)).info(anyString(), anyString());
+        }
+    }
 }

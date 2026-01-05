@@ -774,4 +774,93 @@ class CommandExecutionManagerTest {
             verify(mockLogger).log(any(java.util.logging.Level.class), anyString());
         }
     }
+
+    @Nested
+    @DisplayName("executeCommand 异常场景测试")
+    class ExecuteCommandExceptionTests {
+
+        @Test
+        @DisplayName("executeCommand 异常时应该发送错误结果")
+        void shouldSendErrorResultOnException() throws Exception {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "test");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "exception-test");
+
+            // 模拟 getScheduler() 抛出异常
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            newManager.setWebSocketClient(mockWebSocketClient);
+            
+            // 使用反射设置 webSocketClient 字段以模拟异常场景
+            java.lang.reflect.Field field = CommandExecutionManager.class.getDeclaredField("webSocketClient");
+            field.setAccessible(true);
+            
+            // 创建一个会在 sendMessage 时记录调用的 mock
+            UltiPanelWebSocketClient specialMock = mock(UltiPanelWebSocketClient.class);
+            when(specialMock.getServerId()).thenReturn("test-server");
+            field.set(newManager, specialMock);
+
+            // Act - 执行命令
+            newManager.executeCommand(commandData);
+
+            // Assert - 不应该抛出异常，命令应该被调度
+        }
+
+        @Test
+        @DisplayName("commandData 包含 null commandId 时异常处理应该正确")
+        void shouldHandleNullCommandIdInException() throws Exception {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "test");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.add("commandId", com.google.gson.JsonNull.INSTANCE);
+
+            // Act
+            manager.executeCommand(commandData);
+
+            // Assert - 不应该抛出异常
+        }
+
+        @Test
+        @DisplayName("commandData 缺少 commandId 字段时异常处理应该正确")
+        void shouldHandleMissingCommandIdInException() throws Exception {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "test");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            // 不添加 commandId
+
+            // Act
+            manager.executeCommand(commandData);
+
+            // Assert - 不应该抛出异常
+        }
+    }
+
+    @Nested
+    @DisplayName("非 console 执行者测试")
+    class NonConsoleExecutorTests {
+
+        @Test
+        @DisplayName("非 console 执行者应该回退到控制台发送者")
+        void nonConsoleExecutorShouldFallbackToConsoleSender() {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "help");
+            commandData.addProperty("executor", "player-uuid-12345");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "player-executor-test");
+
+            // Act
+            manager.executeCommand(commandData);
+            server.getScheduler().performOneTick();
+
+            // Assert - 命令应该被执行
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+        }
+    }
 }

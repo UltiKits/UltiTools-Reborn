@@ -195,7 +195,7 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
-                            <minimizeJar>true</minimizeJar>
+                            <minimizeJar>false</minimizeJar>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
@@ -221,12 +221,24 @@
                                         <exclude>DebugProbesKt.bin</exclude>
                                     </excludes>
                                 </filter>
-                                <!-- MySQL Connector - 排除 X DevAPI -->
+                                <!-- 排除 obliviate-invs 子模块中的重复 UniversalScheduler 类 -->
                                 <filter>
-                                    <artifact>com.mysql:mysql-connector-j</artifact>
+                                    <artifact>com.github.hamza-cskn.obliviate-invs:advancedslot</artifact>
                                     <excludes>
-                                        <exclude>com/mysql/cj/x/**</exclude>
-                                        <exclude>com/mysql/cj/xdevapi/**</exclude>
+                                        <exclude>com/github/Anon8281/universalScheduler/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>com.github.hamza-cskn.obliviate-invs:core</artifact>
+                                    <excludes>
+                                        <exclude>com/github/Anon8281/universalScheduler/**</exclude>
+                                        <exclude>mc/obliviate/util/versiondetection/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>com.github.hamza-cskn.obliviate-invs:configurablegui</artifact>
+                                    <excludes>
+                                        <exclude>mc/obliviate/util/versiondetection/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
@@ -380,47 +392,65 @@
             <version>1.7.1</version>
             <scope>provided</scope>
         </dependency>
-        <!-- JSON 统一使用 Gson -->
+        <!-- JSON 统一使用 Gson - Paper libraries 自动下载 -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
+            <scope>provided</scope>
         </dependency>
         <!-- fastjson 已迁移到 Gson，不再需要 -->
+        <!-- commons-dbutils - Paper libraries 自动下载 -->
         <dependency>
             <groupId>commons-dbutils</groupId>
             <artifactId>commons-dbutils</artifactId>
             <version>1.8.1</version>
+            <scope>provided</scope>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/com.mysql/mysql-connector-j -->
+        <!-- MySQL Connector - Paper libraries 自动下载 -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>8.3.0</version>
-            <exclusions>
-                <!-- 排除 protobuf，只有 X DevAPI 需要它 -->
-                <exclusion>
-                    <groupId>com.google.protobuf</groupId>
-                    <artifactId>protobuf-java</artifactId>
-                </exclusion>
-            </exclusions>
+            <scope>provided</scope>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.java-websocket/Java-WebSocket -->
+        <!-- Java-WebSocket - Paper libraries 自动下载 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
             <artifactId>Java-WebSocket</artifactId>
             <version>1.5.4</version>
+            <scope>provided</scope>
         </dependency>
+        <!-- Adventure - Paper 1.16.5+ 原生支持，无需打包 -->
         <dependency>
             <groupId>net.kyori</groupId>
             <artifactId>adventure-platform-bukkit</artifactId>
             <version>4.3.2</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.github.hamza-cskn</groupId>
             <artifactId>obliviate-invs</artifactId>
             <version>${gui.version}</version>
+            <exclusions>
+                <!-- 排除重复的 UniversalScheduler (core 和 advancedslot 都包含) -->
+                <exclusion>
+                    <groupId>com.github.Anon8281</groupId>
+                    <artifactId>UniversalScheduler</artifactId>
+                </exclusion>
+                <!-- 排除重复的 version-detection -->
+                <exclusion>
+                    <groupId>com.github.hamza-cskn.obliviate-utils</groupId>
+                    <artifactId>version-detection</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- 单独引入 UniversalScheduler 避免重复 -->
+        <dependency>
+            <groupId>com.github.Anon8281</groupId>
+            <artifactId>UniversalScheduler</artifactId>
+            <version>0.1.6</version>
         </dependency>
         <dependency>
             <groupId>me.clip</groupId>
@@ -504,11 +534,12 @@
             <version>2.2.224</version>
             <scope>test</scope>
         </dependency>
-        <!-- CGLIB for AOP proxy support (Spring-like experience without interface requirement) -->
+        <!-- CGLIB for AOP proxy support - Paper libraries 自动下载 -->
         <dependency>
             <groupId>cglib</groupId>
             <artifactId>cglib-nodep</artifactId>
             <version>3.3.0</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 </project>

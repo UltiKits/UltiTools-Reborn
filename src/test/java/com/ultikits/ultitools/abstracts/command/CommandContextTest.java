@@ -185,4 +185,225 @@ class CommandContextTest {
             context.getParsedParams().put("new", new String[]{})
         );
     }
+    
+    @Test
+    @DisplayName("Should return correct arg count")
+    void shouldReturnCorrectArgCount() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{"arg1", "arg2", "arg3"})
+                .build();
+        
+        assertEquals(3, context.getArgCount());
+    }
+    
+    @Test
+    @DisplayName("Should return zero for null rawArgs")
+    void shouldReturnZeroForNullRawArgs() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(null)
+                .build();
+        
+        assertEquals(0, context.getArgCount());
+    }
+    
+    @Test
+    @DisplayName("Should get argument at valid index")
+    void shouldGetArgAtValidIndex() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{"first", "second", "third"})
+                .build();
+        
+        assertEquals("first", context.getArg(0));
+        assertEquals("second", context.getArg(1));
+        assertEquals("third", context.getArg(2));
+    }
+    
+    @Test
+    @DisplayName("Should return null for negative index")
+    void shouldReturnNullForNegativeIndex() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{"arg1"})
+                .build();
+        
+        assertNull(context.getArg(-1));
+    }
+    
+    @Test
+    @DisplayName("Should return null for out of bounds index")
+    void shouldReturnNullForOutOfBoundsIndex() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{"arg1", "arg2"})
+                .build();
+        
+        assertNull(context.getArg(5));
+    }
+    
+    @Test
+    @DisplayName("Should return null for null rawArgs when getting arg")
+    void shouldReturnNullForNullRawArgsWhenGettingArg() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(null)
+                .build();
+        
+        assertNull(context.getArg(0));
+    }
+    
+    @Test
+    @DisplayName("Should get param by name")
+    void shouldGetParamByName() {
+        Map<String, String[]> params = new HashMap<>();
+        params.put("name", new String[]{"value1", "value2"});
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build()
+                .withParsedParams(params);
+        
+        String[] result = context.getParam("name");
+        assertNotNull(result);
+        assertEquals(2, result.length);
+        assertEquals("value1", result[0]);
+        assertEquals("value2", result[1]);
+    }
+    
+    @Test
+    @DisplayName("Should return null for non-existent param")
+    void shouldReturnNullForNonExistentParam() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build();
+        
+        assertNull(context.getParam("nonexistent"));
+    }
+    
+    @Test
+    @DisplayName("Should get single param value")
+    void shouldGetSingleParamValue() {
+        Map<String, String[]> params = new HashMap<>();
+        params.put("key", new String[]{"singleValue"});
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build()
+                .withParsedParams(params);
+        
+        assertEquals("singleValue", context.getParamValue("key"));
+    }
+    
+    @Test
+    @DisplayName("Should return first value when param has multiple values")
+    void shouldReturnFirstValueWhenMultipleValues() {
+        Map<String, String[]> params = new HashMap<>();
+        params.put("multi", new String[]{"first", "second", "third"});
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build()
+                .withParsedParams(params);
+        
+        assertEquals("first", context.getParamValue("multi"));
+    }
+    
+    @Test
+    @DisplayName("Should return null for non-existent param value")
+    void shouldReturnNullForNonExistentParamValue() {
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build();
+        
+        assertNull(context.getParamValue("nonexistent"));
+    }
+    
+    @Test
+    @DisplayName("Should return null for empty param values array")
+    void shouldReturnNullForEmptyParamValues() {
+        Map<String, String[]> params = new HashMap<>();
+        params.put("empty", new String[]{});
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build()
+                .withParsedParams(params);
+        
+        assertNull(context.getParamValue("empty"));
+    }
+    
+    @Test
+    @DisplayName("Should have default timestamp")
+    void shouldHaveDefaultTimestamp() {
+        long before = System.currentTimeMillis();
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build();
+        
+        long after = System.currentTimeMillis();
+        
+        assertTrue(context.getTimestamp() >= before);
+        assertTrue(context.getTimestamp() <= after);
+    }
+    
+    @Test
+    @DisplayName("Should merge params with withParsedParams")
+    void shouldMergeParamsWithParsedParams() {
+        Map<String, String[]> initial = new HashMap<>();
+        initial.put("key1", new String[]{"value1"});
+        
+        CommandContext context = CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .build()
+                .withParsedParams(initial);
+        
+        Map<String, String[]> additional = new HashMap<>();
+        additional.put("key2", new String[]{"value2"});
+        
+        CommandContext updated = context.withParsedParams(additional);
+        
+        // Updated should have both keys
+        assertEquals(2, updated.getParsedParams().size());
+        assertNotNull(updated.getParam("key1"));
+        assertNotNull(updated.getParam("key2"));
+    }
 }

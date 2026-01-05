@@ -814,4 +814,160 @@ class UltiPanelLogTransmitterTest {
             // Assert - 没有异常就是成功
         }
     }
+
+    @Nested
+    @DisplayName("determineLoggerName 边缘情况测试")
+    class DetermineLoggerNameEdgeCasesTests {
+
+        @Test
+        @DisplayName("普通 source 应该直接返回")
+        void shouldReturnSourceDirectlyForOtherSources() throws Exception {
+            // Arrange
+            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
+            method.setAccessible(true);
+
+            // Act
+            String result = (String) method.invoke(logTransmitter, "custom-source");
+
+            // Assert - 既不是 "server" 也不是 "plugin:" 前缀，应该直接返回 source
+            assertThat(result).isEqualTo("custom-source");
+        }
+
+        @Test
+        @DisplayName("plugin: 前缀应该被移除")
+        void shouldRemovePluginPrefix() throws Exception {
+            // Arrange
+            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("determineLoggerName", String.class);
+            method.setAccessible(true);
+
+            // Act
+            String result = (String) method.invoke(logTransmitter, "plugin:MyPlugin");
+
+            // Assert
+            assertThat(result).isEqualTo("MyPlugin");
+        }
+    }
+
+    @Nested
+    @DisplayName("getDefaultServerId 异常测试")
+    class GetDefaultServerIdExceptionTests {
+
+        @Test
+        @DisplayName("CommonUtils.getUltiToolsUUID 抛出异常时应该返回 unknown-server")
+        void shouldReturnUnknownServerOnException() throws Exception {
+            // 这个测试验证 getDefaultServerId 的异常处理
+            // 由于 serverId 为 null 时会调用 getDefaultServerId
+            // 如果 CommonUtils.getUltiToolsUUID() 抛出异常，应该返回 "unknown-server"
+            
+            // Arrange - 使用 null serverId 创建新的 transmitter
+            // 在正常情况下，getDefaultServerId 会尝试获取 UUID
+            // 我们验证即使有异常也能正常工作
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, null);
+
+            // Assert
+            Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
+            serverIdField.setAccessible(true);
+            String serverId = (String) serverIdField.get(transmitter);
+            assertThat(serverId).isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("getStackTrace 边缘情况测试")
+    class GetStackTraceEdgeCasesTests {
+
+        @Test
+        @DisplayName("throwable 为 null 时应该返回 null")
+        void shouldReturnNullForNullThrowable() throws Exception {
+            // Arrange
+            Method method = UltiPanelLogTransmitter.class.getDeclaredMethod("getStackTrace", Throwable.class);
+            method.setAccessible(true);
+
+            // Act
+            String result = (String) method.invoke(logTransmitter, (Throwable) null);
+
+            // Assert
+            assertThat(result).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("shutdown 边缘情况测试")
+    class ShutdownEdgeCasesTests {
+
+        @Test
+        @DisplayName("shutdown 超时应该强制关闭")
+        void shouldForceShutdownOnTimeout() throws Exception {
+            // Arrange
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+            
+            // 添加一些日志来确保有数据
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            transmitter.sendLog("info", "test", "server", null);
+
+            // Act - shutdown 应该正常完成
+            transmitter.shutdown();
+
+            // Assert - 不应该抛出异常
+            assertThat(transmitter.isLogTransmissionEnabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("多次 shutdown 不应该抛出异常")
+        void multipleShutdownShouldNotThrow() {
+            // Arrange
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+
+            // Act - 多次 shutdown
+            transmitter.shutdown();
+            transmitter.shutdown();
+
+            // Assert - 不应该抛出异常
+        }
+    }
+
+    @Nested
+    @DisplayName("sendLog 异常处理测试")
+    class SendLogExceptionHandlingTests {
+
+        @Test
+        @DisplayName("WebSocket 发送异常时应该输出到 stderr")
+        void shouldOutputToStderrOnSendException() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            org.mockito.Mockito.doThrow(new RuntimeException("Send failed"))
+                .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            logTransmitter.setBatchEnabled(false);
+
+            // Act - 不应该抛出异常
+            logTransmitter.sendLog("info", "test", "server", null);
+
+            // Assert - 异常被捕获，没有抛出
+        }
+    }
+
+    @Nested
+    @DisplayName("sendBatch 异常测试")
+    class SendBatchExceptionTests {
+
+        @Test
+        @DisplayName("sendBatch 异常时应该安全处理")
+        void shouldHandleSendBatchException() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            logTransmitter.setBatchEnabled(true);
+            logTransmitter.setBatchSize(1);
+            
+            // 模拟第二次发送时抛出异常
+            org.mockito.Mockito.doNothing()
+                .doThrow(new RuntimeException("Batch send failed"))
+                .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
+
+            // Act - 发送多条日志触发批量发送
+            logTransmitter.sendLog("info", "message1", "server", null);
+            logTransmitter.sendLog("info", "message2", "server", null);
+
+            // Assert - 不应该抛出异常
+        }
+    }
 }

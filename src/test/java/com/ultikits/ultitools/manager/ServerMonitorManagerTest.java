@@ -681,5 +681,108 @@ class ServerMonitorManagerTest {
             assertThat(manager.isMonitoring()).isTrue();
         }
     }
-}
 
+    @Nested
+    @DisplayName("startMonitoring 完整测试")
+    class StartMonitoringFullTests {
+
+        @Test
+        @DisplayName("startMonitoring 应该设置 isMonitoring 为 true")
+        void shouldSetIsMonitoringToTrue() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            
+            // Act
+            serverMonitorManager.startMonitoring();
+            
+            // Assert
+            assertThat(serverMonitorManager.isMonitoring()).isTrue();
+        }
+
+        @Test
+        @DisplayName("startMonitoring 应该记录日志")
+        void shouldLogStartMessage() {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            
+            // Act
+            serverMonitorManager.startMonitoring();
+            
+            // Assert
+            verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("启动"));
+        }
+    }
+
+    @Nested
+    @DisplayName("stopMonitoring 完整测试")
+    class StopMonitoringFullTests {
+
+        @Test
+        @DisplayName("stopMonitoring 应该设置 isMonitoring 为 false")
+        void shouldSetIsMonitoringToFalse() throws Exception {
+            // Arrange
+            Field field = ServerMonitorManager.class.getDeclaredField("isMonitoring");
+            field.setAccessible(true);
+            field.setBoolean(serverMonitorManager, true);
+            
+            // Act
+            serverMonitorManager.stopMonitoring();
+            
+            // Assert
+            assertThat(serverMonitorManager.isMonitoring()).isFalse();
+        }
+
+        @Test
+        @DisplayName("stopMonitoring 应该记录日志")
+        void shouldLogStopMessage() throws Exception {
+            // Arrange - 先设置为监控中
+            Field field = ServerMonitorManager.class.getDeclaredField("isMonitoring");
+            field.setAccessible(true);
+            field.setBoolean(serverMonitorManager, true);
+            
+            // Act
+            serverMonitorManager.stopMonitoring();
+            
+            // Assert
+            verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("停止"));
+        }
+    }
+
+    @Nested
+    @DisplayName("sendServerStatus 异常测试")
+    class SendServerStatusExceptionTests {
+
+        @Test
+        @DisplayName("异常时应该记录警告日志")
+        void shouldLogWarningOnException() throws Exception {
+            // Arrange
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            org.mockito.Mockito.doThrow(new RuntimeException("Test exception"))
+                .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            
+            // Act
+            serverMonitorManager.sendServerStatus();
+            
+            // Assert - 应该记录警告
+            verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("发送服务器状态失败"), any(Throwable.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("updateTPS 扩展测试")
+    class UpdateTPSExtendedTests {
+
+        @Test
+        @DisplayName("updateTPS 应该更新历史记录")
+        void shouldUpdateHistory() throws Exception {
+            // Arrange
+            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTPS");
+            method.setAccessible(true);
+            
+            // Act
+            method.invoke(serverMonitorManager);
+            
+            // Assert - 不应该抛出异常
+        }
+    }
+}

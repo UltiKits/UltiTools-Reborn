@@ -125,6 +125,27 @@ class ClassLoaderUtilsTest {
                     .isInstanceOf(SecurityException.class);
             }
         }
+
+        @Test
+        @DisplayName("受信任包下的无效类名格式也应该抛出SecurityException")
+        void invalidFormatInTrustedPackageShouldThrowSecurityException() {
+            // 这些类名以受信任的前缀开头，但格式不正确
+            // 这测试的是 VALID_CLASS_NAME_PATTERN 的第二道检查
+            String[] invalidNamesInTrustedPackage = {
+                "com.ultikits.ultitools..DoubleDot",
+                "com.ultikits.ultitools.123StartWithNumber",
+                "com.ultikits.ultitools.-dash.Class",
+                "com.ultikits.ultitools. space.Class",
+                "org.bukkit..DoubleDot",
+                "org.bukkit.-invalid.Class"
+            };
+            
+            for (String className : invalidNamesInTrustedPackage) {
+                assertThatThrownBy(() -> ClassLoaderUtils.loadClass(className))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("Invalid class name format");
+            }
+        }
     }
 
     @Nested
