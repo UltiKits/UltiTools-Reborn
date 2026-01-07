@@ -24,10 +24,6 @@
   "已随机传送到 X:%d Y:%d Z:%d": "Randomly teleported to X:%d Y:%d Z:%d",
   "未能找到安全位置，请稍后再试": "Could not find a safe location, please try again later",
 
-  "不能召回自己": "You cannot recall yourself",
-  "已将 %s 召回到你的位置": "Recalled %s to your location",
-  "你被 %s 召回": "You were recalled by %s",
-
   "飞行模式已开启": "Flight mode enabled",
   "飞行模式已关闭": "Flight mode disabled",
   "已为 %s 开启飞行模式": "Enabled flight mode for %s",

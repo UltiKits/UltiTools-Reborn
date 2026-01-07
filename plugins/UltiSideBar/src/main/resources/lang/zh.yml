@@ -1,0 +1,4 @@
+# UltiSideBar 语言文件
+sidebar_enabled: "UltiSideBar 已启用！"
+sidebar_disabled: "UltiSideBar 已禁用！"
+sidebar_reloaded: "UltiSideBar 配置已重载！"

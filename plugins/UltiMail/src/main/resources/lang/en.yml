@@ -1,0 +1,4 @@
+# UltiMail Language File
+mail_enabled: "UltiMail has been enabled!"
+mail_disabled: "UltiMail has been disabled!"
+mail_reloaded: "UltiMail configuration has been reloaded!"

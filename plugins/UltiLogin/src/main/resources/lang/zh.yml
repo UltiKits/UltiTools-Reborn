@@ -1,0 +1,4 @@
+# UltiLogin 语言文件
+login_enabled: "UltiLogin 已启用！"
+login_disabled: "UltiLogin 已禁用！"
+login_reloaded: "UltiLogin 配置已重载！"

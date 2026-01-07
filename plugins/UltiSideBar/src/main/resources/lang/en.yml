@@ -1,0 +1,4 @@
+# UltiSideBar Language File
+sidebar_enabled: "UltiSideBar has been enabled!"
+sidebar_disabled: "UltiSideBar has been disabled!"
+sidebar_reloaded: "UltiSideBar configuration has been reloaded!"

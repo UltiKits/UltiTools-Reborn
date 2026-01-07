@@ -1,0 +1,4 @@
+# UltiTrade Language File
+trade_enabled: "UltiTrade has been enabled!"
+trade_disabled: "UltiTrade has been disabled!"
+trade_reloaded: "UltiTrade configuration has been reloaded!"

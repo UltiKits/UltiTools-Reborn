@@ -1,0 +1,4 @@
+# UltiCleaner 语言文件
+cleaner_enabled: "UltiCleaner 已启用！"
+cleaner_disabled: "UltiCleaner 已禁用！"
+cleaner_reloaded: "UltiCleaner 配置已重载！"

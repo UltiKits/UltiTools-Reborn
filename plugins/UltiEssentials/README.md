@@ -17,7 +17,6 @@ UltiEssentials 是基于 UltiTools-API 框架开发的服务器基础功能插�
 | `/lobby` `/hub` | 传送到主城 | `ultiessentials.lobby.teleport` |
 | `/setlobby` `/sethub` | 设置主城位置 | `ultiessentials.lobby.set` |
 | `/wild` `/rtp` | 随机传送到野外 | `ultiessentials.wild` |
-| `/recall <玩家>` | 召回指定玩家到你的位置 | `ultiessentials.recall` |
 
 ### 💪 玩家状态
 | 命令 | 描述 | 权限 |
@@ -89,8 +88,6 @@ features:
     max-range: 10000       # 随机传送最大范围
     min-range: 100         # 随机传送最小范围
     cooldown: 60           # 冷却时间 (秒)
-  recall:
-    enabled: true          # 启用 /recall 召回命令
 
   # ===== 玩家状态 =====
   fly:
@@ -199,7 +196,6 @@ auto-reply:
 | `ultiessentials.lobby.teleport` | 传送到主城 | 玩家 |
 | `ultiessentials.lobby.set` | 设置主城 | OP |
 | `ultiessentials.wild` | 使用随机传送 | 玩家 |
-| `ultiessentials.recall` | 召回其他玩家 | OP |
 
 ### 玩家状态权限
 | 权限 | 描述 | 默认 |

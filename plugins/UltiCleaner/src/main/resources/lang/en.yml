@@ -1,0 +1,4 @@
+# UltiCleaner Language File
+cleaner_enabled: "UltiCleaner has been enabled!"
+cleaner_disabled: "UltiCleaner has been disabled!"
+cleaner_reloaded: "UltiCleaner configuration has been reloaded!"

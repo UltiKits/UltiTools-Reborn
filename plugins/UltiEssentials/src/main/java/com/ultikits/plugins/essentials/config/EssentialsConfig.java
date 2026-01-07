@@ -79,6 +79,246 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.auto-reply.enabled", comment = "启用自动回复")
     private boolean autoReplyEnabled = true;
 
+    // ============ Home 系统功能 ============
+    @ConfigEntry(path = "features.home.enabled", comment = "启用 /home 家系统")
+    private boolean homeEnabled = true;
+
+    @ConfigEntry(path = "features.home.default-max-homes", comment = "默认最大家数量")
+    private int homeDefaultMaxHomes = 3;
+
+    @ConfigEntry(path = "features.home.teleport-warmup", comment = "传送预热时间(秒)，0为立即传送")
+    private int homeTeleportWarmup = 3;
+
+    @ConfigEntry(path = "features.home.cancel-on-move", comment = "移动时取消传送")
+    private boolean homeCancelOnMove = true;
+
+    // ============ TPA 传送功能 ============
+    @ConfigEntry(path = "features.tpa.enabled", comment = "启用 /tpa 传送请求")
+    private boolean tpaEnabled = true;
+
+    @ConfigEntry(path = "features.tpa.timeout", comment = "传送请求超时时间(秒)")
+    private int tpaTimeout = 30;
+
+    @ConfigEntry(path = "features.tpa.cooldown", comment = "发送请求冷却时间(秒)")
+    private int tpaCooldown = 10;
+
+    @ConfigEntry(path = "features.tpa.allow-cross-world", comment = "允许跨世界传送")
+    private boolean tpaAllowCrossWorld = true;
+
+    // ============ Warp 地标功能 ============
+    @ConfigEntry(path = "features.warp.enabled", comment = "启用 /warp 地标系统")
+    private boolean warpEnabled = true;
+
+    @ConfigEntry(path = "features.warp.teleport-warmup", comment = "地标传送预热时间(秒)")
+    private int warpTeleportWarmup = 3;
+
+    // ============ Ban 封禁系统 ============
+    @ConfigEntry(path = "features.ban.enabled", comment = "启用封禁系统")
+    private boolean banEnabled = true;
+
+    @ConfigEntry(path = "features.ban.broadcast-ban", comment = "广播封禁消息")
+    private boolean banBroadcast = true;
+
+    @ConfigEntry(path = "features.ban.broadcast-unban", comment = "广播解禁消息")
+    private boolean unbanBroadcast = true;
+
+    // ============ Kit 礼包系统 ============
+    @ConfigEntry(path = "features.kit.enabled", comment = "启用礼包系统")
+    private boolean kitEnabled = true;
+
+    // ============ Scoreboard 计分板 ============
+    @ConfigEntry(path = "features.scoreboard.enabled", comment = "启用计分板功能")
+    private boolean scoreboardEnabled = true;
+
+    @ConfigEntry(path = "features.scoreboard.auto-enable", comment = "玩家进入时自动启用计分板")
+    private boolean scoreboardAutoEnable = true;
+
+    @ConfigEntry(path = "features.scoreboard.update-interval", comment = "计分板更新间隔(秒)")
+    private int scoreboardUpdateInterval = 1;
+
+    @ConfigEntry(path = "features.scoreboard.title", comment = "计分板标题 (支持PlaceholderAPI)")
+    private String scoreboardTitle = "&6&l服务器信息";
+
+    @ConfigEntry(path = "features.scoreboard.lines", comment = "计分板内容行 (支持PlaceholderAPI)")
+    private java.util.List<String> scoreboardLines = java.util.Arrays.asList(
+        "&7欢迎, &e%player_name%",
+        "&7",
+        "&6在线玩家: &f%online_players%/%max_players%",
+        "&6当前世界: &f%player_world%",
+        "&7",
+        "&6生命值: &c%player_health%",
+        "&6饥饿值: &a%player_food%",
+        "&6等级: &e%player_level%",
+        "&7",
+        "&ewww.example.com"
+    );
+
+    // ============ Chat 聊天格式 ============
+    @ConfigEntry(path = "features.chat.format-enabled", comment = "启用聊天格式化")
+    private boolean chatFormatEnabled = true;
+
+    @ConfigEntry(path = "features.chat.format", comment = "聊天格式 (支持PlaceholderAPI)")
+    private String chatFormat = "&7[&f%player_world%&7] &f{player}&7: &f{message}";
+
+    // ============ 进入/离开消息 ============
+    @ConfigEntry(path = "features.join-quit.join-message-enabled", comment = "启用自定义进入消息")
+    private boolean joinMessageEnabled = true;
+
+    @ConfigEntry(path = "features.join-quit.join-message-format", comment = "进入消息格式")
+    private String joinMessageFormat = "&a[+] &e%player_name% &7加入了服务器";
+
+    @ConfigEntry(path = "features.join-quit.quit-message-enabled", comment = "启用自定义离开消息")
+    private boolean quitMessageEnabled = true;
+
+    @ConfigEntry(path = "features.join-quit.quit-message-format", comment = "离开消息格式")
+    private String quitMessageFormat = "&c[-] &e%player_name% &7离开了服务器";
+
+    @ConfigEntry(path = "features.join-quit.welcome-message-lines", comment = "欢迎消息内容")
+    private java.util.List<String> welcomeMessageLines = java.util.Arrays.asList(
+        "&7========================================",
+        "&6欢迎来到服务器, &e%player_name%&6!",
+        "&7当前在线: &f%online_players%&7/&f%max_players%",
+        "&7输入 &e/help &7查看帮助",
+        "&7========================================"
+    );
+
+    // ============ Announcement 公告系统 ============
+    @ConfigEntry(path = "features.announcement.chat.enabled", comment = "启用聊天公告")
+    private boolean announcementChatEnabled = true;
+
+    @ConfigEntry(path = "features.announcement.chat.interval", comment = "聊天公告间隔(秒)")
+    private int announcementChatInterval = 300;
+
+    @ConfigEntry(path = "features.announcement.chat.prefix", comment = "聊天公告前缀")
+    private String announcementChatPrefix = "&6[公告] &f";
+
+    @ConfigEntry(path = "features.announcement.chat.messages", comment = "聊天公告内容列表")
+    private java.util.List<String> announcementChatMessages = java.util.Arrays.asList(
+        "欢迎来到服务器！输入 /help 查看帮助。",
+        "请遵守服务器规则，文明游戏！",
+        "有问题请联系管理员。"
+    );
+
+    @ConfigEntry(path = "features.announcement.bossbar.enabled", comment = "启用Boss栏公告")
+    private boolean announcementBossBarEnabled = false;
+
+    @ConfigEntry(path = "features.announcement.bossbar.interval", comment = "Boss栏公告间隔(秒)")
+    private int announcementBossBarInterval = 60;
+
+    @ConfigEntry(path = "features.announcement.bossbar.duration", comment = "Boss栏显示时长(秒)")
+    private int announcementBossBarDuration = 10;
+
+    @ConfigEntry(path = "features.announcement.bossbar.color", comment = "Boss栏颜色 (BLUE, GREEN, PINK, PURPLE, RED, WHITE, YELLOW)")
+    private String announcementBossBarColor = "BLUE";
+
+    @ConfigEntry(path = "features.announcement.bossbar.messages", comment = "Boss栏公告内容列表")
+    private java.util.List<String> announcementBossBarMessages = java.util.Arrays.asList(
+        "&e欢迎来到服务器!",
+        "&a请遵守服务器规则"
+    );
+
+    @ConfigEntry(path = "features.announcement.title.enabled", comment = "启用标题公告")
+    private boolean announcementTitleEnabled = false;
+
+    @ConfigEntry(path = "features.announcement.title.interval", comment = "标题公告间隔(秒)")
+    private int announcementTitleInterval = 600;
+
+    @ConfigEntry(path = "features.announcement.title.fade-in", comment = "标题淡入时间(tick)")
+    private int announcementTitleFadeIn = 10;
+
+    @ConfigEntry(path = "features.announcement.title.stay", comment = "标题停留时间(tick)")
+    private int announcementTitleStay = 70;
+
+    @ConfigEntry(path = "features.announcement.title.fade-out", comment = "标题淡出时间(tick)")
+    private int announcementTitleFadeOut = 20;
+
+    @ConfigEntry(path = "features.announcement.title.messages", comment = "标题公告内容列表 (用||分隔标题和副标题)")
+    private java.util.List<String> announcementTitleMessages = java.util.Arrays.asList(
+        "&6欢迎回来!||&7祝你游戏愉快",
+        "&c注意||&7请遵守服务器规则"
+    );
+
+    // ============ ChestLock 箱子锁 ============
+    @ConfigEntry(path = "features.chestlock.enabled", comment = "启用箱子锁功能")
+    private boolean chestLockEnabled = true;
+
+    @ConfigEntry(path = "features.chestlock.admin-bypass", comment = "管理员可以绕过锁定")
+    private boolean chestLockAdminBypass = true;
+
+    // ============ DeathPunish 死亡惩罚 ============
+    @ConfigEntry(path = "features.deathpunish.enabled", comment = "启用死亡惩罚")
+    private boolean deathPunishEnabled = false;
+
+    @ConfigEntry(path = "features.deathpunish.money.enabled", comment = "启用金币惩罚")
+    private boolean deathPunishMoneyEnabled = false;
+
+    @ConfigEntry(path = "features.deathpunish.money.percent", comment = "掉落金币百分比")
+    private double deathPunishMoneyPercent = 10.0;
+
+    @ConfigEntry(path = "features.deathpunish.money.max", comment = "最大掉落金币 (0为无限制)")
+    private double deathPunishMoneyMax = 1000.0;
+
+    @ConfigEntry(path = "features.deathpunish.item.enabled", comment = "启用物品掉落惩罚")
+    private boolean deathPunishItemDropEnabled = false;
+
+    @ConfigEntry(path = "features.deathpunish.item.drop-chance", comment = "物品掉落概率(%)")
+    private double deathPunishItemDropChance = 50.0;
+
+    @ConfigEntry(path = "features.deathpunish.item.keep-other", comment = "保留未掉落的物品")
+    private boolean deathPunishKeepOtherItems = true;
+
+    @ConfigEntry(path = "features.deathpunish.item.whitelist", comment = "物品白名单(不会掉落)")
+    private java.util.List<String> deathPunishItemWhitelist = java.util.Arrays.asList(
+        "DIAMOND_SWORD",
+        "DIAMOND_PICKAXE"
+    );
+
+    @ConfigEntry(path = "features.deathpunish.exp.enabled", comment = "启用经验惩罚")
+    private boolean deathPunishExpEnabled = false;
+
+    @ConfigEntry(path = "features.deathpunish.exp.percent", comment = "额外经验损失百分比")
+    private double deathPunishExpPercent = 20.0;
+
+    @ConfigEntry(path = "features.deathpunish.command.enabled", comment = "启用命令惩罚")
+    private boolean deathPunishCommandEnabled = false;
+
+    @ConfigEntry(path = "features.deathpunish.command.commands", comment = "死亡执行的命令 ({PLAYER}为玩家名)")
+    private java.util.List<String> deathPunishCommands = java.util.Arrays.asList(
+        "say {PLAYER} 死亡了!"
+    );
+
+    @ConfigEntry(path = "features.deathpunish.world-whitelist", comment = "不进行惩罚的世界")
+    private java.util.List<String> deathPunishWorldWhitelist = java.util.Arrays.asList(
+        "world_creative"
+    );
+
+    // ============ NamePrefix 头顶称号 ============
+    @ConfigEntry(path = "features.nameprefix.enabled", comment = "启用头顶称号")
+    private boolean namePrefixEnabled = false;
+
+    @ConfigEntry(path = "features.nameprefix.prefix-format", comment = "前缀格式 (支持PlaceholderAPI)")
+    private String namePrefixFormat = "&7[&e%vault_prefix%&7] ";
+
+    @ConfigEntry(path = "features.nameprefix.suffix-format", comment = "后缀格式 (支持PlaceholderAPI)")
+    private String nameSuffixFormat = "";
+
+    @ConfigEntry(path = "features.nameprefix.update-interval", comment = "更新间隔(秒)")
+    private int namePrefixUpdateInterval = 5;
+
+    // ============ CommandAlias 命令别名 ============
+    @ConfigEntry(path = "features.commandalias.enabled", comment = "启用命令别名")
+    private boolean commandAliasEnabled = true;
+
+    @ConfigEntry(path = "features.commandalias.aliases", comment = "命令别名映射 (别名: 原命令)")
+    private java.util.Map<String, String> commandAliases = new java.util.HashMap<String, String>() {{
+        put("gmc", "gamemode creative");
+        put("gms", "gamemode survival");
+        put("gma", "gamemode adventure");
+        put("gmsp", "gamemode spectator");
+        put("day", "time set day");
+        put("night", "time set night");
+    }};
+
     public EssentialsConfig() {
         super("config/essentials.yml");
     }
