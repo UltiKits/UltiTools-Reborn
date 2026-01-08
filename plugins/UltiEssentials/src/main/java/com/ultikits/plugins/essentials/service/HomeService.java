@@ -9,9 +9,7 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.World;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -205,19 +203,10 @@ public class HomeService {
             return TeleportResult.NOT_FOUND;
         }
         
-        World world = Bukkit.getWorld(home.getWorld());
-        if (world == null) {
+        Location targetLocation = home.toLocation();
+        if (targetLocation == null) {
             return TeleportResult.WORLD_NOT_FOUND;
         }
-        
-        Location targetLocation = new Location(
-            world, 
-            home.getX(), 
-            home.getY(), 
-            home.getZ(), 
-            home.getYaw(), 
-            home.getPitch()
-        );
         
         int warmup = config.getHomeTeleportWarmup();
         boolean skipWarmup = player.hasPermission("ultiessentials.home.nowarmup");
@@ -250,12 +239,7 @@ public class HomeService {
     }
     
     private void updateHomeLocation(HomeData home, Location loc) {
-        home.setWorld(loc.getWorld().getName());
-        home.setX(loc.getX());
-        home.setY(loc.getY());
-        home.setZ(loc.getZ());
-        home.setYaw(loc.getYaw());
-        home.setPitch(loc.getPitch());
+        home.fromLocation(loc);
     }
     
     public enum SetHomeResult {

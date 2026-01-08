@@ -9,9 +9,7 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.World;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -183,19 +181,10 @@ public class WarpService {
             return TeleportResult.NO_PERMISSION;
         }
         
-        World world = Bukkit.getWorld(warp.getWorld());
-        if (world == null) {
+        Location targetLocation = warp.toLocation();
+        if (targetLocation == null) {
             return TeleportResult.WORLD_NOT_FOUND;
         }
-        
-        Location targetLocation = new Location(
-            world,
-            warp.getX(),
-            warp.getY(),
-            warp.getZ(),
-            warp.getYaw(),
-            warp.getPitch()
-        );
         
         int warmup = config.getWarpTeleportWarmup();
         boolean skipWarmup = player.hasPermission("ultiessentials.warp.nowarmup");

@@ -1,8 +1,8 @@
 package com.ultikits.plugins.essentials.entity;
 
+import com.ultikits.plugins.essentials.entity.base.LocationDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
-import com.ultikits.ultitools.entities.BaseDataEntity;
 import lombok.*;
 
 import java.util.UUID;
@@ -16,12 +16,10 @@ import java.util.UUID;
  * @version 1.0.0
  */
 @Data
-@Builder
 @NoArgsConstructor
-@AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("essentials_homes")
-public class HomeData extends BaseDataEntity<UUID> {
+public class HomeData extends LocationDataEntity {
     
     @Column("uuid")
     private UUID uuid;
@@ -32,26 +30,18 @@ public class HomeData extends BaseDataEntity<UUID> {
     @Column("name")
     private String name;
     
-    @Column("world")
-    private String world;
-    
-    @Column("x")
-    private double x;
-    
-    @Column("y")
-    private double y;
-    
-    @Column("z")
-    private double z;
-    
-    @Column("yaw")
-    private float yaw;
-    
-    @Column("pitch")
-    private float pitch;
-    
     @Column("created_at")
     private long createdAt;
+    
+    @Builder
+    public HomeData(UUID uuid, String playerUuid, String name, String world,
+                    double x, double y, double z, float yaw, float pitch, long createdAt) {
+        super(world, x, y, z, yaw, pitch);
+        this.uuid = uuid;
+        this.playerUuid = playerUuid;
+        this.name = name;
+        this.createdAt = createdAt;
+    }
     
     @Override
     public UUID getId() {
