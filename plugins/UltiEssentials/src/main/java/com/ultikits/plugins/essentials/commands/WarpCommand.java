@@ -1,6 +1,7 @@
 package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.UltiEssentials;
+import com.ultikits.plugins.essentials.enums.TeleportResult;
 import com.ultikits.plugins.essentials.service.WarpService;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
@@ -30,7 +31,7 @@ public class WarpCommand extends AbstractCommandExecutor {
     
     @CmdMapping(format = "<name>")
     public void warp(@CmdSender Player player, @CmdParam("name") String name) {
-        WarpService.TeleportResult result = warpService.teleportToWarp(player, name);
+        TeleportResult result = warpService.teleportToWarp(player, name);
         
         switch (result) {
             case SUCCESS:

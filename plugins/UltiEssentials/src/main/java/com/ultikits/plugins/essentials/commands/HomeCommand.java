@@ -2,6 +2,7 @@ package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.HomeData;
+import com.ultikits.plugins.essentials.enums.TeleportResult;
 import com.ultikits.plugins.essentials.service.HomeService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
@@ -37,9 +38,9 @@ public class HomeCommand extends BaseEssentialsCommand {
         }
         
         // Try default home first
-        HomeService.TeleportResult result = homeService.teleportToHome(player, "home");
+        TeleportResult result = homeService.teleportToHome(player, "home");
         
-        if (result == HomeService.TeleportResult.NOT_FOUND) {
+        if (result == TeleportResult.NOT_FOUND) {
             // Try first home
             List<HomeData> homes = homeService.getHomes(player.getUniqueId());
             if (homes.isEmpty()) {
@@ -62,11 +63,11 @@ public class HomeCommand extends BaseEssentialsCommand {
             return;
         }
         
-        HomeService.TeleportResult result = homeService.teleportToHome(player, name);
+        TeleportResult result = homeService.teleportToHome(player, name);
         handleTeleportResult(player, result);
     }
     
-    private void handleTeleportResult(Player player, HomeService.TeleportResult result) {
+    private void handleTeleportResult(Player player, TeleportResult result) {
         switch (result) {
             case SUCCESS:
                 player.sendMessage(i18n("传送成功！"));

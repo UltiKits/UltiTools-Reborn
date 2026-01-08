@@ -3,7 +3,7 @@ package com.ultikits.plugins.essentials.service;
 import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.HomeData;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.plugins.essentials.enums.TeleportResult;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -13,12 +13,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.scheduler.BukkitTask;
 
 import javax.annotation.Nullable;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for managing player homes.
@@ -35,13 +32,10 @@ public class HomeService {
     @Autowired
     private EssentialsConfig config;
     
+    @Autowired
+    private TeleportService teleportService;
+    
     private DataOperator<HomeData> homeOperator;
-    
-    // 传送中的玩家 (防止重复传送)
-    private final Map<UUID, BukkitTask> pendingTeleports = new ConcurrentHashMap<>();
-    
-    // 传送前的位置 (用于取消传送时的移动检测)
-    private final Map<UUID, Location> teleportStartLocations = new ConcurrentHashMap<>();
     
     /**
      * Initializes the service with the data operator.
@@ -202,7 +196,7 @@ public class HomeService {
         }
         
         // Check if already teleporting
-        if (pendingTeleports.containsKey(player.getUniqueId())) {
+        if (teleportService.isTeleporting(player.getUniqueId())) {
             return TeleportResult.ALREADY_TELEPORTING;
         }
         
@@ -226,88 +220,33 @@ public class HomeService {
         );
         
         int warmup = config.getHomeTeleportWarmup();
+        boolean skipWarmup = player.hasPermission("ultiessentials.home.nowarmup");
         
-        if (warmup <= 0 || player.hasPermission("ultiessentials.home.nowarmup")) {
-            // Instant teleport
-            player.teleport(targetLocation);
-            return TeleportResult.SUCCESS;
-        }
-        
-        // Warmup teleport
-        return startWarmupTeleport(player, targetLocation, warmup);
+        return teleportService.teleport(
+            player, 
+            targetLocation, 
+            skipWarmup ? 0 : warmup, 
+            config.isHomeCancelOnMove()
+        );
     }
     
     /**
-     * Starts a warmup teleport.
-     */
-    private TeleportResult startWarmupTeleport(Player player, Location target, int warmupSeconds) {
-        UUID uuid = player.getUniqueId();
-        
-        // Store start location for movement detection
-        teleportStartLocations.put(uuid, player.getLocation().clone());
-        
-        BukkitTask task = new BukkitRunnable() {
-            int countdown = warmupSeconds;
-            
-            @Override
-            public void run() {
-                if (!player.isOnline()) {
-                    cancelTeleport(uuid);
-                    cancel();
-                    return;
-                }
-                
-                // Check movement
-                if (config.isHomeCancelOnMove()) {
-                    Location startLoc = teleportStartLocations.get(uuid);
-                    if (startLoc != null && hasMovedTooFar(player.getLocation(), startLoc)) {
-                        player.sendMessage(UltiEssentials.getInstance().i18n("传送已取消：你移动了"));
-                        cancelTeleport(uuid);
-                        cancel();
-                        return;
-                    }
-                }
-                
-                if (countdown <= 0) {
-                    player.teleport(target);
-                    player.sendMessage(UltiEssentials.getInstance().i18n("传送成功！"));
-                    cancelTeleport(uuid);
-                    cancel();
-                    return;
-                }
-                
-                player.sendMessage(UltiEssentials.getInstance().i18n("传送中...") + " " + countdown + "s");
-                countdown--;
-            }
-        }.runTaskTimer(UltiTools.getInstance(), 0L, 20L);
-        
-        pendingTeleports.put(uuid, task);
-        return TeleportResult.WARMUP_STARTED;
-    }
-    
-    /**
-     * Cancels a pending teleport.
+     * Cancels a pending teleport for a player.
+     *
+     * @param uuid the player's UUID
      */
     public void cancelTeleport(UUID uuid) {
-        BukkitTask task = pendingTeleports.remove(uuid);
-        if (task != null) {
-            task.cancel();
-        }
-        teleportStartLocations.remove(uuid);
+        teleportService.cancelTeleport(uuid);
     }
     
     /**
      * Checks if a player is currently teleporting.
+     *
+     * @param uuid the player's UUID
+     * @return true if teleporting
      */
     public boolean isTeleporting(UUID uuid) {
-        return pendingTeleports.containsKey(uuid);
-    }
-    
-    private boolean hasMovedTooFar(Location current, Location start) {
-        if (!Objects.equals(current.getWorld(), start.getWorld())) {
-            return true;
-        }
-        return current.distanceSquared(start) > 1; // More than 1 block
+        return teleportService.isTeleporting(uuid);
     }
     
     private void updateHomeLocation(HomeData home, Location loc) {
@@ -324,15 +263,6 @@ public class HomeService {
         UPDATED,
         LIMIT_REACHED,
         INVALID_NAME,
-        DISABLED
-    }
-    
-    public enum TeleportResult {
-        SUCCESS,
-        WARMUP_STARTED,
-        NOT_FOUND,
-        WORLD_NOT_FOUND,
-        ALREADY_TELEPORTING,
         DISABLED
     }
 }
