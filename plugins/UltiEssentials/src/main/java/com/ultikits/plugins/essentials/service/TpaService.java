@@ -12,7 +12,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 

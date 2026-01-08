@@ -16,7 +16,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;

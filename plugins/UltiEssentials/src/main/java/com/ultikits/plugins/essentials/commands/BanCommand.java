@@ -1,7 +1,8 @@
 package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.service.BanService;
-import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;

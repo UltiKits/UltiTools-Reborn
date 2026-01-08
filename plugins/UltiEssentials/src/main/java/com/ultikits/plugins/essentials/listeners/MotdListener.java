@@ -2,6 +2,7 @@ package com.ultikits.plugins.essentials.listeners;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.config.MotdConfig;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.ChatColor;
 import org.bukkit.event.EventHandler;
@@ -14,13 +15,11 @@ import org.bukkit.event.server.ServerListPingEvent;
 @EventListener
 public class MotdListener implements Listener {
 
-    private final EssentialsConfig config;
-    private final MotdConfig motdConfig;
-
-    public MotdListener(EssentialsConfig config, MotdConfig motdConfig) {
-        this.config = config;
-        this.motdConfig = motdConfig;
-    }
+    @Autowired
+    private EssentialsConfig config;
+    
+    @Autowired
+    private MotdConfig motdConfig;
 
     @EventHandler
     public void onServerListPing(ServerListPingEvent event) {

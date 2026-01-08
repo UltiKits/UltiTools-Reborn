@@ -17,7 +17,7 @@ import org.bukkit.util.io.BukkitObjectOutputStream;
 import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

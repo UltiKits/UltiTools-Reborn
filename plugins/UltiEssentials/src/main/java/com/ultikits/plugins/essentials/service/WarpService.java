@@ -13,7 +13,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.util.*;
 
 /**

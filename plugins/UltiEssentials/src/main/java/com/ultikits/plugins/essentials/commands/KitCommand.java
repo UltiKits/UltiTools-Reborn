@@ -2,7 +2,8 @@ package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.entity.KitData;
 import com.ultikits.plugins.essentials.service.KitService;
-import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.entity.Player;
 
 import java.util.List;

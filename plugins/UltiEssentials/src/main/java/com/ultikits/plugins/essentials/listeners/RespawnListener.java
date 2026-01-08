@@ -2,6 +2,7 @@ package com.ultikits.plugins.essentials.listeners;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.config.SpawnConfig;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -13,13 +14,11 @@ import org.bukkit.event.player.PlayerRespawnEvent;
 @EventListener
 public class RespawnListener implements Listener {
 
-    private final EssentialsConfig config;
-    private final SpawnConfig spawnConfig;
-
-    public RespawnListener(EssentialsConfig config, SpawnConfig spawnConfig) {
-        this.config = config;
-        this.spawnConfig = spawnConfig;
-    }
+    @Autowired
+    private EssentialsConfig config;
+    
+    @Autowired
+    private SpawnConfig spawnConfig;
 
     @EventHandler
     public void onPlayerRespawn(PlayerRespawnEvent event) {

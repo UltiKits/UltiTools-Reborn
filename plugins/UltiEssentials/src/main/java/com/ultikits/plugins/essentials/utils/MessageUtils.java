@@ -1,10 +1,10 @@
 package com.ultikits.plugins.essentials.utils;
 
+import javax.annotation.Nullable;
+
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
-
-import javax.annotation.Nullable;
 
 /**
  * Utility class for message formatting and sending.

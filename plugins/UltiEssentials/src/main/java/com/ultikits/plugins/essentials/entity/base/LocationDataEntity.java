@@ -1,16 +1,19 @@
 package com.ultikits.plugins.essentials.entity.base;
 
-import com.ultikits.ultitools.annotations.Column;
-import com.ultikits.ultitools.entities.BaseDataEntity;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.NoArgsConstructor;
+import java.util.UUID;
+
+import javax.annotation.Nullable;
+
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 
-import javax.annotation.Nullable;
-import java.util.UUID;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.annotations.Column;
+
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 
 /**
  * Base entity for data that contains location information.

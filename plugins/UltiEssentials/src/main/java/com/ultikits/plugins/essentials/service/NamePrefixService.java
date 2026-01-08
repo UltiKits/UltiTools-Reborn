@@ -15,7 +15,7 @@ import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.util.*;
 
 /**

@@ -2,7 +2,8 @@ package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.entity.ChestLockData;
 import com.ultikits.plugins.essentials.service.ChestLockService;
-import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 

@@ -18,7 +18,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.InventoryHolder;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 

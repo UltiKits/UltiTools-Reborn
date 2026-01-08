@@ -28,6 +28,7 @@ public class WildCommand extends BaseEssentialsCommand {
 
     @CmdMapping(format = "")
     @CmdCD(60) // 60 seconds cooldown
+    @RunAsync  // World chunk loading can be slow
     public void wildTeleport(@CmdSender Player player) {
         if (!config.isWildEnabled()) {
             player.sendMessage(i18n("该功能已禁用"));

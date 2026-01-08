@@ -2,6 +2,7 @@ package com.ultikits.plugins.essentials.listeners;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.config.TabBarConfig;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -16,13 +17,11 @@ import org.bukkit.event.player.PlayerJoinEvent;
 @EventListener
 public class TabBarListener implements Listener {
 
-    private final EssentialsConfig config;
-    private final TabBarConfig tabBarConfig;
-
-    public TabBarListener(EssentialsConfig config, TabBarConfig tabBarConfig) {
-        this.config = config;
-        this.tabBarConfig = tabBarConfig;
-    }
+    @Autowired
+    private EssentialsConfig config;
+    
+    @Autowired
+    private TabBarConfig tabBarConfig;
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {

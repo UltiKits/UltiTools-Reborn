@@ -1,7 +1,8 @@
 package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.service.ScoreboardService;
-import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.entity.Player;
 
 /**

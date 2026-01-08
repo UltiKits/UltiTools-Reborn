@@ -2,6 +2,7 @@ package com.ultikits.plugins.essentials.listeners;
 
 import com.ultikits.plugins.essentials.config.AutoReplyConfig;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
@@ -25,13 +26,11 @@ public class AutoReplyListener implements Listener {
      */
     private static final Map<UUID, Long> LAST_REPLY_TIME = new ConcurrentHashMap<>();
 
-    private final EssentialsConfig config;
-    private final AutoReplyConfig autoReplyConfig;
-
-    public AutoReplyListener(EssentialsConfig config, AutoReplyConfig autoReplyConfig) {
-        this.config = config;
-        this.autoReplyConfig = autoReplyConfig;
-    }
+    @Autowired
+    private EssentialsConfig config;
+    
+    @Autowired
+    private AutoReplyConfig autoReplyConfig;
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerChat(AsyncPlayerChatEvent event) {
