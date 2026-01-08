@@ -79,17 +79,17 @@ public class BanListCommand extends BaseEssentialsCommand {
                 " §7于 " + DATE_FORMAT.format(new Date(ban.getBanTime())));
         }
         
-        sender.sendMessage(UltiEssentials.getInstance().i18n("§7共 ") + allBans.size() + 
-            UltiEssentials.getInstance().i18n(" 个活跃封禁"));
+        sender.sendMessage(i18n("§7共 ") + allBans.size() + 
+            i18n(" 个活跃封禁"));
         
         if (totalPages > 1) {
-            sender.sendMessage(UltiEssentials.getInstance().i18n("§7使用 /banlist <页码> 查看更多"));
+            sender.sendMessage(i18n("§7使用 /banlist <页码> 查看更多"));
         }
     }
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(UltiEssentials.getInstance().i18n("用法: /banlist [页码]"));
-        sender.sendMessage(UltiEssentials.getInstance().i18n("查看当前活跃的封禁列表"));
+        sender.sendMessage(i18n("用法: /banlist [页码]"));
+        sender.sendMessage(i18n("查看当前活跃的封禁列表"));
     }
 }

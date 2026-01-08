@@ -157,7 +157,7 @@ public class BackupService {
         if (backup == null) {
             return false;
         }
-        dataOperator.delete(backup);
+        dataOperator.delById(backup.getId());
         return true;
     }
     
@@ -167,7 +167,7 @@ public class BackupService {
     public boolean deleteBackup(String id) {
         BackupData backup = dataOperator.getById(id);
         if (backup != null) {
-            dataOperator.delete(backup);
+            dataOperator.delById(id);
             return true;
         }
         return false;
@@ -195,7 +195,7 @@ public class BackupService {
         if (backups.size() > config.getMaxBackupsPerPlayer()) {
             // Remove oldest backups
             for (int i = config.getMaxBackupsPerPlayer(); i < backups.size(); i++) {
-                dataOperator.delete(backups.get(i));
+                dataOperator.delById(backups.get(i).getId());
             }
         }
     }

@@ -4,6 +4,7 @@ import com.ultikits.plugins.essentials.service.ChestLockService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.block.Block;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -56,8 +57,8 @@ public class LockCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(i18n("用法: /lock"));
-        player.sendMessage(i18n("看向一个容器并使用此命令来锁定它"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /lock"));
+        sender.sendMessage(i18n("看向一个容器并使用此命令来锁定它"));
     }
 }

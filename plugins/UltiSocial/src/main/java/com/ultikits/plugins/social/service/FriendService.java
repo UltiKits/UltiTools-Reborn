@@ -230,7 +230,7 @@ public class FriendService {
         }
         
         // Remove bidirectional
-        dataOperator.delete(toRemove);
+        dataOperator.delById(toRemove.getId());
         
         // Remove reverse friendship
         List<FriendshipData> reverseFriends = dataOperator.getAll(
@@ -238,7 +238,7 @@ public class FriendService {
             WhereCondition.builder().column("friend_uuid").value(playerUuid.toString()).build()
         );
         for (FriendshipData reverse : reverseFriends) {
-            dataOperator.delete(reverse);
+            dataOperator.delById(reverse.getId());
         }
         
         // Clear cache
@@ -321,7 +321,11 @@ public class FriendService {
         for (FriendshipData friend : friends) {
             if (friend.getFriendName().equalsIgnoreCase(friendName)) {
                 friend.setFavorite(!friend.isFavorite());
-                dataOperator.update(friend);
+                try {
+                    dataOperator.update(friend);
+                } catch (IllegalAccessException e) {
+                    UltiSocial.getInstance().getLogger().error("Failed to update friend data", e);
+                }
                 friendCache.remove(playerUuid);
                 break;
             }
@@ -336,7 +340,11 @@ public class FriendService {
         for (FriendshipData friend : friends) {
             if (friend.getFriendName().equalsIgnoreCase(friendName)) {
                 friend.setNickname(nickname);
-                dataOperator.update(friend);
+                try {
+                    dataOperator.update(friend);
+                } catch (IllegalAccessException e) {
+                    UltiSocial.getInstance().getLogger().error("Failed to update friend data", e);
+                }
                 friendCache.remove(playerUuid);
                 break;
             }

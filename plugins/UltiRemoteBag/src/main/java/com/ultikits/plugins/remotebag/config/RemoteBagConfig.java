@@ -1,11 +1,11 @@
 package com.ultikits.plugins.remotebag.config;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
-import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntry;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * Remote Bag configuration.
@@ -13,10 +13,14 @@ import lombok.EqualsAndHashCode;
  * @author wisdomme
  * @version 1.0.0
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
-@ConfigEntity(path = "config/remotebag.yml")
+@Getter
+@Setter
+@ConfigEntity("config/remotebag.yml")
 public class RemoteBagConfig extends AbstractConfigEntity {
+    
+    public RemoteBagConfig(String configFilePath) {
+        super(configFilePath);
+    }
     
     @ConfigEntry(path = "default_pages", comment = "Default number of bag pages for new players")
     private int defaultPages = 1;

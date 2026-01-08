@@ -1,17 +1,21 @@
 package com.ultikits.ultitools.abstracts.data;
 
+import java.io.Serializable;
+
+import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
+
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-
-import java.io.Serializable;
 
 /**
  * Enhanced abstract data entity with generic ID type and lifecycle hooks.
  * Provides a type-safe foundation for persistent data entities.
+ * Extends {@link AbstractDataEntity} to maintain compatibility with existing data operators.
  * <p>
  * 带有泛型 ID 类型和生命周期钩子的增强型抽象数据实体。
  * 为持久化数据实体提供类型安全的基础。
+ * 继承 {@link AbstractDataEntity} 以保持与现有数据操作器的兼容性。
  *
  * @param <ID> the type of the entity identifier
  * @author wisdomme
@@ -19,8 +23,8 @@ import java.io.Serializable;
  * @since 6.2.0
  */
 @Data
-@EqualsAndHashCode(of = "id")
-public abstract class BaseDataEntity<ID extends Serializable> implements Serializable {
+@EqualsAndHashCode(callSuper = false)
+public abstract class BaseDataEntity<ID extends Serializable> extends AbstractDataEntity implements Serializable {
     
     private static final long serialVersionUID = 1L;
     

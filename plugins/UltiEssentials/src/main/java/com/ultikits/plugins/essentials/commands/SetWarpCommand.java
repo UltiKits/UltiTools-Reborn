@@ -3,6 +3,7 @@ package com.ultikits.plugins.essentials.commands;
 import com.ultikits.plugins.essentials.service.WarpService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -64,9 +65,9 @@ public class SetWarpCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(i18n("用法: /setwarp <名称> [权限]"));
-        player.sendMessage(i18n("在当前位置创建一个地标点"));
-        player.sendMessage(i18n("可选：指定访问此地标所需的权限"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /setwarp <名称> [权限]"));
+        sender.sendMessage(i18n("在当前位置创建一个地标点"));
+        sender.sendMessage(i18n("可选：指定访问此地标所需的权限"));
     }
 }

@@ -3,10 +3,11 @@ package com.ultikits.plugins.login.service;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.impl.data.WhereCondition;
+import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -64,7 +65,7 @@ public class LoginService {
         
         // Start timeout check task
         timeoutTask = Bukkit.getScheduler().runTaskTimer(
-            UltiLogin.getInstance().getPluginInstance(),
+            UltiTools.getInstance(),
             this::checkTimeouts,
             20L, 20L // Every second
         );
@@ -170,7 +171,11 @@ public class LoginService {
         account.setLastIp(ip);
         account.setLastLogin(System.currentTimeMillis());
         account.setLoginCount(account.getLoginCount() + 1);
-        dataOperator.update(account);
+        try {
+            dataOperator.update(account);
+        } catch (IllegalAccessException e) {
+            UltiLogin.getInstance().getLogger().error("Failed to update account", e);
+        }
         
         // Create session
         if (config.isSessionEnabled()) {
@@ -326,7 +331,12 @@ public class LoginService {
         
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        dataOperator.update(account);
+        try {
+            dataOperator.update(account);
+        } catch (IllegalAccessException e) {
+            UltiLogin.getInstance().getLogger().error("Failed to update account", e);
+            return false;
+        }
         
         return true;
     }

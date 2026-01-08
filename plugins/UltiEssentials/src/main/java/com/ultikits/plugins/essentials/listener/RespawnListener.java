@@ -1,4 +1,4 @@
-package com.ultikits.plugins.essentials.listeners;
+package com.ultikits.plugins.essentials.listener;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.config.SpawnConfig;

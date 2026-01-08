@@ -166,7 +166,11 @@ public class BanService implements Listener {
         
         for (BanData ban : activeBans) {
             ban.setActive(false);
-            banOperator.update(ban);
+            try {
+                banOperator.update(ban);
+            } catch (IllegalAccessException e) {
+                log.error("Failed to update ban record", e);
+            }
         }
         
         return true;
@@ -194,7 +198,11 @@ public class BanService implements Listener {
         
         for (BanData ban : activeBans) {
             ban.setActive(false);
-            banOperator.update(ban);
+            try {
+                banOperator.update(ban);
+            } catch (IllegalAccessException e) {
+                log.error("Failed to update ban record", e);
+            }
         }
         
         return true;
@@ -222,7 +230,11 @@ public class BanService implements Listener {
         
         for (BanData ban : ipBans) {
             ban.setActive(false);
-            banOperator.update(ban);
+            try {
+                banOperator.update(ban);
+            } catch (IllegalAccessException e) {
+                log.error("Failed to update ban record", e);
+            }
         }
         
         return true;

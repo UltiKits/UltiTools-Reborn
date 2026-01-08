@@ -10,6 +10,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.World;
 import org.bukkit.WorldType;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
@@ -210,6 +211,13 @@ public class WorldCommand extends AbstractCommendExecutor {
             player.sendMessage(ChatColor.YELLOW + "/world unload <名称>" + ChatColor.WHITE + " - 卸载世界");
             player.sendMessage(ChatColor.YELLOW + "/world delete <名称>" + ChatColor.WHITE + " - 删除世界");
             player.sendMessage(ChatColor.YELLOW + "/world setspawn" + ChatColor.WHITE + " - 设置出生点");
+        }
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        if (sender instanceof Player) {
+            help((Player) sender);
         }
     }
 }

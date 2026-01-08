@@ -6,6 +6,7 @@ import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
@@ -163,12 +164,17 @@ public class MailCommand extends AbstractCommendExecutor {
     
     @CmdMapping(format = "")
     public void help(@CmdSender Player player) {
-        player.sendMessage(ChatColor.GOLD + "=== UltiMail 帮助 ===");
-        player.sendMessage(ChatColor.YELLOW + "/mail inbox" + ChatColor.WHITE + " - 查看收件箱");
-        player.sendMessage(ChatColor.YELLOW + "/mail sent" + ChatColor.WHITE + " - 查看发件箱");
-        player.sendMessage(ChatColor.YELLOW + "/mail read <编号>" + ChatColor.WHITE + " - 阅读邮件");
-        player.sendMessage(ChatColor.YELLOW + "/mail claim <编号>" + ChatColor.WHITE + " - 领取附件");
-        player.sendMessage(ChatColor.YELLOW + "/mail delete <编号>" + ChatColor.WHITE + " - 删除邮件");
-        player.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送邮件");
+        handleHelp(player);
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.GOLD + "=== UltiMail 帮助 ===");
+        sender.sendMessage(ChatColor.YELLOW + "/mail inbox" + ChatColor.WHITE + " - 查看收件箱");
+        sender.sendMessage(ChatColor.YELLOW + "/mail sent" + ChatColor.WHITE + " - 查看发件箱");
+        sender.sendMessage(ChatColor.YELLOW + "/mail read <编号>" + ChatColor.WHITE + " - 阅读邮件");
+        sender.sendMessage(ChatColor.YELLOW + "/mail claim <编号>" + ChatColor.WHITE + " - 领取附件");
+        sender.sendMessage(ChatColor.YELLOW + "/mail delete <编号>" + ChatColor.WHITE + " - 删除邮件");
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送邮件");
     }
 }

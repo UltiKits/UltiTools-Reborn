@@ -1,7 +1,13 @@
 package com.ultikits.ultitools.utils;
 
-import com.ultikits.libs.xseries.XEnchantment;
-import com.ultikits.libs.xseries.XMaterial;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import javax.annotation.Nullable;
+
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
@@ -13,8 +19,8 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.LeatherArmorMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
-import javax.annotation.Nullable;
-import java.util.*;
+import com.cryptomorin.xseries.XEnchantment;
+import com.cryptomorin.xseries.XMaterial;
 
 /**
  * A fluent builder for creating ItemStacks with various properties.
@@ -259,7 +265,10 @@ public class ItemStackBuilder {
      */
     public ItemStackBuilder glow() {
         if (itemMeta != null) {
-            itemMeta.addEnchant(Enchantment.LUCK_OF_THE_SEA, 1, true);
+            Enchantment glowEnchant = XEnchantment.LUCK_OF_THE_SEA.getEnchant();
+            if (glowEnchant != null) {
+                itemMeta.addEnchant(glowEnchant, 1, true);
+            }
             itemMeta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
         }
         return this;

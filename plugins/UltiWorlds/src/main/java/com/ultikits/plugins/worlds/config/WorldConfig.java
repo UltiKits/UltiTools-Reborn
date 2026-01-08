@@ -7,8 +7,8 @@ import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * World management configuration.
@@ -16,10 +16,14 @@ import lombok.EqualsAndHashCode;
  * @author wisdomme
  * @version 1.0.0
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
-@ConfigEntity(path = "config/worlds.yml")
+@Getter
+@Setter
+@ConfigEntity("config/worlds.yml")
 public class WorldConfig extends AbstractConfigEntity {
+    
+    public WorldConfig(String configFilePath) {
+        super(configFilePath);
+    }
     
     @ConfigEntry(path = "default_world", comment = "Default world name")
     private String defaultWorld = "world";

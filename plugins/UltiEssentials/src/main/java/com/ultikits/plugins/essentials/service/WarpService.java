@@ -153,7 +153,7 @@ public class WarpService {
         if (warp == null) {
             return false;
         }
-        warpOperator.delete(warp);
+        warpOperator.delById(warp.getId());
         return true;
     }
     

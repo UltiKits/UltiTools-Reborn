@@ -205,7 +205,7 @@ public class ChestLockService {
         }
         
         // Remove lock
-        lockOperator.delete(lock);
+        lockOperator.delById(lock.getId());
         lockCache.remove(lock.getLocationKey());
         
         // If it's a double chest, unlock the other half too
@@ -241,7 +241,7 @@ public class ChestLockService {
         
         ChestLockData otherLock = getLock(other);
         if (otherLock != null) {
-            lockOperator.delete(otherLock);
+            lockOperator.delById(otherLock.getId());
             lockCache.remove(otherLock.getLocationKey());
         }
     }
@@ -296,7 +296,7 @@ public class ChestLockService {
     public void onBlockBreak(Location location) {
         ChestLockData lock = getLock(location);
         if (lock != null) {
-            lockOperator.delete(lock);
+            lockOperator.delById(lock.getId());
             lockCache.remove(lock.getLocationKey());
         }
     }

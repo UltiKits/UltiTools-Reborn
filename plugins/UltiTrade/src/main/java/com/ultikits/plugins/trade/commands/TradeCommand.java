@@ -6,6 +6,7 @@ import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -70,5 +71,12 @@ public class TradeCommand extends AbstractCommendExecutor {
         player.sendMessage(ChatColor.YELLOW + "/trade accept" + ChatColor.WHITE + " - 接受交易请求");
         player.sendMessage(ChatColor.YELLOW + "/trade deny" + ChatColor.WHITE + " - 拒绝交易请求");
         player.sendMessage(ChatColor.YELLOW + "/trade cancel" + ChatColor.WHITE + " - 取消当前交易");
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        if (sender instanceof Player) {
+            help((Player) sender);
+        }
     }
 }

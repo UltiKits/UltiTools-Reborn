@@ -5,7 +5,8 @@ import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
@@ -70,7 +71,7 @@ public class RecallCommand extends AbstractCommandExecutor {
         sender.sendMessage(ChatColor.YELLOW + "正在发送召回通知...");
         
         // Run async to avoid blocking main thread
-        Bukkit.getScheduler().runTaskAsynchronously(UltiMail.getInstance().getPluginInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
             int[] results = sendRecallNotifications(sender.getName(), message);
             int totalPlayers = results[0];
             int gameMails = results[1];
@@ -78,7 +79,7 @@ public class RecallCommand extends AbstractCommandExecutor {
             int failed = results[3];
             
             // Send result back on main thread
-            Bukkit.getScheduler().runTask(UltiMail.getInstance().getPluginInstance(), () -> {
+            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
                 sender.sendMessage(ChatColor.GREEN + "召回通知发送完成！");
                 sender.sendMessage(ChatColor.AQUA + "共找到 " + ChatColor.WHITE + totalPlayers + ChatColor.AQUA + " 名注册玩家");
                 sender.sendMessage(ChatColor.AQUA + "游戏内邮件: " + ChatColor.WHITE + gameMails + ChatColor.AQUA + " 封");
@@ -138,7 +139,7 @@ public class RecallCommand extends AbstractCommandExecutor {
                     emails.incrementAndGet();
                 } catch (Exception e) {
                     // Email failed, but game mail may have succeeded
-                    UltiMail.getInstance().getPluginInstance().getLogger().warning(
+                    UltiMail.getInstance().getLogger().warn(
                         "Failed to send email to " + playerInfo.email + ": " + e.getMessage()
                     );
                 }
@@ -292,7 +293,7 @@ public class RecallCommand extends AbstractCommandExecutor {
             }
         } catch (Exception e) {
             // UltiLogin not available, fall back to mail data
-            UltiMail.getInstance().getPluginInstance().getLogger().info(
+            UltiMail.getInstance().getLogger().info(
                 "UltiLogin not found, using mail data to find registered players"
             );
         }
@@ -337,5 +338,12 @@ public class RecallCommand extends AbstractCommandExecutor {
             this.name = name;
             this.email = email;
         }
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.GOLD + "=== 召回系统帮助 ===");
+        sender.sendMessage(ChatColor.YELLOW + "/recall" + ChatColor.WHITE + " - 发送默认召回消息");
+        sender.sendMessage(ChatColor.YELLOW + "/recall [自定义消息]" + ChatColor.WHITE + " - 发送自定义召回消息");
     }
 }

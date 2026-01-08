@@ -163,7 +163,7 @@ public class KitService {
         if (kit == null) {
             return false;
         }
-        kitOperator.delete(kit);
+        kitOperator.delById(kit.getId());
         return true;
     }
     
@@ -279,7 +279,11 @@ public class KitService {
         if (existing != null) {
             existing.setLastClaim(System.currentTimeMillis());
             existing.setClaimCount(existing.getClaimCount() + 1);
-            claimOperator.update(existing);
+            try {
+                claimOperator.update(existing);
+            } catch (IllegalAccessException e) {
+                log.error("Failed to update kit claim data", e);
+            }
         } else {
             KitClaimData claim = KitClaimData.builder()
                 .uuid(UUID.randomUUID())

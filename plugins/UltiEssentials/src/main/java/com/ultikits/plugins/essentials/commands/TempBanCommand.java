@@ -5,6 +5,7 @@ import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -99,7 +100,7 @@ public class TempBanCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected List<String> suggest(Player player, String[] args) {
+    protected List<String> suggest(Player player, Command command, String[] args) {
         if (args.length == 1) {
             return Bukkit.getOnlinePlayers().stream()
                 .map(Player::getName)
@@ -109,6 +110,6 @@ public class TempBanCommand extends BaseEssentialsCommand {
         if (args.length == 2) {
             return java.util.Arrays.asList("1h", "6h", "12h", "1d", "3d", "7d", "30d", "1w");
         }
-        return super.suggest(player, args);
+        return super.suggest(player, command, args);
     }
 }

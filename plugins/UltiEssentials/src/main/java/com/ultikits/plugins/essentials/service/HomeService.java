@@ -136,7 +136,11 @@ public class HomeService {
         if (existingHome != null) {
             // Update existing home
             updateHomeLocation(existingHome, player.getLocation());
-            homeOperator.update(existingHome);
+            try {
+                homeOperator.update(existingHome);
+            } catch (IllegalAccessException e) {
+                log.error("Failed to update home", e);
+            }
             return SetHomeResult.UPDATED;
         }
         
@@ -179,7 +183,7 @@ public class HomeService {
         if (home == null) {
             return false;
         }
-        homeOperator.delete(home);
+        homeOperator.delById(home.getId());
         return true;
     }
     

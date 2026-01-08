@@ -3,6 +3,7 @@ package com.ultikits.plugins.essentials.commands;
 import com.ultikits.plugins.essentials.service.KitService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
@@ -102,10 +103,10 @@ public class CreateKitCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /createkit <名称> [冷却秒数] [权限]"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("从你的背包物品创建一个礼包"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("§7冷却: 数字(秒)，'onetime' 或 '-1' 表示一次性礼包"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("§7示例: /createkit starter 3600 ultiessentials.kit.starter"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /createkit <名称> [冷却秒数] [权限]"));
+        sender.sendMessage(i18n("从你的背包物品创建一个礼包"));
+        sender.sendMessage(i18n("§7冷却: 数字(秒)，'onetime' 或 '-1' 表示一次性礼包"));
+        sender.sendMessage(i18n("§7示例: /createkit starter 3600 ultiessentials.kit.starter"));
     }
 }

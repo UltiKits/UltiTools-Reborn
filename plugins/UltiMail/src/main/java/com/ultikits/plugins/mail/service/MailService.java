@@ -6,7 +6,7 @@ import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.impl.data.WhereCondition;
+import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -196,7 +196,11 @@ public class MailService {
      */
     public void markAsRead(MailData mail) {
         mail.setRead(true);
-        dataOperator.update(mail);
+        try {
+            dataOperator.update(mail);
+        } catch (IllegalAccessException e) {
+            UltiMail.getInstance().getLogger().error("Failed to mark mail as read: " + e.getMessage());
+        }
     }
     
     /**
@@ -224,7 +228,11 @@ public class MailService {
         
         // Mark as claimed
         mail.setClaimed(true);
-        dataOperator.update(mail);
+        try {
+            dataOperator.update(mail);
+        } catch (IllegalAccessException e) {
+            UltiMail.getInstance().getLogger().error("Failed to claim items: " + e.getMessage());
+        }
         
         return items;
     }
@@ -242,9 +250,13 @@ public class MailService {
         
         // If both deleted, really delete
         if (mail.isDeletedBySender() && mail.isDeletedByReceiver()) {
-            dataOperator.delete(mail);
+            dataOperator.delById(mail.getId());
         } else {
-            dataOperator.update(mail);
+            try {
+                dataOperator.update(mail);
+            } catch (IllegalAccessException e) {
+                UltiMail.getInstance().getLogger().error("Failed to update mail: " + e.getMessage());
+            }
         }
     }
     
@@ -302,7 +314,7 @@ public class MailService {
             
             return Base64Coder.encodeLines(outputStream.toByteArray());
         } catch (Exception e) {
-            UltiMail.getInstance().getLogger().warning("Failed to serialize items: " + e.getMessage());
+            UltiMail.getInstance().getLogger().warn("Failed to serialize items: " + e.getMessage());
             return null;
         }
     }
@@ -324,7 +336,7 @@ public class MailService {
             
             return items;
         } catch (Exception e) {
-            UltiMail.getInstance().getLogger().warning("Failed to deserialize items: " + e.getMessage());
+            UltiMail.getInstance().getLogger().warn("Failed to deserialize items: " + e.getMessage());
             return new ItemStack[0];
         }
     }

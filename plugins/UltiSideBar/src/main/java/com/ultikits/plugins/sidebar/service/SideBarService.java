@@ -2,6 +2,7 @@ package com.ultikits.plugins.sidebar.service;
 
 import com.ultikits.plugins.sidebar.UltiSideBar;
 import com.ultikits.plugins.sidebar.config.SideBarConfig;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 
@@ -44,7 +45,7 @@ public class SideBarService {
         // Check PlaceholderAPI
         placeholderApiAvailable = Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null;
         if (!placeholderApiAvailable) {
-            UltiSideBar.getInstance().getLogger().warning("PlaceholderAPI not found! Variables will not work.");
+            UltiSideBar.getInstance().getLogger().warn("PlaceholderAPI not found! Variables will not work.");
         }
         
         startUpdateTask();
@@ -91,7 +92,7 @@ public class SideBarService {
         }
         
         updateTask = Bukkit.getScheduler().runTaskTimer(
-            UltiSideBar.getInstance().getPluginInstance(),
+            UltiTools.getInstance(),
             this::updateAllSidebars,
             0L, config.getUpdateInterval()
         );
@@ -260,7 +261,7 @@ public class SideBarService {
         if (config.isDefaultEnabled() && !disabledPlayers.contains(player.getUniqueId())) {
             // Delay to allow other plugins to load
             Bukkit.getScheduler().runTaskLater(
-                UltiSideBar.getInstance().getPluginInstance(),
+                UltiTools.getInstance(),
                 () -> enableSidebar(player),
                 10L
             );

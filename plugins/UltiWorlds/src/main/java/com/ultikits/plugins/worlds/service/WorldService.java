@@ -84,7 +84,11 @@ public class WorldService {
      * Update world settings.
      */
     public void updateSettings(WorldSettings settings) {
-        dataOperator.update(settings);
+        try {
+            dataOperator.update(settings);
+        } catch (IllegalAccessException e) {
+            UltiWorlds.getInstance().getLogger().error("Failed to update world settings", e);
+        }
         settingsCache.put(settings.getWorldName(), settings);
     }
     
@@ -262,7 +266,7 @@ public class WorldService {
             WhereCondition.builder().column("world_name").value(name).build()
         );
         for (WorldSettings s : settings) {
-            dataOperator.delete(s);
+            dataOperator.delById(s.getId());
         }
         settingsCache.remove(name);
         

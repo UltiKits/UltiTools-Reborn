@@ -9,6 +9,7 @@ import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
@@ -154,5 +155,12 @@ public class FriendCommand extends AbstractCommendExecutor {
         player.sendMessage(ChatColor.YELLOW + "/friend remove <玩家>" + ChatColor.WHITE + " - 删除好友");
         player.sendMessage(ChatColor.YELLOW + "/friend tp <玩家>" + ChatColor.WHITE + " - 传送到好友");
         player.sendMessage(ChatColor.YELLOW + "/friend requests" + ChatColor.WHITE + " - 查看待处理请求");
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        if (sender instanceof Player) {
+            help((Player) sender);
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.ultikits.plugins.cleaner.service;
 
 import com.ultikits.plugins.cleaner.UltiCleaner;
 import com.ultikits.plugins.cleaner.config.CleanerConfig;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import org.bukkit.Bukkit;
@@ -81,7 +82,7 @@ public class CleanerService {
                 try {
                     entityTypesCache.add(EntityType.valueOf(type.toUpperCase()));
                 } catch (IllegalArgumentException e) {
-                    UltiCleaner.getInstance().getLogger().warning("Unknown entity type: " + type);
+                    UltiCleaner.getInstance().getLogger().warn("Unknown entity type: " + type);
                 }
             }
         }
@@ -105,7 +106,7 @@ public class CleanerService {
         if (config.isItemCleanEnabled()) {
             itemCountdown = config.getItemCleanInterval();
             itemCleanTask = Bukkit.getScheduler().runTaskTimer(
-                UltiCleaner.getInstance().getPluginInstance(),
+                UltiTools.getInstance(),
                 this::tickItemClean,
                 20L, 20L // Every second
             );
@@ -115,7 +116,7 @@ public class CleanerService {
         if (config.isEntityCleanEnabled()) {
             entityCountdown = config.getEntityCleanInterval();
             entityCleanTask = Bukkit.getScheduler().runTaskTimer(
-                UltiCleaner.getInstance().getPluginInstance(),
+                UltiTools.getInstance(),
                 this::tickEntityClean,
                 20L, 20L // Every second
             );

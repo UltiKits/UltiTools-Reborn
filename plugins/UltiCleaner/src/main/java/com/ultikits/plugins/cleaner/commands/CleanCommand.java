@@ -60,4 +60,9 @@ public class CleanCommand extends AbstractCommendExecutor {
         sender.sendMessage(ChatColor.YELLOW + "/clean all" + ChatColor.WHITE + " - 清理所有");
         sender.sendMessage(ChatColor.YELLOW + "/clean status" + ChatColor.WHITE + " - 查看清理状态");
     }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        help(sender);
+    }
 }

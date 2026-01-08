@@ -4,8 +4,8 @@ import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * Social system configuration.
@@ -13,10 +13,14 @@ import lombok.EqualsAndHashCode;
  * @author wisdomme
  * @version 1.0.0
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
-@ConfigEntity(path = "config/social.yml")
+@Getter
+@Setter
+@ConfigEntity("config/social.yml")
 public class SocialConfig extends AbstractConfigEntity {
+    
+    public SocialConfig(String configFilePath) {
+        super(configFilePath);
+    }
     
     @ConfigEntry(path = "max_friends", comment = "Maximum number of friends per player")
     private int maxFriends = 50;

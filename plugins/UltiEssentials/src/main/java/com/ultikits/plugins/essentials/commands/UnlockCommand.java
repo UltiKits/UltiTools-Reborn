@@ -5,6 +5,7 @@ import com.ultikits.plugins.essentials.service.ChestLockService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.block.Block;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -72,9 +73,9 @@ public class UnlockCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(i18n("用法: /unlock"));
-        player.sendMessage(i18n("看向一个容器并使用此命令来解锁它"));
-        player.sendMessage(i18n("/unlock info - 查看锁定信息"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /unlock"));
+        sender.sendMessage(i18n("看向一个容器并使用此命令来解锁它"));
+        sender.sendMessage(i18n("/unlock info - 查看锁定信息"));
     }
 }

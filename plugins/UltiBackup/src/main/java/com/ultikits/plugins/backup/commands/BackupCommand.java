@@ -9,6 +9,7 @@ import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
@@ -52,7 +53,7 @@ public class BackupCommand extends AbstractCommendExecutor {
         player.sendMessage(ChatColor.GOLD + "=== 你的备份 ===");
         for (int i = 0; i < Math.min(5, backups.size()); i++) {
             BackupData backup = backups.get(i);
-            player.sendMessage(ChatColor.YELLOW + (i + 1) + ". " + ChatColor.WHITE + 
+            player.sendMessage("" + ChatColor.YELLOW + (i + 1) + ". " + ChatColor.WHITE + 
                 backup.getFormattedTime() + " " + backup.getReasonDisplay());
         }
         if (backups.size() > 5) {
@@ -124,14 +125,19 @@ public class BackupCommand extends AbstractCommendExecutor {
     
     @CmdMapping(format = "help")
     public void help(@CmdSender Player player) {
-        player.sendMessage(ChatColor.GOLD + "=== UltiBackup 帮助 ===");
-        player.sendMessage(ChatColor.YELLOW + "/backup" + ChatColor.WHITE + " - 打开备份GUI");
-        player.sendMessage(ChatColor.YELLOW + "/backup list" + ChatColor.WHITE + " - 列出备份");
-        player.sendMessage(ChatColor.YELLOW + "/backup create" + ChatColor.WHITE + " - 创建备份");
-        player.sendMessage(ChatColor.YELLOW + "/backup restore <编号>" + ChatColor.WHITE + " - 恢复备份");
-        if (player.hasPermission("ultibackup.admin")) {
-            player.sendMessage(ChatColor.YELLOW + "/backup admin <玩家>" + ChatColor.WHITE + " - 查看玩家备份");
-            player.sendMessage(ChatColor.YELLOW + "/backup admin create <玩家>" + ChatColor.WHITE + " - 为玩家创建备份");
+        handleHelp(player);
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.GOLD + "=== UltiBackup 帮助 ===");
+        sender.sendMessage(ChatColor.YELLOW + "/backup" + ChatColor.WHITE + " - 打开备份GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/backup list" + ChatColor.WHITE + " - 列出备份");
+        sender.sendMessage(ChatColor.YELLOW + "/backup create" + ChatColor.WHITE + " - 创建备份");
+        sender.sendMessage(ChatColor.YELLOW + "/backup restore <编号>" + ChatColor.WHITE + " - 恢复备份");
+        if (sender.hasPermission("ultibackup.admin")) {
+            sender.sendMessage(ChatColor.YELLOW + "/backup admin <玩家>" + ChatColor.WHITE + " - 查看玩家备份");
+            sender.sendMessage(ChatColor.YELLOW + "/backup admin create <玩家>" + ChatColor.WHITE + " - 为玩家创建备份");
         }
     }
 }

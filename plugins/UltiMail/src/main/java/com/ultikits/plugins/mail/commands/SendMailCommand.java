@@ -1,10 +1,11 @@
 package com.ultikits.plugins.mail.commands;
 
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.conversations.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -22,7 +23,7 @@ import org.bukkit.plugin.Plugin;
     permission = "ultimail.send",
     description = "发送邮件"
 )
-public class SendMailCommand extends AbstractCommendExecutor {
+public class SendMailCommand extends AbstractCommandExecutor {
     
     private final MailService mailService;
     private final Plugin plugin;
@@ -78,10 +79,15 @@ public class SendMailCommand extends AbstractCommendExecutor {
     
     @CmdMapping(format = "")
     public void help(@CmdSender Player player) {
-        player.sendMessage(ChatColor.GOLD + "=== 发送邮件帮助 ===");
-        player.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送文字邮件");
-        player.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题> attach" + ChatColor.WHITE + " - 发送带附件邮件（主手物品）");
-        player.sendMessage(ChatColor.GRAY + "输入 'cancel' 可取消发送");
+        handleHelp(player);
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.GOLD + "=== 发送邮件帮助 ===");
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送文字邮件");
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题> attach" + ChatColor.WHITE + " - 发送带附件邮件（主手物品）");
+        sender.sendMessage(ChatColor.GRAY + "输入 'cancel' 可取消发送");
     }
     
     /**

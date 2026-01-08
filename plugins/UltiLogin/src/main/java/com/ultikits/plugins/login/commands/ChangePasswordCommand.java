@@ -5,6 +5,7 @@ import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -67,6 +68,11 @@ public class ChangePasswordCommand extends AbstractCommendExecutor {
     
     @CmdMapping(format = "")
     public void help(@CmdSender Player player) {
-        player.sendMessage(ChatColor.YELLOW + "使用方法: /changepassword <旧密码> <新密码> <确认新密码>");
+        handleHelp(player);
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.YELLOW + "使用方法: /changepassword <旧密码> <新密码> <确认新密码>");
     }
 }

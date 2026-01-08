@@ -4,6 +4,7 @@ import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
 import com.ultikits.plugins.essentials.utils.MockBukkitHelper;
 import com.ultikits.ultitools.annotations.*;
+import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.*;
 

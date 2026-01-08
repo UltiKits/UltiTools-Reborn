@@ -4,6 +4,8 @@ import com.ultikits.plugins.remotebag.service.RemoteBagService;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
+import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -40,5 +42,16 @@ public class BagCommand extends AbstractCommendExecutor {
     public void saveBag(@CmdSender Player player) {
         bagService.saveBag(player.getUniqueId());
         player.sendMessage(bagService.getConfig().getBagSavedMessage().replace("&", "§"));
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        if (sender instanceof Player) {
+            Player player = (Player) sender;
+            player.sendMessage(ChatColor.GOLD + "=== UltiRemoteBag 帮助 ===");
+            player.sendMessage(ChatColor.YELLOW + "/bag" + ChatColor.WHITE + " - 打开远程背包");
+            player.sendMessage(ChatColor.YELLOW + "/bag <页码>" + ChatColor.WHITE + " - 打开指定页");
+            player.sendMessage(ChatColor.YELLOW + "/bag save" + ChatColor.WHITE + " - 保存背包");
+        }
     }
 }

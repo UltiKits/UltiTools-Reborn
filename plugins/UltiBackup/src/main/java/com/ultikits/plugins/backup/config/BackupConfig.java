@@ -4,8 +4,8 @@ import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * Backup configuration.
@@ -13,10 +13,14 @@ import lombok.EqualsAndHashCode;
  * @author wisdomme
  * @version 1.0.0
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
-@ConfigEntity(path = "config/backup.yml")
+@Getter
+@Setter
+@ConfigEntity("config/backup.yml")
 public class BackupConfig extends AbstractConfigEntity {
+    
+    public BackupConfig(String configFilePath) {
+        super(configFilePath);
+    }
     
     @ConfigEntry(path = "auto_backup.enabled", comment = "Enable automatic backups")
     private boolean autoBackupEnabled = true;

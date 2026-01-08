@@ -5,6 +5,7 @@ import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -55,5 +56,12 @@ public class SideBarCommand extends AbstractCommendExecutor {
         player.sendMessage(ChatColor.YELLOW + "/sidebar toggle" + ChatColor.WHITE + " - 切换侧边栏");
         player.sendMessage(ChatColor.YELLOW + "/sidebar on" + ChatColor.WHITE + " - 开启侧边栏");
         player.sendMessage(ChatColor.YELLOW + "/sidebar off" + ChatColor.WHITE + " - 关闭侧边栏");
+    }
+    
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        if (sender instanceof Player) {
+            help((Player) sender);
+        }
     }
 }

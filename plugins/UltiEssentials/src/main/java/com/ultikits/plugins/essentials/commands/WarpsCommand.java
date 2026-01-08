@@ -4,6 +4,7 @@ import com.ultikits.plugins.essentials.entity.WarpData;
 import com.ultikits.plugins.essentials.service.WarpService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
@@ -58,8 +59,8 @@ public class WarpsCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(i18n("用法: /warps"));
-        player.sendMessage(i18n("列出所有你可以访问的地标点"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /warps"));
+        sender.sendMessage(i18n("列出所有你可以访问的地标点"));
     }
 }

@@ -14,6 +14,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
@@ -111,8 +112,10 @@ public class LoginProtectionListener implements Listener {
     }
     
     @EventHandler(priority = EventPriority.LOWEST)
-    public void onPlayerPickupItem(PlayerAttemptPickupItemEvent event) {
-        cancelIfNotLoggedIn(event.getPlayer(), event);
+    public void onPlayerPickupItem(EntityPickupItemEvent event) {
+        if (event.getEntity() instanceof Player) {
+            cancelIfNotLoggedIn((Player) event.getEntity(), event);
+        }
     }
     
     @EventHandler(priority = EventPriority.LOWEST)

@@ -243,7 +243,11 @@ public class RemoteBagService {
                 RemoteBagData data = existing.get(0);
                 data.setContents(contents);
                 data.setLastUpdated(System.currentTimeMillis());
-                dataOperator.update(data);
+                try {
+                    dataOperator.update(data);
+                } catch (IllegalAccessException e) {
+                    UltiRemoteBag.getInstance().getLogger().error("Failed to update bag data", e);
+                }
             }
         }
     }

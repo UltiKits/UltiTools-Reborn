@@ -3,6 +3,7 @@ package com.ultikits.plugins.essentials.commands;
 import com.ultikits.plugins.essentials.service.ScoreboardService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 /**
@@ -59,8 +60,8 @@ public class ScoreboardCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected void handleHelp(Player player) {
-        player.sendMessage(i18n("用法: /scoreboard [on/off]"));
-        player.sendMessage(i18n("切换或设置计分板显示状态"));
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage(i18n("用法: /scoreboard [on/off]"));
+        sender.sendMessage(i18n("切换或设置计分板显示状态"));
     }
 }

@@ -5,6 +5,7 @@ import com.ultikits.plugins.trade.config.TradeConfig;
 import com.ultikits.plugins.trade.entity.TradeRequest;
 import com.ultikits.plugins.trade.entity.TradeSession;
 import com.ultikits.plugins.trade.gui.TradeGUI;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 
@@ -57,7 +58,7 @@ public class TradeService {
         
         // Start cleanup task
         cleanupTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTrade.getInstance().getPluginInstance(),
+            UltiTools.getInstance(),
             this::cleanupExpiredRequests,
             20L * 10, 20L * 10 // Every 10 seconds
         );
@@ -86,7 +87,7 @@ public class TradeService {
      */
     private void setupEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            UltiTrade.getInstance().getLogger().warning("Vault not found! Money trading disabled.");
+            UltiTrade.getInstance().getLogger().warn("Vault not found! Money trading disabled.");
             return;
         }
         

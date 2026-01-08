@@ -5,6 +5,7 @@ import com.ultikits.plugins.essentials.service.BanService;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -52,7 +53,7 @@ public class UnbanCommand extends BaseEssentialsCommand {
     }
     
     @Override
-    protected List<String> suggest(Player player, String[] args) {
+    protected List<String> suggest(Player player, Command command, String[] args) {
         if (args.length == 1) {
             return banService.getActiveBans().stream()
                 .map(BanData::getPlayerName)
@@ -60,6 +61,6 @@ public class UnbanCommand extends BaseEssentialsCommand {
                 .distinct()
                 .collect(Collectors.toList());
         }
-        return super.suggest(player, args);
+        return super.suggest(player, command, args);
     }
 }

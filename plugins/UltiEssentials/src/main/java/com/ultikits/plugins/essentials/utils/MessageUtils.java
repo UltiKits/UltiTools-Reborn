@@ -128,6 +128,7 @@ public final class MessageUtils {
 
     /**
      * Sends an action bar message to a player.
+     * Uses Spigot API for cross-version compatibility.
      *
      * @param player  the player to send the action bar to
      * @param message the message to display
@@ -137,7 +138,8 @@ public final class MessageUtils {
             return;
         }
         message = colorize(parsePlaceholders(player, message));
-        player.sendActionBar(message);
+        player.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR, 
+            net.md_5.bungee.api.chat.TextComponent.fromLegacyText(message));
     }
 
     /**
