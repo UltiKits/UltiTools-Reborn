@@ -1,9 +1,7 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.entity.ChestLockData;
 import com.ultikits.plugins.essentials.service.ChestLockService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
@@ -22,7 +20,7 @@ import org.bukkit.entity.Player;
     permission = "ultiessentials.lock",
     description = "解锁容器"
 )
-public class UnlockCommand extends AbstractCommandExecutor {
+public class UnlockCommand extends BaseEssentialsCommand {
     
     @Autowired
     private ChestLockService chestLockService;
@@ -32,7 +30,7 @@ public class UnlockCommand extends AbstractCommandExecutor {
         Block target = player.getTargetBlockExact(5);
         
         if (target == null) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c请看向一个容器"));
+            player.sendMessage(i18n("§c请看向一个容器"));
             return;
         }
         
@@ -40,13 +38,13 @@ public class UnlockCommand extends AbstractCommandExecutor {
         
         switch (result) {
             case SUCCESS:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§a已解锁该容器"));
+                player.sendMessage(i18n("§a已解锁该容器"));
                 break;
             case NOT_LOCKED:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c该容器未被锁定"));
+                player.sendMessage(i18n("§c该容器未被锁定"));
                 break;
             case NOT_OWNER:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c你不是该容器的主人"));
+                player.sendMessage(i18n("§c你不是该容器的主人"));
                 break;
         }
     }
@@ -56,26 +54,26 @@ public class UnlockCommand extends AbstractCommandExecutor {
         Block target = player.getTargetBlockExact(5);
         
         if (target == null) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c请看向一个容器"));
+            player.sendMessage(i18n("§c请看向一个容器"));
             return;
         }
         
         ChestLockData lock = chestLockService.getLock(target.getLocation());
         
         if (lock == null) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§7该容器未被锁定"));
+            player.sendMessage(i18n("§7该容器未被锁定"));
         } else {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§6=== 容器锁定信息 ==="));
-            player.sendMessage(UltiEssentials.getInstance().i18n("§7主人: §f") + lock.getOwnerName());
-            player.sendMessage(UltiEssentials.getInstance().i18n("§7位置: §f") + 
+            player.sendMessage(i18n("§6=== 容器锁定信息 ==="));
+            player.sendMessage(i18n("§7主人: §f") + lock.getOwnerName());
+            player.sendMessage(i18n("§7位置: §f") + 
                 lock.getWorld() + " (" + lock.getX() + ", " + lock.getY() + ", " + lock.getZ() + ")");
         }
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /unlock"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("看向一个容器并使用此命令来解锁它"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("/unlock info - 查看锁定信息"));
+        player.sendMessage(i18n("用法: /unlock"));
+        player.sendMessage(i18n("看向一个容器并使用此命令来解锁它"));
+        player.sendMessage(i18n("/unlock info - 查看锁定信息"));
     }
 }

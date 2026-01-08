@@ -1,9 +1,7 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.entity.KitData;
 import com.ultikits.plugins.essentials.service.KitService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 
@@ -25,7 +23,7 @@ import java.util.stream.Collectors;
     permission = "ultiessentials.kit.use",
     description = "领取礼包"
 )
-public class KitCommand extends AbstractCommandExecutor {
+public class KitCommand extends BaseEssentialsCommand {
     
     @Autowired
     private KitService kitService;
@@ -35,11 +33,11 @@ public class KitCommand extends AbstractCommandExecutor {
         List<KitData> availableKits = kitService.getAvailableKits(player);
         
         if (availableKits.isEmpty()) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c没有可用的礼包"));
+            player.sendMessage(i18n("§c没有可用的礼包"));
             return;
         }
         
-        player.sendMessage(UltiEssentials.getInstance().i18n("§6=== 可用礼包 ==="));
+        player.sendMessage(i18n("§6=== 可用礼包 ==="));
         
         for (KitData kit : availableKits) {
             long remaining = kitService.getRemainingCooldown(player.getUniqueId(), kit);
@@ -66,7 +64,7 @@ public class KitCommand extends AbstractCommandExecutor {
             }
         }
         
-        player.sendMessage(UltiEssentials.getInstance().i18n("§7使用 /kit <名称> 领取礼包"));
+        player.sendMessage(i18n("§7使用 /kit <名称> 领取礼包"));
     }
     
     @CmdMapping(format = "<name>")
@@ -75,42 +73,42 @@ public class KitCommand extends AbstractCommandExecutor {
         
         switch (result) {
             case SUCCESS:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§a成功领取礼包: ") + name);
+                player.sendMessage(i18n("§a成功领取礼包: ") + name);
                 break;
             case NOT_FOUND:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包不存在: ") + name);
+                player.sendMessage(i18n("§c礼包不存在: ") + name);
                 break;
             case NO_PERMISSION:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c你没有权限使用该礼包"));
+                player.sendMessage(i18n("§c你没有权限使用该礼包"));
                 break;
             case ALREADY_CLAIMED:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c你已经领取过该礼包（一次性礼包）"));
+                player.sendMessage(i18n("§c你已经领取过该礼包（一次性礼包）"));
                 break;
             case ON_COOLDOWN:
                 KitData kit = kitService.getKit(name);
                 if (kit != null) {
                     long remaining = kitService.getRemainingCooldown(player.getUniqueId(), kit);
-                    player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包冷却中，剩余: ") + 
+                    player.sendMessage(i18n("§c礼包冷却中，剩余: ") + 
                         KitService.formatCooldown(remaining));
                 }
                 break;
             case INVENTORY_FULL:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c背包空间不足"));
+                player.sendMessage(i18n("§c背包空间不足"));
                 break;
             case ERROR:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c领取礼包时发生错误"));
+                player.sendMessage(i18n("§c领取礼包时发生错误"));
                 break;
             case DISABLED:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包功能已禁用"));
+                player.sendMessage(i18n("§c礼包功能已禁用"));
                 break;
         }
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /kit [名称]"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("不带名称显示所有可用礼包"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("带名称领取指定礼包"));
+        player.sendMessage(i18n("用法: /kit [名称]"));
+        player.sendMessage(i18n("不带名称显示所有可用礼包"));
+        player.sendMessage(i18n("带名称领取指定礼包"));
     }
     
     @Override

@@ -1,15 +1,12 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.service.BanService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -30,7 +27,7 @@ import java.util.stream.Collectors;
     permission = "ultiessentials.ban",
     description = "封禁玩家"
 )
-public class BanCommand extends AbstractCommandExecutor {
+public class BanCommand extends BaseEssentialsCommand {
     
     @Autowired
     private BanService banService;
@@ -48,7 +45,7 @@ public class BanCommand extends AbstractCommandExecutor {
     ) {
         OfflinePlayer target = Bukkit.getOfflinePlayer(playerName);
         if (target.getUniqueId() == null && !target.hasPlayedBefore()) {
-            sender.sendMessage(UltiEssentials.getInstance().i18n("§c玩家不存在: ") + playerName);
+            sender.sendMessage(i18n("§c玩家不存在: ") + playerName);
             return;
         }
         
@@ -65,23 +62,23 @@ public class BanCommand extends AbstractCommandExecutor {
         
         switch (result) {
             case SUCCESS:
-                Bukkit.broadcastMessage(UltiEssentials.getInstance().i18n("§c[封禁] §f") + 
+                Bukkit.broadcastMessage(i18n("§c[封禁] §f") + 
                     target.getName() + " §7被 " + operatorName + " 永久封禁");
-                Bukkit.broadcastMessage(UltiEssentials.getInstance().i18n("§7原因: §f") + reason);
+                Bukkit.broadcastMessage(i18n("§7原因: §f") + reason);
                 break;
             case ALREADY_BANNED:
-                sender.sendMessage(UltiEssentials.getInstance().i18n("§c该玩家已被封禁"));
+                sender.sendMessage(i18n("§c该玩家已被封禁"));
                 break;
             case DISABLED:
-                sender.sendMessage(UltiEssentials.getInstance().i18n("§c封禁功能已禁用"));
+                sender.sendMessage(i18n("§c封禁功能已禁用"));
                 break;
         }
     }
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(UltiEssentials.getInstance().i18n("用法: /ban <玩家> [原因]"));
-        sender.sendMessage(UltiEssentials.getInstance().i18n("永久封禁一个玩家"));
+        sender.sendMessage(i18n("用法: /ban <玩家> [原因]"));
+        sender.sendMessage(i18n("永久封禁一个玩家"));
     }
     
     @Override

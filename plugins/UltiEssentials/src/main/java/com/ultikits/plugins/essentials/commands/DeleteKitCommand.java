@@ -1,9 +1,7 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.entity.KitData;
 import com.ultikits.plugins.essentials.service.KitService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 
@@ -24,7 +22,7 @@ import java.util.stream.Collectors;
     permission = "ultiessentials.kit.delete",
     description = "删除礼包"
 )
-public class DeleteKitCommand extends AbstractCommandExecutor {
+public class DeleteKitCommand extends BaseEssentialsCommand {
     
     @Autowired
     private KitService kitService;
@@ -34,16 +32,16 @@ public class DeleteKitCommand extends AbstractCommandExecutor {
         boolean deleted = kitService.deleteKit(name);
         
         if (deleted) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§a已删除礼包: ") + name);
+            player.sendMessage(i18n("§a已删除礼包: ") + name);
         } else {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包不存在: ") + name);
+            player.sendMessage(i18n("§c礼包不存在: ") + name);
         }
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /deletekit <名称>"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("删除指定的礼包"));
+        player.sendMessage(i18n("用法: /deletekit <名称>"));
+        player.sendMessage(i18n("删除指定的礼包"));
     }
     
     @Override

@@ -1,8 +1,6 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.service.KitService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -21,7 +19,7 @@ import org.bukkit.inventory.ItemStack;
     permission = "ultiessentials.kit.create",
     description = "创建礼包"
 )
-public class CreateKitCommand extends AbstractCommandExecutor {
+public class CreateKitCommand extends BaseEssentialsCommand {
     
     @Autowired
     private KitService kitService;
@@ -55,7 +53,7 @@ public class CreateKitCommand extends AbstractCommandExecutor {
                 cooldownSeconds = Long.parseLong(cooldown);
             }
         } catch (NumberFormatException e) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c无效的冷却时间，请输入秒数或 'onetime'"));
+            player.sendMessage(i18n("§c无效的冷却时间，请输入秒数或 'onetime'"));
             return;
         }
         
@@ -72,32 +70,32 @@ public class CreateKitCommand extends AbstractCommandExecutor {
         
         switch (result) {
             case SUCCESS:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§a成功创建礼包: ") + name);
+                player.sendMessage(i18n("§a成功创建礼包: ") + name);
                 if (cooldownSeconds == -1) {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("§7类型: 一次性礼包"));
+                    player.sendMessage(i18n("§7类型: 一次性礼包"));
                 } else if (cooldownSeconds > 0) {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("§7冷却时间: ") + cooldownSeconds + "秒");
+                    player.sendMessage(i18n("§7冷却时间: ") + cooldownSeconds + "秒");
                 } else {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("§7冷却时间: 无冷却"));
+                    player.sendMessage(i18n("§7冷却时间: 无冷却"));
                 }
                 if (permission != null) {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("§7所需权限: ") + permission);
+                    player.sendMessage(i18n("§7所需权限: ") + permission);
                 }
                 break;
             case ALREADY_EXISTS:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包已存在: ") + name);
+                player.sendMessage(i18n("§c礼包已存在: ") + name);
                 break;
             case INVALID_NAME:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c无效的礼包名称（长度需在1-32字符之间）"));
+                player.sendMessage(i18n("§c无效的礼包名称（长度需在1-32字符之间）"));
                 break;
             case EMPTY_KIT:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c背包中没有物品，无法创建礼包"));
+                player.sendMessage(i18n("§c背包中没有物品，无法创建礼包"));
                 break;
             case SERIALIZATION_ERROR:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c保存礼包物品时发生错误"));
+                player.sendMessage(i18n("§c保存礼包物品时发生错误"));
                 break;
             case DISABLED:
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c礼包功能已禁用"));
+                player.sendMessage(i18n("§c礼包功能已禁用"));
                 break;
         }
     }

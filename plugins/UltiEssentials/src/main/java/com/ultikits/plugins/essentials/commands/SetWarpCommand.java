@@ -1,8 +1,6 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.service.WarpService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 
@@ -20,7 +18,7 @@ import org.bukkit.entity.Player;
     permission = "ultiessentials.warp.set",
     description = "创建地标点"
 )
-public class SetWarpCommand extends AbstractCommandExecutor {
+public class SetWarpCommand extends BaseEssentialsCommand {
     
     @Autowired
     private WarpService warpService;
@@ -46,28 +44,28 @@ public class SetWarpCommand extends AbstractCommandExecutor {
         switch (result) {
             case CREATED:
                 if (permission != null && !permission.isEmpty()) {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("已创建地标点: ") + name + 
-                        UltiEssentials.getInstance().i18n(" (权限: ") + permission + ")");
+                    player.sendMessage(i18n("已创建地标点: ") + name + 
+                        i18n(" (权限: ") + permission + ")");
                 } else {
-                    player.sendMessage(UltiEssentials.getInstance().i18n("已创建地标点: ") + name);
+                    player.sendMessage(i18n("已创建地标点: ") + name);
                 }
                 break;
             case ALREADY_EXISTS:
-                player.sendMessage(UltiEssentials.getInstance().i18n("地标点已存在: ") + name);
+                player.sendMessage(i18n("地标点已存在: ") + name);
                 break;
             case INVALID_NAME:
-                player.sendMessage(UltiEssentials.getInstance().i18n("无效的地标名称（长度需在1-32字符之间）"));
+                player.sendMessage(i18n("无效的地标名称（长度需在1-32字符之间）"));
                 break;
             case DISABLED:
-                player.sendMessage(UltiEssentials.getInstance().i18n("地标功能已禁用"));
+                player.sendMessage(i18n("地标功能已禁用"));
                 break;
         }
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /setwarp <名称> [权限]"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("在当前位置创建一个地标点"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("可选：指定访问此地标所需的权限"));
+        player.sendMessage(i18n("用法: /setwarp <名称> [权限]"));
+        player.sendMessage(i18n("在当前位置创建一个地标点"));
+        player.sendMessage(i18n("可选：指定访问此地标所需的权限"));
     }
 }

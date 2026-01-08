@@ -4,8 +4,17 @@
   "UltiEssentials 配置已重载！": "UltiEssentials 配置已重载！",
 
   "该功能已禁用": "该功能已禁用",
+  "feature_disabled": "§c该功能已禁用",
   "玩家不存在或不在线": "玩家不存在或不在线",
   "玩家不存在": "玩家不存在",
+
+  "teleport_success": "§a传送成功！",
+  "teleport_warmup_started": "§e传送准备中，请保持不动...",
+  "teleport_target_not_found": "§c传送目标不存在",
+  "teleport_world_not_found": "§c目标世界不存在",
+  "teleport_no_permission": "§c你没有传送到该位置的权限",
+  "teleport_already_in_progress": "§c你正在传送中，请稍候",
+  "teleport_cancelled": "§c传送已取消",
 
   "没有可返回的位置": "没有可返回的位置",
   "已传送到上一个位置": "已传送到上一个位置",

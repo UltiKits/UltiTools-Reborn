@@ -1,8 +1,6 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.service.WarpService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 
@@ -23,7 +21,7 @@ import java.util.stream.Collectors;
     permission = "ultiessentials.warp.delete",
     description = "删除地标点"
 )
-public class DelWarpCommand extends AbstractCommandExecutor {
+public class DelWarpCommand extends BaseEssentialsCommand {
     
     @Autowired
     private WarpService warpService;
@@ -33,16 +31,16 @@ public class DelWarpCommand extends AbstractCommandExecutor {
         boolean deleted = warpService.deleteWarp(name);
         
         if (deleted) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("已删除地标点: ") + name);
+            player.sendMessage(i18n("已删除地标点: ") + name);
         } else {
-            player.sendMessage(UltiEssentials.getInstance().i18n("地标点不存在: ") + name);
+            player.sendMessage(i18n("地标点不存在: ") + name);
         }
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /delwarp <名称>"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("删除指定的地标点"));
+        player.sendMessage(i18n("用法: /delwarp <名称>"));
+        player.sendMessage(i18n("删除指定的地标点"));
     }
     
     @Override

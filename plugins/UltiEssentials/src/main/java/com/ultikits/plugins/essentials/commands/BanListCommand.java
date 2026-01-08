@@ -1,12 +1,9 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.entity.BanData;
 import com.ultikits.plugins.essentials.service.BanService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Player;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -26,7 +23,7 @@ import java.util.List;
     permission = "ultiessentials.banlist",
     description = "查看封禁列表"
 )
-public class BanListCommand extends AbstractCommandExecutor {
+public class BanListCommand extends BaseEssentialsCommand {
     
     private static final int PAGE_SIZE = 10;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
@@ -48,7 +45,7 @@ public class BanListCommand extends AbstractCommandExecutor {
         List<BanData> allBans = banService.getActiveBans();
         
         if (allBans.isEmpty()) {
-            sender.sendMessage(UltiEssentials.getInstance().i18n("§a没有活跃的封禁"));
+            sender.sendMessage(i18n("§a没有活跃的封禁"));
             return;
         }
         
@@ -58,7 +55,7 @@ public class BanListCommand extends AbstractCommandExecutor {
         int start = (page - 1) * PAGE_SIZE;
         int end = Math.min(start + PAGE_SIZE, allBans.size());
         
-        sender.sendMessage(UltiEssentials.getInstance().i18n("§6=== 封禁列表 ===") + 
+        sender.sendMessage(i18n("§6=== 封禁列表 ===") + 
             " §7(" + page + "/" + totalPages + ")");
         
         for (int i = start; i < end; i++) {

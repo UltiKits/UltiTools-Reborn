@@ -4,8 +4,17 @@
   "UltiEssentials 配置已重载！": "UltiEssentials config reloaded!",
 
   "该功能已禁用": "This feature is disabled",
+  "feature_disabled": "§cThis feature is disabled",
   "玩家不存在或不在线": "Player not found or offline",
   "玩家不存在": "Player not found",
+
+  "teleport_success": "§aTeleport successful!",
+  "teleport_warmup_started": "§eTeleporting, please stand still...",
+  "teleport_target_not_found": "§cTeleport target not found",
+  "teleport_world_not_found": "§cTarget world not found",
+  "teleport_no_permission": "§cYou don't have permission to teleport there",
+  "teleport_already_in_progress": "§cTeleport already in progress, please wait",
+  "teleport_cancelled": "§cTeleport cancelled",
 
   "没有可返回的位置": "No location to return to",
   "已传送到上一个位置": "Teleported to previous location",

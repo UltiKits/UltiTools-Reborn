@@ -1,9 +1,7 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.entity.WarpData;
 import com.ultikits.plugins.essentials.service.WarpService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.*;
 import org.bukkit.entity.Player;
 
@@ -23,7 +21,7 @@ import java.util.List;
     permission = "ultiessentials.warp.list",
     description = "列出所有地标点"
 )
-public class WarpsCommand extends AbstractCommandExecutor {
+public class WarpsCommand extends BaseEssentialsCommand {
     
     @Autowired
     private WarpService warpService;
@@ -33,11 +31,11 @@ public class WarpsCommand extends AbstractCommandExecutor {
         List<WarpData> accessibleWarps = warpService.getAccessibleWarps(player);
         
         if (accessibleWarps.isEmpty()) {
-            player.sendMessage(UltiEssentials.getInstance().i18n("没有可用的地标点"));
+            player.sendMessage(i18n("没有可用的地标点"));
             return;
         }
         
-        player.sendMessage(UltiEssentials.getInstance().i18n("§6=== 地标点列表 ==="));
+        player.sendMessage(i18n("§6=== 地标点列表 ==="));
         
         for (WarpData warp : accessibleWarps) {
             StringBuilder info = new StringBuilder();
@@ -54,13 +52,13 @@ public class WarpsCommand extends AbstractCommandExecutor {
             player.sendMessage(info.toString());
         }
         
-        player.sendMessage(UltiEssentials.getInstance().i18n("§7共 ") + accessibleWarps.size() + 
-            UltiEssentials.getInstance().i18n(" 个可用地标点"));
+        player.sendMessage(i18n("§7共 ") + accessibleWarps.size() + 
+            i18n(" 个可用地标点"));
     }
     
     @Override
     protected void handleHelp(Player player) {
-        player.sendMessage(UltiEssentials.getInstance().i18n("用法: /warps"));
-        player.sendMessage(UltiEssentials.getInstance().i18n("列出所有你可以访问的地标点"));
+        player.sendMessage(i18n("用法: /warps"));
+        player.sendMessage(i18n("列出所有你可以访问的地标点"));
     }
 }
