@@ -15,6 +15,7 @@ import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
+import javax.annotation.PostConstruct;
 import java.util.*;
 
 /**
@@ -40,7 +41,9 @@ public class NamePrefixService {
     
     /**
      * Initializes the name prefix service.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         if (!config.isNamePrefixEnabled()) {
             return;

@@ -16,6 +16,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
+import javax.annotation.PostConstruct;
 import java.util.*;
 
 /**
@@ -48,7 +49,9 @@ public class AnnouncementService {
     
     /**
      * Initializes the announcement service.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         startTasks();
     }

@@ -14,6 +14,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.*;
 
+import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -43,7 +44,9 @@ public class ScoreboardService {
     
     /**
      * Initializes the scoreboard service.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         this.manager = Bukkit.getScoreboardManager();
         

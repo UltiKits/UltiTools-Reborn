@@ -17,6 +17,7 @@ import org.bukkit.util.io.BukkitObjectOutputStream;
 import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -44,7 +45,9 @@ public class KitService {
     
     /**
      * Initializes the service with data operators.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         this.kitOperator = UltiEssentials.getInstance().getDataOperator(KitData.class);
         this.claimOperator = UltiEssentials.getInstance().getDataOperator(KitClaimData.class);

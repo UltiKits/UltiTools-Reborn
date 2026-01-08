@@ -18,6 +18,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.InventoryHolder;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -74,7 +75,9 @@ public class ChestLockService {
     
     /**
      * Initializes the service.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         this.lockOperator = UltiEssentials.getInstance().getDataOperator(ChestLockData.class);
         loadCache();

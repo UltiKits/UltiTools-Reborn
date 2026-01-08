@@ -16,6 +16,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -39,7 +40,9 @@ public class BanService implements Listener {
     
     /**
      * Initializes the service with the data operator.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         this.banOperator = UltiEssentials.getInstance().getDataOperator(BanData.class);
         

@@ -12,6 +12,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -45,6 +46,11 @@ public class TpaService {
      */
     private final Map<UUID, BukkitTask> timeoutTasks = new ConcurrentHashMap<>();
     
+    /**
+     * Initializes the service.
+     * Automatically called by the IoC container after construction.
+     */
+    @PostConstruct
     public void init() {
         // Service initialization if needed
     }

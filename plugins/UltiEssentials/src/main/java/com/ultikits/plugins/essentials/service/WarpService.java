@@ -13,6 +13,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
+import javax.annotation.PostConstruct;
 import java.util.*;
 
 /**
@@ -37,7 +38,9 @@ public class WarpService {
     
     /**
      * Initializes the service with the data operator.
+     * Automatically called by the IoC container after construction.
      */
+    @PostConstruct
     public void init() {
         this.warpOperator = UltiEssentials.getInstance().getDataOperator(WarpData.class);
     }
