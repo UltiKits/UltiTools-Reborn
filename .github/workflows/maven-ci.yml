@@ -82,6 +82,13 @@ jobs:
         # fi
         echo "✅ 测试通过，覆盖率符合要求"
 
+    - name: 📤 Upload Coverage to Codacy
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: codacy/codacy-coverage-reporter-action@v1
+      with:
+        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        coverage-reports: target/site/jacoco/jacoco.xml
+
   # ==================== 构建 SNAPSHOT 阶段 ====================
   build-snapshot:
     name: 🔨 Build SNAPSHOT
