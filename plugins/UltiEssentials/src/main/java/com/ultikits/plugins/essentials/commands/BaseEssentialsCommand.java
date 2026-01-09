@@ -3,17 +3,24 @@ package com.ultikits.plugins.essentials.commands;
 import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * Base class for all UltiEssentials commands.
- * Provides convenient i18n access, feature check, and teleport result handling.
+ * Provides convenient i18n access, feature check, teleport result handling,
+ * and common tab completion helpers.
  * <p>
  * Uses the new BaseCommandExecutor introduced in UltiTools-API 6.2.0.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 public abstract class BaseEssentialsCommand extends BaseCommandExecutor {
 
@@ -75,6 +82,58 @@ public abstract class BaseEssentialsCommand extends BaseCommandExecutor {
                 player.sendMessage(i18n("teleport_cancelled"));
                 break;
         }
+    }
+
+    /**
+     * Suggests online player names for tab completion.
+     * Filters players whose names start with the given prefix (case-insensitive).
+     *
+     * @param prefix the prefix to filter by (usually args[argIndex])
+     * @return list of matching online player names
+     */
+    protected List<String> suggestOnlinePlayers(String prefix) {
+        String lowerPrefix = prefix != null ? prefix.toLowerCase() : "";
+        return Bukkit.getOnlinePlayers().stream()
+                .map(Player::getName)
+                .filter(name -> name.toLowerCase().startsWith(lowerPrefix))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Suggests offline player names for tab completion.
+     * Returns players who have played before but may not be online.
+     * Filters players whose names start with the given prefix (case-insensitive).
+     *
+     * @param prefix the prefix to filter by
+     * @return list of matching offline player names
+     */
+    protected List<String> suggestOfflinePlayers(String prefix) {
+        String lowerPrefix = prefix != null ? prefix.toLowerCase() : "";
+        return Arrays.stream(Bukkit.getOfflinePlayers())
+                .map(OfflinePlayer::getName)
+                .filter(name -> name != null && name.toLowerCase().startsWith(lowerPrefix))
+                .distinct()
+                .limit(50) // Limit to prevent performance issues
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Suggests both online and offline player names for tab completion.
+     * Online players are prioritized in the result.
+     *
+     * @param prefix the prefix to filter by
+     * @return list of matching player names (online first, then offline)
+     */
+    protected List<String> suggestAllPlayers(String prefix) {
+        List<String> online = suggestOnlinePlayers(prefix);
+        List<String> offline = suggestOfflinePlayers(prefix);
+        
+        // Remove duplicates (online players already in the list)
+        offline.removeAll(online);
+        
+        // Combine: online first, then offline
+        online.addAll(offline);
+        return online;
     }
 
     /**

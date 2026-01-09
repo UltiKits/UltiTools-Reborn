@@ -10,10 +10,6 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 
 import javax.annotation.Nullable;
 import com.ultikits.ultitools.annotations.PostConstruct;
@@ -25,13 +21,15 @@ import java.util.stream.Collectors;
  * Service for managing player bans.
  * <p>
  * 管理玩家封禁的服务。
+ * <p>
+ * Note: Login ban checks are handled by {@link com.ultikits.plugins.essentials.listener.BanListener}
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @Slf4j
 @Service
-public class BanService implements Listener {
+public class BanService {
     
     @Autowired
     private EssentialsConfig config;
@@ -45,36 +43,6 @@ public class BanService implements Listener {
     @PostConstruct
     public void init() {
         this.banOperator = UltiEssentials.getInstance().getDataOperator(BanData.class);
-        
-        // Register login listener
-        Bukkit.getPluginManager().registerEvents(this, 
-            Bukkit.getPluginManager().getPlugin("UltiTools-API"));
-    }
-    
-    /**
-     * Handles player login to check for bans.
-     */
-    @EventHandler(priority = EventPriority.HIGHEST)
-    public void onPlayerLogin(AsyncPlayerPreLoginEvent event) {
-        if (!config.isBanEnabled()) {
-            return;
-        }
-        
-        UUID playerUuid = event.getUniqueId();
-        String ipAddress = event.getAddress().getHostAddress();
-        
-        // Check UUID ban
-        BanData activeBan = getActiveBan(playerUuid);
-        if (activeBan != null) {
-            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED, formatKickMessage(activeBan));
-            return;
-        }
-        
-        // Check IP ban
-        BanData ipBan = getActiveIpBan(ipAddress);
-        if (ipBan != null) {
-            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED, formatKickMessage(ipBan));
-        }
     }
     
     /**
@@ -303,8 +271,11 @@ public class BanService implements Listener {
     
     /**
      * Formats the kick message for a banned player.
+     * 
+     * @param ban the ban data
+     * @return the formatted kick message
      */
-    private String formatKickMessage(BanData ban) {
+    public String formatKickMessage(BanData ban) {
         StringBuilder message = new StringBuilder();
         message.append("§c你已被封禁\n\n");
         message.append("§7原因: §f").append(ban.getReason()).append("\n");

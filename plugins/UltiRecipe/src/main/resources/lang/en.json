@@ -1,0 +1,17 @@
+{
+  "UltiRecipe 已启用！": "UltiRecipe enabled!",
+  "UltiRecipe 已禁用！": "UltiRecipe disabled!",
+  "已注册 %d 个自定义配方": "Registered %d custom recipes",
+  "配方已重载，共 %d 个配方": "Recipes reloaded, %d recipes total",
+
+  "§7没有已注册的配方": "§7No recipes registered",
+  "§6=== 已注册的配方 ===": "§6=== Registered Recipes ===",
+  "§7共 §f%d §7个配方": "§7Total §f%d §7recipes",
+  "§a配方已重载！共 %d 个配方": "§aRecipes reloaded! %d recipes total",
+  "§7当前已注册 §f%d §7个配方": "§7Currently §f%d §7recipes registered",
+
+  "§6=== UltiRecipe 帮助 ===": "§6=== UltiRecipe Help ===",
+  "§e/recipe list §7- 列出所有配方": "§e/recipe list §7- List all recipes",
+  "§e/recipe reload §7- 重载配方配置": "§e/recipe reload §7- Reload recipe config",
+  "§e/recipe count §7- 显示配方数量": "§e/recipe count §7- Show recipe count"
+}

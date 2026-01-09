@@ -11,7 +11,6 @@ import org.bukkit.entity.Player;
 
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Command for temporarily banning players.
@@ -102,10 +101,7 @@ public class TempBanCommand extends BaseEssentialsCommand {
     @Override
     protected List<String> suggest(Player player, Command command, String[] args) {
         if (args.length == 1) {
-            return Bukkit.getOnlinePlayers().stream()
-                .map(Player::getName)
-                .filter(n -> n.toLowerCase().startsWith(args[0].toLowerCase()))
-                .collect(Collectors.toList());
+            return suggestOnlinePlayers(args[0]);
         }
         if (args.length == 2) {
             return java.util.Arrays.asList("1h", "6h", "12h", "1d", "3d", "7d", "30d", "1w");

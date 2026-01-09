@@ -11,7 +11,6 @@ import org.bukkit.entity.Player;
 
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Command for banning players.
@@ -86,10 +85,7 @@ public class BanCommand extends BaseEssentialsCommand {
     @Override
     protected List<String> suggest(Player player, Command command, String[] args) {
         if (args.length == 1) {
-            return Bukkit.getOnlinePlayers().stream()
-                .map(Player::getName)
-                .filter(n -> n.toLowerCase().startsWith(args[0].toLowerCase()))
-                .collect(Collectors.toList());
+            return suggestOnlinePlayers(args[0]);
         }
         return super.suggest(player, command, args);
     }
