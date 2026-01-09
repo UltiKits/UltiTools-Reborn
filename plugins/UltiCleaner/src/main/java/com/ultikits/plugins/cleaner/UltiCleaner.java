@@ -1,18 +1,25 @@
 package com.ultikits.plugins.cleaner;
 
+import com.ultikits.plugins.cleaner.service.ChunkUnloadService;
 import com.ultikits.plugins.cleaner.service.CleanerService;
+import com.ultikits.plugins.cleaner.utils.ServerTypeUtil;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 /**
- * UltiCleaner - Automatic entity and item cleanup for Minecraft servers.
+ * UltiCleaner - Advanced automatic entity and item cleanup for Minecraft servers.
  * <p>
- * This plugin provides automatic cleanup of dropped items and entities
- * to improve server performance.
+ * Features:
+ * - Automatic cleanup of dropped items and entities
+ * - Smart cleanup based on entity count thresholds
+ * - TPS-adaptive threshold adjustment
+ * - Batch processing to minimize lag spikes
+ * - Safe chunk unloading with Paper compatibility
+ * - Custom events for extensibility
  * </p>
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.cleaner"})
 public class UltiCleaner extends UltiToolsPlugin {
@@ -27,13 +34,22 @@ public class UltiCleaner extends UltiToolsPlugin {
     public boolean registerSelf() {
         instance = this;
         
+        // Log server type
+        getLogger().info("Detected server: " + ServerTypeUtil.getServerSoftware());
+        
         // Initialize cleaner service
         CleanerService cleanerService = getContext().getBean(CleanerService.class);
         if (cleanerService != null) {
             cleanerService.init();
         }
         
-        getLogger().info(i18n("UltiCleaner 已启用！"));
+        // Initialize chunk unload service
+        ChunkUnloadService chunkUnloadService = getContext().getBean(ChunkUnloadService.class);
+        if (chunkUnloadService != null) {
+            chunkUnloadService.init();
+        }
+        
+        getLogger().info(i18n("cleaner_enabled"));
         return true;
     }
 
@@ -45,7 +61,13 @@ public class UltiCleaner extends UltiToolsPlugin {
             cleanerService.shutdown();
         }
         
-        getLogger().info(i18n("UltiCleaner 已禁用！"));
+        // Shutdown chunk unload service
+        ChunkUnloadService chunkUnloadService = getContext().getBean(ChunkUnloadService.class);
+        if (chunkUnloadService != null) {
+            chunkUnloadService.shutdown();
+        }
+        
+        getLogger().info(i18n("cleaner_disabled"));
         instance = null;
     }
 
@@ -55,6 +77,6 @@ public class UltiCleaner extends UltiToolsPlugin {
         if (cleanerService != null) {
             cleanerService.reload();
         }
-        getLogger().info(i18n("UltiCleaner 配置已重载！"));
+        getLogger().info(i18n("cleaner_reloaded"));
     }
 }

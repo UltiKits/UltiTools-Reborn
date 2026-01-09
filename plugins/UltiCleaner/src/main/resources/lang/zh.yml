@@ -1,4 +1,55 @@
-# UltiCleaner 语言文件
+# UltiCleaner 语言文件 (简体中文)
+
+# 系统消息
 cleaner_enabled: "UltiCleaner 已启用！"
 cleaner_disabled: "UltiCleaner 已禁用！"
 cleaner_reloaded: "UltiCleaner 配置已重载！"
+
+# 清理消息
+item_warn: "&c[清理] &f地面物品将在 &e{TIME} &f秒后清理！"
+entity_warn: "&c[清理] &f实体将在 &e{TIME} &f秒后清理！"
+item_cleaned: "&a[清理] &f已清理 &e{COUNT} &f个地面物品！"
+entity_cleaned: "&a[清理] &f已清理 &e{COUNT} &f个实体！"
+chunk_unloaded: "&a[清理] &f已卸载 &e{COUNT} &f个闲置区块！"
+
+# 智能清理
+smart_clean_triggered: "&e[清理] &f检测到实体数量过多，正在进行智能清理..."
+smart_clean_items: "&e[清理] &f物品数量超过阈值 ({COUNT}/{THRESHOLD})，触发智能清理"
+smart_clean_mobs: "&e[清理] &f生物数量超过阈值 ({COUNT}/{THRESHOLD})，触发智能清理"
+
+# 进度显示
+clean_progress: "&7[清理] &f清理进度: &e{CURRENT}&f/&e{TOTAL}"
+clean_in_progress: "&e清理正在进行中，请稍候..."
+clean_complete: "&a[清理] &f清理完成！耗时 {TIME}"
+
+# 事件相关
+clean_cancelled: "&c[清理] &f清理操作被其他插件取消！"
+
+# TPS 相关
+tps_low_warning: "&e[清理] &f服务器TPS较低 ({TPS})，已降低清理阈值"
+tps_critical_warning: "&c[清理] &f服务器TPS严重过低 ({TPS})，已大幅降低清理阈值"
+
+# 命令帮助
+cmd_help_title: "&6=== UltiCleaner 帮助 ==="
+cmd_help_items: "&e/clean items &f- 清理地面物品"
+cmd_help_entities: "&e/clean entities &f- 清理实体"
+cmd_help_all: "&e/clean all &f- 清理所有"
+cmd_help_chunks: "&e/clean chunks &f- 卸载闲置区块"
+cmd_help_check: "&e/clean check &f- 查看实体统计"
+cmd_help_status: "&e/clean status &f- 查看清理状态"
+
+# 状态显示
+status_title: "&6=== 清理状态 ==="
+status_next_item_clean: "&e下次物品清理: &f{TIME} 秒"
+status_next_entity_clean: "&e下次实体清理: &f{TIME} 秒"
+status_cleaning: "&e清理状态: &a进行中..."
+status_idle: "&e清理状态: &7空闲"
+
+# 统计显示
+stats_title: "&6=== 服务器实体统计 ==="
+stats_items: "&e地面物品: &f{COUNT}"
+stats_mobs: "&e可清理生物: &f{COUNT}"
+stats_total: "&e实体总数: &f{COUNT}"
+stats_chunks_loaded: "&e已加载区块: &f{COUNT}"
+stats_chunks_unloadable: "&e可卸载区块: &f{COUNT}"
+stats_tps: "&e服务器TPS: &f{TPS}"
