@@ -17,3 +17,4 @@ libraries:
   - org.java-websocket:Java-WebSocket:1.5.4
   - cglib:cglib-nodep:3.3.0
   - org.slf4j:slf4j-api:1.8.0-beta4
+  - com.sun.mail:javax.mail:1.6.2

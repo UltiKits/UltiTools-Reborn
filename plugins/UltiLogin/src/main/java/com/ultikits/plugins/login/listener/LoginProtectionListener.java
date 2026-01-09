@@ -1,9 +1,13 @@
 package com.ultikits.plugins.login.listener;
 
+import com.ultikits.plugins.login.gui.LoginGUIPage;
+import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
@@ -23,7 +27,7 @@ import org.bukkit.event.player.*;
  * Listener for login protection.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @EventListener
 public class LoginProtectionListener implements Listener {
@@ -33,7 +37,26 @@ public class LoginProtectionListener implements Listener {
     
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        loginService.onPlayerJoin(event.getPlayer());
+        Player player = event.getPlayer();
+        loginService.onPlayerJoin(player);
+        
+        // Open GUI if enabled (with delay for proper loading)
+        if (loginService.getConfig().isGuiModeEnabled()) {
+            Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+                if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    // Check if already has valid session (handled in onPlayerJoin)
+                    if (loginService.hasValidSession(player)) {
+                        return;
+                    }
+                    
+                    if (loginService.isRegistered(player.getUniqueId())) {
+                        LoginGUIPage.open(player, loginService);
+                    } else {
+                        RegisterGUIPage.open(player, loginService);
+                    }
+                }
+            }, 20L); // 1 second delay for compatibility with skin plugins
+        }
     }
     
     @EventHandler
@@ -85,14 +108,29 @@ public class LoginProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getWhoClicked() instanceof Player) {
-            cancelIfNotLoggedIn((Player) event.getWhoClicked(), event);
+            Player player = (Player) event.getWhoClicked();
+            // Allow GUI interactions for login/register GUI
+            if (!loginService.isLoggedIn(player.getUniqueId())) {
+                String title = event.getView().getTitle();
+                // Allow clicking in login/register GUI
+                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                    event.setCancelled(true);
+                }
+            }
         }
     }
     
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
-            cancelIfNotLoggedIn((Player) event.getPlayer(), event);
+            Player player = (Player) event.getPlayer();
+            // Allow opening login/register GUI
+            if (!loginService.isLoggedIn(player.getUniqueId())) {
+                String title = event.getView().getTitle();
+                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                    event.setCancelled(true);
+                }
+            }
         }
     }
     
@@ -155,12 +193,26 @@ public class LoginProtectionListener implements Listener {
      * Send login prompt to player.
      */
     private void sendLoginPrompt(Player player) {
-        if (loginService.isRegistered(player.getUniqueId())) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                loginService.getConfig().getLoginPrompt()));
+        if (loginService.getConfig().isGuiModeEnabled()) {
+            // Reopen GUI
+            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    if (loginService.isRegistered(player.getUniqueId())) {
+                        LoginGUIPage.open(player, loginService);
+                    } else {
+                        RegisterGUIPage.open(player, loginService);
+                    }
+                }
+            });
         } else {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                loginService.getConfig().getRegisterPrompt()));
+            // Send text prompt
+            if (loginService.isRegistered(player.getUniqueId())) {
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                    loginService.getConfig().getLoginPrompt()));
+            } else {
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                    loginService.getConfig().getRegisterPrompt()));
+            }
         }
     }
 }

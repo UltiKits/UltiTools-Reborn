@@ -541,5 +541,12 @@
             <version>3.3.0</version>
             <scope>provided</scope>
         </dependency>
+        <!-- JavaMail for email service - Paper libraries 自动下载 -->
+        <dependency>
+            <groupId>com.sun.mail</groupId>
+            <artifactId>javax.mail</artifactId>
+            <version>1.6.2</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>

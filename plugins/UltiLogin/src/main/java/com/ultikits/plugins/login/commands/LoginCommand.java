@@ -13,7 +13,7 @@ import org.bukkit.entity.Player;
  * Login command executor.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
@@ -44,12 +44,17 @@ public class LoginCommand extends AbstractCommendExecutor {
             return;
         }
         
-        // Login
-        if (loginService.login(player, password)) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginSuccess()));
-        } else {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', config.getWrongPassword()));
+        // Check if locked
+        if (loginService.isLocked(player)) {
+            long remaining = loginService.getRemainingLockoutTime(player);
+            String message = config.getAccountLocked().replace("{TIME}", String.valueOf(remaining));
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
+            return;
         }
+        
+        // Login with new result object
+        LoginService.LoginResult result = loginService.login(player, password);
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&', result.getMessage()));
     }
     
     @CmdMapping(format = "")

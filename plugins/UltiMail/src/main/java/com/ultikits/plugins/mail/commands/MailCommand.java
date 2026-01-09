@@ -1,14 +1,22 @@
 package com.ultikits.plugins.mail.commands;
 
+import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.entity.MailData;
+import com.ultikits.plugins.mail.gui.AttachmentSelectorPage;
+import com.ultikits.plugins.mail.gui.MailboxGUI;
+import com.ultikits.plugins.mail.gui.SentboxGUI;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.scheduler.BukkitRunnable;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -16,9 +24,12 @@ import java.util.List;
 
 /**
  * Mail command executor.
+ * <p>
+ * Provides commands for inbox, sentbox, reading, claiming, deleting mails,
+ * batch operations, and admin broadcast.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
@@ -26,7 +37,7 @@ import java.util.List;
     permission = "ultimail.use",
     description = "邮件系统"
 )
-public class MailCommand extends AbstractCommendExecutor {
+public class MailCommand extends AbstractCommandExecutor {
     
     private final MailService mailService;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
@@ -35,21 +46,43 @@ public class MailCommand extends AbstractCommendExecutor {
         this.mailService = mailService;
     }
     
+    // ==================== GUI Commands ====================
+    
+    /**
+     * Open inbox GUI.
+     */
+    @CmdMapping(format = "read")
+    public void openInboxGUI(@CmdSender Player player) {
+        new MailboxGUI(player, mailService).open();
+    }
+    
+    /**
+     * Open sentbox GUI.
+     */
+    @CmdMapping(format = "sentgui")
+    public void openSentboxGUI(@CmdSender Player player) {
+        new SentboxGUI(player, mailService).open();
+    }
+    
+    // ==================== Text Commands ====================
+    
     @CmdMapping(format = "inbox")
     public void inbox(@CmdSender Player player) {
         List<MailData> mails = mailService.getInbox(player.getUniqueId());
         
         if (mails.isEmpty()) {
-            player.sendMessage(ChatColor.YELLOW + "收件箱为空！");
+            player.sendMessage(ChatColor.YELLOW + i18n("inbox_empty"));
             return;
         }
         
-        player.sendMessage(ChatColor.GOLD + "=== 收件箱 (" + mails.size() + " 封) ===");
+        player.sendMessage(ChatColor.GOLD + i18n("inbox_title").replace("{0}", String.valueOf(mails.size())));
         int index = 1;
         for (MailData mail : mails) {
-            String status = mail.isRead() ? ChatColor.GRAY + "[已读]" : ChatColor.GREEN + "[未读]";
-            String hasItems = mail.getItems() != null && !mail.getItems().isEmpty() ? 
-                (mail.isClaimed() ? ChatColor.GRAY + "[已领取]" : ChatColor.YELLOW + "[有附件]") : "";
+            String status = mail.isRead() ? 
+                ChatColor.GRAY + i18n("inbox_status_read") : 
+                ChatColor.GREEN + i18n("inbox_status_unread");
+            String hasItems = mail.hasItems() ? 
+                (mail.isClaimed() ? ChatColor.GRAY + i18n("inbox_status_claimed") : ChatColor.YELLOW + i18n("inbox_status_has_items")) : "";
             
             player.sendMessage(String.format("%s%d. %s %s%s %s- %s%s",
                 ChatColor.WHITE, index++,
@@ -59,7 +92,7 @@ public class MailCommand extends AbstractCommendExecutor {
                 ChatColor.GRAY, mail.getSenderName()
             ));
         }
-        player.sendMessage(ChatColor.GRAY + "使用 /mail read <编号> 查看邮件");
+        player.sendMessage(ChatColor.GRAY + i18n("inbox_hint"));
     }
     
     @CmdMapping(format = "sent")
@@ -67,53 +100,61 @@ public class MailCommand extends AbstractCommendExecutor {
         List<MailData> mails = mailService.getSentMails(player.getUniqueId());
         
         if (mails.isEmpty()) {
-            player.sendMessage(ChatColor.YELLOW + "发件箱为空！");
+            player.sendMessage(ChatColor.YELLOW + i18n("sentbox_empty"));
             return;
         }
         
-        player.sendMessage(ChatColor.GOLD + "=== 发件箱 (" + mails.size() + " 封) ===");
+        player.sendMessage(ChatColor.GOLD + i18n("sentbox_title").replace("{0}", String.valueOf(mails.size())));
         int index = 1;
         for (MailData mail : mails) {
-            String status = mail.isRead() ? ChatColor.GREEN + "[已读]" : ChatColor.GRAY + "[未读]";
+            String status = mail.isRead() ? 
+                ChatColor.GREEN + i18n("inbox_status_read") : 
+                ChatColor.GRAY + i18n("inbox_status_unread");
             
-            player.sendMessage(String.format("%s%d. %s %s%s %s- 发给 %s%s",
+            player.sendMessage(String.format("%s%d. %s %s%s %s- %s %s%s",
                 ChatColor.WHITE, index++,
                 status,
                 ChatColor.WHITE, mail.getSubject(),
                 ChatColor.GRAY,
+                i18n("sentbox_to"),
                 ChatColor.WHITE, mail.getReceiverName()
             ));
         }
     }
     
     @CmdMapping(format = "read <index>")
-    public void read(@CmdSender Player player, @CmdParam("index") int index) {
+    public void readByIndex(@CmdSender Player player, @CmdParam("index") int index) {
         List<MailData> mails = mailService.getInbox(player.getUniqueId());
         
         if (index < 1 || index > mails.size()) {
-            player.sendMessage(ChatColor.RED + "无效的邮件编号！");
+            player.sendMessage(ChatColor.RED + i18n("error_invalid_index"));
             return;
         }
         
         MailData mail = mails.get(index - 1);
         mailService.markAsRead(mail);
         
-        player.sendMessage(ChatColor.GOLD + "=== 邮件详情 ===");
-        player.sendMessage(ChatColor.YELLOW + "发件人: " + ChatColor.WHITE + mail.getSenderName());
-        player.sendMessage(ChatColor.YELLOW + "标题: " + ChatColor.WHITE + mail.getSubject());
-        player.sendMessage(ChatColor.YELLOW + "时间: " + ChatColor.WHITE + DATE_FORMAT.format(new Date(mail.getSentTime())));
-        player.sendMessage(ChatColor.YELLOW + "内容: ");
+        // Execute commands if any
+        if (mail.hasCommands() && !mail.isCommandsExecuted()) {
+            mailService.executeMailCommands(player, mail);
+        }
+        
+        player.sendMessage(ChatColor.GOLD + i18n("mail_detail_title"));
+        player.sendMessage(ChatColor.YELLOW + i18n("mail_detail_sender") + ChatColor.WHITE + mail.getSenderName());
+        player.sendMessage(ChatColor.YELLOW + i18n("mail_detail_subject") + ChatColor.WHITE + mail.getSubject());
+        player.sendMessage(ChatColor.YELLOW + i18n("mail_detail_time") + ChatColor.WHITE + DATE_FORMAT.format(new Date(mail.getSentTime())));
+        player.sendMessage(ChatColor.YELLOW + i18n("mail_detail_content"));
         player.sendMessage(ChatColor.WHITE + mail.getContent());
         
-        if (mail.getItems() != null && !mail.getItems().isEmpty()) {
+        if (mail.hasItems()) {
             if (mail.isClaimed()) {
-                player.sendMessage(ChatColor.GRAY + "[附件已领取]");
+                player.sendMessage(ChatColor.GRAY + i18n("mail_detail_items_claimed"));
             } else {
-                player.sendMessage(ChatColor.YELLOW + "[有附件] 使用 /mail claim " + index + " 领取");
+                player.sendMessage(ChatColor.YELLOW + i18n("mail_detail_items_hint").replace("{0}", String.valueOf(index)));
             }
         }
         
-        player.sendMessage(ChatColor.GRAY + "使用 /mail delete " + index + " 删除此邮件");
+        player.sendMessage(ChatColor.GRAY + i18n("mail_detail_delete_hint").replace("{0}", String.valueOf(index)));
     }
     
     @CmdMapping(format = "claim <index>")
@@ -121,24 +162,35 @@ public class MailCommand extends AbstractCommendExecutor {
         List<MailData> mails = mailService.getInbox(player.getUniqueId());
         
         if (index < 1 || index > mails.size()) {
-            player.sendMessage(ChatColor.RED + "无效的邮件编号！");
+            player.sendMessage(ChatColor.RED + i18n("error_invalid_index"));
             return;
         }
         
         MailData mail = mails.get(index - 1);
         
         if (mail.isClaimed()) {
-            player.sendMessage(ChatColor.RED + "附件已经领取过了！");
+            player.sendMessage(ChatColor.RED + i18n("claim_already_claimed"));
             return;
         }
         
-        if (mail.getItems() == null || mail.getItems().isEmpty()) {
-            player.sendMessage(ChatColor.RED + "这封邮件没有附件！");
+        if (!mail.hasItems()) {
+            player.sendMessage(ChatColor.RED + i18n("claim_no_items"));
+            return;
+        }
+        
+        // Check inventory space
+        int requiredSlots = mailService.getItemCount(mail);
+        int emptySlots = countEmptySlots(player);
+        
+        if (emptySlots < requiredSlots) {
+            player.sendMessage(ChatColor.RED + i18n("claim_inventory_full")
+                .replace("{0}", String.valueOf(requiredSlots)));
             return;
         }
         
         ItemStack[] items = mailService.claimItems(mail, player);
-        player.sendMessage(ChatColor.GREEN + "成功领取了 " + items.length + " 个物品！");
+        player.sendMessage(ChatColor.GREEN + i18n("claim_success")
+            .replace("{0}", String.valueOf(items.length)));
     }
     
     @CmdMapping(format = "delete <index>")
@@ -146,21 +198,74 @@ public class MailCommand extends AbstractCommendExecutor {
         List<MailData> mails = mailService.getInbox(player.getUniqueId());
         
         if (index < 1 || index > mails.size()) {
-            player.sendMessage(ChatColor.RED + "无效的邮件编号！");
+            player.sendMessage(ChatColor.RED + i18n("error_invalid_index"));
             return;
         }
         
         MailData mail = mails.get(index - 1);
         
         // Check if has unclaimed items
-        if (mail.getItems() != null && !mail.getItems().isEmpty() && !mail.isClaimed()) {
-            player.sendMessage(ChatColor.RED + "请先领取附件再删除邮件！");
+        if (mail.hasItems() && !mail.isClaimed()) {
+            player.sendMessage(ChatColor.RED + i18n("delete_claim_first"));
             return;
         }
         
         mailService.deleteMail(mail, player.getUniqueId());
-        player.sendMessage(ChatColor.GREEN + "邮件已删除！");
+        player.sendMessage(ChatColor.GREEN + i18n("delete_success"));
     }
+    
+    // ==================== Batch Operations ====================
+    
+    /**
+     * Delete all mails.
+     */
+    @CmdMapping(format = "delall")
+    public void deleteAll(@CmdSender Player player) {
+        int count = mailService.deleteAllByReceiver(player.getUniqueId());
+        player.sendMessage(ChatColor.GREEN + i18n("delete_all_success") + " (" + count + ")");
+    }
+    
+    /**
+     * Delete all read mails.
+     */
+    @CmdMapping(format = "delread")
+    public void deleteRead(@CmdSender Player player) {
+        int count = mailService.deleteReadByReceiver(player.getUniqueId());
+        player.sendMessage(ChatColor.GREEN + i18n("delete_read_success") + " (" + count + ")");
+    }
+    
+    // ==================== Admin Commands ====================
+    
+    /**
+     * Send mail to all players (text only).
+     */
+    @CmdMapping(format = "sendall <content>", permission = "ultimail.admin.sendall")
+    public void sendAll(@CmdSender Player player, @CmdParam("content") String content) {
+        mailService.sendToAll(player, content, null);
+    }
+    
+    /**
+     * Send mail to all players with attachments from GUI.
+     */
+    @CmdMapping(format = "sendall <content> items", permission = "ultimail.admin.sendall")
+    public void sendAllWithItems(@CmdSender Player player, @CmdParam("content") String content) {
+        int maxItems = mailService.getConfig().getMaxItems();
+        
+        new AttachmentSelectorPage(player, maxItems,
+            items -> {
+                if (items != null && items.length > 0) {
+                    mailService.sendToAll(player, content, items);
+                    player.sendMessage(ChatColor.GREEN + i18n("send_attachment_added")
+                        .replace("{0}", String.valueOf(items.length)));
+                } else {
+                    mailService.sendToAll(player, content, null);
+                }
+            },
+            () -> player.sendMessage(ChatColor.YELLOW + i18n("send_cancelled"))
+        ).open();
+    }
+    
+    // ==================== Help ====================
     
     @CmdMapping(format = "")
     public void help(@CmdSender Player player) {
@@ -169,12 +274,35 @@ public class MailCommand extends AbstractCommendExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GOLD + "=== UltiMail 帮助 ===");
-        sender.sendMessage(ChatColor.YELLOW + "/mail inbox" + ChatColor.WHITE + " - 查看收件箱");
-        sender.sendMessage(ChatColor.YELLOW + "/mail sent" + ChatColor.WHITE + " - 查看发件箱");
-        sender.sendMessage(ChatColor.YELLOW + "/mail read <编号>" + ChatColor.WHITE + " - 阅读邮件");
-        sender.sendMessage(ChatColor.YELLOW + "/mail claim <编号>" + ChatColor.WHITE + " - 领取附件");
-        sender.sendMessage(ChatColor.YELLOW + "/mail delete <编号>" + ChatColor.WHITE + " - 删除邮件");
-        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送邮件");
+        sender.sendMessage(ChatColor.GOLD + i18n("help_title"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail read" + ChatColor.WHITE + " - " + i18n("help_read"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail inbox" + ChatColor.WHITE + " - " + i18n("help_inbox"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail sent" + ChatColor.WHITE + " - " + i18n("help_sent"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail read <编号>" + ChatColor.WHITE + " - " + i18n("help_read_index"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail claim <编号>" + ChatColor.WHITE + " - " + i18n("help_claim"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail delete <编号>" + ChatColor.WHITE + " - " + i18n("help_delete"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail delall" + ChatColor.WHITE + " - " + i18n("help_delall"));
+        sender.sendMessage(ChatColor.YELLOW + "/mail delread" + ChatColor.WHITE + " - " + i18n("help_delread"));
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - " + i18n("help_sendmail"));
+        
+        if (sender.hasPermission("ultimail.admin.sendall")) {
+            sender.sendMessage(ChatColor.RED + "/mail sendall <内容>" + ChatColor.WHITE + " - " + i18n("help_sendall"));
+        }
+    }
+    
+    // ==================== Utilities ====================
+    
+    private int countEmptySlots(Player player) {
+        int count = 0;
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (item == null || item.getType() == Material.AIR) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    private String i18n(String key) {
+        return UltiMail.getInstance().i18n(key);
     }
 }

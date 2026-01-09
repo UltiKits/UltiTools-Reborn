@@ -3,16 +3,18 @@ package com.ultikits.plugins.mail.entity;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
-import java.util.Date;
-
 /**
  * Mail data entity.
+ * <p>
+ * Stores mail information including sender, receiver, content, attachments,
+ * and optional commands to execute when mail is read.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -40,6 +42,17 @@ public class MailData extends AbstractDataEntity {
     @Column(value = "items", type = "TEXT")
     private String items; // Serialized ItemStack array in Base64
     
+    /**
+     * Commands to execute when mail is read.
+     * Stored as JSON array: ["command1", "console:command2"]
+     * Commands prefixed with "console:" will be executed by console.
+     * Supports %player% placeholder.
+     * <p>
+     * This is an API-only feature for third-party plugins.
+     */
+    @Column(value = "commands", type = "TEXT")
+    private String commands; // JSON array of commands
+    
     @Column(value = "sent_time", type = "BIGINT")
     private long sentTime;
     
@@ -48,6 +61,13 @@ public class MailData extends AbstractDataEntity {
     
     @Column(value = "claimed_status", type = "BOOLEAN")
     private boolean claimed; // Items claimed
+    
+    /**
+     * Whether commands have been executed.
+     * Commands are executed only once when mail is first read.
+     */
+    @Column(value = "commands_executed", type = "BOOLEAN")
+    private boolean commandsExecuted;
     
     @Column(value = "deleted_by_sender", type = "BOOLEAN")
     private boolean deletedBySender;
@@ -59,7 +79,22 @@ public class MailData extends AbstractDataEntity {
         this.sentTime = System.currentTimeMillis();
         this.read = false;
         this.claimed = false;
+        this.commandsExecuted = false;
         this.deletedBySender = false;
         this.deletedByReceiver = false;
+    }
+    
+    /**
+     * Check if this mail has attachments.
+     */
+    public boolean hasItems() {
+        return items != null && !items.isEmpty();
+    }
+    
+    /**
+     * Check if this mail has commands to execute.
+     */
+    public boolean hasCommands() {
+        return commands != null && !commands.isEmpty() && !commands.equals("[]");
     }
 }

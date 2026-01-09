@@ -1,24 +1,27 @@
 package com.ultikits.plugins.login.config;
 
+import java.util.Arrays;
+import java.util.List;
+
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+
 import lombok.Getter;
 import lombok.Setter;
-
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Configuration for UltiLogin.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @Getter
 @Setter
 @ConfigEntity("config/login.yml")
 public class LoginConfig extends AbstractConfigEntity {
+    
+    // ==================== 基础设置 ====================
     
     @ConfigEntry(path = "login-timeout", comment = "登录超时时间（秒），超时将被踢出")
     private int loginTimeout = 60;
@@ -32,11 +35,43 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "max-register-per-ip", comment = "同一IP最大注册账户数（0为不限制）")
     private int maxRegisterPerIp = 3;
     
-    @ConfigEntry(path = "min-password-length", comment = "密码最小长度")
+    // ==================== GUI 模式设置 ====================
+    
+    @ConfigEntry(path = "gui-mode.enabled", comment = "启用GUI登录模式（数字键盘界面）")
+    private boolean guiModeEnabled = false;
+    
+    @ConfigEntry(path = "gui-mode.password-length", comment = "GUI模式密码位数（1-9数字，推荐4-6位）")
+    private int guiPasswordLength = 4;
+    
+    @ConfigEntry(path = "gui-mode.title-login", comment = "GUI登录界面标题")
+    private String guiLoginTitle = "&6请输入密码";
+    
+    @ConfigEntry(path = "gui-mode.title-register", comment = "GUI注册界面标题")
+    private String guiRegisterTitle = "&6请设置密码";
+    
+    @ConfigEntry(path = "gui-mode.title-confirm", comment = "GUI确认密码界面标题")
+    private String guiConfirmTitle = "&6请再次输入密码";
+    
+    // ==================== 命令模式密码设置 ====================
+    
+    @ConfigEntry(path = "password.min-length", comment = "命令模式密码最小长度")
     private int minPasswordLength = 6;
     
-    @ConfigEntry(path = "max-password-length", comment = "密码最大长度")
+    @ConfigEntry(path = "password.max-length", comment = "命令模式密码最大长度")
     private int maxPasswordLength = 32;
+    
+    // ==================== 登录安全保护 ====================
+    
+    @ConfigEntry(path = "security.max-login-attempts", comment = "最大登录失败次数（0为不限制）")
+    private int maxLoginAttempts = 5;
+    
+    @ConfigEntry(path = "security.lockout-duration", comment = "登录失败封禁时长（秒）")
+    private int lockoutDuration = 900;
+    
+    @ConfigEntry(path = "security.lockout-type", comment = "封禁类型：IP / UUID / BOTH")
+    private String lockoutType = "IP";
+    
+    // ==================== 位置设置 ====================
     
     @ConfigEntry(path = "spawn-location.enabled", comment = "未登录时传送到指定位置")
     private boolean spawnLocationEnabled = false;
@@ -53,17 +88,27 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "spawn-location.z", comment = "出生点Z")
     private double spawnZ = 0;
     
+    // ==================== 其他设置 ====================
+    
     @ConfigEntry(path = "allowed-commands", comment = "未登录时允许执行的命令")
     private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg");
     
     @ConfigEntry(path = "blind-effect", comment = "未登录时给予失明效果")
     private boolean blindEffect = true;
     
-    @ConfigEntry(path = "messages.register-prompt", comment = "注册提示")
+    // ==================== 消息配置 ====================
+    
+    @ConfigEntry(path = "messages.register-prompt", comment = "注册提示（命令模式）")
     private String registerPrompt = "&e请使用 /register <密码> <确认密码> 注册账号";
     
-    @ConfigEntry(path = "messages.login-prompt", comment = "登录提示")
+    @ConfigEntry(path = "messages.register-prompt-gui", comment = "注册提示（GUI模式）")
+    private String registerPromptGui = "&e请在弹出的界面中设置密码";
+    
+    @ConfigEntry(path = "messages.login-prompt", comment = "登录提示（命令模式）")
     private String loginPrompt = "&e请使用 /login <密码> 登录";
+    
+    @ConfigEntry(path = "messages.login-prompt-gui", comment = "登录提示（GUI模式）")
+    private String loginPromptGui = "&e请在弹出的界面中输入密码";
     
     @ConfigEntry(path = "messages.register-success", comment = "注册成功")
     private String registerSuccess = "&a注册成功！欢迎加入服务器！";
@@ -95,7 +140,49 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "messages.timeout-kick", comment = "超时踢出")
     private String timeoutKick = "&c登录超时！请重新连接。";
     
+    @ConfigEntry(path = "messages.account-locked", comment = "账户被锁定")
+    private String accountLocked = "&c登录失败次数过多！请在 {TIME} 秒后重试。";
+    
+    @ConfigEntry(path = "messages.attempts-remaining", comment = "剩余尝试次数")
+    private String attemptsRemaining = "&c密码错误！剩余尝试次数: {COUNT}";
+    
+    @ConfigEntry(path = "messages.gui-password-invalid", comment = "GUI密码无效")
+    private String guiPasswordInvalid = "&c密码必须是 {LENGTH} 位数字！";
+    
+    // ==================== 管理员消息 ====================
+    
+    @ConfigEntry(path = "messages.admin.password-reset", comment = "管理员重置密码成功")
+    private String adminPasswordReset = "&a已重置玩家 {PLAYER} 的密码为: {PASSWORD}";
+    
+    @ConfigEntry(path = "messages.admin.force-login", comment = "管理员强制登录")
+    private String adminForceLogin = "&a已强制登录玩家 {PLAYER}";
+    
+    @ConfigEntry(path = "messages.admin.unregister", comment = "管理员删除账号")
+    private String adminUnregister = "&a已删除玩家 {PLAYER} 的账号";
+    
+    @ConfigEntry(path = "messages.admin.player-not-found", comment = "玩家不存在")
+    private String adminPlayerNotFound = "&c找不到玩家 {PLAYER}";
+    
+    @ConfigEntry(path = "messages.admin.account-not-found", comment = "账号不存在")
+    private String adminAccountNotFound = "&c玩家 {PLAYER} 尚未注册";
+    
     public LoginConfig() {
         super("config/login.yml");
+    }
+    
+    /**
+     * Get the effective password min length based on mode.
+     * GUI mode uses guiPasswordLength, command mode uses minPasswordLength.
+     */
+    public int getEffectiveMinPasswordLength() {
+        return guiModeEnabled ? guiPasswordLength : minPasswordLength;
+    }
+    
+    /**
+     * Get the effective password max length based on mode.
+     * GUI mode uses guiPasswordLength, command mode uses maxPasswordLength.
+     */
+    public int getEffectiveMaxPasswordLength() {
+        return guiModeEnabled ? guiPasswordLength : maxPasswordLength;
     }
 }

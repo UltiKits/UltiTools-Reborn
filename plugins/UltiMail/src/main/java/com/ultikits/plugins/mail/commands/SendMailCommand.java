@@ -1,5 +1,7 @@
 package com.ultikits.plugins.mail.commands;
 
+import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.plugins.mail.gui.AttachmentSelectorPage;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
@@ -10,6 +12,8 @@ import org.bukkit.conversations.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
+
+import java.util.Arrays;
 
 /**
  * Send mail command executor.
@@ -24,6 +28,8 @@ import org.bukkit.plugin.Plugin;
     description = "发送邮件"
 )
 public class SendMailCommand extends AbstractCommandExecutor {
+    
+    private static final String ADMIN_PERMISSION = "ultimail.admin.multiattach";
     
     private final MailService mailService;
     private final Plugin plugin;
@@ -40,10 +46,10 @@ public class SendMailCommand extends AbstractCommandExecutor {
             .withFirstPrompt(new ContentPrompt(receiver, subject))
             .withEscapeSequence("cancel")
             .withTimeout(120)
-            .thatExcludesNonPlayersWithMessage("只有玩家可以发送邮件")
+            .thatExcludesNonPlayersWithMessage(i18n("error_player_only"))
             .addConversationAbandonedListener(event -> {
                 if (!event.gracefulExit()) {
-                    event.getContext().getForWhom().sendRawMessage(ChatColor.RED + "邮件发送已取消。");
+                    event.getContext().getForWhom().sendRawMessage(ChatColor.RED + i18n("send_cancelled"));
                 }
             });
         
@@ -54,27 +60,79 @@ public class SendMailCommand extends AbstractCommandExecutor {
     
     @CmdMapping(format = "<player> <subject> attach")
     public void sendMailWithItems(@CmdSender Player sender, @CmdParam("player") String receiver, @CmdParam("subject") String subject) {
-        // Get items from main hand
-        ItemStack item = sender.getInventory().getItemInMainHand();
-        if (item == null || item.getType().isAir()) {
-            sender.sendMessage(ChatColor.RED + "请在主手拿着要附加的物品！");
-            return;
+        // Check if admin has multi-attach permission
+        if (sender.hasPermission(ADMIN_PERMISSION)) {
+            // Open multi-attachment GUI for admins
+            sender.sendMessage(ChatColor.GREEN + i18n("attachment_gui_hint"));
+            
+            int maxItems = 45; // Default max items for GUI
+            AttachmentSelectorPage gui = new AttachmentSelectorPage(sender, maxItems,
+                items -> {
+                    // Filter out null items
+                    if (items == null) {
+                        startContentConversation(sender, receiver, subject, null);
+                        return;
+                    }
+                    ItemStack[] validItems = Arrays.stream(items)
+                        .filter(item -> item != null && !item.getType().isAir())
+                        .toArray(ItemStack[]::new);
+                    
+                    if (validItems.length == 0) {
+                        // No items selected, send without attachment
+                        startContentConversation(sender, receiver, subject, null);
+                    } else {
+                        startContentConversation(sender, receiver, subject, validItems);
+                    }
+                },
+                () -> {
+                    sender.sendMessage(ChatColor.YELLOW + i18n("send_cancelled"));
+                });
+            gui.open();
+        } else {
+            // Regular players: use main hand item only
+            ItemStack item = sender.getInventory().getItemInMainHand();
+            if (item == null || item.getType().isAir()) {
+                sender.sendMessage(ChatColor.RED + i18n("error_no_item_in_hand"));
+                return;
+            }
+            
+            // Start conversation with single attachment
+            ItemStack[] items = new ItemStack[]{item.clone()};
+            sender.getInventory().setItemInMainHand(null);
+            
+            startContentConversation(sender, receiver, subject, items);
         }
-        
-        // Start conversation with attachment
+    }
+    
+    /**
+     * Start conversation to input mail content.
+     */
+    private void startContentConversation(Player sender, String receiver, String subject, ItemStack[] items) {
         ConversationFactory factory = new ConversationFactory(plugin)
             .withFirstPrompt(new ContentPrompt(receiver, subject))
             .withEscapeSequence("cancel")
             .withTimeout(120)
-            .thatExcludesNonPlayersWithMessage("只有玩家可以发送邮件");
+            .thatExcludesNonPlayersWithMessage(i18n("error_player_only"))
+            .addConversationAbandonedListener(event -> {
+                if (!event.gracefulExit()) {
+                    event.getContext().getForWhom().sendRawMessage(ChatColor.RED + i18n("send_cancelled"));
+                    // Return items if conversation cancelled
+                    ItemStack[] attachedItems = (ItemStack[]) event.getContext().getSessionData("attachItems");
+                    if (attachedItems != null) {
+                        Player player = (Player) event.getContext().getForWhom();
+                        for (ItemStack item : attachedItems) {
+                            if (item != null && !item.getType().isAir()) {
+                                player.getInventory().addItem(item);
+                            }
+                        }
+                    }
+                }
+            });
         
         Conversation conversation = factory.buildConversation(sender);
         conversation.getContext().setSessionData("mailService", mailService);
-        conversation.getContext().setSessionData("attachItem", item.clone());
+        conversation.getContext().setSessionData("attachItems", items);
         conversation.begin();
-        
-        // Remove item from inventory after starting conversation
-        sender.getInventory().setItemInMainHand(null);
     }
     
     @CmdMapping(format = "")
@@ -84,10 +142,16 @@ public class SendMailCommand extends AbstractCommandExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GOLD + "=== 发送邮件帮助 ===");
-        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题>" + ChatColor.WHITE + " - 发送文字邮件");
-        sender.sendMessage(ChatColor.YELLOW + "/sendmail <玩家> <标题> attach" + ChatColor.WHITE + " - 发送带附件邮件（主手物品）");
-        sender.sendMessage(ChatColor.GRAY + "输入 'cancel' 可取消发送");
+        sender.sendMessage(ChatColor.GOLD + "=== " + i18n("help_sendmail_title") + " ===");
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <" + i18n("arg_player") + "> <" + i18n("arg_subject") + ">" 
+            + ChatColor.WHITE + " - " + i18n("help_sendmail_text"));
+        sender.sendMessage(ChatColor.YELLOW + "/sendmail <" + i18n("arg_player") + "> <" + i18n("arg_subject") + "> attach" 
+            + ChatColor.WHITE + " - " + i18n("help_sendmail_attach"));
+        sender.sendMessage(ChatColor.GRAY + i18n("help_cancel_hint"));
+    }
+    
+    private String i18n(String key) {
+        return UltiMail.getInstance().i18n(key);
     }
     
     /**
@@ -104,7 +168,7 @@ public class SendMailCommand extends AbstractCommandExecutor {
         
         @Override
         public String getPromptText(ConversationContext context) {
-            return ChatColor.YELLOW + "请输入邮件内容 (输入 'cancel' 取消):";
+            return ChatColor.YELLOW + UltiMail.getInstance().i18n("input_content_prompt");
         }
         
         @Override
@@ -115,14 +179,14 @@ public class SendMailCommand extends AbstractCommandExecutor {
             
             Player sender = (Player) context.getForWhom();
             MailService service = (MailService) context.getSessionData("mailService");
-            ItemStack attachItem = (ItemStack) context.getSessionData("attachItem");
-            
-            ItemStack[] items = attachItem != null ? new ItemStack[]{attachItem} : null;
+            ItemStack[] items = (ItemStack[]) context.getSessionData("attachItems");
             
             boolean success = service.sendMail(sender, receiver, subject, input, items);
             
             if (success) {
-                sender.sendMessage(ChatColor.GREEN + "邮件已发送给 " + receiver + "！");
+                String msg = UltiMail.getInstance().i18n("mail_sent_success")
+                    .replace("{RECEIVER}", receiver);
+                sender.sendMessage(ChatColor.GREEN + msg);
             }
             
             return Prompt.END_OF_CONVERSATION;

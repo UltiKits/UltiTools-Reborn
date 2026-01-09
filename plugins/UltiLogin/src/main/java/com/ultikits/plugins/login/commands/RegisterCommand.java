@@ -13,7 +13,7 @@ import org.bukkit.entity.Player;
  * Register command executor.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
@@ -44,16 +44,10 @@ public class RegisterCommand extends AbstractCommendExecutor {
             return;
         }
         
-        // Validate password length
-        if (password.length() < config.getMinPasswordLength()) {
-            String message = config.getPasswordTooShort().replace("{MIN}", String.valueOf(config.getMinPasswordLength()));
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
-            return;
-        }
-        
-        if (password.length() > config.getMaxPasswordLength()) {
-            String message = config.getPasswordTooLong().replace("{MAX}", String.valueOf(config.getMaxPasswordLength()));
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
+        // Validate password based on mode
+        if (!loginService.isPasswordValid(password)) {
+            String error = loginService.getPasswordValidationError(password);
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', error));
             return;
         }
         
@@ -76,6 +70,13 @@ public class RegisterCommand extends AbstractCommendExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "使用方法: /register <密码> <确认密码>");
+        LoginConfig config = loginService.getConfig();
+        if (config.isGuiModeEnabled()) {
+            sender.sendMessage(ChatColor.YELLOW + "使用方法: /register <密码> <确认密码>");
+            sender.sendMessage(ChatColor.GRAY + "密码必须是 " + config.getGuiPasswordLength() + " 位数字");
+        } else {
+            sender.sendMessage(ChatColor.YELLOW + "使用方法: /register <密码> <确认密码>");
+            sender.sendMessage(ChatColor.GRAY + "密码长度: " + config.getMinPasswordLength() + "-" + config.getMaxPasswordLength() + " 字符");
+        }
     }
 }

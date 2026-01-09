@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.commands;
 
+import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.command.*;
@@ -12,7 +13,7 @@ import org.bukkit.entity.Player;
  * Change password command executor.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
@@ -35,20 +36,18 @@ public class ChangePasswordCommand extends AbstractCommendExecutor {
         @CmdParam("newPassword") String newPassword,
         @CmdParam("confirm") String confirm
     ) {
+        LoginConfig config = loginService.getConfig();
+        
         // Check if logged in
         if (!loginService.isLoggedIn(player.getUniqueId())) {
             player.sendMessage(ChatColor.RED + "请先登录！");
             return;
         }
         
-        // Validate new password
-        if (newPassword.length() < loginService.getConfig().getMinPasswordLength()) {
-            player.sendMessage(ChatColor.RED + "新密码太短！至少 " + loginService.getConfig().getMinPasswordLength() + " 个字符");
-            return;
-        }
-        
-        if (newPassword.length() > loginService.getConfig().getMaxPasswordLength()) {
-            player.sendMessage(ChatColor.RED + "新密码太长！最多 " + loginService.getConfig().getMaxPasswordLength() + " 个字符");
+        // Validate new password based on mode
+        if (!loginService.isPasswordValid(newPassword)) {
+            String error = loginService.getPasswordValidationError(newPassword);
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', error));
             return;
         }
         
@@ -73,6 +72,12 @@ public class ChangePasswordCommand extends AbstractCommendExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
+        LoginConfig config = loginService.getConfig();
         sender.sendMessage(ChatColor.YELLOW + "使用方法: /changepassword <旧密码> <新密码> <确认新密码>");
+        if (config.isGuiModeEnabled()) {
+            sender.sendMessage(ChatColor.GRAY + "密码必须是 " + config.getGuiPasswordLength() + " 位数字");
+        } else {
+            sender.sendMessage(ChatColor.GRAY + "密码长度: " + config.getMinPasswordLength() + "-" + config.getMaxPasswordLength() + " 字符");
+        }
     }
 }

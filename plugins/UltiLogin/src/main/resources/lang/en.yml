@@ -1,4 +1,83 @@
-# UltiLogin Language File
+# UltiLogin Language File (English)
+# Version: 1.1.0
+
+# ==================== System Messages ====================
 login_enabled: "UltiLogin has been enabled!"
 login_disabled: "UltiLogin has been disabled!"
 login_reloaded: "UltiLogin configuration has been reloaded!"
+
+# ==================== Login/Register Messages ====================
+login_success: "Login successful! Welcome back!"
+register_success: "Registration successful! Welcome to the server!"
+wrong_password: "Wrong password! Please try again."
+already_logged: "You are already logged in!"
+not_registered: "You are not registered! Please register first."
+already_registered: "You are already registered! Please login."
+password_mismatch: "Passwords do not match!"
+password_too_short: "Password too short! At least {MIN} characters required."
+password_too_long: "Password too long! Maximum {MAX} characters allowed."
+session_login: "Session valid, auto-login successful!"
+timeout_kick: "Login timeout! Please reconnect."
+
+# ==================== Login Security ====================
+account_locked: "Too many failed login attempts! Please try again in {TIME} seconds."
+attempts_remaining: "Wrong password! Remaining attempts: {COUNT}"
+ip_limit_reached: "This IP has reached the maximum registration limit!"
+
+# ==================== GUI Mode ====================
+gui_password_invalid: "Password must be {LENGTH} digits!"
+gui_enter_password: "Enter Password"
+gui_set_password: "Set Password"
+gui_confirm_password: "Confirm Password"
+gui_confirm_button: "Confirm"
+gui_clear_button: "Clear"
+gui_exit_button: "Exit"
+gui_password_display: "Password Input"
+gui_entered: "Entered {CURRENT}/{TOTAL} digits"
+
+# ==================== Command Prompts ====================
+login_prompt: "Please use /login <password> to login"
+register_prompt: "Please use /register <password> <confirm> to register"
+login_prompt_gui: "Please enter your password in the popup"
+register_prompt_gui: "Please set your password in the popup"
+change_password_success: "Password changed successfully!"
+change_password_wrong: "Wrong old password!"
+please_login_first: "Please login first!"
+
+# ==================== Admin Commands ====================
+admin_password_reset: "Reset password for player {PLAYER} to: {PASSWORD}"
+admin_force_login: "Force logged in player {PLAYER}"
+admin_unregister: "Deleted account for player {PLAYER}"
+admin_player_not_found: "Player {PLAYER} not found"
+admin_account_not_found: "Player {PLAYER} is not registered"
+admin_player_already_logged: "Player {PLAYER} is already logged in!"
+admin_reset_failed: "Password reset failed!"
+admin_force_login_failed: "Force login failed!"
+admin_unregister_failed: "Account deletion failed!"
+admin_force_login_notify: "An admin has logged you in!"
+
+# ==================== Account Info ====================
+info_header: "===== Player Account Info ====="
+info_player_name: "Player Name: "
+info_uuid: "UUID: "
+info_register_ip: "Register IP: "
+info_last_ip: "Last IP: "
+info_login_count: "Login Count: "
+info_email: "Email: "
+info_email_not_bound: "Not bound"
+info_email_verified: "Email Verified: "
+info_verified: "Verified"
+info_not_verified: "Not verified"
+info_register_time: "Register Time: "
+info_last_login: "Last Login: "
+
+# ==================== Help Messages ====================
+help_login: "Usage: /login <password>"
+help_register: "Usage: /register <password> <confirm>"
+help_change_password: "Usage: /changepassword <old> <new> <confirm>"
+help_admin_header: "===== UltiLogin Admin Commands ====="
+help_admin_reset: "/logadmin reset <player> [password] - Reset player password"
+help_admin_forcelogin: "/logadmin forcelogin <player> - Force login player"
+help_admin_unregister: "/logadmin unregister <player> - Delete player account"
+help_admin_info: "/logadmin info <player> - View player account info"
+

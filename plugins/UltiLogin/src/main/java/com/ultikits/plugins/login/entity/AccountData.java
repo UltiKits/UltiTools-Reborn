@@ -3,6 +3,7 @@ package com.ultikits.plugins.login.entity;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -10,7 +11,7 @@ import lombok.EqualsAndHashCode;
  * Player account data entity.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -44,12 +45,23 @@ public class AccountData extends AbstractDataEntity {
     @Column(value = "email", type = "VARCHAR(100)")
     private String email;
     
+    @Column(value = "email_verified", type = "BOOLEAN")
+    private boolean emailVerified;
+    
     @Column(value = "login_count", type = "INT")
     private int loginCount;
+    
+    @Column(value = "failed_attempts", type = "INT")
+    private int failedAttempts;
+    
+    @Column(value = "last_failed_time", type = "BIGINT")
+    private long lastFailedTime;
     
     public AccountData() {
         this.registerTime = System.currentTimeMillis();
         this.lastLogin = System.currentTimeMillis();
         this.loginCount = 0;
+        this.failedAttempts = 0;
+        this.emailVerified = false;
     }
 }
