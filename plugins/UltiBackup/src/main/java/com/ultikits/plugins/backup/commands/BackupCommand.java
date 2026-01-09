@@ -1,33 +1,40 @@
 package com.ultikits.plugins.backup.commands;
 
-import com.ultikits.plugins.backup.entity.BackupData;
+import com.ultikits.plugins.backup.UltiBackup;
+import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.gui.BackupGUI;
+import com.ultikits.plugins.backup.gui.ForceRestoreConfirmPage;
 import com.ultikits.plugins.backup.service.BackupService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Backup command executor.
+ * Uses BaseCommandExecutor with @CmdCD, @RunAsync annotations.
+ * <p>
+ * 备份命令执行器。
+ * 使用 BaseCommandExecutor，带有 @CmdCD、@RunAsync 注解。
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
     alias = {"backup", "invbackup", "bk"},
     permission = "ultibackup.use",
-    description = "背包备份系统"
+    description = "backup.command.description"
 )
-public class BackupCommand extends AbstractCommendExecutor {
+public class BackupCommand extends BaseCommandExecutor {
     
     private final BackupService backupService;
     
@@ -35,70 +42,144 @@ public class BackupCommand extends AbstractCommendExecutor {
         this.backupService = backupService;
     }
     
+    /**
+     * Open backup GUI (default command).
+     * <p>
+     * 打开备份 GUI（默认命令）。
+     */
     @CmdMapping(format = "")
     public void openBackups(@CmdSender Player player) {
         BackupGUI gui = new BackupGUI(backupService, player, player.getUniqueId(), player.getName());
         player.openInventory(gui.getInventory());
     }
     
+    /**
+     * List backups.
+     * <p>
+     * 列出备份。
+     */
     @CmdMapping(format = "list")
     public void listBackups(@CmdSender Player player) {
-        List<BackupData> backups = backupService.getBackups(player.getUniqueId());
+        List<BackupMetadata> backups = backupService.getBackups(player.getUniqueId());
         
         if (backups.isEmpty()) {
-            player.sendMessage(backupService.getConfig().getNoBackupsMessage().replace("&", "§"));
+            player.sendMessage(i18n("backup.message.no_backups"));
             return;
         }
         
-        player.sendMessage(ChatColor.GOLD + "=== 你的备份 ===");
+        player.sendMessage(i18n("backup.message.list_header"));
         for (int i = 0; i < Math.min(5, backups.size()); i++) {
-            BackupData backup = backups.get(i);
-            player.sendMessage("" + ChatColor.YELLOW + (i + 1) + ". " + ChatColor.WHITE + 
-                backup.getFormattedTime() + " " + backup.getReasonDisplay());
+            BackupMetadata backup = backups.get(i);
+            player.sendMessage(i18n("backup.message.list_item")
+                .replace("{NUMBER}", String.valueOf(i + 1))
+                .replace("{TIME}", backup.getFormattedTime())
+                .replace("{REASON}", backup.getReasonDisplay()));
         }
         if (backups.size() > 5) {
-            player.sendMessage(ChatColor.GRAY + "... 还有 " + (backups.size() - 5) + " 个备份");
+            player.sendMessage(i18n("backup.message.list_more")
+                .replace("{COUNT}", String.valueOf(backups.size() - 5)));
         }
     }
     
+    /**
+     * Create a manual backup.
+     * <p>
+     * 创建手动备份。
+     */
     @CmdMapping(format = "create")
+    @CmdCD(30)
+    @RunAsync
     public void createBackup(@CmdSender Player player) {
         if (!player.hasPermission("ultibackup.create")) {
-            player.sendMessage(ChatColor.RED + "你没有权限创建备份！");
+            player.sendMessage(i18n("backup.message.no_permission"));
             return;
         }
         
-        backupService.createBackup(player, "MANUAL");
-        player.sendMessage(backupService.getConfig().getBackupCreatedMessage().replace("&", "§"));
+        BackupMetadata result = backupService.createBackup(player, "MANUAL");
+        if (result != null) {
+            player.sendMessage(i18n("backup.message.created"));
+        } else {
+            player.sendMessage(i18n("backup.message.create_failed"));
+        }
     }
     
+    /**
+     * Restore a backup by number.
+     * <p>
+     * 按编号恢复备份。
+     */
     @CmdMapping(format = "restore <number>")
+    @CmdCD(30)
     public void restoreBackup(@CmdSender Player player, @CmdParam("number") int number) {
-        List<BackupData> backups = backupService.getBackups(player.getUniqueId());
+        List<BackupMetadata> backups = backupService.getBackups(player.getUniqueId());
         
         if (backups.isEmpty() || number < 1 || number > backups.size()) {
-            player.sendMessage(ChatColor.RED + "无效的备份编号！");
+            player.sendMessage(i18n("backup.message.invalid_number"));
             return;
         }
         
-        BackupData backup = backups.get(number - 1);
-        if (backupService.restoreBackup(player, backup)) {
-            player.sendMessage(backupService.getConfig().getBackupRestoredMessage().replace("&", "§"));
-        } else {
-            player.sendMessage(ChatColor.RED + "恢复备份失败！");
-        }
+        BackupMetadata backup = backups.get(number - 1);
+        handleRestore(player, player, backup);
     }
     
-    @CmdMapping(format = "admin <player>")
-    public void adminBackups(@CmdSender Player sender, @CmdParam("player") String targetName) {
+    /**
+     * Force restore a backup (skip checksum verification).
+     * <p>
+     * 强制恢复备份（跳过校验和验证）。
+     */
+    @CmdMapping(format = "restore <number> force")
+    @CmdCD(30)
+    public void forceRestoreBackup(@CmdSender Player player, @CmdParam("number") int number) {
+        List<BackupMetadata> backups = backupService.getBackups(player.getUniqueId());
+        
+        if (backups.isEmpty() || number < 1 || number > backups.size()) {
+            player.sendMessage(i18n("backup.message.invalid_number"));
+            return;
+        }
+        
+        BackupMetadata backup = backups.get(number - 1);
+        
+        // Open confirmation GUI
+        ForceRestoreConfirmPage.open(player, backup, backupService);
+    }
+    
+    /**
+     * Save all online players' backups.
+     * <p>
+     * 保存所有在线玩家的备份。
+     */
+    @CmdMapping(format = "saveall")
+    @CmdCD(60)
+    @RunAsync
+    public void saveAllPlayers(@CmdSender Player sender) {
         if (!sender.hasPermission("ultibackup.admin")) {
-            sender.sendMessage(ChatColor.RED + "你没有权限查看其他玩家的备份！");
+            sender.sendMessage(i18n("backup.message.no_permission"));
+            return;
+        }
+        
+        int count = backupService.saveAllOnlinePlayers();
+        sender.sendMessage(i18n("backup.message.saveall_complete")
+            .replace("{COUNT}", String.valueOf(count)));
+    }
+    
+    /**
+     * View another player's backups (admin).
+     * <p>
+     * 查看其他玩家的备份（管理员）。
+     */
+    @CmdMapping(format = "admin <player>")
+    public void adminBackups(
+            @CmdSender Player sender, 
+            @CmdParam(value = "player", suggest = "suggestOnlinePlayers") String targetName) {
+        if (!sender.hasPermission("ultibackup.admin")) {
+            sender.sendMessage(i18n("backup.message.no_permission"));
             return;
         }
         
         OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
-        if (!target.hasPlayedBefore()) {
-            sender.sendMessage(ChatColor.RED + "找不到玩家: " + targetName);
+        if (!target.hasPlayedBefore() && !target.isOnline()) {
+            sender.sendMessage(i18n("backup.message.player_not_found")
+                .replace("{PLAYER}", targetName));
             return;
         }
         
@@ -106,23 +187,43 @@ public class BackupCommand extends AbstractCommendExecutor {
         sender.openInventory(gui.getInventory());
     }
     
+    /**
+     * Create backup for another player (admin).
+     * <p>
+     * 为其他玩家创建备份（管理员）。
+     */
     @CmdMapping(format = "admin create <player>")
-    public void adminCreateBackup(@CmdSender Player sender, @CmdParam("player") String targetName) {
+    @CmdCD(30)
+    @RunAsync
+    public void adminCreateBackup(
+            @CmdSender Player sender, 
+            @CmdParam(value = "player", suggest = "suggestOnlinePlayers") String targetName) {
         if (!sender.hasPermission("ultibackup.admin")) {
-            sender.sendMessage(ChatColor.RED + "你没有权限为其他玩家创建备份！");
+            sender.sendMessage(i18n("backup.message.no_permission"));
             return;
         }
         
         Player target = Bukkit.getPlayerExact(targetName);
         if (target == null) {
-            sender.sendMessage(ChatColor.RED + "玩家 " + targetName + " 不在线！");
+            sender.sendMessage(i18n("backup.message.player_offline")
+                .replace("{PLAYER}", targetName));
             return;
         }
         
-        backupService.createBackup(target, "ADMIN");
-        sender.sendMessage(ChatColor.GREEN + "已为 " + targetName + " 创建备份！");
+        BackupMetadata result = backupService.createBackup(target, "ADMIN");
+        if (result != null) {
+            sender.sendMessage(i18n("backup.message.admin_created")
+                .replace("{PLAYER}", targetName));
+        } else {
+            sender.sendMessage(i18n("backup.message.create_failed"));
+        }
     }
     
+    /**
+     * Show help message.
+     * <p>
+     * 显示帮助信息。
+     */
     @CmdMapping(format = "help")
     public void help(@CmdSender Player player) {
         handleHelp(player);
@@ -130,14 +231,81 @@ public class BackupCommand extends AbstractCommendExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GOLD + "=== UltiBackup 帮助 ===");
-        sender.sendMessage(ChatColor.YELLOW + "/backup" + ChatColor.WHITE + " - 打开备份GUI");
-        sender.sendMessage(ChatColor.YELLOW + "/backup list" + ChatColor.WHITE + " - 列出备份");
-        sender.sendMessage(ChatColor.YELLOW + "/backup create" + ChatColor.WHITE + " - 创建备份");
-        sender.sendMessage(ChatColor.YELLOW + "/backup restore <编号>" + ChatColor.WHITE + " - 恢复备份");
+        sender.sendMessage(i18n("backup.help.header"));
+        sender.sendMessage(i18n("backup.help.open"));
+        sender.sendMessage(i18n("backup.help.list"));
+        sender.sendMessage(i18n("backup.help.create"));
+        sender.sendMessage(i18n("backup.help.restore"));
+        sender.sendMessage(i18n("backup.help.restore_force"));
         if (sender.hasPermission("ultibackup.admin")) {
-            sender.sendMessage(ChatColor.YELLOW + "/backup admin <玩家>" + ChatColor.WHITE + " - 查看玩家备份");
-            sender.sendMessage(ChatColor.YELLOW + "/backup admin create <玩家>" + ChatColor.WHITE + " - 为玩家创建备份");
+            sender.sendMessage(i18n("backup.help.saveall"));
+            sender.sendMessage(i18n("backup.help.admin"));
+            sender.sendMessage(i18n("backup.help.admin_create"));
         }
+    }
+    
+    /**
+     * Handle restore operation with checksum verification.
+     * <p>
+     * 处理恢复操作（带校验和验证）。
+     */
+    private void handleRestore(Player sender, Player target, BackupMetadata backup) {
+        BackupService.RestoreResult result = backupService.restoreBackup(target, backup);
+        
+        switch (result) {
+            case SUCCESS:
+                sender.sendMessage(i18n("backup.message.restored"));
+                if (!sender.equals(target)) {
+                    target.sendMessage(i18n("backup.message.restored_by_admin")
+                        .replace("{ADMIN}", sender.getName()));
+                }
+                break;
+                
+            case CHECKSUM_FAILED:
+                sender.sendMessage(i18n("backup.message.checksum_failed"));
+                sender.sendMessage(i18n("backup.message.checksum_hint"));
+                break;
+                
+            case NOT_FOUND:
+                sender.sendMessage(i18n("backup.message.not_found"));
+                break;
+                
+            case LOAD_FAILED:
+                sender.sendMessage(i18n("backup.message.load_failed"));
+                break;
+                
+            case RESTORE_FAILED:
+                sender.sendMessage(i18n("backup.message.restore_failed"));
+                break;
+        }
+    }
+    
+    /**
+     * Suggest online player names for tab completion.
+     * <p>
+     * 为 Tab 补全建议在线玩家名称。
+     */
+    public List<String> suggestOnlinePlayers() {
+        return Bukkit.getOnlinePlayers().stream()
+            .map(Player::getName)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Suggest subcommands for tab completion.
+     * <p>
+     * 为 Tab 补全建议子命令。
+     */
+    public List<String> suggestSubcommands() {
+        return Arrays.asList("list", "create", "restore", "help", "admin", "saveall");
+    }
+    
+    /**
+     * Get i18n message.
+     * <p>
+     * 获取 i18n 消息。
+     */
+    private String i18n(String key) {
+        return UltiBackup.getInstance().i18n(key);
     }
 }

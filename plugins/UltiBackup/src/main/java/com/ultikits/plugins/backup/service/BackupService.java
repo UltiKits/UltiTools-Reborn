@@ -2,7 +2,8 @@ package com.ultikits.plugins.backup.service;
 
 import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.config.BackupConfig;
-import com.ultikits.plugins.backup.entity.BackupData;
+import com.ultikits.plugins.backup.entity.BackupContent;
+import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
@@ -10,17 +11,26 @@ import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
 
+import com.ultikits.ultitools.annotations.PostConstruct;
+import java.io.File;
+import java.io.IOException;
 import java.util.*;
 
 /**
  * Service for inventory backup operations.
+ * Implements cold/hot data separation:
+ * - Hot data (metadata) stored via DataOperator
+ * - Cold data (backup content) stored in YAML files
+ * <p>
+ * 背包备份操作服务。
+ * 实现冷热数据分离：
+ * - 热数据（元数据）通过 DataOperator 存储
+ * - 冷数据（备份内容）存储在 YAML 文件中
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @Service
 public class BackupService {
@@ -28,13 +38,23 @@ public class BackupService {
     @Autowired
     private BackupConfig config;
     
-    private DataOperator<BackupData> dataOperator;
+    private DataOperator<BackupMetadata> dataOperator;
+    private File backupsDirectory;
     
     /**
      * Initialize the service.
+     * <p>
+     * 初始化服务。
      */
+    @PostConstruct
     public void init() {
-        this.dataOperator = UltiBackup.getInstance().getDataOperator(BackupData.class);
+        this.dataOperator = UltiBackup.getInstance().getDataOperator(BackupMetadata.class);
+        
+        // Ensure backups directory exists
+        this.backupsDirectory = new File(UltiTools.getInstance().getDataFolder(), "backups");
+        if (!backupsDirectory.exists()) {
+            backupsDirectory.mkdirs();
+        }
         
         // Start auto backup task
         if (config.isAutoBackupEnabled() && config.getAutoBackupInterval() > 0) {
@@ -44,43 +64,65 @@ public class BackupService {
                 config.getAutoBackupInterval() * 60 * 20L,
                 config.getAutoBackupInterval() * 60 * 20L
             );
+            UltiBackup.getInstance().getLogger().info("Auto backup task started with interval: " + 
+                config.getAutoBackupInterval() + " minutes");
         }
     }
     
     /**
      * Create a backup for a player.
+     * <p>
+     * 为玩家创建备份。
+     *
+     * @param player the player
+     * @param reason the backup reason
+     * @return the backup metadata
      */
-    public BackupData createBackup(Player player, String reason) {
-        BackupData backup = BackupData.fromPlayer(player, reason);
+    public BackupMetadata createBackup(Player player, String reason) {
+        // Create metadata
+        BackupMetadata metadata = BackupMetadata.fromPlayer(player, reason);
         
-        // Serialize inventory
-        backup.setInventoryContents(serializeItems(player.getInventory().getStorageContents()));
+        // Create content from player
+        BackupContent content = BackupContent.fromPlayer(
+            player,
+            config.isBackupArmor(),
+            config.isBackupEnderchest(),
+            config.isBackupExp()
+        );
         
-        // Serialize armor
-        if (config.isBackupArmor()) {
-            backup.setArmorContents(serializeItems(player.getInventory().getArmorContents()));
-            backup.setOffhandItem(serializeItem(player.getInventory().getItemInOffHand()));
+        try {
+            // Save cold data to file
+            File backupFile = new File(UltiTools.getInstance().getDataFolder(), metadata.getFilePath());
+            String checksum = content.saveToFile(backupFile);
+            metadata.setChecksum(checksum);
+            
+            // Save metadata to database
+            dataOperator.insert(metadata);
+            
+            // Clean up old backups
+            cleanupOldBackups(UUID.fromString(player.getUniqueId().toString()));
+            
+            UltiBackup.getInstance().getLogger().info("Created backup for " + player.getName() + 
+                ": " + metadata.getFilePath());
+            
+            return metadata;
+        } catch (IOException e) {
+            UltiBackup.getInstance().getLogger().error(e, 
+                "Failed to create backup for " + player.getName());
+            return null;
         }
-        
-        // Serialize ender chest
-        if (config.isBackupEnderchest()) {
-            backup.setEnderchestContents(serializeItems(player.getEnderChest().getContents()));
-        }
-        
-        // Save to database
-        dataOperator.insert(backup);
-        
-        // Clean up old backups
-        cleanupOldBackups(player.getUniqueId());
-        
-        return backup;
     }
     
     /**
      * Get all backups for a player.
+     * <p>
+     * 获取玩家的所有备份。
+     *
+     * @param playerUuid the player UUID
+     * @return list of backups sorted by time descending
      */
-    public List<BackupData> getBackups(UUID playerUuid) {
-        List<BackupData> backups = dataOperator.getAll(
+    public List<BackupMetadata> getBackups(UUID playerUuid) {
+        List<BackupMetadata> backups = dataOperator.getAll(
             WhereCondition.builder()
                 .column("player_uuid")
                 .value(playerUuid.toString())
@@ -95,191 +137,265 @@ public class BackupService {
     
     /**
      * Get a specific backup by ID.
+     * <p>
+     * 根据 ID 获取备份。
+     *
+     * @param id the backup ID
+     * @return the backup metadata
      */
-    public BackupData getBackup(String id) {
+    public BackupMetadata getBackup(String id) {
         return dataOperator.getById(id);
     }
     
     /**
-     * Restore a backup to a player.
+     * Verify backup checksum.
+     * <p>
+     * 验证备份校验和。
+     *
+     * @param metadata the backup metadata
+     * @return true if checksum is valid
      */
-    public boolean restoreBackup(Player player, BackupData backup) {
-        if (backup == null) {
+    public boolean verifyChecksum(BackupMetadata metadata) {
+        if (metadata == null || metadata.getFilePath() == null) {
             return false;
         }
         
-        // Clear current inventory
-        player.getInventory().clear();
-        
-        // Restore inventory contents
-        ItemStack[] contents = deserializeItems(backup.getInventoryContents());
-        if (contents != null) {
-            for (int i = 0; i < Math.min(contents.length, 36); i++) {
-                if (contents[i] != null) {
-                    player.getInventory().setItem(i, contents[i]);
-                }
-            }
+        File backupFile = metadata.getBackupFile();
+        if (backupFile == null || !backupFile.exists()) {
+            return false;
         }
         
-        // Restore armor
-        if (config.isBackupArmor() && backup.getArmorContents() != null) {
-            ItemStack[] armor = deserializeItems(backup.getArmorContents());
-            if (armor != null) {
-                player.getInventory().setArmorContents(armor);
-            }
-            ItemStack offhand = deserializeItem(backup.getOffhandItem());
-            if (offhand != null) {
-                player.getInventory().setItemInOffHand(offhand);
-            }
+        try {
+            return BackupContent.verifyChecksum(backupFile, metadata.getChecksum());
+        } catch (IOException e) {
+            UltiBackup.getInstance().getLogger().warn(e, 
+                "Failed to verify checksum for backup: " + metadata.getId());
+            return false;
+        }
+    }
+    
+    /**
+     * Load backup content from file.
+     * <p>
+     * 从文件加载备份内容。
+     *
+     * @param metadata the backup metadata
+     * @return the backup content, or null if load fails
+     */
+    public BackupContent loadBackupContent(BackupMetadata metadata) {
+        if (metadata == null || metadata.getFilePath() == null) {
+            return null;
         }
         
-        // Restore ender chest
-        if (config.isBackupEnderchest() && backup.getEnderchestContents() != null) {
-            ItemStack[] enderChest = deserializeItems(backup.getEnderchestContents());
-            if (enderChest != null) {
-                player.getEnderChest().setContents(enderChest);
-            }
+        File backupFile = metadata.getBackupFile();
+        if (backupFile == null || !backupFile.exists()) {
+            return null;
         }
         
-        // Restore exp
-        if (config.isBackupExp()) {
-            player.setLevel(backup.getExpLevel());
-            player.setExp(backup.getExpProgress());
+        try {
+            return BackupContent.loadFromFile(backupFile);
+        } catch (IOException e) {
+            UltiBackup.getInstance().getLogger().warn(e, 
+                "Failed to load backup content: " + metadata.getId());
+            return null;
+        }
+    }
+    
+    /**
+     * Restore a backup to a player (with checksum verification).
+     * <p>
+     * 将备份恢复到玩家（带校验和验证）。
+     *
+     * @param player the player
+     * @param metadata the backup metadata
+     * @return RestoreResult indicating success, failure, or checksum error
+     */
+    public RestoreResult restoreBackup(Player player, BackupMetadata metadata) {
+        if (metadata == null) {
+            return RestoreResult.NOT_FOUND;
         }
         
-        return true;
+        // Verify checksum first
+        if (!verifyChecksum(metadata)) {
+            return RestoreResult.CHECKSUM_FAILED;
+        }
+        
+        // Load and restore content
+        return forceRestore(player, metadata);
+    }
+    
+    /**
+     * Force restore a backup without checksum verification.
+     * Use this when user confirms to restore a corrupted backup.
+     * <p>
+     * 强制恢复备份（跳过校验和验证）。
+     * 当用户确认恢复损坏的备份时使用。
+     *
+     * @param player the player
+     * @param metadata the backup metadata
+     * @return RestoreResult indicating success or failure
+     */
+    public RestoreResult forceRestore(Player player, BackupMetadata metadata) {
+        if (metadata == null) {
+            return RestoreResult.NOT_FOUND;
+        }
+        
+        BackupContent content = loadBackupContent(metadata);
+        if (content == null) {
+            return RestoreResult.LOAD_FAILED;
+        }
+        
+        try {
+            content.restoreToPlayer(
+                player,
+                config.isBackupArmor(),
+                config.isBackupEnderchest(),
+                config.isBackupExp()
+            );
+            
+            UltiBackup.getInstance().getLogger().info("Restored backup " + metadata.getId() + 
+                " to player " + player.getName());
+            
+            return RestoreResult.SUCCESS;
+        } catch (Exception e) {
+            UltiBackup.getInstance().getLogger().error(e, 
+                "Failed to restore backup " + metadata.getId() + " to " + player.getName());
+            return RestoreResult.RESTORE_FAILED;
+        }
     }
     
     /**
      * Delete a backup.
+     * <p>
+     * 删除备份。
+     *
+     * @param metadata the backup metadata
+     * @return true if deleted successfully
      */
-    public boolean deleteBackup(BackupData backup) {
-        if (backup == null) {
+    public boolean deleteBackup(BackupMetadata metadata) {
+        if (metadata == null) {
             return false;
         }
-        dataOperator.delById(backup.getId());
+        
+        // Trigger onDelete hook which will delete the cold data file
+        metadata.onDelete();
+        
+        // Delete metadata from database
+        dataOperator.delById(metadata.getId());
+        
         return true;
     }
     
     /**
      * Delete a backup by ID.
+     * <p>
+     * 根据 ID 删除备份。
+     *
+     * @param id the backup ID
+     * @return true if deleted successfully
      */
     public boolean deleteBackup(String id) {
-        BackupData backup = dataOperator.getById(id);
-        if (backup != null) {
-            dataOperator.delById(id);
-            return true;
+        BackupMetadata metadata = dataOperator.getById(id);
+        return deleteBackup(metadata);
+    }
+    
+    /**
+     * Save all online players' backups.
+     * <p>
+     * 保存所有在线玩家的备份。
+     *
+     * @return the number of backups created
+     */
+    public int saveAllOnlinePlayers() {
+        int count = 0;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.hasPermission("ultibackup.auto")) {
+                BackupMetadata result = createBackup(player, "ADMIN");
+                if (result != null) {
+                    count++;
+                }
+            }
         }
-        return false;
+        return count;
     }
     
     /**
      * Auto backup all online players.
+     * <p>
+     * 自动备份所有在线玩家。
      */
     private void autoBackupAll() {
         Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            int count = 0;
             for (Player player : Bukkit.getOnlinePlayers()) {
                 if (player.hasPermission("ultibackup.auto")) {
-                    createBackup(player, "AUTO");
+                    BackupMetadata result = createBackup(player, "AUTO");
+                    if (result != null) {
+                        count++;
+                    }
                 }
+            }
+            if (count > 0) {
+                UltiBackup.getInstance().getLogger().info("Auto backup completed: " + count + " players");
             }
         });
     }
     
     /**
      * Clean up old backups for a player.
+     * <p>
+     * 清理玩家的旧备份。
+     *
+     * @param playerUuid the player UUID
      */
     private void cleanupOldBackups(UUID playerUuid) {
-        List<BackupData> backups = getBackups(playerUuid);
+        List<BackupMetadata> backups = getBackups(playerUuid);
         
         if (backups.size() > config.getMaxBackupsPerPlayer()) {
             // Remove oldest backups
             for (int i = config.getMaxBackupsPerPlayer(); i < backups.size(); i++) {
-                dataOperator.delById(backups.get(i).getId());
+                deleteBackup(backups.get(i));
             }
         }
     }
     
     /**
-     * Serialize items to YAML string.
+     * Get the config.
+     * <p>
+     * 获取配置。
+     *
+     * @return the backup config
      */
-    private String serializeItems(ItemStack[] items) {
-        if (items == null) return "";
-        
-        YamlConfiguration yaml = new YamlConfiguration();
-        for (int i = 0; i < items.length; i++) {
-            if (items[i] != null) {
-                yaml.set("items." + i, items[i]);
-            }
-        }
-        return yaml.saveToString();
-    }
-    
-    /**
-     * Serialize single item to YAML string.
-     */
-    private String serializeItem(ItemStack item) {
-        if (item == null) return "";
-        
-        YamlConfiguration yaml = new YamlConfiguration();
-        yaml.set("item", item);
-        return yaml.saveToString();
-    }
-    
-    /**
-     * Deserialize items from YAML string.
-     */
-    private ItemStack[] deserializeItems(String data) {
-        if (data == null || data.isEmpty()) {
-            return null;
-        }
-        
-        try {
-            YamlConfiguration yaml = new YamlConfiguration();
-            yaml.loadFromString(data);
-            
-            List<ItemStack> items = new ArrayList<>();
-            int maxSlot = 0;
-            
-            if (yaml.isConfigurationSection("items")) {
-                for (String key : yaml.getConfigurationSection("items").getKeys(false)) {
-                    int slot = Integer.parseInt(key);
-                    maxSlot = Math.max(maxSlot, slot);
-                }
-                
-                ItemStack[] result = new ItemStack[maxSlot + 1];
-                for (String key : yaml.getConfigurationSection("items").getKeys(false)) {
-                    int slot = Integer.parseInt(key);
-                    result[slot] = yaml.getItemStack("items." + key);
-                }
-                return result;
-            }
-            return null;
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
-    
-    /**
-     * Deserialize single item from YAML string.
-     */
-    private ItemStack deserializeItem(String data) {
-        if (data == null || data.isEmpty()) {
-            return null;
-        }
-        
-        try {
-            YamlConfiguration yaml = new YamlConfiguration();
-            yaml.loadFromString(data);
-            return yaml.getItemStack("item");
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
-    
     public BackupConfig getConfig() {
         return config;
+    }
+    
+    /**
+     * Get the backups directory.
+     * <p>
+     * 获取备份目录。
+     *
+     * @return the backups directory
+     */
+    public File getBackupsDirectory() {
+        return backupsDirectory;
+    }
+    
+    /**
+     * Restore result enum.
+     * <p>
+     * 恢复结果枚举。
+     */
+    public enum RestoreResult {
+        /** Restore successful */
+        SUCCESS,
+        /** Backup not found */
+        NOT_FOUND,
+        /** Checksum verification failed */
+        CHECKSUM_FAILED,
+        /** Failed to load backup content */
+        LOAD_FAILED,
+        /** Failed to restore to player */
+        RESTORE_FAILED
     }
 }

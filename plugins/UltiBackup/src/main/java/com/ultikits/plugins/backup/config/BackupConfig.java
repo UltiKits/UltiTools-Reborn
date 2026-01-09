@@ -1,17 +1,19 @@
 package com.ultikits.plugins.backup.config;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
-import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntry;
 
 import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Backup configuration.
+ * Backup configuration entity.
+ * <p>
+ * 备份配置实体。
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @Getter
 @Setter
@@ -45,19 +47,4 @@ public class BackupConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "backup_exp", comment = "Include experience levels in backups")
     private boolean backupExp = true;
-    
-    @ConfigEntry(path = "gui_title", comment = "Title of the backup selection GUI")
-    private String guiTitle = "&6背包备份 &7- {PLAYER}";
-    
-    @ConfigEntry(path = "messages.backup_created", comment = "Backup created message")
-    private String backupCreatedMessage = "&a已创建背包备份！";
-    
-    @ConfigEntry(path = "messages.backup_restored", comment = "Backup restored message")
-    private String backupRestoredMessage = "&a已恢复背包备份！";
-    
-    @ConfigEntry(path = "messages.no_backups", comment = "No backups available message")
-    private String noBackupsMessage = "&c没有可用的备份！";
-    
-    @ConfigEntry(path = "messages.backup_deleted", comment = "Backup deleted message")
-    private String backupDeletedMessage = "&a备份已删除！";
 }

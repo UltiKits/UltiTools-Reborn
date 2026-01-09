@@ -1,3 +1,88 @@
-# UltiBackup Language File
-backup_enabled: "UltiBackup has been enabled!"
-backup_disabled: "UltiBackup has been disabled!"
+# UltiBackup English Language File
+
+# Command description
+backup.command.description: "§6Inventory Backup System"
+
+# Backup reason display
+backup.reason.death: "§cDeath Backup"
+backup.reason.quit: "§eQuit Backup"
+backup.reason.auto: "§aAuto Backup"
+backup.reason.manual: "§bManual Backup"
+backup.reason.admin: "§dAdmin Backup"
+backup.reason.unknown: "§7Unknown"
+
+# Messages
+backup.message.created: "§a✔ Backup created successfully!"
+backup.message.create_failed: "§c✖ Failed to create backup. Check console for details."
+backup.message.restored: "§a✔ Backup restored successfully!"
+backup.message.force_restored: "§e⚠ Corrupted backup force-restored!"
+backup.message.restored_by_admin: "§eAdmin {ADMIN} has restored your inventory backup."
+backup.message.restore_failed: "§c✖ Failed to restore backup!"
+backup.message.restore_cancelled: "§7Restore operation cancelled."
+backup.message.deleted: "§a✔ Backup deleted!"
+backup.message.no_backups: "§eYou have no backups."
+backup.message.invalid_number: "§cInvalid backup number!"
+backup.message.not_found: "§cBackup not found!"
+backup.message.load_failed: "§cFailed to load backup file!"
+backup.message.no_permission: "§cYou don't have permission to do this!"
+backup.message.player_not_found: "§cPlayer not found: {PLAYER}"
+backup.message.player_offline: "§cPlayer {PLAYER} is offline!"
+backup.message.admin_created: "§aCreated backup for player {PLAYER}!"
+backup.message.saveall_complete: "§a✔ Created backups for {COUNT} players!"
+backup.message.checksum_failed: "§c⚠ Warning: Backup file checksum verification failed!"
+backup.message.checksum_hint: "§eThe file may have been modified or corrupted. Use force restore if you still want to proceed."
+
+# List messages
+backup.message.list_header: "§6=== Your Backups ==="
+backup.message.list_item: "§e{NUMBER}. §f{TIME} {REASON}"
+backup.message.list_more: "§7... and {COUNT} more backups"
+
+# GUI title and text
+backup.gui.title: "§6Inventory Backup §7- {PLAYER}"
+backup.gui.reason: "§7Reason: {REASON}"
+backup.gui.world: "§7World: §f{WORLD}"
+backup.gui.location: "§7Location: §f{LOCATION}"
+backup.gui.level: "§7Level: §b{LEVEL}"
+backup.gui.click_restore: "§aLeft-click: Restore this backup"
+backup.gui.click_preview: "§eShift+Left-click: Preview backup"
+backup.gui.click_delete: "§cRight-click: Delete this backup"
+backup.gui.previous_page: "§aPrevious Page"
+backup.gui.next_page: "§aNext Page"
+backup.gui.page_indicator: "§ePage {CURRENT} / {TOTAL}"
+backup.gui.create_new: "§aCreate New Backup"
+backup.gui.create_new_lore: "§7Click to create a new backup for this player"
+
+# Preview GUI
+backup.preview.title: "§6Preview Backup §7- {TIME}"
+backup.preview.tab_inventory: "§fInventory"
+backup.preview.tab_armor: "§fArmor"
+backup.preview.tab_enderchest: "§fEnder Chest"
+backup.preview.close: "§cClose"
+backup.preview.info: "Backup Info"
+backup.preview.info_time: "§7Time: §f{TIME}"
+backup.preview.info_reason: "§7Reason: {REASON}"
+backup.preview.info_level: "§7Level: §b{LEVEL}"
+backup.preview.info_world: "§7World: §f{WORLD}"
+
+# Force restore confirmation
+backup.confirm.title: "§c⚠ Confirm Force Restore"
+backup.confirm.warning_title: "Warning: Backup Corrupted"
+backup.confirm.warning_line1: "Checksum verification failed for this backup"
+backup.confirm.warning_line2: "The file may have been modified or corrupted"
+backup.confirm.backup_info: "Backup Info:"
+backup.confirm.backup_time: "Time: {TIME}"
+backup.confirm.backup_player: "Player: {PLAYER}"
+backup.confirm.risk_warning: "Force restore may result in item loss or corruption!"
+backup.confirm.button_confirm: "§c§lConfirm Force Restore"
+backup.confirm.button_cancel: "§aCancel"
+
+# Help messages
+backup.help.header: "§6=== UltiBackup Help ==="
+backup.help.open: "§e/backup §f- Open backup GUI"
+backup.help.list: "§e/backup list §f- List your backups"
+backup.help.create: "§e/backup create §f- Create a manual backup"
+backup.help.restore: "§e/backup restore <number> §f- Restore a backup"
+backup.help.restore_force: "§e/backup restore <number> force §f- Force restore (skip verification)"
+backup.help.saveall: "§e/backup saveall §f- Save all online players (Admin)"
+backup.help.admin: "§e/backup admin <player> §f- View player's backups (Admin)"
+backup.help.admin_create: "§e/backup admin create <player> §f- Create backup for player (Admin)"

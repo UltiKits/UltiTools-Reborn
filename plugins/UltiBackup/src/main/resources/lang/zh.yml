@@ -1,3 +1,89 @@
-# UltiBackup 语言文件
-backup_enabled: "UltiBackup 已启用！"
-backup_disabled: "UltiBackup 已禁用！"
+# UltiBackup 中文语言文件
+# Chinese Language File for UltiBackup
+
+# 命令描述
+backup.command.description: "§6背包备份系统"
+
+# 备份原因显示
+backup.reason.death: "§c死亡备份"
+backup.reason.quit: "§e退出备份"
+backup.reason.auto: "§a自动备份"
+backup.reason.manual: "§b手动备份"
+backup.reason.admin: "§d管理员备份"
+backup.reason.unknown: "§7未知"
+
+# 消息
+backup.message.created: "§a✔ 已成功创建背包备份！"
+backup.message.create_failed: "§c✖ 创建备份失败，请查看控制台日志。"
+backup.message.restored: "§a✔ 已成功恢复背包备份！"
+backup.message.force_restored: "§e⚠ 已强制恢复损坏的备份！"
+backup.message.restored_by_admin: "§e管理员 {ADMIN} 已恢复你的背包备份。"
+backup.message.restore_failed: "§c✖ 恢复备份失败！"
+backup.message.restore_cancelled: "§7已取消恢复操作。"
+backup.message.deleted: "§a✔ 备份已删除！"
+backup.message.no_backups: "§e你没有任何备份。"
+backup.message.invalid_number: "§c无效的备份编号！"
+backup.message.not_found: "§c找不到指定的备份！"
+backup.message.load_failed: "§c无法加载备份文件！"
+backup.message.no_permission: "§c你没有权限执行此操作！"
+backup.message.player_not_found: "§c找不到玩家: {PLAYER}"
+backup.message.player_offline: "§c玩家 {PLAYER} 不在线！"
+backup.message.admin_created: "§a已为玩家 {PLAYER} 创建备份！"
+backup.message.saveall_complete: "§a✔ 已为 {COUNT} 名玩家创建备份！"
+backup.message.checksum_failed: "§c⚠ 警告：备份文件校验失败！"
+backup.message.checksum_hint: "§e文件可能已被修改或损坏。如果仍要恢复，请使用强制恢复功能。"
+
+# 列表消息
+backup.message.list_header: "§6=== 你的备份 ==="
+backup.message.list_item: "§e{NUMBER}. §f{TIME} {REASON}"
+backup.message.list_more: "§7... 还有 {COUNT} 个备份"
+
+# GUI 标题和文本
+backup.gui.title: "§6背包备份 §7- {PLAYER}"
+backup.gui.reason: "§7原因: {REASON}"
+backup.gui.world: "§7世界: §f{WORLD}"
+backup.gui.location: "§7位置: §f{LOCATION}"
+backup.gui.level: "§7等级: §b{LEVEL}"
+backup.gui.click_restore: "§a左键点击: 恢复此备份"
+backup.gui.click_preview: "§eShift+左键: 预览备份内容"
+backup.gui.click_delete: "§c右键点击: 删除此备份"
+backup.gui.previous_page: "§a上一页"
+backup.gui.next_page: "§a下一页"
+backup.gui.page_indicator: "§e第 {CURRENT} / {TOTAL} 页"
+backup.gui.create_new: "§a创建新备份"
+backup.gui.create_new_lore: "§7点击为此玩家创建新备份"
+
+# 预览 GUI
+backup.preview.title: "§6预览备份 §7- {TIME}"
+backup.preview.tab_inventory: "§f背包"
+backup.preview.tab_armor: "§f护甲"
+backup.preview.tab_enderchest: "§f末影箱"
+backup.preview.close: "§c关闭"
+backup.preview.info: "备份信息"
+backup.preview.info_time: "§7时间: §f{TIME}"
+backup.preview.info_reason: "§7原因: {REASON}"
+backup.preview.info_level: "§7等级: §b{LEVEL}"
+backup.preview.info_world: "§7世界: §f{WORLD}"
+
+# 强制恢复确认
+backup.confirm.title: "§c⚠ 确认强制恢复"
+backup.confirm.warning_title: "警告：备份已损坏"
+backup.confirm.warning_line1: "此备份的校验和验证失败"
+backup.confirm.warning_line2: "文件可能已被修改或损坏"
+backup.confirm.backup_info: "备份信息:"
+backup.confirm.backup_time: "时间: {TIME}"
+backup.confirm.backup_player: "玩家: {PLAYER}"
+backup.confirm.risk_warning: "强制恢复可能导致物品丢失或损坏！"
+backup.confirm.button_confirm: "§c§l确认强制恢复"
+backup.confirm.button_cancel: "§a取消"
+
+# 帮助信息
+backup.help.header: "§6=== UltiBackup 帮助 ==="
+backup.help.open: "§e/backup §f- 打开备份 GUI"
+backup.help.list: "§e/backup list §f- 列出你的备份"
+backup.help.create: "§e/backup create §f- 手动创建备份"
+backup.help.restore: "§e/backup restore <编号> §f- 恢复指定备份"
+backup.help.restore_force: "§e/backup restore <编号> force §f- 强制恢复（跳过校验）"
+backup.help.saveall: "§e/backup saveall §f- 保存所有在线玩家 (管理员)"
+backup.help.admin: "§e/backup admin <玩家> §f- 查看玩家备份 (管理员)"
+backup.help.admin_create: "§e/backup admin create <玩家> §f- 为玩家创建备份 (管理员)"
