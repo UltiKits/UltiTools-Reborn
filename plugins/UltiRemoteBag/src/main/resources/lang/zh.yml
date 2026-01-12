@@ -1,3 +1,93 @@
 # UltiRemoteBag 语言文件
 bag_enabled: "UltiRemoteBag 已启用！"
 bag_disabled: "UltiRemoteBag 已禁用！"
+
+# GUI 标题
+gui_main_title: "的远程背包"
+gui_close: "关闭"
+
+# 背包相关
+bag_name: "背包 #{0}"
+lore_item_count: "物品数量: §f{0} 个"
+lore_slot_usage: "占用槽位: §f{0}/{1}"
+lore_click_open: "点击打开"
+opening_bag: "正在打开背包 #{0}..."
+
+# 购买相关
+purchase_button: "购买新背包"
+lore_price: "价格: §e{0}"
+lore_balance: "余额: §f{0}"
+lore_click_purchase: "点击购买"
+lore_insufficient_balance: "余额不足"
+purchase_success: "成功购买背包 #{0}！"
+purchase_failed: "购买失败！余额不足，需要 {0}"
+
+# 背包内容 GUI
+read_only: "只读"
+btn_back: "返回"
+btn_refresh: "刷新"
+btn_save: "保存"
+btn_save_disabled: "保存 (不可用)"
+btn_close: "关闭"
+mode_edit: "编辑模式"
+mode_readonly: "只读模式"
+
+# 按钮 Lore
+lore_back_to_main: "返回背包列表"
+lore_refresh_hint1: "点击刷新背包状态"
+lore_refresh_hint2: "如果所有者已退出，"
+lore_refresh_hint3: "将自动切换为编辑模式"
+lore_save_hint: "点击手动保存更改"
+lore_readonly_hint1: "所有者正在使用此背包"
+lore_readonly_hint2: "当前为只读模式"
+lore_readonly_hint3: "等待所有者退出后"
+lore_readonly_hint4: "点击刷新按钮切换为编辑模式"
+lore_edit_mode: "您可以自由编辑此背包"
+lore_readonly_mode1: "背包所有者正在使用"
+lore_readonly_mode2: "您只能查看，无法修改"
+lore_close_save: "关闭并保存更改"
+lore_close_discard: "关闭（不保存更改）"
+
+# 消息提示
+msg_upgrading_to_edit: "所有者已退出，正在切换为编辑模式..."
+msg_owner_still_using: "所有者仍在使用中，请稍后再试"
+msg_bag_saved: "背包已保存！"
+msg_cannot_save_readonly: "当前为只读模式，无法保存修改"
+msg_readonly_no_move: "只读模式，无法移动物品"
+
+# 命令相关
+page_out_of_range: "页码 {0} 超出范围，最大页码为 {1}"
+bag_not_exist: "背包 #{0} 不存在"
+bag_saved_manually: "背包已手动保存！"
+player_not_found: "找不到玩家: {0}"
+player_no_bags: "玩家 {0} 没有任何背包"
+bag_in_use_cannot_delete: "该背包正在使用中，无法删除"
+bag_in_use_cannot_clear: "该背包正在使用中，无法清空"
+
+# 管理员命令消息
+admin_bag_created: "已为玩家 {0} 创建背包 #{1}"
+admin_bag_create_failed: "为玩家 {0} 创建背包失败"
+admin_bag_deleted: "已删除玩家 {0} 的背包 #{1}"
+admin_bag_delete_failed: "删除玩家 {0} 的背包 #{1} 失败"
+admin_bag_cleared: "已清空玩家 {0} 的背包 #{1}"
+admin_bag_clear_failed: "清空玩家 {0} 的背包 #{1} 失败"
+
+# 背包列表
+bag_list_title: "的背包列表"
+no_bags: "没有背包"
+items_stacks: "{0} 个物品, {1} 个槽位"
+total_bags: "共 {0} 个背包"
+
+# 帮助信息
+help_title: "帮助"
+help_open: "打开背包主页"
+help_open_page: "打开指定页背包"
+help_save: "手动保存背包"
+admin_commands: "管理员命令"
+help_see: "查看玩家背包"
+help_create: "为玩家创建背包"
+help_delete: "删除玩家背包页"
+help_clear: "清空玩家背包页"
+help_list: "列出玩家所有背包"
+page: "页码"
+player: "玩家"

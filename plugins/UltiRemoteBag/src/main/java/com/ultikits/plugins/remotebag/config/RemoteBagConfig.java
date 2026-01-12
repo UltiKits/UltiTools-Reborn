@@ -54,4 +54,49 @@ public class RemoteBagConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "messages.bag_saved", comment = "Bag saved message")
     private String bagSavedMessage = "&a远程背包已保存！";
+    
+    // ==================== 经济设置 ====================
+    
+    @ConfigEntry(path = "economy.enabled", comment = "是否启用购买背包功能（需要 Vault）")
+    private boolean economyEnabled = true;
+    
+    @ConfigEntry(path = "economy.base_price", comment = "购买背包的基础价格")
+    private int basePrice = 10000;
+    
+    @ConfigEntry(path = "economy.price_increase_enabled", comment = "是否启用价格递增（每购买一个背包价格增加）")
+    private boolean priceIncreaseEnabled = true;
+    
+    @ConfigEntry(path = "economy.price_increase_rate", comment = "价格递增比率（0.1 = 每个背包增加10%）")
+    private double priceIncreaseRate = 0.1;
+    
+    // ==================== 音效设置 ====================
+    
+    @ConfigEntry(path = "sound.enabled", comment = "是否启用音效")
+    private boolean soundEnabled = true;
+    
+    @ConfigEntry(path = "sound.open", comment = "打开背包音效")
+    private String openSound = "BLOCK_CHEST_OPEN";
+    
+    @ConfigEntry(path = "sound.close", comment = "关闭背包音效")
+    private String closeSound = "BLOCK_CHEST_CLOSE";
+    
+    @ConfigEntry(path = "sound.purchase", comment = "购买成功音效")
+    private String purchaseSound = "ENTITY_PLAYER_LEVELUP";
+    
+    @ConfigEntry(path = "sound.error", comment = "错误提示音效")
+    private String errorSound = "ENTITY_VILLAGER_NO";
+    
+    @ConfigEntry(path = "sound.volume", comment = "音量 (0.0-1.0)")
+    private float soundVolume = 1.0f;
+    
+    @ConfigEntry(path = "sound.pitch", comment = "音调 (0.5-2.0)")
+    private float soundPitch = 1.0f;
+    
+    // ==================== 锁定设置 ====================
+    
+    @ConfigEntry(path = "lock.timeout_seconds", comment = "背包锁超时时间（秒），超时后自动释放")
+    private int lockTimeout = 300;
+    
+    @ConfigEntry(path = "lock.notify_readonly_viewers", comment = "所有者开始使用背包时是否通知只读查看者")
+    private boolean notifyReadonlyViewers = true;
 }

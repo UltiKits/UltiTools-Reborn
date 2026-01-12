@@ -1,5 +1,7 @@
 package com.ultikits.plugins.remotebag;
 
+import com.ultikits.plugins.remotebag.service.BagLockService;
+import com.ultikits.plugins.remotebag.service.RemoteBagService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
@@ -11,7 +13,7 @@ import java.util.List;
  * Provides remote bag (virtual chest) functionality for players.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @UltiToolsModule(
     scanBasePackages = {"com.ultikits.plugins.remotebag"}
@@ -23,12 +25,29 @@ public class UltiRemoteBag extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         instance = this;
+        
+        // 初始化服务
+        RemoteBagService bagService = getContext().getBean(RemoteBagService.class);
+        if (bagService != null) {
+            bagService.init();
+        }
+        
+        // 设置锁超时时间
+        BagLockService lockService = getContext().getBean(BagLockService.class);
+        // 从配置获取超时时间（如果有的话）
+        
         getLogger().info("UltiRemoteBag has been enabled!");
         return true;
     }
     
     @Override
     public void unregisterSelf() {
+        // 保存所有背包数据
+        RemoteBagService bagService = getContext().getBean(RemoteBagService.class);
+        if (bagService != null) {
+            bagService.saveAllBags();
+        }
+        
         getLogger().info("UltiRemoteBag has been disabled!");
     }
     

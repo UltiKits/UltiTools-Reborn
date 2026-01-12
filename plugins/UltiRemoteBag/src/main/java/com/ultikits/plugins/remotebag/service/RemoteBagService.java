@@ -7,16 +7,17 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.utils.EconomyUtils;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Service for remote bag operations.
@@ -34,9 +35,6 @@ public class RemoteBagService {
     
     // Cache for player bags - Map<PlayerUUID, Map<PageNumber, ItemStack[]>>
     private final Map<UUID, Map<Integer, ItemStack[]>> bagCache = new ConcurrentHashMap<>();
-    
-    // Track currently open bags - Map<PlayerUUID, CurrentPage>
-    private final Map<UUID, Integer> openBags = new ConcurrentHashMap<>();
     
     /**
      * Initialize the service.
@@ -73,107 +71,11 @@ public class RemoteBagService {
     }
     
     /**
-     * Open remote bag for a player.
-     */
-    public void openBag(Player player, int page) {
-        int maxPages = getPlayerMaxPages(player);
-        
-        if (page < 1) page = 1;
-        if (page > maxPages) {
-            player.sendMessage(config.getPageLockedMessage()
-                .replace("{PAGE}", String.valueOf(page))
-                .replace("&", "§"));
-            return;
-        }
-        
-        // Load bag if not cached
-        loadBagIfNeeded(player.getUniqueId());
-        
-        // Create inventory
-        int size = config.getRowsPerPage() * 9;
-        String title = config.getGuiTitle()
-            .replace("{PAGE}", String.valueOf(page))
-            .replace("{MAX}", String.valueOf(maxPages))
-            .replace("&", "§");
-        
-        Inventory inv = Bukkit.createInventory(null, size + 9, title); // +9 for navigation row
-        
-        // Fill contents
-        ItemStack[] contents = getBagPage(player.getUniqueId(), page);
-        if (contents != null) {
-            for (int i = 0; i < Math.min(contents.length, size); i++) {
-                if (contents[i] != null) {
-                    inv.setItem(i, contents[i]);
-                }
-            }
-        }
-        
-        // Navigation row
-        addNavigationRow(inv, size, page, maxPages);
-        
-        // Track open bag
-        openBags.put(player.getUniqueId(), page);
-        
-        player.openInventory(inv);
-    }
-    
-    /**
-     * Add navigation row to inventory.
-     */
-    private void addNavigationRow(Inventory inv, int startSlot, int currentPage, int maxPages) {
-        // Previous page button
-        if (currentPage > 1) {
-            ItemStack prev = createNavigationItem(Material.ARROW, "§a上一页", "§7点击翻到第 " + (currentPage - 1) + " 页");
-            inv.setItem(startSlot, prev);
-        } else {
-            ItemStack disabled = createNavigationItem(Material.GRAY_STAINED_GLASS_PANE, " ", null);
-            inv.setItem(startSlot, disabled);
-        }
-        
-        // Page indicator
-        ItemStack indicator = createNavigationItem(Material.BOOK, 
-            "§e第 " + currentPage + " / " + maxPages + " 页",
-            "§7左键: 上一页", "§7右键: 下一页");
-        inv.setItem(startSlot + 4, indicator);
-        
-        // Next page button
-        if (currentPage < maxPages) {
-            ItemStack next = createNavigationItem(Material.ARROW, "§a下一页", "§7点击翻到第 " + (currentPage + 1) + " 页");
-            inv.setItem(startSlot + 8, next);
-        } else {
-            ItemStack disabled = createNavigationItem(Material.GRAY_STAINED_GLASS_PANE, " ", null);
-            inv.setItem(startSlot + 8, disabled);
-        }
-        
-        // Fill rest with glass
-        for (int i = 1; i < 4; i++) {
-            inv.setItem(startSlot + i, createNavigationItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
-        }
-        for (int i = 5; i < 8; i++) {
-            inv.setItem(startSlot + i, createNavigationItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
-        }
-    }
-    
-    /**
-     * Create a navigation item.
-     */
-    private ItemStack createNavigationItem(Material material, String name, String... lore) {
-        ItemStack item = new ItemStack(material);
-        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
-        if (meta != null) {
-            meta.setDisplayName(name);
-            if (lore != null && lore.length > 0 && lore[0] != null) {
-                meta.setLore(Arrays.asList(lore));
-            }
-            item.setItemMeta(meta);
-        }
-        return item;
-    }
-    
-    /**
      * Load bag from database if not in cache.
+     * 
+     * @param playerUuid 玩家 UUID
      */
-    private void loadBagIfNeeded(UUID playerUuid) {
+    public void loadBagIfNeeded(UUID playerUuid) {
         if (bagCache.containsKey(playerUuid)) {
             return;
         }
@@ -262,39 +164,6 @@ public class RemoteBagService {
     }
     
     /**
-     * Handle bag close.
-     */
-    public void closeBag(Player player, Inventory inv) {
-        UUID playerUuid = player.getUniqueId();
-        Integer page = openBags.remove(playerUuid);
-        
-        if (page != null && config.isSaveOnClose()) {
-            // Save contents (excluding navigation row)
-            int size = config.getRowsPerPage() * 9;
-            ItemStack[] contents = new ItemStack[size];
-            for (int i = 0; i < size; i++) {
-                contents[i] = inv.getItem(i);
-            }
-            setBagPage(playerUuid, page, contents);
-            saveBag(playerUuid);
-        }
-    }
-    
-    /**
-     * Get current page of open bag.
-     */
-    public Integer getCurrentPage(UUID playerUuid) {
-        return openBags.get(playerUuid);
-    }
-    
-    /**
-     * Check if player has bag open.
-     */
-    public boolean hasBagOpen(UUID playerUuid) {
-        return openBags.containsKey(playerUuid);
-    }
-    
-    /**
      * Serialize items to YAML string.
      */
     private String serializeItems(ItemStack[] items) {
@@ -337,13 +206,243 @@ public class RemoteBagService {
     
     /**
      * Clear cache for a player.
+     * 
+     * @param playerUuid 玩家 UUID
      */
     public void clearCache(UUID playerUuid) {
         bagCache.remove(playerUuid);
-        openBags.remove(playerUuid);
     }
     
     public RemoteBagConfig getConfig() {
         return config;
+    }
+    
+    // ==================== GUI 支持方法 ====================
+    
+    /**
+     * 获取玩家拥有的所有背包页码列表
+     *
+     * @param playerUuid 玩家 UUID
+     * @return 背包页码列表（已排序）
+     */
+    public List<Integer> getPlayerBagPages(UUID playerUuid) {
+        loadBagIfNeeded(playerUuid);
+        Map<Integer, ItemStack[]> pages = bagCache.get(playerUuid);
+        if (pages == null || pages.isEmpty()) {
+            // 如果没有任何背包，返回默认的第一页
+            return Collections.singletonList(1);
+        }
+        return pages.keySet().stream()
+                .sorted()
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * 获取指定背包页的物品总数量
+     *
+     * @param playerUuid 玩家 UUID
+     * @param page       背包页码
+     * @return 物品总数量（所有堆叠物品的数量总和）
+     */
+    public int getItemCount(UUID playerUuid, int page) {
+        ItemStack[] contents = getBagPage(playerUuid, page);
+        if (contents == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ItemStack item : contents) {
+            if (item != null && item.getType() != Material.AIR) {
+                count += item.getAmount();
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * 获取指定背包页占用的槽位数量
+     *
+     * @param playerUuid 玩家 UUID
+     * @param page       背包页码
+     * @return 占用槽位数量
+     */
+    public int getStackCount(UUID playerUuid, int page) {
+        ItemStack[] contents = getBagPage(playerUuid, page);
+        if (contents == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ItemStack item : contents) {
+            if (item != null && item.getType() != Material.AIR) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * 计算购买第 N 个背包的价格
+     * <p>
+     * 如果启用价格递增，公式为：basePrice * (1 + priceIncreaseRate)^(n-1)
+     *
+     * @param bagNumber 背包编号（第几个背包）
+     * @return 购买价格
+     */
+    public int calculatePrice(int bagNumber) {
+        int basePrice = config.getBasePrice();
+        if (!config.isPriceIncreaseEnabled() || bagNumber <= 1) {
+            return basePrice;
+        }
+        double rate = config.getPriceIncreaseRate();
+        double multiplier = Math.pow(1 + rate, bagNumber - 1);
+        return (int) Math.ceil(basePrice * multiplier);
+    }
+    
+    /**
+     * 玩家购买新背包
+     *
+     * @param player 玩家
+     * @return 购买是否成功
+     */
+    public boolean purchaseBag(Player player) {
+        if (!config.isEconomyEnabled() || !EconomyUtils.isAvailable()) {
+            // 经济系统未启用，直接创建背包
+            return createNewBagPage(player);
+        }
+        
+        List<Integer> existingPages = getPlayerBagPages(player.getUniqueId());
+        int nextBagNum = existingPages.size() + 1;
+        
+        // 检查是否超过上限
+        int maxPages = getPlayerMaxPages(player);
+        if (nextBagNum > maxPages) {
+            return false;
+        }
+        
+        int price = calculatePrice(nextBagNum);
+        
+        // 扣款
+        if (!EconomyUtils.withdraw(player, price)) {
+            return false;
+        }
+        
+        // 创建新背包页
+        return createNewBagPage(player);
+    }
+    
+    /**
+     * 为玩家创建新的背包页
+     *
+     * @param player 玩家
+     * @return 是否成功
+     */
+    private boolean createNewBagPage(Player player) {
+        UUID playerUuid = player.getUniqueId();
+        loadBagIfNeeded(playerUuid);
+        
+        List<Integer> existingPages = getPlayerBagPages(playerUuid);
+        int nextPage = existingPages.isEmpty() ? 1 : Collections.max(existingPages) + 1;
+        
+        // 检查是否超过上限
+        int maxPages = getPlayerMaxPages(player);
+        if (nextPage > maxPages) {
+            return false;
+        }
+        
+        // 创建空的背包页
+        ItemStack[] emptyContents = new ItemStack[config.getRowsPerPage() * 9];
+        setBagPage(playerUuid, nextPage, emptyContents);
+        
+        // 保存到数据库
+        saveBag(playerUuid);
+        
+        return true;
+    }
+    
+    // ==================== 管理员命令支持方法 ====================
+    
+    /**
+     * 为指定玩家创建新的背包页（管理员操作）
+     *
+     * @param playerUuid 玩家 UUID
+     * @return 新创建的背包页码，失败返回 -1
+     */
+    public int createBagPage(UUID playerUuid) {
+        loadBagIfNeeded(playerUuid);
+        
+        List<Integer> existingPages = getPlayerBagPages(playerUuid);
+        int nextPage = existingPages.isEmpty() || (existingPages.size() == 1 && existingPages.get(0) == 1) 
+                ? (existingPages.isEmpty() ? 1 : Collections.max(existingPages) + 1)
+                : Collections.max(existingPages) + 1;
+        
+        // 创建空的背包页
+        ItemStack[] emptyContents = new ItemStack[config.getRowsPerPage() * 9];
+        setBagPage(playerUuid, nextPage, emptyContents);
+        
+        // 保存到数据库
+        saveBag(playerUuid);
+        
+        return nextPage;
+    }
+    
+    /**
+     * 删除指定玩家的背包页（管理员操作）
+     *
+     * @param playerUuid 玩家 UUID
+     * @param page       背包页码
+     * @return 是否成功
+     */
+    public boolean deleteBagPage(UUID playerUuid, int page) {
+        loadBagIfNeeded(playerUuid);
+        
+        Map<Integer, ItemStack[]> pages = bagCache.get(playerUuid);
+        if (pages == null || !pages.containsKey(page)) {
+            return false;
+        }
+        
+        // 从缓存中移除
+        pages.remove(page);
+        
+        // 从数据库中删除
+        List<RemoteBagData> existing = dataOperator.getAll(
+                com.ultikits.ultitools.entities.WhereCondition.builder()
+                        .column("player_uuid")
+                        .value(playerUuid.toString())
+                        .build(),
+                com.ultikits.ultitools.entities.WhereCondition.builder()
+                        .column("page_number")
+                        .value(page)
+                        .build()
+        );
+        
+        for (RemoteBagData data : existing) {
+            dataOperator.del(data);
+        }
+        
+        return true;
+    }
+    
+    /**
+     * 清空指定玩家的背包页内容（管理员操作）
+     *
+     * @param playerUuid 玩家 UUID
+     * @param page       背包页码
+     * @return 是否成功
+     */
+    public boolean clearBagPage(UUID playerUuid, int page) {
+        loadBagIfNeeded(playerUuid);
+        
+        Map<Integer, ItemStack[]> pages = bagCache.get(playerUuid);
+        if (pages == null || !pages.containsKey(page)) {
+            return false;
+        }
+        
+        // 创建空的内容
+        ItemStack[] emptyContents = new ItemStack[config.getRowsPerPage() * 9];
+        setBagPage(playerUuid, page, emptyContents);
+        
+        // 保存到数据库
+        saveBag(playerUuid);
+        
+        return true;
     }
 }

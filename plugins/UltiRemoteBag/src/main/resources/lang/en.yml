@@ -1,3 +1,93 @@
 # UltiRemoteBag Language File
 bag_enabled: "UltiRemoteBag has been enabled!"
 bag_disabled: "UltiRemoteBag has been disabled!"
+
+# GUI Titles
+gui_main_title: "'s Remote Bags"
+gui_close: "Close"
+
+# Bag Related
+bag_name: "Bag #{0}"
+lore_item_count: "Item Count: §f{0}"
+lore_slot_usage: "Slots Used: §f{0}/{1}"
+lore_click_open: "Click to open"
+opening_bag: "Opening bag #{0}..."
+
+# Purchase Related
+purchase_button: "Purchase New Bag"
+lore_price: "Price: §e{0}"
+lore_balance: "Balance: §f{0}"
+lore_click_purchase: "Click to purchase"
+lore_insufficient_balance: "Insufficient balance"
+purchase_success: "Successfully purchased bag #{0}!"
+purchase_failed: "Purchase failed! Insufficient balance, requires {0}"
+
+# Bag Content GUI
+read_only: "Read Only"
+btn_back: "Back"
+btn_refresh: "Refresh"
+btn_save: "Save"
+btn_save_disabled: "Save (Disabled)"
+btn_close: "Close"
+mode_edit: "Edit Mode"
+mode_readonly: "Read Only Mode"
+
+# Button Lore
+lore_back_to_main: "Return to bag list"
+lore_refresh_hint1: "Click to refresh bag status"
+lore_refresh_hint2: "If the owner has exited,"
+lore_refresh_hint3: "will auto-switch to edit mode"
+lore_save_hint: "Click to manually save changes"
+lore_readonly_hint1: "Owner is using this bag"
+lore_readonly_hint2: "Currently in read-only mode"
+lore_readonly_hint3: "Wait for owner to exit then"
+lore_readonly_hint4: "click refresh to switch to edit mode"
+lore_edit_mode: "You can freely edit this bag"
+lore_readonly_mode1: "Bag owner is using it"
+lore_readonly_mode2: "You can only view, cannot modify"
+lore_close_save: "Close and save changes"
+lore_close_discard: "Close (without saving)"
+
+# Messages
+msg_upgrading_to_edit: "Owner has exited, switching to edit mode..."
+msg_owner_still_using: "Owner is still using, please try again later"
+msg_bag_saved: "Bag saved!"
+msg_cannot_save_readonly: "Currently in read-only mode, cannot save changes"
+msg_readonly_no_move: "Read-only mode, cannot move items"
+
+# Command Related
+page_out_of_range: "Page {0} out of range, max page is {1}"
+bag_not_exist: "Bag #{0} does not exist"
+bag_saved_manually: "Bag saved manually!"
+player_not_found: "Player not found: {0}"
+player_no_bags: "Player {0} has no bags"
+bag_in_use_cannot_delete: "Bag is in use, cannot delete"
+bag_in_use_cannot_clear: "Bag is in use, cannot clear"
+
+# Admin Command Messages
+admin_bag_created: "Created bag #{1} for player {0}"
+admin_bag_create_failed: "Failed to create bag for player {0}"
+admin_bag_deleted: "Deleted bag #{1} of player {0}"
+admin_bag_delete_failed: "Failed to delete bag #{1} of player {0}"
+admin_bag_cleared: "Cleared bag #{1} of player {0}"
+admin_bag_clear_failed: "Failed to clear bag #{1} of player {0}"
+
+# Bag List
+bag_list_title: "'s Bag List"
+no_bags: "No bags"
+items_stacks: "{0} items, {1} slots"
+total_bags: "Total {0} bags"
+
+# Help Messages
+help_title: "Help"
+help_open: "Open bag main page"
+help_open_page: "Open specified bag page"
+help_save: "Manually save bag"
+admin_commands: "Admin Commands"
+help_see: "View player's bag"
+help_create: "Create bag for player"
+help_delete: "Delete player's bag page"
+help_clear: "Clear player's bag page"
+help_list: "List player's all bags"
+page: "page"
+player: "player"
