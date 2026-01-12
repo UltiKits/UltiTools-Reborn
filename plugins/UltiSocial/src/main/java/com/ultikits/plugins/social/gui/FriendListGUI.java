@@ -96,6 +96,10 @@ public class FriendListGUI implements InventoryHolder {
             
             if (online && onlineFriend != null) {
                 lore.add(ChatColor.GRAY + "世界: " + ChatColor.WHITE + onlineFriend.getWorld().getName());
+                // Show game mode
+                String gameMode = onlineFriend.getGameMode().name();
+                String gameModeDisplay = formatGameMode(gameMode);
+                lore.add(ChatColor.GRAY + "模式: " + ChatColor.WHITE + gameModeDisplay);
             }
             
             lore.add(ChatColor.GRAY + "添加时间: " + ChatColor.WHITE + formatTime(friend.getCreatedTime()));
@@ -104,14 +108,32 @@ public class FriendListGUI implements InventoryHolder {
             if (online && friendService.getConfig().isTpToFriendEnabled()) {
                 lore.add(ChatColor.GREEN + "左键点击: 传送到好友");
             }
+            if (online) {
+                lore.add(ChatColor.AQUA + "右键点击: 发送私聊");
+            } else {
+                lore.add(ChatColor.RED + "右键点击: 删除好友");
+            }
             lore.add(ChatColor.YELLOW + "Shift+左键: " + (friend.isFavorite() ? "取消收藏" : "收藏好友"));
-            lore.add(ChatColor.RED + "右键点击: 删除好友");
+            lore.add(ChatColor.RED + "Shift+右键: 删除好友");
             
             meta.setLore(lore);
             skull.setItemMeta(meta);
         }
         
         return skull;
+    }
+    
+    /**
+     * Format game mode for display.
+     */
+    private String formatGameMode(String gameMode) {
+        switch (gameMode.toUpperCase()) {
+            case "SURVIVAL": return "生存模式";
+            case "CREATIVE": return "创造模式";
+            case "ADVENTURE": return "冒险模式";
+            case "SPECTATOR": return "旁观模式";
+            default: return gameMode;
+        }
     }
     
     /**

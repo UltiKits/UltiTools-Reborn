@@ -1,3 +1,76 @@
-# UltiSocial 语言文件
+# UltiSocial 语言文件 (中文)
+# UltiSocial Language File (Chinese)
+
+# 系统消息
 social_enabled: "UltiSocial 已启用！"
 social_disabled: "UltiSocial 已禁用！"
+
+# 好友系统消息
+friend_added: "&a你和 {PLAYER} 成为了好友！"
+friend_removed: "&c你已删除好友 {PLAYER}"
+friend_online: "&a你的好友 {PLAYER} 上线了！"
+friend_offline: "&7你的好友 {PLAYER} 下线了"
+request_sent: "&a已向 {PLAYER} 发送好友请求！"
+request_received: "&e{PLAYER} 想和你成为好友！输入 /friend accept {PLAYER} 接受"
+request_denied: "&c已拒绝 {PLAYER} 的好友请求"
+max_friends_reached: "&c你的好友数量已达上限！"
+already_friends: "&c你已经和 {PLAYER} 是好友了！"
+
+# 好友请求
+no_pending_request: "&c没有来自 {PLAYER} 的好友请求！"
+request_expired: "&c好友请求已过期或不存在！"
+request_not_exist: "&c好友请求不存在！"
+already_sent_request: "&c你已经向 {PLAYER} 发送过好友请求了！"
+
+# 好友操作
+not_friend: "&c{PLAYER} 不是你的好友！"
+player_not_online: "&c玩家 {PLAYER} 不在线！"
+player_not_exist: "&c玩家 {PLAYER} 不存在！"
+cannot_add_self: "&c不能添加自己为好友！"
+favorite_updated: "&a已更新好友收藏状态！"
+
+# 传送相关
+tp_disabled: "&c传送到好友功能已禁用！"
+tp_cooldown: "&c传送冷却中！请等待 {SECONDS} 秒"
+tp_success: "&a已传送到 {PLAYER} 身边！"
+
+# 私聊相关
+msg_only_friend: "&c{PLAYER} 不是你的好友！只能向好友发送私聊消息"
+msg_prefix: "&d[私聊]"
+
+# 黑名单相关
+blocked: "&c无法与 {PLAYER} 进行好友操作，因为存在黑名单关系"
+player_blocked: "&c已将 {PLAYER} 加入黑名单"
+player_unblocked: "&a已将 {PLAYER} 从黑名单移除"
+already_blocked: "&c{PLAYER} 已在黑名单中！"
+not_in_blocklist: "&c{PLAYER} 不在你的黑名单中！"
+cannot_block_self: "&c不能拉黑自己！"
+auto_unfriend: "&7（已自动解除好友关系）"
+
+# GUI 标题
+gui_friend_list: "&6好友列表 &7({COUNT}/{MAX})"
+gui_blocklist: "&4黑名单管理"
+
+# GUI 操作提示
+gui_click_tp: "&a左键点击: 传送到好友"
+gui_click_msg: "&b右键点击: 发送私聊"
+gui_click_favorite: "&eShift+左键: 收藏好友"
+gui_click_unfavorite: "&eShift+左键: 取消收藏"
+gui_click_remove: "&cShift+右键: 删除好友"
+gui_click_unblock: "&a左键点击: 解除拉黑"
+
+# 帮助命令
+help_title: "&6=== 好友系统帮助 ==="
+help_friend: "&e/friend &f- 打开好友列表"
+help_list: "&e/friend list &f- 列出所有好友"
+help_add: "&e/friend add <玩家> &f- 发送好友请求"
+help_accept: "&e/friend accept <玩家> &f- 接受好友请求"
+help_deny: "&e/friend deny <玩家> &f- 拒绝好友请求"
+help_remove: "&e/friend remove <玩家> &f- 删除好友"
+help_tp: "&e/friend tp <好友> &f- 传送到好友"
+help_msg: "&e/friend msg <好友> <消息> &f- 私聊好友"
+help_requests: "&e/friend requests &f- 查看待处理请求"
+help_block_title: "&6=== 黑名单功能 ==="
+help_block: "&e/friend block <玩家> &f- 拉黑玩家"
+help_unblock: "&e/friend unblock <玩家> &f- 解除拉黑"
+help_blocklist: "&e/friend blocklist &f- 查看黑名单"

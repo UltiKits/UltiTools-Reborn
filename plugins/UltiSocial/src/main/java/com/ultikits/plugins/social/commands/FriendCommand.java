@@ -1,25 +1,32 @@
 package com.ultikits.plugins.social.commands;
 
+import com.ultikits.plugins.social.entity.BlacklistData;
 import com.ultikits.plugins.social.entity.FriendRequest;
 import com.ultikits.plugins.social.entity.FriendshipData;
+import com.ultikits.plugins.social.gui.BlockListGUI;
 import com.ultikits.plugins.social.gui.FriendListGUI;
 import com.ultikits.plugins.social.service.FriendService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
+import com.ultikits.ultitools.services.TeleportService;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Friend command executor.
+ * Supports friend management, blacklist, teleport and messaging.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 1.1.0
  */
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
@@ -27,13 +34,17 @@ import java.util.UUID;
     permission = "ultisocial.use",
     description = "好友系统"
 )
-public class FriendCommand extends AbstractCommendExecutor {
+public class FriendCommand extends AbstractCommandExecutor {
     
     private final FriendService friendService;
+    private final TeleportService teleportService;
     
-    public FriendCommand(FriendService friendService) {
+    public FriendCommand(FriendService friendService, TeleportService teleportService) {
         this.friendService = friendService;
+        this.teleportService = teleportService;
     }
+    
+    // ==================== Friend Commands ====================
     
     @CmdMapping(format = "")
     public void openFriendList(@CmdSender Player player) {
@@ -90,6 +101,24 @@ public class FriendCommand extends AbstractCommendExecutor {
         friendService.removeFriend(player, friendName);
     }
     
+    @CmdMapping(format = "requests")
+    public void viewRequests(@CmdSender Player player) {
+        List<FriendRequest> requests = friendService.getPendingRequests(player.getUniqueId());
+        
+        if (requests.isEmpty()) {
+            player.sendMessage(ChatColor.YELLOW + "你没有待处理的好友请求");
+            return;
+        }
+        
+        player.sendMessage(ChatColor.GOLD + "=== 好友请求 ===");
+        for (FriendRequest request : requests) {
+            player.sendMessage(ChatColor.YELLOW + "- " + ChatColor.WHITE + request.getSenderName() + 
+                ChatColor.GRAY + " (点击接受: /friend accept " + request.getSenderName() + ")");
+        }
+    }
+    
+    // ==================== Teleport Commands ====================
+    
     @CmdMapping(format = "tp <player>")
     public void teleportToFriend(@CmdSender Player player, @CmdParam("player") String friendName) {
         if (!friendService.getConfig().isTpToFriendEnabled()) {
@@ -123,26 +152,108 @@ public class FriendCommand extends AbstractCommendExecutor {
             return;
         }
         
-        player.teleport(target.getLocation());
+        // Use TeleportService for teleportation
+        if (teleportService != null) {
+            teleportService.teleport(player, target.getLocation());
+        } else {
+            player.teleport(target.getLocation());
+        }
+        
         friendService.setTpCooldown(player.getUniqueId());
         player.sendMessage(ChatColor.GREEN + "已传送到 " + friendName + " 身边！");
     }
     
-    @CmdMapping(format = "requests")
-    public void viewRequests(@CmdSender Player player) {
-        List<FriendRequest> requests = friendService.getPendingRequests(player.getUniqueId());
+    // ==================== Message Commands ====================
+    
+    @CmdMapping(format = "msg <player> <message...>")
+    public void sendMessage(@CmdSender Player sender, @CmdParam("player") String friendName, 
+                           @CmdParam("message") String[] messageParts) {
+        // Check if target is friend
+        List<FriendshipData> friends = friendService.getFriends(sender.getUniqueId());
+        FriendshipData targetFriend = null;
+        for (FriendshipData friend : friends) {
+            if (friend.getFriendName().equalsIgnoreCase(friendName)) {
+                targetFriend = friend;
+                break;
+            }
+        }
         
-        if (requests.isEmpty()) {
-            player.sendMessage(ChatColor.YELLOW + "你没有待处理的好友请求");
+        if (targetFriend == null) {
+            sender.sendMessage(ChatColor.RED + friendName + " 不是你的好友！只能向好友发送私聊消息");
             return;
         }
         
-        player.sendMessage(ChatColor.GOLD + "=== 好友请求 ===");
-        for (FriendRequest request : requests) {
-            player.sendMessage(ChatColor.YELLOW + "- " + ChatColor.WHITE + request.getSenderName() + 
-                ChatColor.GRAY + " (点击接受: /friend accept " + request.getSenderName() + ")");
+        Player target = Bukkit.getPlayer(UUID.fromString(targetFriend.getFriendUuid()));
+        if (target == null) {
+            sender.sendMessage(ChatColor.RED + friendName + " 不在线！");
+            return;
+        }
+        
+        String message = String.join(" ", messageParts);
+        
+        // Send to target
+        target.sendMessage(ChatColor.LIGHT_PURPLE + "[私聊] " + ChatColor.WHITE + sender.getName() + 
+            ChatColor.GRAY + " → " + ChatColor.WHITE + "你: " + ChatColor.RESET + message);
+        
+        // Confirm to sender
+        sender.sendMessage(ChatColor.LIGHT_PURPLE + "[私聊] " + ChatColor.WHITE + "你" + 
+            ChatColor.GRAY + " → " + ChatColor.WHITE + target.getName() + ": " + ChatColor.RESET + message);
+    }
+    
+    // ==================== Blacklist Commands ====================
+    
+    @CmdMapping(format = "block <player>")
+    public void blockPlayer(@CmdSender Player player, @CmdParam("player") String targetName) {
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null) {
+            // Try offline player
+            @SuppressWarnings("deprecation")
+            org.bukkit.OfflinePlayer offline = Bukkit.getOfflinePlayer(targetName);
+            if (!offline.hasPlayedBefore()) {
+                player.sendMessage(ChatColor.RED + "玩家 " + targetName + " 不存在！");
+                return;
+            }
+            
+            if (friendService.addToBlacklist(player.getUniqueId(), offline.getUniqueId(), targetName, null)) {
+                player.sendMessage(ChatColor.RED + "已将 " + targetName + " 加入黑名单");
+            } else {
+                player.sendMessage(ChatColor.RED + targetName + " 已在黑名单中！");
+            }
+            return;
+        }
+        
+        if (target.equals(player)) {
+            player.sendMessage(ChatColor.RED + "不能拉黑自己！");
+            return;
+        }
+        
+        if (friendService.addToBlacklist(player, target, null)) {
+            player.sendMessage(ChatColor.RED + "已将 " + targetName + " 加入黑名单");
+            // Notify if they were friends
+            if (friendService.areFriends(player.getUniqueId(), target.getUniqueId())) {
+                player.sendMessage(ChatColor.GRAY + "（已自动解除好友关系）");
+            }
+        } else {
+            player.sendMessage(ChatColor.RED + targetName + " 已在黑名单中！");
         }
     }
+    
+    @CmdMapping(format = "unblock <player>")
+    public void unblockPlayer(@CmdSender Player player, @CmdParam("player") String targetName) {
+        if (friendService.removeFromBlacklist(player, targetName)) {
+            player.sendMessage(ChatColor.GREEN + "已将 " + targetName + " 从黑名单中移除");
+        } else {
+            player.sendMessage(ChatColor.RED + targetName + " 不在你的黑名单中！");
+        }
+    }
+    
+    @CmdMapping(format = "blocklist")
+    public void openBlockList(@CmdSender Player player) {
+        BlockListGUI gui = new BlockListGUI(friendService, player);
+        player.openInventory(gui.getInventory());
+    }
+    
+    // ==================== Help Command ====================
     
     @CmdMapping(format = "help")
     public void help(@CmdSender Player player) {
@@ -153,8 +264,13 @@ public class FriendCommand extends AbstractCommendExecutor {
         player.sendMessage(ChatColor.YELLOW + "/friend accept <玩家>" + ChatColor.WHITE + " - 接受好友请求");
         player.sendMessage(ChatColor.YELLOW + "/friend deny <玩家>" + ChatColor.WHITE + " - 拒绝好友请求");
         player.sendMessage(ChatColor.YELLOW + "/friend remove <玩家>" + ChatColor.WHITE + " - 删除好友");
-        player.sendMessage(ChatColor.YELLOW + "/friend tp <玩家>" + ChatColor.WHITE + " - 传送到好友");
+        player.sendMessage(ChatColor.YELLOW + "/friend tp <好友>" + ChatColor.WHITE + " - 传送到好友");
+        player.sendMessage(ChatColor.YELLOW + "/friend msg <好友> <消息>" + ChatColor.WHITE + " - 私聊好友");
         player.sendMessage(ChatColor.YELLOW + "/friend requests" + ChatColor.WHITE + " - 查看待处理请求");
+        player.sendMessage(ChatColor.GOLD + "=== 黑名单功能 ===");
+        player.sendMessage(ChatColor.YELLOW + "/friend block <玩家>" + ChatColor.WHITE + " - 拉黑玩家");
+        player.sendMessage(ChatColor.YELLOW + "/friend unblock <玩家>" + ChatColor.WHITE + " - 解除拉黑");
+        player.sendMessage(ChatColor.YELLOW + "/friend blocklist" + ChatColor.WHITE + " - 查看黑名单");
     }
     
     @Override
@@ -162,5 +278,98 @@ public class FriendCommand extends AbstractCommendExecutor {
         if (sender instanceof Player) {
             help((Player) sender);
         }
+    }
+    
+    // ==================== Tab Complete ====================
+    
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        // Let parent handle basic completion first
+        List<String> parentSuggestions = super.onTabComplete(sender, command, alias, args);
+        if (parentSuggestions != null && !parentSuggestions.isEmpty()) {
+            return parentSuggestions;
+        }
+        
+        if (!(sender instanceof Player)) {
+            return new ArrayList<>();
+        }
+        
+        Player player = (Player) sender;
+        List<String> suggestions = new ArrayList<>();
+        
+        if (args.length == 1) {
+            // First argument - subcommands
+            suggestions.add("list");
+            suggestions.add("add");
+            suggestions.add("accept");
+            suggestions.add("deny");
+            suggestions.add("remove");
+            suggestions.add("tp");
+            suggestions.add("msg");
+            suggestions.add("requests");
+            suggestions.add("block");
+            suggestions.add("unblock");
+            suggestions.add("blocklist");
+            suggestions.add("help");
+            
+            return filterStartsWith(suggestions, args[0]);
+        }
+        
+        if (args.length == 2) {
+            String subCmd = args[0].toLowerCase();
+            
+            switch (subCmd) {
+                case "add":
+                case "block":
+                    // Online players (excluding self and already friends/blocked)
+                    for (Player online : Bukkit.getOnlinePlayers()) {
+                        if (!online.equals(player)) {
+                            suggestions.add(online.getName());
+                        }
+                    }
+                    break;
+                    
+                case "accept":
+                case "deny":
+                    // Pending request senders
+                    for (FriendRequest req : friendService.getPendingRequests(player.getUniqueId())) {
+                        suggestions.add(req.getSenderName());
+                    }
+                    break;
+                    
+                case "remove":
+                case "tp":
+                case "msg":
+                    // Friends list
+                    for (FriendshipData friend : friendService.getFriends(player.getUniqueId())) {
+                        suggestions.add(friend.getFriendName());
+                    }
+                    break;
+                    
+                case "unblock":
+                    // Blocked users
+                    for (BlacklistData blocked : friendService.getBlacklist(player.getUniqueId())) {
+                        suggestions.add(blocked.getBlockedName());
+                    }
+                    break;
+            }
+            
+            return filterStartsWith(suggestions, args[1]);
+        }
+        
+        return suggestions;
+    }
+    
+    /**
+     * Filter suggestions that start with given prefix.
+     */
+    private List<String> filterStartsWith(List<String> suggestions, String prefix) {
+        if (prefix == null || prefix.isEmpty()) {
+            return suggestions;
+        }
+        String lowerPrefix = prefix.toLowerCase();
+        return suggestions.stream()
+            .filter(s -> s.toLowerCase().startsWith(lowerPrefix))
+            .collect(Collectors.toList());
     }
 }

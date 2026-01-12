@@ -2,10 +2,12 @@ package com.ultikits.plugins.social.service;
 
 import com.ultikits.plugins.social.UltiSocial;
 import com.ultikits.plugins.social.config.SocialConfig;
+import com.ultikits.plugins.social.entity.BlacklistData;
 import com.ultikits.plugins.social.entity.FriendRequest;
 import com.ultikits.plugins.social.entity.FriendshipData;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -29,6 +31,7 @@ public class FriendService {
     private SocialConfig config;
     
     private DataOperator<FriendshipData> dataOperator;
+    private DataOperator<BlacklistData> blacklistDataOperator;
     
     // Pending friend requests - Map<ReceiverUUID, List<FriendRequest>>
     private final Map<UUID, List<FriendRequest>> pendingRequests = new ConcurrentHashMap<>();
@@ -36,14 +39,19 @@ public class FriendService {
     // Cache for friends - Map<PlayerUUID, List<FriendshipData>>
     private final Map<UUID, List<FriendshipData>> friendCache = new ConcurrentHashMap<>();
     
+    // Cache for blacklist - Map<PlayerUUID, List<BlacklistData>>
+    private final Map<UUID, List<BlacklistData>> blacklistCache = new ConcurrentHashMap<>();
+    
     // Teleport cooldowns - Map<PlayerUUID, LastTeleportTime>
     private final Map<UUID, Long> tpCooldowns = new ConcurrentHashMap<>();
     
     /**
      * Initialize the service.
      */
+    @PostConstruct
     public void init() {
         this.dataOperator = UltiSocial.getInstance().getDataOperator(FriendshipData.class);
+        this.blacklistDataOperator = UltiSocial.getInstance().getDataOperator(BlacklistData.class);
         
         // Start cleanup task for expired requests
         Bukkit.getScheduler().runTaskTimerAsynchronously(
@@ -60,6 +68,14 @@ public class FriendService {
     public boolean sendRequest(Player sender, Player receiver) {
         UUID senderUuid = sender.getUniqueId();
         UUID receiverUuid = receiver.getUniqueId();
+        
+        // Check blacklist (bidirectional)
+        if (isBlocked(senderUuid, receiverUuid)) {
+            sender.sendMessage(config.getBlockedMessage()
+                .replace("{PLAYER}", receiver.getName())
+                .replace("&", "§"));
+            return false;
+        }
         
         // Check if already friends
         if (areFriends(senderUuid, receiverUuid)) {
@@ -395,6 +411,195 @@ public class FriendService {
      */
     public void clearCache(UUID playerUuid) {
         friendCache.remove(playerUuid);
+        blacklistCache.remove(playerUuid);
+    }
+    
+    // ==================== Blacklist Methods ====================
+    
+    /**
+     * Add a player to blacklist.
+     * This will also remove any existing friendship between the two players.
+     *
+     * @param blocker The player who is blocking
+     * @param blocked The player being blocked
+     * @param reason Optional reason for blocking
+     * @return true if successfully blocked
+     */
+    public boolean addToBlacklist(Player blocker, Player blocked, String reason) {
+        return addToBlacklist(blocker.getUniqueId(), blocked.getUniqueId(), blocked.getName(), reason);
+    }
+    
+    /**
+     * Add a player to blacklist by UUID.
+     *
+     * @param blockerUuid UUID of the player who is blocking
+     * @param blockedUuid UUID of the player being blocked
+     * @param blockedName Name of the player being blocked
+     * @param reason Optional reason for blocking
+     * @return true if successfully blocked
+     */
+    public boolean addToBlacklist(UUID blockerUuid, UUID blockedUuid, String blockedName, String reason) {
+        // Check if already blocked
+        if (isBlockedBy(blockerUuid, blockedUuid)) {
+            return false;
+        }
+        
+        // Remove friendship if exists (bidirectional)
+        removeFriendByUuid(blockerUuid, blockedUuid);
+        
+        // Create blacklist entry
+        BlacklistData blacklist = BlacklistData.create(blockerUuid, blockedUuid, blockedName, reason);
+        blacklistDataOperator.insert(blacklist);
+        
+        // Clear cache
+        blacklistCache.remove(blockerUuid);
+        
+        return true;
+    }
+    
+    /**
+     * Remove a player from blacklist.
+     *
+     * @param blocker The player who blocked
+     * @param blockedName Name of the blocked player
+     * @return true if successfully unblocked
+     */
+    public boolean removeFromBlacklist(Player blocker, String blockedName) {
+        UUID blockerUuid = blocker.getUniqueId();
+        List<BlacklistData> blacklist = getBlacklist(blockerUuid);
+        
+        BlacklistData toRemove = null;
+        for (BlacklistData entry : blacklist) {
+            if (entry.getBlockedName().equalsIgnoreCase(blockedName)) {
+                toRemove = entry;
+                break;
+            }
+        }
+        
+        if (toRemove == null) {
+            return false;
+        }
+        
+        blacklistDataOperator.delById(toRemove.getId());
+        blacklistCache.remove(blockerUuid);
+        
+        return true;
+    }
+    
+    /**
+     * Remove a player from blacklist by UUID.
+     *
+     * @param blockerUuid UUID of the player who blocked
+     * @param blockedUuid UUID of the blocked player
+     * @return true if successfully unblocked
+     */
+    public boolean removeFromBlacklist(UUID blockerUuid, UUID blockedUuid) {
+        List<BlacklistData> entries = blacklistDataOperator.getAll(
+            WhereCondition.builder().column("player_uuid").value(blockerUuid.toString()).build(),
+            WhereCondition.builder().column("blocked_uuid").value(blockedUuid.toString()).build()
+        );
+        
+        if (entries.isEmpty()) {
+            return false;
+        }
+        
+        for (BlacklistData entry : entries) {
+            blacklistDataOperator.delById(entry.getId());
+        }
+        
+        blacklistCache.remove(blockerUuid);
+        return true;
+    }
+    
+    /**
+     * Check if player1 has blocked player2 (single direction).
+     *
+     * @param blockerUuid UUID of potential blocker
+     * @param blockedUuid UUID of potentially blocked player
+     * @return true if player1 has blocked player2
+     */
+    public boolean isBlockedBy(UUID blockerUuid, UUID blockedUuid) {
+        List<BlacklistData> blacklist = getBlacklist(blockerUuid);
+        for (BlacklistData entry : blacklist) {
+            if (entry.getBlockedUuid().equals(blockedUuid.toString())) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Check if there is any block between two players (bidirectional).
+     * Returns true if either player has blocked the other.
+     *
+     * @param uuid1 First player UUID
+     * @param uuid2 Second player UUID
+     * @return true if either player has blocked the other
+     */
+    public boolean isBlocked(UUID uuid1, UUID uuid2) {
+        return isBlockedBy(uuid1, uuid2) || isBlockedBy(uuid2, uuid1);
+    }
+    
+    /**
+     * Get blacklist for a player.
+     *
+     * @param playerUuid UUID of the player
+     * @return List of blocked players
+     */
+    public List<BlacklistData> getBlacklist(UUID playerUuid) {
+        if (blacklistCache.containsKey(playerUuid)) {
+            return blacklistCache.get(playerUuid);
+        }
+        
+        List<BlacklistData> blacklist = blacklistDataOperator.getAll(
+            WhereCondition.builder()
+                .column("player_uuid")
+                .value(playerUuid.toString())
+                .build()
+        );
+        
+        // Sort by time descending
+        blacklist.sort((a, b) -> Long.compare(b.getCreatedTime(), a.getCreatedTime()));
+        
+        blacklistCache.put(playerUuid, blacklist);
+        return blacklist;
+    }
+    
+    /**
+     * Get blacklist count for a player.
+     *
+     * @param playerUuid UUID of the player
+     * @return Number of blocked players
+     */
+    public int getBlacklistCount(UUID playerUuid) {
+        return getBlacklist(playerUuid).size();
+    }
+    
+    /**
+     * Remove friendship by UUID (internal helper for blacklist).
+     */
+    private void removeFriendByUuid(UUID playerUuid, UUID friendUuid) {
+        // Remove from player's list
+        List<FriendshipData> playerFriends = dataOperator.getAll(
+            WhereCondition.builder().column("player_uuid").value(playerUuid.toString()).build(),
+            WhereCondition.builder().column("friend_uuid").value(friendUuid.toString()).build()
+        );
+        for (FriendshipData f : playerFriends) {
+            dataOperator.delById(f.getId());
+        }
+        
+        // Remove from friend's list (reverse)
+        List<FriendshipData> reverseFriends = dataOperator.getAll(
+            WhereCondition.builder().column("player_uuid").value(friendUuid.toString()).build(),
+            WhereCondition.builder().column("friend_uuid").value(playerUuid.toString()).build()
+        );
+        for (FriendshipData f : reverseFriends) {
+            dataOperator.delById(f.getId());
+        }
+        
+        // Clear caches
+        friendCache.remove(playerUuid);
+        friendCache.remove(friendUuid);
     }
     
     public SocialConfig getConfig() {

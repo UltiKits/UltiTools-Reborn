@@ -72,4 +72,13 @@ public class SocialConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "messages.already_friends", comment = "Already friends message")
     private String alreadyFriendsMessage = "&c你已经和 {PLAYER} 是好友了！";
+    
+    @ConfigEntry(path = "messages.blocked", comment = "Blocked player message (bidirectional)")
+    private String blockedMessage = "&c无法与 {PLAYER} 进行好友操作，因为存在黑名单关系";
+    
+    @ConfigEntry(path = "messages.player_blocked", comment = "Player added to blacklist message")
+    private String playerBlockedMessage = "&c已将 {PLAYER} 加入黑名单";
+    
+    @ConfigEntry(path = "messages.player_unblocked", comment = "Player removed from blacklist message")
+    private String playerUnblockedMessage = "&a已将 {PLAYER} 从黑名单移除";
 }
