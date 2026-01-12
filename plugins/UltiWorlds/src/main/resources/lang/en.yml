@@ -1,3 +1,168 @@
-# UltiWorlds Language File
-worlds_enabled: "UltiWorlds has been enabled!"
-worlds_disabled: "UltiWorlds has been disabled!"
+# UltiWorlds Language File - English
+# Version 2.0.0
+
+# ==================== Plugin Status ====================
+worlds_enabled: "§aUltiWorlds has been enabled!"
+worlds_disabled: "§cUltiWorlds has been disabled!"
+
+# ==================== Common ====================
+common:
+  enabled: "Enabled"
+  disabled: "Disabled"
+  yes: "Yes"
+  no: "No"
+  random: "Random"
+  on: "On"
+  off: "Off"
+
+# ==================== Error Messages ====================
+error:
+  world_not_found: "§cWorld %world% does not exist!"
+  world_exists: "§cWorld %world% already exists!"
+  world_blocked: "§cThis world has been blocked!"
+  world_locked: "§cThis world is locked and cannot be entered!"
+  no_permission: "§cYou don't have permission to enter this world!"
+  cooldown: "§cTeleport cooldown! Please wait %time% seconds"
+  delete_protected: "§cCannot delete a protected world!"
+  invalid_world: "§cInvalid world name!"
+  invalid_option: "§cInvalid option! Available options: %options%"
+  invalid_value: "§cInvalid value!"
+  not_player: "§cThis command can only be executed by players!"
+
+# ==================== Success Messages ====================
+success:
+  teleported: "§aTeleported to world: %world%"
+  created: "§aWorld %world% has been created!"
+  deleted: "§cWorld %world% has been deleted!"
+  loaded: "§aWorld %world% has been loaded!"
+  unloaded: "§eWorld %world% has been unloaded"
+  spawn_set: "§aWorld spawn point has been set"
+  setting_updated: "§aSetting updated: %option% = %value%"
+  protection_enabled: "§aWorld protection enabled"
+  protection_disabled: "§eWorld protection disabled"
+  world_blocked: "§cWorld %world% has been blocked"
+  world_unblocked: "§aWorld %world% has been unblocked"
+
+# ==================== Protection Messages ====================
+protection:
+  break_denied: "§cBlock breaking is protected in this world!"
+  place_denied: "§cBlock placing is protected in this world!"
+  interact_denied: "§cInteraction is protected in this world!"
+  pvp_disabled: "§cPVP is disabled in this world!"
+
+# ==================== GUI ====================
+gui:
+  title: "§6World List"
+  environment: "§7Environment:"
+  players: "§7Players:"
+  time: "§7Time:"
+  weather: "§7Weather:"
+  pvp: "§7PVP:"
+  monsters: "§7Monsters:"
+  protected: "Protected"
+  locked: "Locked"
+  blocked: "Blocked"
+  click_to_tp: "Click to teleport to this world"
+  
+  delete:
+    title: "§cConfirm Delete: %world%"
+    confirm: "§aConfirm Delete"
+    cancel: "§cCancel"
+    warning: "§cWarning: This action cannot be undone!"
+
+# ==================== Environment Names ====================
+environment:
+  normal: "Overworld"
+  nether: "Nether"
+  the_end: "The End"
+
+# ==================== World Types ====================
+type:
+  normal: "Normal"
+  flat: "Flat"
+  amplified: "Amplified"
+  large_biomes: "Large Biomes"
+
+# ==================== Time ====================
+time:
+  morning: "Morning"
+  noon: "Noon"
+  evening: "Evening"
+  night: "Night"
+
+# ==================== Weather ====================
+weather:
+  clear: "Clear"
+  rain: "Rain"
+  thunder: "Thunder"
+
+# ==================== Wizard ====================
+wizard:
+  header: "§6========== World Creation Wizard =========="
+  cancel_hint: "§7Type 'cancel' to abort at any time"
+  
+  enter_name: "§ePlease enter the new world name §7(letters, numbers, underscore, hyphen only):"
+  invalid_name: "§cInvalid world name! Only letters, numbers, underscores and hyphens allowed, 1-32 characters"
+  world_exists: "§cA world with that name already exists! Please use a different name"
+  
+  select_environment: "§ePlease select world environment:"
+  invalid_environment: "§cInvalid choice! Please enter 1, 2, or 3"
+  
+  select_type: "§ePlease select world type:"
+  invalid_type: "§cInvalid choice! Please enter 1-4"
+  
+  generate_structures: "§eGenerate structures (villages, temples, etc.)?"
+  invalid_yn: "§cInvalid input! Please enter y(yes) or n(no)"
+  
+  enter_seed: "§ePlease enter world seed §7(leave empty or 'random' for random seed):"
+  
+  confirm_header: "§6========== Confirm Creation =========="
+  confirm_name: "World Name:"
+  confirm_env: "Environment:"
+  confirm_type: "Type:"
+  confirm_structures: "Structures:"
+  confirm_seed: "Seed:"
+  confirm_question: "§eConfirm creating this world?"
+  
+  creating: "§6Creating world, please wait..."
+  success: "§a✓ World %world% created successfully! Teleporting..."
+  failed: "§c✗ Failed to create world %world%"
+  error: "§cError creating world: %error%"
+  
+  timeout: "§cOperation timed out, world creation cancelled"
+  cancelled: "§eWorld creation cancelled"
+
+# ==================== Command Help ====================
+command:
+  usage: "§eUsage: %usage%"
+  help:
+    header: "§6========== UltiWorlds Help =========="
+    list: "§e/world list §7- Open world list GUI"
+    tp: "§e/world tp <world> §7- Teleport to a world"
+    create: "§e/world create <name> <type> [generator] §7- Create world"
+    delete: "§e/world delete <world> §7- Delete a world"
+    load: "§e/world load <world> §7- Load a world"
+    unload: "§e/world unload <world> §7- Unload a world"
+    setspawn: "§e/world setspawn §7- Set current world spawn"
+    set: "§e/world set <world> <option> <value> §7- Modify world settings"
+    protect: "§e/world protect <world> §7- Enable full protection"
+    unprotect: "§e/world unprotect <world> §7- Disable all protection"
+    block: "§e/world block <world> §7- Block world access"
+    unblock: "§e/world unblock <world> §7- Unblock world access"
+    wizard: "§e/world wizard §7- Start world creation wizard"
+  
+  # Setting options
+  set_options: "pvp, monsters, animals, weather, hidden, locked, displayname, description, icon"
+  
+  # Delete
+  delete:
+    success: "§aWorld %world% has been deleted"
+    failed: "§cFailed to delete world %world%"
+    cancelled: "§eDelete operation cancelled"
+
+# ==================== Inventory Isolation ====================
+inventory:
+  saved: "§aInventory data saved"
+  loaded: "§aInventory data loaded"
+  save_failed: "§cFailed to save inventory data"
+  load_failed: "§cFailed to load inventory data"

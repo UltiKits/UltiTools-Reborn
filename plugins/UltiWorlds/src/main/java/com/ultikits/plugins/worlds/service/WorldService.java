@@ -5,12 +5,15 @@ import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.*;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.io.File;
 import java.util.*;
@@ -20,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Service for world management operations.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @Service
 public class WorldService {
@@ -36,9 +39,16 @@ public class WorldService {
     // Teleport cooldowns
     private final Map<UUID, Long> tpCooldowns = new ConcurrentHashMap<>();
     
+    // Auto-unload scheduler
+    private BukkitTask autoUnloadTask;
+    
+    // Empty world timer (tracks how long a world has been empty)
+    private final Map<String, Long> emptyWorldTimers = new ConcurrentHashMap<>();
+    
     /**
-     * Initialize the service.
+     * Initialize the service with @PostConstruct.
      */
+    @PostConstruct
     public void init() {
         this.dataOperator = UltiWorlds.getInstance().getDataOperator(WorldSettings.class);
         
@@ -50,6 +60,68 @@ public class WorldService {
         // Initialize settings for existing worlds
         for (World world : Bukkit.getWorlds()) {
             getOrCreateSettings(world.getName());
+        }
+        
+        // Start auto-unload scheduler if enabled
+        if (config.isAutoUnloadEmptyWorlds()) {
+            startAutoUnloadScheduler();
+        }
+    }
+    
+    /**
+     * Start the auto-unload scheduler for empty worlds.
+     */
+    private void startAutoUnloadScheduler() {
+        int checkInterval = config.getEmptyWorldCheckInterval(); // in seconds
+        int unloadAfter = config.getEmptyWorldUnloadAfter(); // in seconds
+        
+        autoUnloadTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                long now = System.currentTimeMillis();
+                
+                for (World world : Bukkit.getWorlds()) {
+                    String worldName = world.getName();
+                    WorldSettings settings = getOrCreateSettings(worldName);
+                    
+                    // Skip if world should not auto-unload
+                    if (!settings.isAutoUnload() || config.getProtectedWorlds().contains(worldName)) {
+                        emptyWorldTimers.remove(worldName);
+                        continue;
+                    }
+                    
+                    if (world.getPlayers().isEmpty()) {
+                        // Start or check timer
+                        Long emptyStart = emptyWorldTimers.get(worldName);
+                        if (emptyStart == null) {
+                            emptyWorldTimers.put(worldName, now);
+                        } else if (now - emptyStart > unloadAfter * 1000L) {
+                            // World has been empty long enough, unload it
+                            UltiWorlds.getInstance().getLogger().info(
+                                "Auto-unloading empty world: " + worldName
+                            );
+                            unloadWorld(worldName, true);
+                            emptyWorldTimers.remove(worldName);
+                        }
+                    } else {
+                        // World has players, reset timer
+                        emptyWorldTimers.remove(worldName);
+                    }
+                }
+            }
+        }.runTaskTimer(
+            UltiTools.getInstance(), 
+            checkInterval * 20L, 
+            checkInterval * 20L
+        );
+    }
+    
+    /**
+     * Stop the auto-unload scheduler.
+     */
+    public void shutdown() {
+        if (autoUnloadTask != null) {
+            autoUnloadTask.cancel();
         }
     }
     
@@ -114,22 +186,18 @@ public class WorldService {
     }
     
     /**
-     * Teleport player to world.
+     * Check if player can enter world.
      */
-    public boolean teleportToWorld(Player player, String worldName) {
-        World world = Bukkit.getWorld(worldName);
-        if (world == null) {
-            player.sendMessage(config.getWorldNotFoundMessage()
-                .replace("{WORLD}", worldName)
-                .replace("&", "§"));
+    public boolean canEnterWorld(Player player, String worldName) {
+        WorldSettings settings = getOrCreateSettings(worldName);
+        
+        // Check if blocked
+        if (settings.isBlocked() && !player.hasPermission("ultiworlds.bypass.blocked")) {
             return false;
         }
         
-        WorldSettings settings = getOrCreateSettings(worldName);
-        
         // Check if locked
         if (settings.isLocked() && !player.hasPermission("ultiworlds.bypass.locked")) {
-            player.sendMessage("§c这个世界已被锁定，无法进入！");
             return false;
         }
         
@@ -137,16 +205,50 @@ public class WorldService {
         if (config.isPermissionPerWorld() && 
             !player.hasPermission("ultiworlds.world." + worldName) &&
             !player.hasPermission("ultiworlds.world.*")) {
-            player.sendMessage(config.getNoPermissionMessage()
-                .replace("{WORLD}", worldName)
-                .replace("&", "§"));
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Teleport player to world.
+     */
+    public boolean teleportToWorld(Player player, String worldName) {
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            player.sendMessage(UltiWorlds.getInstance().i18n("error.world_not_found")
+                .replace("%world%", worldName));
+            return false;
+        }
+        
+        WorldSettings settings = getOrCreateSettings(worldName);
+        
+        // Check if blocked
+        if (settings.isBlocked() && !player.hasPermission("ultiworlds.bypass.blocked")) {
+            player.sendMessage(UltiWorlds.getInstance().i18n("error.world_blocked"));
+            return false;
+        }
+        
+        // Check if locked
+        if (settings.isLocked() && !player.hasPermission("ultiworlds.bypass.locked")) {
+            player.sendMessage(UltiWorlds.getInstance().i18n("error.world_locked"));
+            return false;
+        }
+        
+        // Check permission
+        if (config.isPermissionPerWorld() && 
+            !player.hasPermission("ultiworlds.world." + worldName) &&
+            !player.hasPermission("ultiworlds.world.*")) {
+            player.sendMessage(UltiWorlds.getInstance().i18n("error.no_permission"));
             return false;
         }
         
         // Check cooldown
         if (!canTeleport(player.getUniqueId())) {
             int remaining = getRemainingCooldown(player.getUniqueId());
-            player.sendMessage("§c传送冷却中！请等待 " + remaining + " 秒");
+            player.sendMessage(UltiWorlds.getInstance().i18n("error.cooldown")
+                .replace("%time%", String.valueOf(remaining)));
             return false;
         }
         
@@ -168,11 +270,44 @@ public class WorldService {
         player.teleport(destination);
         setTpCooldown(player.getUniqueId());
         
-        player.sendMessage(config.getWorldTeleportMessage()
-            .replace("{WORLD}", settings.getDisplayName() != null ? settings.getDisplayName() : worldName)
-            .replace("&", "§"));
+        String displayName = settings.getDisplayName() != null ? settings.getDisplayName() : worldName;
+        player.sendMessage(UltiWorlds.getInstance().i18n("success.teleported")
+            .replace("%world%", displayName));
         
         return true;
+    }
+    
+    /**
+     * Create a new world with all options.
+     */
+    public World createWorld(String name, World.Environment environment, WorldType type, 
+                             Boolean generateStructures, String seed) {
+        if (Bukkit.getWorld(name) != null) {
+            return null;
+        }
+        
+        WorldCreator creator = new WorldCreator(name);
+        creator.environment(environment);
+        creator.type(type);
+        
+        if (generateStructures != null) {
+            creator.generateStructures(generateStructures);
+        }
+        
+        if (seed != null && !seed.isEmpty()) {
+            try {
+                creator.seed(Long.parseLong(seed));
+            } catch (NumberFormatException e) {
+                // Use string hash as seed
+                creator.seed(seed.hashCode());
+            }
+        }
+        
+        World world = creator.createWorld();
+        if (world != null) {
+            getOrCreateSettings(name);
+        }
+        return world;
     }
     
     /**

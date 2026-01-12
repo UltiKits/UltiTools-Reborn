@@ -14,7 +14,7 @@ import lombok.Setter;
  * World management configuration.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 @Getter
 @Setter
@@ -28,17 +28,36 @@ public class WorldConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "default_world", comment = "Default world name")
     private String defaultWorld = "world";
     
+    @ConfigEntry(path = "protected_worlds", comment = "Worlds that cannot be auto-unloaded or deleted")
+    private List<String> protectedWorlds = Arrays.asList("world", "world_nether", "world_the_end");
+    
     @ConfigEntry(path = "load_worlds_on_start", comment = "Worlds to load automatically on server start")
     private List<String> loadWorldsOnStart = Arrays.asList();
     
-    @ConfigEntry(path = "unload_empty_worlds", comment = "Unload worlds with no players after delay")
+    // ==================== Auto-Unload Settings ====================
+    
+    @ConfigEntry(path = "auto_unload.enabled", comment = "Enable auto-unloading of empty worlds")
+    private boolean autoUnloadEmptyWorlds = false;
+    
+    @ConfigEntry(path = "auto_unload.check_interval", comment = "Check interval in seconds")
+    private int emptyWorldCheckInterval = 60;
+    
+    @ConfigEntry(path = "auto_unload.unload_after", comment = "Unload world after being empty for this many seconds")
+    private int emptyWorldUnloadAfter = 300;
+    
+    // Legacy compat
+    @ConfigEntry(path = "unload_empty_worlds", comment = "Deprecated: use auto_unload.enabled instead")
     private boolean unloadEmptyWorlds = false;
     
-    @ConfigEntry(path = "unload_delay", comment = "Delay before unloading empty world (seconds)")
+    @ConfigEntry(path = "unload_delay", comment = "Deprecated: use auto_unload.unload_after instead")
     private int unloadDelay = 300;
+    
+    // ==================== GUI Settings ====================
     
     @ConfigEntry(path = "gui_title", comment = "World list GUI title")
     private String guiTitle = "&6世界列表";
+    
+    // ==================== Teleport Settings ====================
     
     @ConfigEntry(path = "tp_to_world.enabled", comment = "Allow players to teleport between worlds")
     private boolean tpToWorldEnabled = true;
@@ -52,11 +71,33 @@ public class WorldConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "world_spawn.use_spawn_location", comment = "Teleport to world spawn instead of last location")
     private boolean useSpawnLocation = true;
     
+    // ==================== Inventory Isolation Settings ====================
+    
     @ConfigEntry(path = "world_isolation.enabled", comment = "Enable per-world inventory isolation")
     private boolean inventoryIsolation = false;
     
-    @ConfigEntry(path = "world_isolation.shared_worlds", comment = "Worlds that share inventory (groups)")
+    @ConfigEntry(path = "world_isolation.separate_inventory", comment = "Separate inventory per world")
+    private boolean separateInventory = true;
+    
+    @ConfigEntry(path = "world_isolation.separate_ender_chest", comment = "Separate ender chest per world")
+    private boolean separateEnderChest = true;
+    
+    @ConfigEntry(path = "world_isolation.separate_experience", comment = "Separate XP levels per world")
+    private boolean separateExperience = false;
+    
+    @ConfigEntry(path = "world_isolation.separate_health", comment = "Separate health per world")
+    private boolean separateHealth = false;
+    
+    @ConfigEntry(path = "world_isolation.separate_hunger", comment = "Separate hunger per world")
+    private boolean separateHunger = false;
+    
+    @ConfigEntry(path = "world_isolation.separate_effects", comment = "Separate potion effects per world")
+    private boolean separateEffects = false;
+    
+    @ConfigEntry(path = "world_isolation.shared_worlds", comment = "Worlds that share inventory (comma separated groups)")
     private List<String> sharedWorldGroups = Arrays.asList("world,world_nether,world_the_end");
+    
+    // ==================== Messages (legacy, prefer i18n) ====================
     
     @ConfigEntry(path = "messages.world_teleport", comment = "World teleport message")
     private String worldTeleportMessage = "&a已传送到世界: {WORLD}";

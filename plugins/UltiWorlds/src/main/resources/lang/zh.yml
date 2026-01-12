@@ -1,3 +1,168 @@
-# UltiWorlds 语言文件
-worlds_enabled: "UltiWorlds 已启用！"
-worlds_disabled: "UltiWorlds 已禁用！"
+# UltiWorlds 语言文件 - 简体中文
+# Version 2.0.0
+
+# ==================== 插件状态 ====================
+worlds_enabled: "§aUltiWorlds 已启用！"
+worlds_disabled: "§cUltiWorlds 已禁用！"
+
+# ==================== 通用 ====================
+common:
+  enabled: "已启用"
+  disabled: "已禁用"
+  yes: "是"
+  no: "否"
+  random: "随机"
+  on: "开"
+  off: "关"
+
+# ==================== 错误消息 ====================
+error:
+  world_not_found: "§c世界 %world% 不存在！"
+  world_exists: "§c世界 %world% 已存在！"
+  world_blocked: "§c此世界已被禁止进入！"
+  world_locked: "§c此世界已被锁定，无法进入！"
+  no_permission: "§c你没有权限进入此世界！"
+  cooldown: "§c传送冷却中！请等待 %time% 秒"
+  delete_protected: "§c无法删除受保护的世界！"
+  invalid_world: "§c无效的世界名称！"
+  invalid_option: "§c无效的选项！可用选项: %options%"
+  invalid_value: "§c无效的值！"
+  not_player: "§c此命令只能由玩家执行！"
+
+# ==================== 成功消息 ====================
+success:
+  teleported: "§a已传送到世界: %world%"
+  created: "§a世界 %world% 已创建！"
+  deleted: "§c世界 %world% 已删除！"
+  loaded: "§a世界 %world% 已加载！"
+  unloaded: "§e世界 %world% 已卸载"
+  spawn_set: "§a已设置世界出生点"
+  setting_updated: "§a设置已更新: %option% = %value%"
+  protection_enabled: "§a已启用世界保护"
+  protection_disabled: "§e已禁用世界保护"
+  world_blocked: "§c已禁止进入世界 %world%"
+  world_unblocked: "§a已允许进入世界 %world%"
+
+# ==================== 保护消息 ====================
+protection:
+  break_denied: "§c此世界已启用方块破坏保护！"
+  place_denied: "§c此世界已启用方块放置保护！"
+  interact_denied: "§c此世界已启用交互保护！"
+  pvp_disabled: "§c此世界已禁用 PVP！"
+
+# ==================== GUI ====================
+gui:
+  title: "§6世界列表"
+  environment: "§7环境:"
+  players: "§7玩家数:"
+  time: "§7时间:"
+  weather: "§7天气:"
+  pvp: "§7PVP:"
+  monsters: "§7怪物:"
+  protected: "保护中"
+  locked: "已锁定"
+  blocked: "已禁止"
+  click_to_tp: "点击传送到此世界"
+  
+  delete:
+    title: "§c确认删除: %world%"
+    confirm: "§a确认删除"
+    cancel: "§c取消"
+    warning: "§c警告: 此操作不可撤销！"
+
+# ==================== 环境名称 ====================
+environment:
+  normal: "主世界"
+  nether: "下界"
+  the_end: "末地"
+
+# ==================== 世界类型 ====================
+type:
+  normal: "标准"
+  flat: "超平坦"
+  amplified: "放大化"
+  large_biomes: "巨型生物群系"
+
+# ==================== 时间 ====================
+time:
+  morning: "早晨"
+  noon: "正午"
+  evening: "傍晚"
+  night: "夜晚"
+
+# ==================== 天气 ====================
+weather:
+  clear: "晴朗"
+  rain: "雨天"
+  thunder: "雷暴"
+
+# ==================== 向导 ====================
+wizard:
+  header: "§6========== 世界创建向导 =========="
+  cancel_hint: "§7输入 'cancel' 随时取消"
+  
+  enter_name: "§e请输入新世界的名称 §7(仅限字母、数字、下划线和连字符):"
+  invalid_name: "§c无效的世界名称！只允许字母、数字、下划线和连字符，长度1-32字符"
+  world_exists: "§c同名世界已存在！请使用其他名称"
+  
+  select_environment: "§e请选择世界环境:"
+  invalid_environment: "§c无效的选择！请输入 1、2 或 3"
+  
+  select_type: "§e请选择世界类型:"
+  invalid_type: "§c无效的选择！请输入 1-4"
+  
+  generate_structures: "§e是否生成建筑物（村庄、神殿等）？"
+  invalid_yn: "§c无效输入！请输入 y(是) 或 n(否)"
+  
+  enter_seed: "§e请输入世界种子 §7(留空或输入 'random' 使用随机种子):"
+  
+  confirm_header: "§6========== 确认创建 =========="
+  confirm_name: "世界名称:"
+  confirm_env: "环境:"
+  confirm_type: "类型:"
+  confirm_structures: "生成建筑:"
+  confirm_seed: "种子:"
+  confirm_question: "§e确认创建此世界吗？"
+  
+  creating: "§6正在创建世界，请稍候..."
+  success: "§a✓ 世界 %world% 创建成功！已传送至该世界"
+  failed: "§c✗ 创建世界 %world% 失败"
+  error: "§c创建世界时发生错误: %error%"
+  
+  timeout: "§c操作超时，世界创建已取消"
+  cancelled: "§e世界创建已取消"
+
+# ==================== 命令帮助 ====================
+command:
+  usage: "§e用法: %usage%"
+  help:
+    header: "§6========== UltiWorlds 帮助 =========="
+    list: "§e/world list §7- 打开世界列表GUI"
+    tp: "§e/world tp <世界> §7- 传送到指定世界"
+    create: "§e/world create <名称> <类型> [生成器] §7- 创建世界"
+    delete: "§e/world delete <世界> §7- 删除世界"
+    load: "§e/world load <世界> §7- 加载世界"
+    unload: "§e/world unload <世界> §7- 卸载世界"
+    setspawn: "§e/world setspawn §7- 设置当前世界出生点"
+    set: "§e/world set <世界> <选项> <值> §7- 修改世界设置"
+    protect: "§e/world protect <世界> §7- 启用完整保护"
+    unprotect: "§e/world unprotect <世界> §7- 禁用所有保护"
+    block: "§e/world block <世界> §7- 禁止进入世界"
+    unblock: "§e/world unblock <世界> §7- 允许进入世界"
+    wizard: "§e/world wizard §7- 启动世界创建向导"
+  
+  # 设置选项
+  set_options: "pvp, monsters, animals, weather, hidden, locked, displayname, description, icon"
+  
+  # 删除
+  delete:
+    success: "§a世界 %world% 已删除"
+    failed: "§c删除世界 %world% 失败"
+    cancelled: "§e已取消删除操作"
+
+# ==================== 背包隔离 ====================
+inventory:
+  saved: "§a背包数据已保存"
+  loaded: "§a背包数据已加载"
+  save_failed: "§c保存背包数据失败"
+  load_failed: "§c加载背包数据失败"
