@@ -2,9 +2,12 @@ package com.ultikits.plugins.sidebar.service;
 
 import com.ultikits.plugins.sidebar.UltiSideBar;
 import com.ultikits.plugins.sidebar.config.SideBarConfig;
+import com.ultikits.plugins.sidebar.data.SideBarPreference;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.DataOperator;
 
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
@@ -30,7 +33,12 @@ public class SideBarService {
     
     // Track player scoreboard state
     private final Map<UUID, Scoreboard> playerScoreboards = new ConcurrentHashMap<>();
-    private final Set<UUID> disabledPlayers = ConcurrentHashMap.newKeySet();
+    
+    // Content cache for performance optimization (avoid unnecessary scoreboard updates)
+    private final Map<UUID, List<String>> contentCache = new ConcurrentHashMap<>();
+    
+    // Data operator for persistent storage
+    private DataOperator<SideBarPreference> dataOperator;
     
     // Update task
     private BukkitTask updateTask;
@@ -42,17 +50,26 @@ public class SideBarService {
      * Initialize the sidebar service.
      */
     public void init() {
+        // Initialize data operator for persistent storage
+        dataOperator = UltiSideBar.getInstance().getDataOperator(SideBarPreference.class);
+        
         // Check PlaceholderAPI
         placeholderApiAvailable = Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null;
         if (!placeholderApiAvailable) {
             UltiSideBar.getInstance().getLogger().warn("PlaceholderAPI not found! Variables will not work.");
         }
         
+        // Register config change listener
+        config.addChangeListener(cfg -> {
+            clearCache();
+            refreshAllSidebars();
+        });
+        
         startUpdateTask();
         
         // Initialize for online players
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (config.isDefaultEnabled()) {
+            if (config.isDefaultEnabled() && isSidebarEnabledInDatabase(player.getUniqueId())) {
                 enableSidebar(player);
             }
         }
@@ -64,6 +81,7 @@ public class SideBarService {
     public void shutdown() {
         if (updateTask != null) {
             updateTask.cancel();
+            updateTask = null;
         }
         
         // Remove all scoreboards
@@ -72,15 +90,34 @@ public class SideBarService {
         }
         
         playerScoreboards.clear();
-        disabledPlayers.clear();
+        contentCache.clear();
     }
     
     /**
-     * Reload configuration.
+     * Reload configuration and refresh all sidebars.
      */
     public void reload() {
         shutdown();
         init();
+    }
+    
+    /**
+     * Clear content cache (called on config reload).
+     */
+    public void clearCache() {
+        contentCache.clear();
+    }
+    
+    /**
+     * Refresh all online players' sidebars.
+     */
+    private void refreshAllSidebars() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (isSidebarEnabled(player)) {
+                removeSidebar(player);
+                enableSidebar(player);
+            }
+        }
     }
     
     /**
@@ -117,7 +154,8 @@ public class SideBarService {
             return;
         }
         
-        disabledPlayers.remove(player.getUniqueId());
+        // Update database
+        setSidebarEnabledInDatabase(player.getUniqueId(), true);
         
         // Check world blacklist
         if (config.getWorldBlacklist().contains(player.getWorld().getName())) {
@@ -140,7 +178,7 @@ public class SideBarService {
      * Disable sidebar for player.
      */
     public void disableSidebar(Player player) {
-        disabledPlayers.add(player.getUniqueId());
+        setSidebarEnabledInDatabase(player.getUniqueId(), false);
         removeSidebar(player);
     }
     
@@ -149,6 +187,7 @@ public class SideBarService {
      */
     public void removeSidebar(Player player) {
         playerScoreboards.remove(player.getUniqueId());
+        contentCache.remove(player.getUniqueId());
         
         // Reset to main scoreboard
         if (Bukkit.getScoreboardManager() != null) {
@@ -161,8 +200,50 @@ public class SideBarService {
      */
     public boolean isSidebarEnabled(Player player) {
         return config.isEnabled() && 
-               !disabledPlayers.contains(player.getUniqueId()) &&
+               isSidebarEnabledInDatabase(player.getUniqueId()) &&
                !config.getWorldBlacklist().contains(player.getWorld().getName());
+    }
+    
+    /**
+     * Check if sidebar is enabled in database for player.
+     * Returns true if not found (default enabled based on config).
+     */
+    private boolean isSidebarEnabledInDatabase(UUID playerUuid) {
+        List<SideBarPreference> prefs = dataOperator.getAll(
+            WhereCondition.builder()
+                .column("player_uuid")
+                .value(playerUuid.toString())
+                .build()
+        );
+        
+        if (prefs.isEmpty()) {
+            return config.isDefaultEnabled();
+        }
+        
+        Boolean enabled = prefs.get(0).getEnabled();
+        return enabled != null ? enabled : config.isDefaultEnabled();
+    }
+    
+    /**
+     * Set sidebar enabled state in database.
+     */
+    private void setSidebarEnabledInDatabase(UUID playerUuid, boolean enabled) {
+        List<SideBarPreference> existing = dataOperator.getAll(
+            WhereCondition.builder()
+                .column("player_uuid")
+                .value(playerUuid.toString())
+                .build()
+        );
+        
+        if (existing.isEmpty()) {
+            // Insert new record
+            SideBarPreference pref = new SideBarPreference(playerUuid.toString(), enabled);
+            dataOperator.insert(pref);
+        } else {
+            // Update existing record
+            SideBarPreference pref = existing.get(0);
+            dataOperator.update("enabled", enabled, pref.getId());
+        }
     }
     
     /**
@@ -171,12 +252,12 @@ public class SideBarService {
      * @return true if now enabled
      */
     public boolean toggleSidebar(Player player) {
-        if (disabledPlayers.contains(player.getUniqueId())) {
-            enableSidebar(player);
-            return true;
-        } else {
+        if (isSidebarEnabledInDatabase(player.getUniqueId())) {
             disableSidebar(player);
             return false;
+        } else {
+            enableSidebar(player);
+            return true;
         }
     }
     
@@ -208,13 +289,8 @@ public class SideBarService {
             return;
         }
         
-        // Clear old entries
-        for (String entry : new HashSet<>(scoreboard.getEntries())) {
-            scoreboard.resetScores(entry);
-        }
-        
-        // Add new entries (reverse order for correct display)
-        int score = lines.size();
+        // Parse and build new content
+        List<String> newContent = new ArrayList<>();
         Set<String> usedEntries = new HashSet<>();
         
         for (String line : lines) {
@@ -222,18 +298,39 @@ public class SideBarService {
             parsed = ChatColor.translateAlternateColorCodes('&', parsed);
             
             // Ensure unique entry (add invisible chars if duplicate)
-            while (usedEntries.contains(parsed)) {
-                parsed = parsed + ChatColor.RESET;
+            String uniqueParsed = parsed;
+            while (usedEntries.contains(uniqueParsed)) {
+                uniqueParsed = uniqueParsed + ChatColor.RESET;
             }
-            usedEntries.add(parsed);
+            usedEntries.add(uniqueParsed);
             
             // Truncate if too long (max 40 chars in older versions)
-            if (parsed.length() > 40) {
-                parsed = parsed.substring(0, 40);
+            if (uniqueParsed.length() > 40) {
+                uniqueParsed = uniqueParsed.substring(0, 40);
             }
             
+            newContent.add(uniqueParsed);
+        }
+        
+        // Check if content changed (performance optimization)
+        List<String> cachedContent = contentCache.get(player.getUniqueId());
+        if (cachedContent != null && cachedContent.equals(newContent)) {
+            return; // No change, skip update
+        }
+        
+        // Update cache
+        contentCache.put(player.getUniqueId(), new ArrayList<>(newContent));
+        
+        // Clear old entries
+        for (String entry : new HashSet<>(scoreboard.getEntries())) {
+            scoreboard.resetScores(entry);
+        }
+        
+        // Add new entries (reverse order for correct display)
+        int score = newContent.size();
+        for (String entry : newContent) {
             try {
-                objective.getScore(parsed).setScore(score--);
+                objective.getScore(entry).setScore(score--);
             } catch (Exception e) {
                 // Ignore invalid entries
             }
@@ -258,7 +355,7 @@ public class SideBarService {
      * Handle player join.
      */
     public void onPlayerJoin(Player player) {
-        if (config.isDefaultEnabled() && !disabledPlayers.contains(player.getUniqueId())) {
+        if (isSidebarEnabledInDatabase(player.getUniqueId())) {
             // Delay to allow other plugins to load
             Bukkit.getScheduler().runTaskLater(
                 UltiTools.getInstance(),
@@ -273,6 +370,7 @@ public class SideBarService {
      */
     public void onPlayerQuit(Player player) {
         playerScoreboards.remove(player.getUniqueId());
+        contentCache.remove(player.getUniqueId());
     }
     
     /**

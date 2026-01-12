@@ -10,8 +10,9 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
  * Features:
  * - Dynamic sidebar with PlaceholderAPI support
  * - Per-world configuration
- * - Toggle command
- * - Auto-update
+ * - Toggle command with persistent preferences
+ * - Auto-update with content caching
+ * - Hot reload support
  * </p>
  *
  * @author wisdomme
@@ -35,7 +36,7 @@ public class UltiSideBar extends UltiToolsPlugin {
             sideBarService.init();
         }
         
-        getLogger().info(i18n("UltiSideBar 已启用！"));
+        getLogger().info(i18n("sidebar_enabled"));
         return true;
     }
 
@@ -46,16 +47,19 @@ public class UltiSideBar extends UltiToolsPlugin {
             sideBarService.shutdown();
         }
         
-        getLogger().info(i18n("UltiSideBar 已禁用！"));
+        getLogger().info(i18n("sidebar_disabled"));
         instance = null;
     }
 
     @Override
     public void reloadSelf() {
+        // Reload all configs
+        getConfigManager().reloadConfigs(this);
+        
         SideBarService sideBarService = getContext().getBean(SideBarService.class);
         if (sideBarService != null) {
             sideBarService.reload();
         }
-        getLogger().info(i18n("UltiSideBar 配置已重载！"));
+        getLogger().info(i18n("sidebar_reloaded"));
     }
 }

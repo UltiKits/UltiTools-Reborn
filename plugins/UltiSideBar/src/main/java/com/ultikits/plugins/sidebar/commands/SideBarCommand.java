@@ -1,12 +1,16 @@
 package com.ultikits.plugins.sidebar.commands;
 
+import com.ultikits.plugins.sidebar.UltiSideBar;
 import com.ultikits.plugins.sidebar.service.SideBarService;
 import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Sidebar toggle command.
@@ -14,54 +18,76 @@ import org.bukkit.entity.Player;
  * @author wisdomme
  * @version 1.0.0
  */
-@CmdTarget(CmdTarget.CmdTargetType.PLAYER)
+@CmdTarget(CmdTarget.CmdTargetType.BOTH)
 @CmdExecutor(
     alias = {"sidebar", "sb"},
     permission = "ultisidebar.toggle",
-    description = "切换侧边栏显示"
+    description = "sidebar_command_description"
 )
 public class SideBarCommand extends AbstractCommendExecutor {
     
-    private final SideBarService sideBarService;
-    
-    public SideBarCommand(SideBarService sideBarService) {
-        this.sideBarService = sideBarService;
-    }
+    @Autowired
+    private SideBarService sideBarService;
     
     @CmdMapping(format = "toggle")
+    @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
     public void toggle(@CmdSender Player player) {
         boolean enabled = sideBarService.toggleSidebar(player);
         if (enabled) {
-            player.sendMessage(ChatColor.GREEN + "侧边栏已开启！");
+            player.sendMessage(UltiSideBar.getInstance().i18n("sidebar_toggle_on"));
         } else {
-            player.sendMessage(ChatColor.YELLOW + "侧边栏已关闭！");
+            player.sendMessage(UltiSideBar.getInstance().i18n("sidebar_toggle_off"));
         }
     }
     
     @CmdMapping(format = "on")
+    @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
     public void on(@CmdSender Player player) {
         sideBarService.enableSidebar(player);
-        player.sendMessage(ChatColor.GREEN + "侧边栏已开启！");
+        player.sendMessage(UltiSideBar.getInstance().i18n("sidebar_toggle_on"));
     }
     
     @CmdMapping(format = "off")
+    @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
     public void off(@CmdSender Player player) {
         sideBarService.disableSidebar(player);
-        player.sendMessage(ChatColor.YELLOW + "侧边栏已关闭！");
+        player.sendMessage(UltiSideBar.getInstance().i18n("sidebar_toggle_off"));
+    }
+    
+    @CmdMapping(format = "reload", permission = "ultisidebar.admin")
+    public void reload(@CmdSender CommandSender sender) {
+        UltiSideBar.getInstance().reloadSelf();
+        sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_reloaded"));
     }
     
     @CmdMapping(format = "")
-    public void help(@CmdSender Player player) {
-        player.sendMessage(ChatColor.GOLD + "=== UltiSideBar 帮助 ===");
-        player.sendMessage(ChatColor.YELLOW + "/sidebar toggle" + ChatColor.WHITE + " - 切换侧边栏");
-        player.sendMessage(ChatColor.YELLOW + "/sidebar on" + ChatColor.WHITE + " - 开启侧边栏");
-        player.sendMessage(ChatColor.YELLOW + "/sidebar off" + ChatColor.WHITE + " - 关闭侧边栏");
+    public void help(@CmdSender CommandSender sender) {
+        sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_help_title"));
+        sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_help_toggle"));
+        sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_help_on"));
+        sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_help_off"));
+        if (sender.hasPermission("ultisidebar.admin")) {
+            sender.sendMessage(UltiSideBar.getInstance().i18n("sidebar_help_reload"));
+        }
     }
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        if (sender instanceof Player) {
-            help((Player) sender);
+        help(sender);
+    }
+    
+    @Override
+    protected List<String> suggest(CommandSender sender, String[] args) {
+        if (args.length == 1) {
+            List<String> suggestions = Arrays.asList("toggle", "on", "off");
+            if (sender.hasPermission("ultisidebar.admin")) {
+                suggestions = Arrays.asList("toggle", "on", "off", "reload");
+            }
+            String input = args[0].toLowerCase();
+            return suggestions.stream()
+                .filter(s -> s.startsWith(input))
+                .collect(java.util.stream.Collectors.toList());
         }
+        return super.suggest(sender, args);
     }
 }

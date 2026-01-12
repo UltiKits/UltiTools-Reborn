@@ -1,4 +1,20 @@
 # UltiSideBar Language File
-sidebar_enabled: "UltiSideBar has been enabled!"
-sidebar_disabled: "UltiSideBar has been disabled!"
-sidebar_reloaded: "UltiSideBar configuration has been reloaded!"
+
+# Plugin status messages
+sidebar_enabled: "§aUltiSideBar has been enabled!"
+sidebar_disabled: "§eUltiSideBar has been disabled!"
+sidebar_reloaded: "§aUltiSideBar configuration has been reloaded!"
+
+# Command messages
+sidebar_toggle_on: "§aSidebar has been enabled!"
+sidebar_toggle_off: "§eSidebar has been disabled!"
+
+# Command description
+sidebar_command_description: "Toggle sidebar display"
+
+# Help messages
+sidebar_help_title: "§6=== UltiSideBar Help ==="
+sidebar_help_toggle: "§e/sidebar toggle§f - Toggle sidebar"
+sidebar_help_on: "§e/sidebar on§f - Enable sidebar"
+sidebar_help_off: "§e/sidebar off§f - Disable sidebar"
+sidebar_help_reload: "§e/sidebar reload§f - Reload configuration"
