@@ -6,21 +6,23 @@ import com.ultikits.plugins.trade.service.TradeService;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 
-import java.util.Arrays;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 /**
- * Trade GUI implementation.
+ * Trade GUI implementation with experience trading and item details.
  *
  * @author wisdomme
- * @version 1.0.0
+ * @version 2.0.0
  */
 public class TradeGUI implements InventoryHolder {
     
@@ -42,6 +44,8 @@ public class TradeGUI implements InventoryHolder {
     public static final int CANCEL_SLOT = 45;
     public static final int YOUR_MONEY_SLOT = 36;
     public static final int THEIR_MONEY_SLOT = 44;
+    public static final int YOUR_EXP_SLOT = 38;
+    public static final int THEIR_EXP_SLOT = 42;
     public static final int YOUR_STATUS_SLOT = 37;
     public static final int THEIR_STATUS_SLOT = 43;
     
@@ -97,6 +101,9 @@ public class TradeGUI implements InventoryHolder {
         // Money display
         updateMoneyDisplay();
         
+        // Experience display
+        updateExpDisplay();
+        
         // Status display
         updateStatusDisplay();
     }
@@ -118,20 +125,105 @@ public class TradeGUI implements InventoryHolder {
             }
         }
         
-        // Update their items (display only)
+        // Update their items (display only) with detail lore
         Map<Integer, ItemStack> theirItems = session.getOtherPlayerItems(viewerUuid);
         for (int i = 0; i < THEIR_SLOTS.length; i++) {
             ItemStack item = theirItems.get(i);
             if (item != null) {
-                inventory.setItem(THEIR_SLOTS[i], item.clone());
+                inventory.setItem(THEIR_SLOTS[i], createItemWithDetails(item));
             } else {
                 inventory.setItem(THEIR_SLOTS[i], createItem(Material.CYAN_STAINED_GLASS_PANE, ChatColor.AQUA + "对方物品"));
             }
         }
         
         updateMoneyDisplay();
+        updateExpDisplay();
         updateStatusDisplay();
         updateConfirmButton();
+    }
+    
+    /**
+     * Create a clone of item with detailed information in lore.
+     */
+    private ItemStack createItemWithDetails(ItemStack original) {
+        ItemStack item = original.clone();
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+        
+        List<String> lore = meta.hasLore() ? new ArrayList<>(meta.getLore()) : new ArrayList<>();
+        
+        // Add separator
+        lore.add("");
+        lore.add(ChatColor.DARK_GRAY + "───────────────");
+        lore.add(ChatColor.GRAY + "物品详情:");
+        
+        // Add enchantments
+        if (!item.getEnchantments().isEmpty()) {
+            lore.add(ChatColor.LIGHT_PURPLE + "附魔:");
+            for (Map.Entry<Enchantment, Integer> ench : item.getEnchantments().entrySet()) {
+                lore.add(ChatColor.GRAY + "  • " + getEnchantmentName(ench.getKey()) + " " + toRoman(ench.getValue()));
+            }
+        }
+        
+        // Add durability
+        if (meta instanceof Damageable) {
+            Damageable damageable = (Damageable) meta;
+            int maxDurability = item.getType().getMaxDurability();
+            if (maxDurability > 0) {
+                int currentDurability = maxDurability - damageable.getDamage();
+                double percent = (double) currentDurability / maxDurability * 100;
+                ChatColor color = percent > 50 ? ChatColor.GREEN : (percent > 25 ? ChatColor.YELLOW : ChatColor.RED);
+                lore.add(ChatColor.GRAY + "耐久度: " + color + currentDurability + "/" + maxDurability + 
+                         ChatColor.GRAY + " (" + String.format("%.1f", percent) + "%)");
+            }
+        }
+        
+        // Add item flags info
+        if (!meta.getItemFlags().isEmpty()) {
+            lore.add(ChatColor.GRAY + "物品标志: " + ChatColor.WHITE + meta.getItemFlags().size() + " 个");
+        }
+        
+        // Add unbreakable info
+        if (meta.isUnbreakable()) {
+            lore.add(ChatColor.BLUE + "无法破坏");
+        }
+        
+        // Add custom model data
+        if (meta.hasCustomModelData()) {
+            lore.add(ChatColor.GRAY + "自定义模型: " + ChatColor.WHITE + meta.getCustomModelData());
+        }
+        
+        meta.setLore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+    
+    /**
+     * Get enchantment display name.
+     */
+    private String getEnchantmentName(Enchantment enchantment) {
+        // Return a readable name
+        String name = enchantment.getKey().getKey();
+        name = name.replace("_", " ");
+        // Capitalize first letter of each word
+        StringBuilder result = new StringBuilder();
+        for (String word : name.split(" ")) {
+            if (word.length() > 0) {
+                result.append(Character.toUpperCase(word.charAt(0)))
+                      .append(word.substring(1).toLowerCase())
+                      .append(" ");
+            }
+        }
+        return result.toString().trim();
+    }
+    
+    /**
+     * Convert number to roman numeral.
+     */
+    private String toRoman(int number) {
+        if (number <= 0 || number > 10) return String.valueOf(number);
+        String[] romanNumerals = {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"};
+        return romanNumerals[number - 1];
     }
     
     /**
@@ -144,18 +236,71 @@ public class TradeGUI implements InventoryHolder {
             double yourMoney = session.getPlayerMoney(viewerUuid);
             double theirMoney = session.getOtherPlayerMoney(viewerUuid);
             
+            // Calculate tax
+            double taxRate = tradeService.getConfig().getTradeTax();
+            double yourTax = yourMoney * taxRate;
+            double theirReceive = yourMoney - yourTax;
+            
+            List<String> yourLore = new ArrayList<>();
+            yourLore.add(ChatColor.GRAY + "点击修改金额");
+            if (taxRate > 0 && yourMoney > 0) {
+                yourLore.add(ChatColor.YELLOW + "税率: " + String.format("%.1f%%", taxRate * 100));
+                yourLore.add(ChatColor.RED + "税金: " + String.format("%.2f", yourTax));
+                yourLore.add(ChatColor.GREEN + "对方实收: " + String.format("%.2f", theirReceive));
+            }
+            
             ItemStack yourMoneyItem = createItem(Material.GOLD_NUGGET, 
-                ChatColor.GOLD + "你的金币: " + ChatColor.WHITE + yourMoney,
-                ChatColor.GRAY + "点击修改金额");
+                ChatColor.GOLD + "你的金币: " + ChatColor.WHITE + String.format("%.2f", yourMoney),
+                yourLore.toArray(new String[0]));
             inventory.setItem(YOUR_MONEY_SLOT, yourMoneyItem);
             
             ItemStack theirMoneyItem = createItem(Material.GOLD_NUGGET,
-                ChatColor.GOLD + "对方金币: " + ChatColor.WHITE + theirMoney);
+                ChatColor.GOLD + "对方金币: " + ChatColor.WHITE + String.format("%.2f", theirMoney));
             inventory.setItem(THEIR_MONEY_SLOT, theirMoneyItem);
         } else {
             ItemStack disabled = createItem(Material.BARRIER, ChatColor.RED + "金币交易未启用");
             inventory.setItem(YOUR_MONEY_SLOT, disabled);
             inventory.setItem(THEIR_MONEY_SLOT, disabled);
+        }
+    }
+    
+    /**
+     * Update experience display.
+     */
+    private void updateExpDisplay() {
+        UUID viewerUuid = viewer.getUniqueId();
+        
+        if (tradeService.getConfig().isEnableExpTrade()) {
+            int yourExp = session.getPlayerExp(viewerUuid);
+            int theirExp = session.getOtherPlayerExp(viewerUuid);
+            int totalExp = tradeService.getTotalExperience(viewer);
+            
+            // Calculate tax
+            double taxRate = tradeService.getConfig().getExpTaxRate();
+            int yourTax = (int)(yourExp * taxRate);
+            int theirReceive = yourExp - yourTax;
+            
+            List<String> yourLore = new ArrayList<>();
+            yourLore.add(ChatColor.GRAY + "点击修改经验值");
+            yourLore.add(ChatColor.AQUA + "你的总经验: " + totalExp);
+            if (taxRate > 0 && yourExp > 0) {
+                yourLore.add(ChatColor.YELLOW + "税率: " + String.format("%.1f%%", taxRate * 100));
+                yourLore.add(ChatColor.RED + "税金: " + yourTax);
+                yourLore.add(ChatColor.GREEN + "对方实收: " + theirReceive);
+            }
+            
+            ItemStack yourExpItem = createItem(Material.EXPERIENCE_BOTTLE, 
+                ChatColor.GREEN + "你的经验: " + ChatColor.WHITE + yourExp,
+                yourLore.toArray(new String[0]));
+            inventory.setItem(YOUR_EXP_SLOT, yourExpItem);
+            
+            ItemStack theirExpItem = createItem(Material.EXPERIENCE_BOTTLE,
+                ChatColor.GREEN + "对方经验: " + ChatColor.WHITE + theirExp);
+            inventory.setItem(THEIR_EXP_SLOT, theirExpItem);
+        } else {
+            ItemStack disabled = createItem(Material.BARRIER, ChatColor.RED + "经验交易未启用");
+            inventory.setItem(YOUR_EXP_SLOT, disabled);
+            inventory.setItem(THEIR_EXP_SLOT, disabled);
         }
     }
     
@@ -222,6 +367,20 @@ public class TradeGUI implements InventoryHolder {
     }
     
     /**
+     * Check if slot is the experience slot.
+     */
+    public boolean isExpSlot(int slot) {
+        return slot == YOUR_EXP_SLOT;
+    }
+    
+    /**
+     * Check if slot is the money slot.
+     */
+    public boolean isMoneySlot(int slot) {
+        return slot == YOUR_MONEY_SLOT;
+    }
+    
+    /**
      * Get item index from slot.
      */
     public int getItemIndex(int slot) {
@@ -231,12 +390,23 @@ public class TradeGUI implements InventoryHolder {
         return -1;
     }
     
+    /**
+     * Play item place sound.
+     */
+    public void playItemSound() {
+        tradeService.playSound(viewer, Sound.BLOCK_NOTE_BLOCK_PLING);
+    }
+    
     public TradeSession getSession() {
         return session;
     }
     
     public Player getViewer() {
         return viewer;
+    }
+    
+    public TradeService getTradeService() {
+        return tradeService;
     }
     
     @Override

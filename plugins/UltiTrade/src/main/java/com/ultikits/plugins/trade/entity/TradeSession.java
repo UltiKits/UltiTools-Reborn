@@ -1,11 +1,11 @@
 package com.ultikits.plugins.trade.entity;
 
-import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 /**
  * Represents an active trade session between two players.
@@ -27,6 +27,10 @@ public class TradeSession {
     // Money offered by each player
     private double player1Money = 0;
     private double player2Money = 0;
+    
+    // Experience offered by each player
+    private int player1Exp = 0;
+    private int player2Exp = 0;
     
     // Confirmation status
     private boolean player1Confirmed = false;
@@ -108,6 +112,24 @@ public class TradeSession {
     
     public double getOtherPlayerMoney(UUID player) {
         return player.equals(player1) ? player2Money : player1Money;
+    }
+    
+    // Experience management
+    public void setExp(UUID player, int amount) {
+        resetConfirmation();
+        if (player.equals(player1)) {
+            player1Exp = amount;
+        } else {
+            player2Exp = amount;
+        }
+    }
+    
+    public int getPlayerExp(UUID player) {
+        return player.equals(player1) ? player1Exp : player2Exp;
+    }
+    
+    public int getOtherPlayerExp(UUID player) {
+        return player.equals(player1) ? player2Exp : player1Exp;
     }
     
     // Confirmation

@@ -1,4 +1,84 @@
-# UltiTrade Language File
-trade_enabled: "UltiTrade has been enabled!"
-trade_disabled: "UltiTrade has been disabled!"
-trade_reloaded: "UltiTrade configuration has been reloaded!"
+# UltiTrade Language File (English)
+trade_enabled: "UltiTrade enabled!"
+trade_disabled: "UltiTrade disabled!"
+trade_reloaded: "UltiTrade config reloaded!"
+
+# Trade Request
+request_sent: "&aTrading request sent to &e{PLAYER}&a!"
+request_received: "&e{PLAYER} &fwants to trade with you! Use &a/trade accept &for &c/trade deny"
+request_timeout: "&cTrading request has timed out!"
+request_denied: "&c{PLAYER} denied your trading request!"
+request_expired: "&cTrading request has expired!"
+
+# Trade Status
+trade_started: "&aTrade started!"
+trade_complete: "&aTrade completed!"
+trade_cancelled: "&cTrade cancelled!"
+already_trading: "&cYou are already trading!"
+target_trading: "&c{PLAYER} is currently trading!"
+no_pending_request: "&cNo pending trade request!"
+player_offline: "&cThe other player is offline!"
+
+# Trade Toggle and Blacklist
+trade_toggle_on: "&aTrade enabled!"
+trade_toggle_off: "&eTrade disabled!"
+trade_disabled_target: "&c{PLAYER} has trading disabled!"
+player_blocked: "&cYou are blocked by {PLAYER}!"
+block_success: "&aAdded {PLAYER} to your trade blacklist!"
+unblock_success: "&aRemoved {PLAYER} from your trade blacklist!"
+already_blocked: "&c{PLAYER} is already in your blacklist!"
+not_blocked: "&c{PLAYER} is not in your blacklist!"
+
+# Trade Confirmation
+confirm_required: "&eThis trade involves large assets, please confirm!"
+confirmed: "&aTrade confirmed! Waiting for the other player..."
+other_confirmed: "&a{PLAYER} has confirmed the trade!"
+confirmation_cancelled: "&eConfirmation cancelled."
+
+# Money and Experience
+money_set: "&aMoney set to: &e{AMOUNT}"
+exp_set: "&aExperience set to: &e{AMOUNT}"
+insufficient_money: "&cInsufficient balance!"
+insufficient_exp: "&cInsufficient experience!"
+invalid_amount: "&cInvalid amount!"
+amount_negative: "&cAmount cannot be negative!"
+
+# GUI
+gui_your_items: "&aYour Items"
+gui_their_items: "&bTheir Items"
+gui_confirm: "&aConfirm Trade"
+gui_cancel: "&cCancel Trade"
+gui_your_money: "&6Your Money"
+gui_their_money: "&6Their Money"
+gui_your_exp: "&aYour Experience"
+gui_their_exp: "&aTheir Experience"
+gui_status_confirmed: "&aConfirmed"
+gui_status_pending: "&cPending"
+
+# Item Details
+item_enchantments: "&dEnchantments:"
+item_durability: "&7Durability: {CURRENT}/{MAX}"
+item_unbreakable: "&9Unbreakable"
+item_custom_model: "&7Custom Model: {ID}"
+
+# Prompts
+input_money_prompt: "&6Enter the amount of money to trade:"
+input_exp_prompt: "&aEnter the amount of experience to trade:"
+input_cancel: "&7(Type 'cancel' to cancel)"
+input_cancelled: "&eInput cancelled"
+
+# Command Help
+help_header: "&6=== UltiTrade Help ==="
+help_request: "&e/trade <player>&f - Send a trade request"
+help_accept: "&e/trade accept&f - Accept a trade request"
+help_deny: "&e/trade deny&f - Deny a trade request"
+help_cancel: "&e/trade cancel&f - Cancel current trade"
+help_toggle: "&e/trade toggle&f - Toggle trading on/off"
+help_block: "&e/trade block <player>&f - Block a player"
+help_unblock: "&e/trade unblock <player>&f - Unblock a player"
+
+# Errors
+player_not_found: "&cPlayer {PLAYER} is not online!"
+cannot_trade_self: "&cYou cannot trade with yourself!"
+too_far_away: "&cToo far away to trade!"
+cross_world_disabled: "&cCross-world trading is disabled!"
