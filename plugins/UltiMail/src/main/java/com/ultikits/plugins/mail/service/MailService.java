@@ -498,6 +498,51 @@ public class MailService {
     }
     
     /**
+     * Internal method for sending mail programmatically without player sender.
+     * Used by GameMailService integration for cross-module mail.
+     * 
+     * @param senderUuid Sender UUID (can be null for system mail)
+     * @param senderName Sender name
+     * @param receiverName Receiver name
+     * @param subject Mail subject
+     * @param content Mail content
+     * @param items Attached items (can be null)
+     * @return true if sent successfully
+     */
+    public boolean sendMailInternal(UUID senderUuid, String senderName, String receiverName, 
+                                    String subject, String content, ItemStack[] items) {
+        // Get receiver UUID (may be offline)
+        String receiverUuid = getPlayerUuid(receiverName);
+        if (receiverUuid == null) {
+            return false;
+        }
+        
+        // Create mail data
+        MailData mail = createMailData(
+            senderUuid != null ? senderUuid.toString() : null,
+            senderName,
+            receiverUuid, 
+            receiverName, 
+            subject, 
+            content, 
+            items, 
+            null
+        );
+        
+        if (mail == null) {
+            return false;
+        }
+        
+        // Save to database
+        dataOperator.insert(mail);
+        
+        // Notify receiver if online
+        notifyReceiver(receiverName, senderName);
+        
+        return true;
+    }
+    
+    /**
      * Check if player is on send cooldown.
      */
     private boolean isOnCooldown(UUID playerUuid) {
