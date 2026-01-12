@@ -847,6 +847,53 @@ public class SimpleContainer {
     }
 
     /**
+     * Get beans of type ordered by @Service priority.
+     * Higher priority beans come first.
+     * <br>
+     * 按 @Service 优先级排序获取指定类型的Bean。
+     * 优先级高的Bean排在前面。
+     *
+     * @param type bean type <br> Bean类型
+     * @return ordered list of beans <br> 排序后的Bean列表
+     */
+    public <T> java.util.List<T> getOrderedBeansOfType(Class<T> type) {
+        Map<String, T> beans = getBeansOfType(type);
+        java.util.List<T> result = new java.util.ArrayList<>(beans.values());
+        result.sort((a, b) -> {
+            int priorityA = getServicePriority(a.getClass());
+            int priorityB = getServicePriority(b.getClass());
+            return Integer.compare(priorityB, priorityA); // Descending order
+        });
+        return result;
+    }
+
+    /**
+     * Get the highest priority bean of the given type.
+     * <br>
+     * 获取指定类型中优先级最高的Bean。
+     *
+     * @param type bean type <br> Bean类型
+     * @return highest priority bean or null <br> 优先级最高的Bean或null
+     */
+    public <T> T getHighestPriorityBean(Class<T> type) {
+        java.util.List<T> ordered = getOrderedBeansOfType(type);
+        return ordered.isEmpty() ? null : ordered.get(0);
+    }
+
+    /**
+     * Get service priority from @Service annotation.
+     * <br>
+     * 从 @Service 注解获取服务优先级。
+     *
+     * @param clazz the class to check <br> 要检查的类
+     * @return priority value (default 0) <br> 优先级值（默认0）
+     */
+    private int getServicePriority(Class<?> clazz) {
+        Service service = clazz.getAnnotation(Service.class);
+        return service != null ? service.priority() : 0;
+    }
+
+    /**
      * Check if bean is singleton.
      * <br>
      * 检查Bean是否是单例。
