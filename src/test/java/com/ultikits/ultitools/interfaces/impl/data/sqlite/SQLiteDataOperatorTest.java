@@ -71,7 +71,7 @@ class SQLiteDataOperatorTest {
         // Use H2 in MySQL compatibility mode for backtick support
         config.setJdbcUrl("jdbc:h2:mem:sqlitetest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword("");
+        config.setPassword(""); // codacy:ignore - Empty password for H2 in-memory test database, not a security risk
         dataSource = new HikariDataSource(config);
     }
 
@@ -86,6 +86,7 @@ class SQLiteDataOperatorTest {
         operator = new SQLiteDataOperator<>(dataSource, TestEntity.class);
     }
 
+    // codacy:ignore - Test helper method with controlled input, not exposed to user data
     private void executeSql(String sql) throws Exception {
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {

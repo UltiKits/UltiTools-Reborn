@@ -93,6 +93,7 @@ class AbstractDataEntityTest {
         oos.close();
         
         // 反序列化
+        // codacy:ignore - Test verifying serialization works with controlled test data, not untrusted input
         ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
         ObjectInputStream ois = new ObjectInputStream(bais);
         TestDataEntity deserializedEntity = (TestDataEntity) ois.readObject();

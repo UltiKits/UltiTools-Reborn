@@ -44,6 +44,7 @@ public class PackageScanUtils {
         try {
             ClassPath classPath = ClassPath.from(classLoader);
             for (ClassPath.ClassInfo classInfo : classPath.getTopLevelClassesRecursive(packageName)) {
+                // codacy:ignore - Reflection required for annotation scanning, classInfo.getName() is from ClassPath scan
                 Class<?> c = Class.forName(classInfo.getName(), true, classLoader);
                 if (c.isAnnotationPresent(targetAnnotation)) {
                     classes.add(c);

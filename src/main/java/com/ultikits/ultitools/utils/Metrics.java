@@ -328,6 +328,7 @@ public class Metrics {
                 infoLogger.accept("Sent bStats metrics data: " + data.toString());
             }
             String url = String.format(REPORT_URL, platform);
+            // codacy:ignore - REPORT_URL is a hardcoded constant (bStats), not user-controlled (no SSRF risk)
             HttpsURLConnection connection = (HttpsURLConnection) new URL(url).openConnection();
             // Compress the data to save bandwidth
             byte[] compressedData = compress(data.toString());

@@ -78,6 +78,7 @@ public class ClassLoaderUtils {
      * @throws ClassNotFoundException if class not found <br> 如果找不到类
      * @throws SecurityException if class is dangerous <br> 如果类是危险的
      */
+    // codacy:ignore - Reflection is required for plugin framework class loading, className is validated
     public static Class<?> loadClass(String className, boolean initialize) throws ClassNotFoundException, SecurityException {
         validateClassName(className);
         try {
