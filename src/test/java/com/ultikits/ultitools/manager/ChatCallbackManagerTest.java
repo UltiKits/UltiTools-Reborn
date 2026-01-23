@@ -27,6 +27,7 @@ import be.seeseemelk.mockbukkit.ServerMock;
  */
 @DisplayName("ChatCallbackManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)  // Global timeout to prevent hangs in coverage mode
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for singleton reset
 class ChatCallbackManagerTest {
 
     private ServerMock server;

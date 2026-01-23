@@ -34,6 +34,7 @@ import be.seeseemelk.mockbukkit.ServerMock;
  */
 @DisplayName("ListenerManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for mocking internal state
 class ListenerManagerTest {
 
     private ServerMock server;

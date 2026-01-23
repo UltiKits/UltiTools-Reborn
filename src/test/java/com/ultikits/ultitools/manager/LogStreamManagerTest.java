@@ -53,6 +53,7 @@ import be.seeseemelk.mockbukkit.ServerMock;
  */
 @DisplayName("LogStreamManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for mocking internal state
 class LogStreamManagerTest {
 
     private ServerMock server;

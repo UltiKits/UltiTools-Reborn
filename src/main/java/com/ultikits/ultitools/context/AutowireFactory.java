@@ -9,6 +9,7 @@ import java.lang.reflect.Field;
  * <br>
  * 简单的自动装配工厂，用于替换Spring的AutowireCapableBeanFactory。
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Autowiring requires reflection
 public class AutowireFactory {
     private final SimpleContainer container;
 
@@ -39,7 +40,7 @@ public class AutowireFactory {
                             field.set(bean, dependency);
                         }
                     } catch (IllegalAccessException e) {
-                        throw new RuntimeException("Failed to autowire field: " + field.getName(), e);
+                        throw new IllegalStateException("Failed to autowire field: " + field.getName(), e);
                     }
                 }
             }

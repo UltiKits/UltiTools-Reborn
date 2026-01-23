@@ -15,6 +15,7 @@ import com.google.gson.JsonObject;
  * PongHandler 测试类
  */
 @DisplayName("PongHandler 测试")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for internal state verification
 class PongHandlerTest {
 
     private PongHandler handler;

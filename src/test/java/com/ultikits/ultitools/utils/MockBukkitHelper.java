@@ -10,6 +10,7 @@ import be.seeseemelk.mockbukkit.MockBukkit;
  * MockBukkit 测试工具类
  * 提供健壮的 MockBukkit 清理功能，解决测试之间的单例冲突问题
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test helper requires reflection for singleton cleanup
 public final class MockBukkitHelper {
 
     private MockBukkitHelper() {

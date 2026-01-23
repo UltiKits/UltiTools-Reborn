@@ -26,6 +26,7 @@ import com.google.gson.JsonObject;
  */
 @DisplayName("UltiPanelWebSocketClient 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for internal state verification
 class UltiPanelWebSocketClientTest {
 
     private static final String TEST_URL = "wss://test.example.com/ws";

@@ -90,7 +90,7 @@ public class JsonStore implements DataStore {
     @Override
     public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
-            throw new RuntimeException("No Table annotation is presented!");
+            throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
         Cached dataOperator = dataOperatorMap.get(dataEntity);
         if (dataOperator == null) {

@@ -12,6 +12,7 @@ import org.mockito.Mockito;
 
 import com.ultikits.ultitools.UltiTools;
 
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test helper requires reflection for mocking
 public class TestHelper {
     public static void mockUltiToolsInstance() {
         try {
@@ -19,13 +20,13 @@ public class TestHelper {
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
             instanceField.set(null, mock);
-            
+
             // Mock i18n(String)
             Mockito.lenient().when(mock.i18n(Mockito.anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-            
+
             // Mock getServer()
             Mockito.lenient().when(mock.getServer()).thenAnswer(invocation -> org.bukkit.Bukkit.getServer());
-            
+
             // Mock isEnabled()
             Mockito.lenient().when(mock.isEnabled()).thenReturn(true);
 
@@ -33,7 +34,7 @@ public class TestHelper {
             org.bukkit.plugin.PluginLoader pluginLoader = Mockito.mock(org.bukkit.plugin.PluginLoader.class);
             Mockito.lenient().when(mock.getPluginLoader()).thenReturn(pluginLoader);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to mock UltiTools instance", e);
+            throw new IllegalStateException("Failed to mock UltiTools instance", e);
         }
     }
 }
