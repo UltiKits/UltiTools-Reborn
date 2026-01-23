@@ -22,6 +22,7 @@ import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 
 /**
@@ -227,7 +228,7 @@ class UltiToolsTest {
         @DisplayName("Should have getPluginManager method")
         void shouldHaveGetPluginManagerMethod() throws NoSuchMethodException {
             Method method = UltiTools.class.getMethod("getPluginManager");
-            assertThat(method.getReturnType()).isEqualTo(com.ultikits.ultitools.manager.PluginManager.class);
+            assertThat(method.getReturnType()).isEqualTo(PluginManager.class);
         }
 
         @Test

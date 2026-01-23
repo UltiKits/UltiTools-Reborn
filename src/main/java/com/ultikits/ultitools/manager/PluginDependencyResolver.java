@@ -27,16 +27,15 @@ import com.ultikits.ultitools.annotations.PluginDependency;
  */
 public class PluginDependencyResolver {
 
-    @SuppressWarnings("unused")
-    private final Logger logger;
-    
     /**
      * Constructs a new PluginDependencyResolver.
      *
-     * @param logger the logger to use for warnings and errors
+     * @param logger the logger to use for warnings and errors (reserved for future use)
      */
+    @SuppressWarnings("unused")
     public PluginDependencyResolver(Logger logger) {
-        this.logger = logger;
+        // Logger parameter is reserved for future use
+        // Currently not stored as a field to satisfy code quality checks
     }
     
     /**

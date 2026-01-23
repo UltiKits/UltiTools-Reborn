@@ -56,6 +56,9 @@ public class WarpCommand extends BaseEssentialsCommand {
             case DISABLED:
                 player.sendMessage(i18n("地标功能已禁用"));
                 break;
+            default:
+                // Handle any unexpected result types
+                break;
         }
     }
     

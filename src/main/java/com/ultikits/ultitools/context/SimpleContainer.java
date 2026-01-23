@@ -856,9 +856,9 @@ public class SimpleContainer {
      * @param type bean type <br> Bean类型
      * @return ordered list of beans <br> 排序后的Bean列表
      */
-    public <T> java.util.List<T> getOrderedBeansOfType(Class<T> type) {
+    public <T> List<T> getOrderedBeansOfType(Class<T> type) {
         Map<String, T> beans = getBeansOfType(type);
-        java.util.List<T> result = new java.util.ArrayList<>(beans.values());
+        List<T> result = new ArrayList<>(beans.values());
         result.sort((a, b) -> {
             int priorityA = getServicePriority(a.getClass());
             int priorityB = getServicePriority(b.getClass());

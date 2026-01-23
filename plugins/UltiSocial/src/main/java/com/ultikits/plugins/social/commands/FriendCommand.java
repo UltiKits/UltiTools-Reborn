@@ -352,8 +352,11 @@ public class FriendCommand extends AbstractCommandExecutor {
                         suggestions.add(blocked.getBlockedName());
                     }
                     break;
+                default:
+                    // No suggestions for unknown subcommands
+                    break;
             }
-            
+
             return filterStartsWith(suggestions, args[1]);
         }
         

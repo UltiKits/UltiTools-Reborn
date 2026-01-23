@@ -219,10 +219,12 @@ public class RecallCommand extends AbstractCommandExecutor {
             // Create authenticator via dynamic proxy or anonymous class workaround
             final String username = config.getSmtpUsername();
             final String password = config.getSmtpPassword();
-            
-            Object passwordAuth = passwordAuthClass.getConstructor(String.class, String.class)
+
+            // Note: PasswordAuthentication object created for potential future use with authenticator
+            // Currently using direct SMTP credentials in session properties
+            passwordAuthClass.getConstructor(String.class, String.class)
                 .newInstance(username, password);
-            
+
             // Create session with null authenticator first, then set auth manually
             Object session = sessionClass.getMethod("getInstance", Properties.class)
                 .invoke(null, props);

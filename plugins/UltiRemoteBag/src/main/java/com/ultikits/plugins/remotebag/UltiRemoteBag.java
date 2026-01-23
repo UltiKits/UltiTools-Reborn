@@ -32,8 +32,9 @@ public class UltiRemoteBag extends UltiToolsPlugin {
             bagService.init();
         }
         
-        // 设置锁超时时间
-        BagLockService lockService = getContext().getBean(BagLockService.class);
+        // 设置锁超时时间 - Bean initialization handled by framework
+        // BagLockService is initialized via @Service annotation
+        getContext().getBean(BagLockService.class);
         // 从配置获取超时时间（如果有的话）
         
         getLogger().info("UltiRemoteBag has been enabled!");

@@ -48,10 +48,9 @@ public class PlayerTempListener<E extends PlayerEvent> implements TempListener {
                             if (eventHandler.handle((E) event)) {
                                 unregister();
                             }
-                        } else if (((E) event).getPlayer().equals(player)) {
-                            if (eventHandler.handle((E) event)) {
-                                unregister();
-                            }
+                        } else if (((E) event).getPlayer().equals(player)
+                                && eventHandler.handle((E) event)) {
+                            unregister();
                         }
                     } catch (ClassCastException e) {
                         throw new RuntimeException(e);

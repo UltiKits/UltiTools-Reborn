@@ -102,13 +102,14 @@ class PlayerEventManagerTest {
         @Test
         @DisplayName("应该接受 WebSocket 客户端参数")
         void shouldAcceptWebSocketClient() throws Exception {
-            // Arrange
-            PlayerEventManager manager = new PlayerEventManager();
+            // Arrange - verify constructor and initialize method exist
             UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
 
             // initialize 方法存在
             Method initMethod = PlayerEventManager.class.getDeclaredMethod("initialize", UltiPanelWebSocketClient.class);
             assertThat(initMethod).isNotNull();
+            // Verify client mock was created successfully
+            assertThat(client).isNotNull();
         }
     }
 

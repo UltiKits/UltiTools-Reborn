@@ -1,21 +1,25 @@
 package com.ultikits.ultitools.abstracts.guis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -24,6 +28,12 @@ import be.seeseemelk.mockbukkit.MockBukkit;
 import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import mc.obliviate.inventory.GuiIcon;
+import mc.obliviate.inventory.InventoryAPI;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * Unit tests for OkCancelPage.
@@ -53,28 +63,28 @@ class OkCancelPageTest {
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
-        
+        TestHelper.mockUltiToolsInstance();
+
         // Mock VersionWrapper
-        com.ultikits.ultitools.interfaces.VersionWrapper versionWrapper = org.mockito.Mockito.mock(com.ultikits.ultitools.interfaces.VersionWrapper.class);
-        org.mockito.Mockito.lenient().when(com.ultikits.ultitools.UltiTools.getInstance().getVersionWrapper()).thenReturn(versionWrapper);
-        org.mockito.Mockito.lenient().when(versionWrapper.getColoredPlaneGlass(org.mockito.ArgumentMatchers.any())).thenReturn(new org.bukkit.inventory.ItemStack(org.bukkit.Material.STONE));
-        
+        VersionWrapper versionWrapper = mock(VersionWrapper.class);
+        lenient().when(UltiTools.getInstance().getVersionWrapper()).thenReturn(versionWrapper);
+        lenient().when(versionWrapper.getColoredPlaneGlass(any())).thenReturn(new ItemStack(Material.STONE));
+
         // Initialize InventoryAPI
-        new mc.obliviate.inventory.InventoryAPI(com.ultikits.ultitools.UltiTools.getInstance()).init();
+        new InventoryAPI(UltiTools.getInstance()).init();
 
         player = server.addPlayer();
         page = new TestOkCancelPage(player, "test_gui", "Confirm Action", confirmAction, cancelAction);
         page.open();
         // Manually trigger onOpen because MockBukkit/ObliviateInvs interaction might not fire it synchronously or correctly in this environment
-        page.onOpen(org.mockito.Mockito.mock(org.bukkit.event.inventory.InventoryOpenEvent.class));
+        page.onOpen(mock(InventoryOpenEvent.class));
     }
 
     @AfterEach
     void tearDown() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     // ==================== Initialization Tests ====================

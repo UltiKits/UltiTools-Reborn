@@ -74,8 +74,7 @@ public class AttachmentGUIListener implements Listener {
         }
         
         AttachmentSelectorPage page = (AttachmentSelectorPage) event.getInventory().getHolder();
-        Player player = (Player) event.getPlayer();
-        
+
         // If not confirmed (closed by ESC or other means), return items
         if (!page.isConfirmed()) {
             page.returnAllItems();

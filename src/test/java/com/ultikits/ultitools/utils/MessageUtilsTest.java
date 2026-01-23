@@ -25,6 +25,9 @@ import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import net.kyori.adventure.text.TextComponent;
 
+import static com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState;
+import static com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock;
+
 /**
  * MessageUtils 测试类
  */
@@ -36,13 +39,13 @@ class MessageUtilsTest {
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        ensureCleanState();
         server = MockBukkit.mock();
     }
 
     @AfterEach
     void tearDown() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        safeUnmock();
     }
 
     @Nested

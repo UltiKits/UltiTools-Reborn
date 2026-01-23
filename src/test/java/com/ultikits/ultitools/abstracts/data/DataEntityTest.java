@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -434,8 +435,8 @@ class DataEntityTest {
         }
         
         @Override
-        public java.util.List<String> getValidationErrors() {
-            java.util.List<String> errors = new java.util.ArrayList<>();
+        public List<String> getValidationErrors() {
+            List<String> errors = new ArrayList<>();
             if (name == null || name.isEmpty()) {
                 errors.add("Name is required");
             }

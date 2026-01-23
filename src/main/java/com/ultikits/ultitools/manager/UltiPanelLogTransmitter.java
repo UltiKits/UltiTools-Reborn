@@ -76,23 +76,25 @@ public class UltiPanelLogTransmitter {
             return;
         }
         
-        if (level == null || level.trim().isEmpty()) {
-            level = "info";
+        String logLevel = level;
+        String logSource = source;
+        if (logLevel == null || logLevel.trim().isEmpty()) {
+            logLevel = "info";
         }
-        if (source == null || source.trim().isEmpty()) {
-            source = "server";
+        if (logSource == null || logSource.trim().isEmpty()) {
+            logSource = "server";
         }
         
         try {
             JsonObject logData = new JsonObject();
-            logData.addProperty("level", level);
+            logData.addProperty("level", logLevel);
             logData.addProperty("message", message != null ? message : "");
             logData.addProperty("timestamp", System.currentTimeMillis());
-            logData.addProperty("source", source);
+            logData.addProperty("source", logSource);
             logData.addProperty("thread", Thread.currentThread().getName());
-            
+
             // 添加记录器名称（可选）
-            logData.addProperty("logger", determineLoggerName(source));
+            logData.addProperty("logger", determineLoggerName(logSource));
             
             // 如果有异常，添加堆栈跟踪
             if (throwable != null) {

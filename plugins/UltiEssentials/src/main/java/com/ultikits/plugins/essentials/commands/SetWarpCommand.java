@@ -46,7 +46,7 @@ public class SetWarpCommand extends BaseEssentialsCommand {
         switch (result) {
             case CREATED:
                 if (permission != null && !permission.isEmpty()) {
-                    player.sendMessage(i18n("已创建地标点: ") + name + 
+                    player.sendMessage(i18n("已创建地标点: ") + name +
                         i18n(" (权限: ") + permission + ")");
                 } else {
                     player.sendMessage(i18n("已创建地标点: ") + name);
@@ -60,6 +60,9 @@ public class SetWarpCommand extends BaseEssentialsCommand {
                 break;
             case DISABLED:
                 player.sendMessage(i18n("地标功能已禁用"));
+                break;
+            default:
+                // Handle any unexpected result types
                 break;
         }
     }

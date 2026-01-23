@@ -42,15 +42,15 @@ import lombok.Setter;
 @ConfigEntity("config/recipes.yml")
 public class RecipeConfig extends AbstractConfigEntity {
 
-    public RecipeConfig(String configFilePath) {
-        super(configFilePath);
-    }
-
     @ConfigEntry(path = "enabled", comment = "是否启用自定义配方功能")
     private boolean enabled = true;
 
     @ConfigEntry(path = "recipes", comment = "自定义配方列表")
     private Map<String, RecipeDefinition> recipes = new HashMap<>();
+
+    public RecipeConfig(String configFilePath) {
+        super(configFilePath);
+    }
 
     /**
      * Recipe definition for a single custom recipe.

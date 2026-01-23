@@ -198,10 +198,9 @@ public class ChestLockService {
         }
         
         // Check permission
-        if (!lock.getOwnerUuid().equals(player.getUniqueId().toString())) {
-            if (!player.hasPermission("ultiessentials.lock.admin")) {
-                return UnlockResult.NOT_OWNER;
-            }
+        if (!lock.getOwnerUuid().equals(player.getUniqueId().toString())
+                && !player.hasPermission("ultiessentials.lock.admin")) {
+            return UnlockResult.NOT_OWNER;
         }
         
         // Remove lock
@@ -276,11 +275,7 @@ public class ChestLockService {
         }
         
         // Admin can access if config allows
-        if (config.isChestLockAdminBypass() && player.hasPermission("ultiessentials.lock.admin")) {
-            return true;
-        }
-        
-        return false;
+        return config.isChestLockAdminBypass() && player.hasPermission("ultiessentials.lock.admin");
     }
     
     /**

@@ -81,6 +81,9 @@ public abstract class BaseEssentialsCommand extends BaseCommandExecutor {
             case CANCELLED:
                 player.sendMessage(i18n("teleport_cancelled"));
                 break;
+            default:
+                // Handle any unexpected result types
+                break;
         }
     }
 

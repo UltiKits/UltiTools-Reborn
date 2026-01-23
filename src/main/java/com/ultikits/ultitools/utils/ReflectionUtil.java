@@ -32,9 +32,10 @@ public final class ReflectionUtil {
      */
     public static List<Field> getAllFields(Class<?> clazz) {
         List<Field> fields = new ArrayList<>();
-        while (clazz != null && clazz != Object.class) {
-            fields.addAll(Arrays.asList(clazz.getDeclaredFields()));
-            clazz = clazz.getSuperclass();
+        Class<?> currentClass = clazz;
+        while (currentClass != null && currentClass != Object.class) {
+            fields.addAll(Arrays.asList(currentClass.getDeclaredFields()));
+            currentClass = currentClass.getSuperclass();
         }
         return fields;
     }

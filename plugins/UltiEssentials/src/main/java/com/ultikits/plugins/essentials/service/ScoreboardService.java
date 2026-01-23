@@ -170,19 +170,20 @@ public class ScoreboardService {
      */
     private String ensureUnique(Scoreboard scoreboard, String line) {
         String original = line;
+        String result = line;
         int attempt = 0;
-        
-        while (scoreboard.getEntries().contains(line) && attempt < 16) {
-            line = original + ChatColor.values()[attempt].toString();
+
+        while (scoreboard.getEntries().contains(result) && attempt < 16) {
+            result = original + ChatColor.values()[attempt].toString();
             attempt++;
         }
-        
+
         // Truncate if too long (scoreboard limit is 40 characters in modern MC)
-        if (line.length() > 40) {
-            line = line.substring(0, 40);
+        if (result.length() > 40) {
+            result = result.substring(0, 40);
         }
-        
-        return line;
+
+        return result;
     }
     
     /**
