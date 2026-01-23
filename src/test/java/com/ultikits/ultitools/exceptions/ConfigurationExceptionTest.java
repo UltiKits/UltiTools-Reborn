@@ -21,7 +21,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("Constructor with message should use CONFIG_ERROR code")
-        void constructor_withMessage_usesConfigErrorCode() {
+        void constructorWithmessageUsesconfigerrorcode() {
             ConfigurationException exception = new ConfigurationException("Test message");
             
             assertEquals(ErrorCode.CONFIG_ERROR, exception.getErrorCode());
@@ -30,7 +30,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use specified code")
-        void constructor_withErrorCodeAndMessage_usesSpecifiedCode() {
+        void constructorWitherrorcodeandmessageUsesspecifiedcode() {
             ConfigurationException exception = new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED, "Load failed");
             
             assertEquals(ErrorCode.CONFIG_LOAD_FAILED, exception.getErrorCode());
@@ -39,7 +39,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("Constructor with message and cause should set both")
-        void constructor_withMessageAndCause_setsBoth() {
+        void constructorWithmessageandcauseSetsboth() {
             Throwable cause = new RuntimeException("Root cause");
             ConfigurationException exception = new ConfigurationException("Test message", cause);
             
@@ -50,7 +50,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             ConfigurationException exception = new ConfigurationException(ErrorCode.CONFIG_PARSE_FAILED, "Parse error", cause);
             
@@ -66,7 +66,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("loadFailed should create exception with correct code and message")
-        void loadFailed_createsCorrectException() {
+        void loadFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("IO error");
             ConfigurationException exception = ConfigurationException.loadFailed("config/main.yml", cause);
             
@@ -78,7 +78,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("saveFailed should create exception with correct code and message")
-        void saveFailed_createsCorrectException() {
+        void saveFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Permission denied");
             ConfigurationException exception = ConfigurationException.saveFailed("config/settings.yml", cause);
             
@@ -90,7 +90,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("parseFailed should create exception with correct code and message")
-        void parseFailed_createsCorrectException() {
+        void parseFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Invalid YAML");
             ConfigurationException exception = ConfigurationException.parseFailed("config/data.yml", cause);
             
@@ -102,7 +102,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("validationFailed should create exception with correct code and message")
-        void validationFailed_createsCorrectException() {
+        void validationFailedCreatescorrectexception() {
             ConfigurationException exception = ConfigurationException.validationFailed("maxPlayers", "must be positive");
             
             assertEquals(ErrorCode.CONFIG_VALIDATION_FAILED, exception.getErrorCode());
@@ -112,7 +112,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("validationFailed should include field name and rule")
-        void validationFailed_includesFieldNameAndRule() {
+        void validationFailedIncludesfieldnameandrule() {
             ConfigurationException exception = ConfigurationException.validationFailed("timeout", "must be between 1 and 3600");
             
             String message = exception.getMessage();
@@ -128,7 +128,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code prefix")
-        void getFormattedMessage_includesErrorCodePrefix() {
+        void getFormattedMessageIncludeserrorcodeprefix() {
             ConfigurationException exception = new ConfigurationException("Test");
             
             String formatted = exception.getFormattedMessage();
@@ -138,7 +138,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("toString should include class name and formatted message")
-        void toString_includesClassNameAndFormattedMessage() {
+        void toStringIncludesclassnameandformattedmessage() {
             ConfigurationException exception = new ConfigurationException("Test message");
             
             String str = exception.toString();
@@ -154,7 +154,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("ConfigurationException should extend UltiToolsException")
-        void configurationException_extendsUltiToolsException() {
+        void configurationExceptionExtendsultitoolsexception() {
             ConfigurationException exception = new ConfigurationException("Test");
             
             assertTrue(exception instanceof UltiToolsException);
@@ -162,7 +162,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("ConfigurationException should extend RuntimeException")
-        void configurationException_extendsRuntimeException() {
+        void configurationExceptionExtendsruntimeexception() {
             ConfigurationException exception = new ConfigurationException("Test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -175,7 +175,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("Empty message should be handled")
-        void emptyMessage_isHandled() {
+        void emptyMessageIshandled() {
             ConfigurationException exception = new ConfigurationException("");
             
             assertEquals("", exception.getMessage());
@@ -184,7 +184,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("loadFailed with empty path")
-        void loadFailed_withEmptyPath() {
+        void loadFailedWithemptypath() {
             Throwable cause = new RuntimeException("Error");
             ConfigurationException exception = ConfigurationException.loadFailed("", cause);
             
@@ -194,7 +194,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("saveFailed with empty path")
-        void saveFailed_withEmptyPath() {
+        void saveFailedWithemptypath() {
             Throwable cause = new RuntimeException("Error");
             ConfigurationException exception = ConfigurationException.saveFailed("", cause);
             
@@ -204,7 +204,7 @@ class ConfigurationExceptionTest {
 
         @Test
         @DisplayName("validationFailed with empty field and rule")
-        void validationFailed_withEmptyFieldAndRule() {
+        void validationFailedWithemptyfieldandrule() {
             ConfigurationException exception = ConfigurationException.validationFailed("", "");
             
             assertEquals(ErrorCode.CONFIG_VALIDATION_FAILED, exception.getErrorCode());

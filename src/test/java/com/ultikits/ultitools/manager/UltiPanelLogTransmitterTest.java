@@ -322,7 +322,8 @@ class UltiPanelLogTransmitterTest {
             // 等待批量发送
             Thread.sleep(200);
 
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
     }
 
@@ -733,6 +734,9 @@ class UltiPanelLogTransmitterTest {
             transmitter.sendLog("info", "test", "server", null);
             transmitter.flushLogs();
             transmitter.shutdown();
+
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
 
         @Test

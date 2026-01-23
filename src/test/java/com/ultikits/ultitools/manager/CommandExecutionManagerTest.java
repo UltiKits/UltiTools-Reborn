@@ -436,7 +436,7 @@ class CommandExecutionManagerTest {
             java.lang.reflect.Method setOp = captureClass.getMethod("setOp", boolean.class);
             setOp.invoke(capture, true);
             
-            org.mockito.Mockito.verify(delegate).setOp(true);
+            verify(delegate).setOp(true);
         }
 
         @Test
@@ -452,7 +452,7 @@ class CommandExecutionManagerTest {
             java.lang.reflect.Method recalc = captureClass.getMethod("recalculatePermissions");
             recalc.invoke(capture);
             
-            org.mockito.Mockito.verify(delegate).recalculatePermissions();
+            verify(delegate).recalculatePermissions();
         }
 
         @Test
@@ -543,7 +543,7 @@ class CommandExecutionManagerTest {
             java.lang.reflect.Method removeAttach = captureClass.getMethod("removeAttachment", org.bukkit.permissions.PermissionAttachment.class);
             removeAttach.invoke(capture, mockAttachment);
             
-            org.mockito.Mockito.verify(delegate).removeAttachment(mockAttachment);
+            verify(delegate).removeAttachment(mockAttachment);
         }
 
         @Test

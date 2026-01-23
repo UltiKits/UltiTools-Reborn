@@ -81,22 +81,23 @@ class UsageLockValidatorTest {
     }
 
     // Test methods with @UsageLimit annotation
+    // Test stub methods for reflection testing - intentionally empty
     @UsageLimit(value = UsageLimit.LimitType.SENDER)
-    public void senderLimitedMethod() {}
+    public void senderLimitedMethod() { /* Test stub for annotation testing */ }
 
     @UsageLimit(value = UsageLimit.LimitType.ALL)
-    public void serverWideLimitedMethod() {}
+    public void serverWideLimitedMethod() { /* Test stub for annotation testing */ }
 
     @UsageLimit(value = UsageLimit.LimitType.SENDER, ContainConsole = true)
-    public void senderLimitedWithConsole() {}
+    public void senderLimitedWithConsole() { /* Test stub for annotation testing */ }
 
     @UsageLimit(value = UsageLimit.LimitType.ALL, ContainConsole = true)
-    public void serverWideLimitedWithConsole() {}
+    public void serverWideLimitedWithConsole() { /* Test stub for annotation testing */ }
 
     @UsageLimit(value = UsageLimit.LimitType.NONE)
-    public void noLimitMethod() {}
+    public void noLimitMethod() { /* Test stub for annotation testing */ }
 
-    public void methodWithoutUsageLimit() {}
+    public void methodWithoutUsageLimit() { /* Test stub for annotation testing */ }
 
     private CommandContext createPlayerContext(Method method, Player player) {
         return CommandContext.builder()

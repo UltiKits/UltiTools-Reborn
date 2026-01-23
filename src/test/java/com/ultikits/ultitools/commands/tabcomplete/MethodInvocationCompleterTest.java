@@ -122,7 +122,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty when matchedMethod is null")
-        void complete_returnsEmpty_whenMatchedMethodNull() {
+        void completeReturnsemptyWhenmatchedmethodnull() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
                     .command(mockCommand)

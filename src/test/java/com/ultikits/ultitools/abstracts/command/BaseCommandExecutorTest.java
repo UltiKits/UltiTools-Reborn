@@ -1006,6 +1006,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "echo <message...>")
@@ -1023,6 +1024,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
     }
     
@@ -1032,6 +1034,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "run")
@@ -1048,6 +1051,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "int <num>")
@@ -1067,23 +1071,27 @@ class BaseCommandExecutorTest {
         
         @CmdMapping(format = "sender")
         public void doSender(@CmdSender CommandSender sender) {
+            // Test stub - validates sender injection
         }
-        
+
         @CmdMapping(format = "noparam")
         public void doNoParam() {
+            // Test stub - validates no-parameter commands
         }
     }
     
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"playersender"})
     static class PlayerSenderExecutor extends BaseCommandExecutor {
-        
+
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
-        
+
         @CmdMapping(format = "playersender")
         public void doPlayerSender(@CmdSender Player player) {
+            // Test stub - validates player sender injection
         }
     }
     
@@ -1093,6 +1101,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "sendernoannot")
@@ -1107,6 +1116,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "noannotation")
@@ -1124,6 +1134,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "process <data>")
@@ -1145,6 +1156,7 @@ class BaseCommandExecutorTest {
         
         @Override
         protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
         }
         
         @CmdMapping(format = "run")

@@ -70,7 +70,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("getInstance() should return same instance")
-        void getInstance_returnsSameInstance() {
+        void getInstanceReturnssameinstance() {
             TabCompletionManager instance1 = TabCompletionManager.getInstance();
             TabCompletionManager instance2 = TabCompletionManager.getInstance();
             
@@ -111,43 +111,43 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("PLAYERS constant should be correct")
-        void playersConstant_isCorrect() {
+        void playersConstantIscorrect() {
             assertEquals("@players", TabCompletionManager.PLAYERS);
         }
 
         @Test
         @DisplayName("WORLDS constant should be correct")
-        void worldsConstant_isCorrect() {
+        void worldsConstantIscorrect() {
             assertEquals("@worlds", TabCompletionManager.WORLDS);
         }
 
         @Test
         @DisplayName("MATERIALS constant should be correct")
-        void materialsConstant_isCorrect() {
+        void materialsConstantIscorrect() {
             assertEquals("@materials", TabCompletionManager.MATERIALS);
         }
 
         @Test
         @DisplayName("BLOCKS constant should be correct")
-        void blocksConstant_isCorrect() {
+        void blocksConstantIscorrect() {
             assertEquals("@blocks", TabCompletionManager.BLOCKS);
         }
 
         @Test
         @DisplayName("ITEMS constant should be correct")
-        void itemsConstant_isCorrect() {
+        void itemsConstantIscorrect() {
             assertEquals("@items", TabCompletionManager.ITEMS);
         }
 
         @Test
         @DisplayName("BOOLEAN constant should be correct")
-        void booleanConstant_isCorrect() {
+        void booleanConstantIscorrect() {
             assertEquals("@boolean", TabCompletionManager.BOOLEAN);
         }
 
         @Test
         @DisplayName("TOGGLE constant should be correct")
-        void toggleConstant_isCorrect() {
+        void toggleConstantIscorrect() {
             assertEquals("@toggle", TabCompletionManager.TOGGLE);
         }
     }
@@ -219,7 +219,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("register() should add custom completer")
-        void register_addsCustomCompleter() {
+        void registerAddscustomcompleter() {
             TabCompleter customCompleter = context -> Arrays.asList("custom1", "custom2");
             
             manager.register("@custom", customCompleter);
@@ -230,7 +230,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("register() should throw exception for null key")
-        void register_throwsException_forNullKey() {
+        void registerThrowsexceptionFornullkey() {
             TabCompleter completer = context -> Collections.emptyList();
             
             assertThrows(IllegalArgumentException.class, () -> 
@@ -239,14 +239,14 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("register() should throw exception for null completer")
-        void register_throwsException_forNullCompleter() {
+        void registerThrowsexceptionFornullcompleter() {
             assertThrows(IllegalArgumentException.class, () -> 
                 manager.register("@test", null));
         }
 
         @Test
         @DisplayName("register() should overwrite existing completer")
-        void register_overwritesExistingCompleter() {
+        void registerOverwritesexistingcompleter() {
             TabCompleter completer1 = context -> Arrays.asList("a", "b");
             TabCompleter completer2 = context -> Arrays.asList("x", "y");
             
@@ -263,7 +263,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("unregister() should remove completer")
-        void unregister_removesCompleter() {
+        void unregisterRemovescompleter() {
             TabCompleter completer = context -> Collections.emptyList();
             manager.register("@test", completer);
             
@@ -274,14 +274,14 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("unregister() should handle non-existent key")
-        void unregister_handlesNonExistentKey() {
+        void unregisterHandlesnonexistentkey() {
             // Should not throw
             assertDoesNotThrow(() -> manager.unregister("@nonexistent"));
         }
 
         @Test
         @DisplayName("unregister() can remove built-in completer")
-        void unregister_canRemoveBuiltInCompleter() {
+        void unregisterCanremovebuiltincompleter() {
             assertNotNull(manager.getCompleter(TabCompletionManager.BOOLEAN));
             
             manager.unregister(TabCompletionManager.BOOLEAN);
@@ -296,7 +296,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("getCompleter() should return registered completer")
-        void getCompleter_returnsRegisteredCompleter() {
+        void getCompleterReturnsregisteredcompleter() {
             TabCompleter completer = context -> Collections.emptyList();
             manager.register("@test", completer);
             
@@ -305,13 +305,13 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("getCompleter() should return null for unknown key")
-        void getCompleter_returnsNull_forUnknownKey() {
+        void getCompleterReturnsnullForunknownkey() {
             assertNull(manager.getCompleter("@unknown"));
         }
 
         @Test
         @DisplayName("getCompleter() should return built-in completers")
-        void getCompleter_returnsBuiltInCompleters() {
+        void getCompleterReturnsbuiltincompleters() {
             assertNotNull(manager.getCompleter(TabCompletionManager.PLAYERS));
             assertNotNull(manager.getCompleter(TabCompletionManager.WORLDS));
             assertNotNull(manager.getCompleter(TabCompletionManager.MATERIALS));
@@ -324,7 +324,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should create context and delegate")
-        void suggest_createsContextAndDelegates() {
+        void suggestCreatescontextanddelegates() {
             String[] args = {"test"};
             
             // This method creates a context internally
@@ -335,7 +335,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should handle empty args")
-        void suggest_handlesEmptyArgs() {
+        void suggestHandlesemptyargs() {
             String[] args = new String[0];
             
             List<String> suggestions = manager.suggest(mockPlayer, mockCommand, args);
@@ -350,7 +350,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should return empty list for null context")
-        void suggest_returnsEmptyList_forNullContext() {
+        void suggestReturnsemptylistFornullcontext() {
             List<String> suggestions = manager.suggest((TabCompletionContext) null);
             
             assertTrue(suggestions.isEmpty());
@@ -358,7 +358,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should use built-in completer when parameter starts with @")
-        void suggest_usesBuiltInCompleter_forAtPrefix() {
+        void suggestUsesbuiltincompleterForatprefix() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
                     .command(mockCommand)
@@ -375,7 +375,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should delegate to method completer when no @ parameter")
-        void suggest_delegatesToMethodCompleter_whenNoAtParameter() {
+        void suggestDelegatestomethodcompleterWhennoatparameter() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
                     .command(mockCommand)
@@ -392,7 +392,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggest() should return empty when @ completer not found")
-        void suggest_returnsEmpty_whenAtCompleterNotFound() {
+        void suggestReturnsemptyWhenatcompleternotfound() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(mockPlayer)
                     .command(mockCommand)
@@ -414,7 +414,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestWith() should use specified completer")
-        void suggestWith_usesSpecifiedCompleter() {
+        void suggestWithUsesspecifiedcompleter() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"t"})
                     .currentArgIndex(0)
@@ -428,7 +428,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestWith() should return empty for unknown completer")
-        void suggestWith_returnsEmpty_forUnknownCompleter() {
+        void suggestWithReturnsemptyForunknowncompleter() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)
@@ -441,7 +441,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestWith() should work with custom completers")
-        void suggestWith_worksWithCustomCompleters() {
+        void suggestWithWorkswithcustomcompleters() {
             manager.register("@custom", ctx -> Arrays.asList("opt1", "opt2", "opt3"));
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -461,7 +461,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("createContext() should create context with correct values")
-        void createContext_createsContextWithCorrectValues() {
+        void createContextCreatescontextwithcorrectvalues() {
             String[] args = {"arg1", "arg2", "partial"};
             
             TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
@@ -475,7 +475,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("createContext() should handle empty args")
-        void createContext_handlesEmptyArgs() {
+        void createContextHandlesemptyargs() {
             String[] args = new String[0];
             
             TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
@@ -486,7 +486,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("createContext() should handle single arg")
-        void createContext_handlesSingleArg() {
+        void createContextHandlessinglearg() {
             String[] args = {"only"};
             
             TabCompletionContext context = manager.createContext(mockPlayer, mockCommand, args);
@@ -502,7 +502,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should filter suggestions by prefix")
-        void filterByInput_filtersByPrefix() {
+        void filterByInputFiltersbyprefix() {
             List<String> suggestions = Arrays.asList("apple", "apricot", "banana", "cherry");
             
             List<String> filtered = TabCompletionManager.filterByInput(suggestions, "ap");
@@ -514,7 +514,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should be case insensitive")
-        void filterByInput_caseInsensitive() {
+        void filterByInputCaseinsensitive() {
             List<String> suggestions = Arrays.asList("Apple", "APRICOT", "banana");
             
             List<String> filtered = TabCompletionManager.filterByInput(suggestions, "AP");
@@ -524,7 +524,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should return all when input is empty")
-        void filterByInput_returnsAll_whenInputEmpty() {
+        void filterByInputReturnsallWheninputempty() {
             List<String> suggestions = Arrays.asList("a", "b", "c");
             
             List<String> filtered = TabCompletionManager.filterByInput(suggestions, "");
@@ -534,7 +534,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should return all when input is null")
-        void filterByInput_returnsAll_whenInputNull() {
+        void filterByInputReturnsallWheninputnull() {
             List<String> suggestions = Arrays.asList("a", "b", "c");
             
             List<String> filtered = TabCompletionManager.filterByInput(suggestions, null);
@@ -544,7 +544,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should return empty for null suggestions")
-        void filterByInput_returnsEmpty_forNullSuggestions() {
+        void filterByInputReturnsemptyFornullsuggestions() {
             List<String> filtered = TabCompletionManager.filterByInput(null, "test");
             
             assertTrue(filtered.isEmpty());
@@ -552,7 +552,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should return empty for empty suggestions")
-        void filterByInput_returnsEmpty_forEmptySuggestions() {
+        void filterByInputReturnsemptyForemptysuggestions() {
             List<String> filtered = TabCompletionManager.filterByInput(Collections.emptyList(), "test");
             
             assertTrue(filtered.isEmpty());
@@ -560,7 +560,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("filterByInput() should return empty when no match")
-        void filterByInput_returnsEmpty_whenNoMatch() {
+        void filterByInputReturnsemptyWhennomatch() {
             List<String> suggestions = Arrays.asList("apple", "banana", "cherry");
             
             List<String> filtered = TabCompletionManager.filterByInput(suggestions, "xyz");
@@ -658,7 +658,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestFirstArgs() should return empty for null mappings")
-        void suggestFirstArgs_returnsEmpty_forNullMappings() {
+        void suggestFirstArgsReturnsemptyFornullmappings() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)
@@ -671,7 +671,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestFirstArgs() should return empty for empty mappings")
-        void suggestFirstArgs_returnsEmpty_forEmptyMappings() {
+        void suggestFirstArgsReturnsemptyForemptymappings() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)

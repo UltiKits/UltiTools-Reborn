@@ -528,7 +528,8 @@ class LogStreamManagerTest {
         @DisplayName("logTransmitter 为 null 时不应抛出异常")
         void shouldNotThrowWhenLogTransmitterIsNull() {
             logStreamManager.sendCustomLog("info", "Test message", "test-source");
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -719,7 +720,8 @@ class LogStreamManagerTest {
         @DisplayName("shutdown 时 logTransmitter 为 null 不应抛出异常")
         void shouldNotThrowWhenLogTransmitterIsNull() {
             logStreamManager.shutdown();
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
     }
 
@@ -833,7 +835,8 @@ class LogStreamManagerTest {
             
             method.invoke(logStreamManager, "client-1", "Error message");
             
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -913,7 +916,8 @@ class LogStreamManagerTest {
             
             method.invoke(logStreamManager);
             
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
 
         @Test

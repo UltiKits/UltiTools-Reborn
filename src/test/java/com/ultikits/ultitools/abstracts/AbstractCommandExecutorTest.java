@@ -615,6 +615,7 @@ class AbstractCommandExecutorTest {
         
         @CmdMapping(format = "suggest <arg>")
         public void suggestCommand(@CmdSender CommandSender sender, @CmdParam(value = "arg", suggest = "getSuggestions") String arg) {
+            // Command with suggestions - intentionally empty as this tests suggestion handling
         }
         
         public List<String> getSuggestions(Player player, Command command, String[] args) {

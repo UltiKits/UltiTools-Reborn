@@ -277,19 +277,15 @@ public class ConfigManager {
                     continue;
                 }
                 Map<String, AbstractConfigEntity> configEntityMap = pluginConfigMap.get(ultiToolsPlugin);
+                Map<String, JsonObject> pluginParseData = parseObject.get(pluginName);
                 for (String configPath : configEntityMap.keySet()) {
-                    for (String pathName : parseObject.get(pluginName).keySet()) {
-                        if (!configPath.equals(pathName)) {
-                            continue;
-                        }
+                    if (pluginParseData.containsKey(configPath)) {
                         AbstractConfigEntity config = configEntityMap.get(configPath);
-                        config.updateProperties(parseObject.get(pluginName).get(pathName));
+                        config.updateProperties(pluginParseData.get(configPath));
                         configEntityMap.put(configPath, config);
-                        break;
                     }
                 }
                 pluginConfigMap.put(ultiToolsPlugin, configEntityMap);
-                break;
             }
         }
     }

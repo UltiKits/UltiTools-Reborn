@@ -92,7 +92,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("supports() should return true for any exception type by default")
-        void supports_returnsTrue_byDefault() {
+        void supportsReturnsTrueByDefault() {
             assertTrue(handler.supports(RuntimeException.class));
             assertTrue(handler.supports(NullPointerException.class));
             assertTrue(handler.supports(IllegalArgumentException.class));
@@ -103,7 +103,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("getOrder() should return 0 by default")
-        void getOrder_returnsZero_byDefault() {
+        void getOrderReturnszeroBydefault() {
             assertEquals(0, handler.getOrder());
         }
     }
@@ -114,7 +114,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Custom supports() should filter exception types correctly")
-        void customSupports_filtersCorrectly() {
+        void customSupportsFilterscorrectly() {
             ExceptionHandler handler = new CustomExceptionHandler(0, IllegalArgumentException.class);
             
             // Should support IllegalArgumentException and subclasses
@@ -127,7 +127,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Custom supports() with null type should accept all exceptions")
-        void customSupports_nullType_acceptsAll() {
+        void customSupportsNulltypeAcceptsall() {
             ExceptionHandler handler = new CustomExceptionHandler(0, null);
             
             assertTrue(handler.supports(RuntimeException.class));
@@ -137,7 +137,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Custom getOrder() should return specified order")
-        void customGetOrder_returnsSpecifiedOrder() {
+        void customGetOrderReturnsspecifiedorder() {
             assertEquals(10, new CustomExceptionHandler(10, null).getOrder());
             assertEquals(-5, new CustomExceptionHandler(-5, null).getOrder());
             assertEquals(100, new CustomExceptionHandler(100, null).getOrder());
@@ -180,7 +180,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("handleException() can re-throw exception")
-        void handleException_canRethrow() {
+        void handleExceptionCanrethrow() {
             RuntimeException expected = new RuntimeException("re-thrown");
             TestExceptionHandler handler = new TestExceptionHandler().withExceptionToThrow(expected);
             
@@ -247,7 +247,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Handlers can be sorted by order")
-        void handlers_canBeSortedByOrder() {
+        void handlersCanbesortedbyorder() {
             ExceptionHandler handler1 = new CustomExceptionHandler(10, null);
             ExceptionHandler handler2 = new CustomExceptionHandler(-5, null);
             ExceptionHandler handler3 = new CustomExceptionHandler(0, null);
@@ -269,7 +269,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Negative order has higher priority than positive")
-        void negativeOrder_hasHigherPriority() {
+        void negativeOrderHashigherpriority() {
             ExceptionHandler highPriority = new CustomExceptionHandler(-100, null);
             ExceptionHandler lowPriority = new CustomExceptionHandler(100, null);
             
@@ -283,7 +283,7 @@ class ExceptionHandlerTest {
 
         @Test
         @DisplayName("Handler for RuntimeException should support subclasses")
-        void handlerForRuntimeException_supportsSubclasses() {
+        void handlerForRuntimeExceptionSupportssubclasses() {
             ExceptionHandler handler = new CustomExceptionHandler(0, RuntimeException.class) {
                 @Override
                 public boolean supports(Class<? extends Throwable> exceptionType) {

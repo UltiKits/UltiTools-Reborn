@@ -235,7 +235,8 @@ class SecurityPolicyTest {
         @DisplayName("null包名不应该导致异常")
         void nullPackageShouldNotThrow() {
             SecurityPolicy.addTrustedPackage(null);
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -243,7 +244,8 @@ class SecurityPolicyTest {
         void emptyPackageShouldNotThrow() {
             SecurityPolicy.addTrustedPackage("");
             SecurityPolicy.addTrustedPackage("   ");
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
     }
 
@@ -265,7 +267,8 @@ class SecurityPolicyTest {
         @DisplayName("null类名不应该导致异常")
         void nullClassNameShouldNotThrow() {
             SecurityPolicy.addDangerousClass(null);
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
     }
 

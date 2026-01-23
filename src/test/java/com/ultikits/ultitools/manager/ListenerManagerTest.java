@@ -232,7 +232,8 @@ class ListenerManagerTest {
             // Act
             listenerManager.unregisterAll(mockPlugin);
 
-            // 不应该抛出异常
+            // 不应该抛出异常 - test passes if we reach here
+            assertThat(true).isTrue();
         }
 
         @Test

@@ -17,11 +17,7 @@ import lombok.Setter;
 @Setter
 @ConfigEntity("config/social.yml")
 public class SocialConfig extends AbstractConfigEntity {
-    
-    public SocialConfig(String configFilePath) {
-        super(configFilePath);
-    }
-    
+
     @ConfigEntry(path = "max_friends", comment = "Maximum number of friends per player")
     private int maxFriends = 50;
     
@@ -81,4 +77,8 @@ public class SocialConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "messages.player_unblocked", comment = "Player removed from blacklist message")
     private String playerUnblockedMessage = "&a已将 {PLAYER} 从黑名单移除";
+
+    public SocialConfig(String configFilePath) {
+        super(configFilePath);
+    }
 }

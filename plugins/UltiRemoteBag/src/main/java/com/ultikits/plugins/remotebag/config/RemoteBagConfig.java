@@ -17,11 +17,7 @@ import lombok.Setter;
 @Setter
 @ConfigEntity("config/remotebag.yml")
 public class RemoteBagConfig extends AbstractConfigEntity {
-    
-    public RemoteBagConfig(String configFilePath) {
-        super(configFilePath);
-    }
-    
+
     @ConfigEntry(path = "default_pages", comment = "Default number of bag pages for new players")
     private int defaultPages = 1;
     
@@ -99,4 +95,8 @@ public class RemoteBagConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "lock.notify_readonly_viewers", comment = "所有者开始使用背包时是否通知只读查看者")
     private boolean notifyReadonlyViewers = true;
+
+    public RemoteBagConfig(String configFilePath) {
+        super(configFilePath);
+    }
 }

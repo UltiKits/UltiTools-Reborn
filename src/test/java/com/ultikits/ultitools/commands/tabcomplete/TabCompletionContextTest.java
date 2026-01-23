@@ -65,7 +65,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("Builder should allow null values")
-        void builder_allowsNullValues() {
+        void builderAllowsnullvalues() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .player(null)
                     .command(null)
@@ -79,7 +79,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("Builder should create context with default values")
-        void builder_defaultValues() {
+        void builderDefaultvalues() {
             TabCompletionContext context = TabCompletionContext.builder().build();
 
             assertNull(context.getPlayer());
@@ -99,7 +99,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return current arg when within bounds")
-        void getCurrentInput_returnsCurrentArg_whenWithinBounds() {
+        void getCurrentInputReturnscurrentargWhenwithinbounds() {
             String[] args = {"first", "second", "third"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -111,7 +111,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return empty string when args is null")
-        void getCurrentInput_returnsEmpty_whenArgsNull() {
+        void getCurrentInputReturnsemptyWhenargsnull() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(null)
                     .currentArgIndex(0)
@@ -122,7 +122,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return empty string when args is empty")
-        void getCurrentInput_returnsEmpty_whenArgsEmpty() {
+        void getCurrentInputReturnsemptyWhenargsempty() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[0])
                     .currentArgIndex(0)
@@ -133,7 +133,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return empty string when index out of bounds")
-        void getCurrentInput_returnsEmpty_whenIndexOutOfBounds() {
+        void getCurrentInputReturnsemptyWhenindexoutofbounds() {
             String[] args = {"first", "second"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -145,7 +145,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return first arg when index is 0")
-        void getCurrentInput_returnsFirstArg_whenIndexIsZero() {
+        void getCurrentInputReturnsfirstargWhenindexiszero() {
             String[] args = {"hello", "world"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -157,7 +157,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("getCurrentInput should return last arg correctly")
-        void getCurrentInput_returnsLastArg() {
+        void getCurrentInputReturnslastarg() {
             String[] args = {"one", "two", "three"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -174,7 +174,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("inputStartsWith should return true for matching prefix")
-        void inputStartsWith_returnsTrue_forMatchingPrefix() {
+        void inputStartsWithReturnstrueFormatchingprefix() {
             String[] args = {"hello"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -188,7 +188,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("inputStartsWith should be case insensitive")
-        void inputStartsWith_caseInsensitive() {
+        void inputStartsWithCaseinsensitive() {
             String[] args = {"Hello"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -202,7 +202,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("inputStartsWith should return false for non-matching prefix")
-        void inputStartsWith_returnsFalse_forNonMatchingPrefix() {
+        void inputStartsWithReturnsfalseFornonmatchingprefix() {
             String[] args = {"hello"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -215,7 +215,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("inputStartsWith should return true for empty prefix")
-        void inputStartsWith_returnsTrue_forEmptyPrefix() {
+        void inputStartsWithReturnstrueForemptyprefix() {
             String[] args = {"hello"};
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(args)
@@ -227,7 +227,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("inputStartsWith should handle empty input")
-        void inputStartsWith_handlesEmptyInput() {
+        void inputStartsWithHandlesemptyinput() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[0])
                     .currentArgIndex(0)
@@ -244,7 +244,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("of() should create context with correct fields")
-        void of_createsContextWithCorrectFields() {
+        void ofCreatescontextwithcorrectfields() {
             String[] args = {"arg1", "arg2", "arg3"};
 
             TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
@@ -258,7 +258,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("of() should handle empty args")
-        void of_handlesEmptyArgs() {
+        void ofHandlesemptyargs() {
             String[] args = new String[0];
 
             TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
@@ -272,7 +272,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("of() should handle single arg")
-        void of_handlesSingleArg() {
+        void ofHandlessinglearg() {
             String[] args = {"only"};
 
             TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);
@@ -283,7 +283,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("of() should set partial to last arg")
-        void of_setsPartialToLastArg() {
+        void ofSetspartialtolastarg() {
             String[] args = {"first", "second", "partial"};
 
             TabCompletionContext context = TabCompletionContext.of(mockPlayer, mockCommand, args);

@@ -88,7 +88,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("Default constructor creates completer for all worlds")
-        void defaultConstructor_createsAllWorldsCompleter() {
+        void defaultConstructorCreatesallworldscompleter() {
             WorldsCompleter completer = new WorldsCompleter();
             
             setupWorlds(mockWorld1, mockNetherWorld, mockEndWorld);
@@ -108,7 +108,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("Constructor with environment filter for NORMAL")
-        void constructor_environmentFilterNormal() {
+        void constructorEnvironmentfilternormal() {
             WorldsCompleter completer = new WorldsCompleter(World.Environment.NORMAL);
             
             setupWorlds(mockWorld1, mockWorld2, mockNetherWorld, mockEndWorld);
@@ -129,7 +129,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("Constructor with environment filter for NETHER")
-        void constructor_environmentFilterNether() {
+        void constructorEnvironmentfilternether() {
             WorldsCompleter completer = new WorldsCompleter(World.Environment.NETHER);
             
             setupWorlds(mockWorld1, mockNetherWorld, mockEndWorld);
@@ -147,7 +147,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("Constructor with environment filter for THE_END")
-        void constructor_environmentFilterTheEnd() {
+        void constructorEnvironmentfiltertheend() {
             WorldsCompleter completer = new WorldsCompleter(World.Environment.THE_END);
             
             setupWorlds(mockWorld1, mockNetherWorld, mockEndWorld);
@@ -165,7 +165,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("Constructor with multiple environment filters")
-        void constructor_multipleEnvironmentFilters() {
+        void constructorMultipleenvironmentfilters() {
             WorldsCompleter completer = new WorldsCompleter(
                     World.Environment.NORMAL, World.Environment.NETHER);
             
@@ -198,7 +198,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should filter by prefix")
-        void complete_filtersByPrefix() {
+        void completeFiltersbyprefix() {
             setupWorlds(mockWorld1, mockWorld2, mockWorld3);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -214,7 +214,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should be case insensitive")
-        void complete_caseInsensitive() {
+        void completeCaseinsensitive() {
             setupWorlds(mockWorld1, mockWorld2);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -230,7 +230,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty list when no match")
-        void complete_returnsEmptyList_whenNoMatch() {
+        void completeReturnsemptylistWhennomatch() {
             setupWorlds(mockWorld1, mockWorld2);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -245,7 +245,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should return sorted results")
-        void complete_returnsSortedResults() {
+        void completeReturnssortedresults() {
             setupWorlds(mockWorld3, mockWorld1, mockWorld2); // survival, world, creative
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -262,7 +262,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should handle empty worlds list")
-        void complete_handlesEmptyWorldsList() {
+        void completeHandlesemptyworldslist() {
             setupWorlds();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -277,7 +277,7 @@ class WorldsCompleterTest {
 
         @Test
         @DisplayName("complete() should handle single world")
-        void complete_handlesSingleWorld() {
+        void completeHandlessingleworld() {
             setupWorlds(mockWorld1);
             
             TabCompletionContext context = TabCompletionContext.builder()

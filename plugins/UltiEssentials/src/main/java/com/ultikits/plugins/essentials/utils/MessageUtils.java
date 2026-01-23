@@ -121,9 +121,9 @@ public final class MessageUtils {
         if (player == null) {
             return;
         }
-        title = colorize(parsePlaceholders(player, title != null ? title : ""));
-        subtitle = colorize(parsePlaceholders(player, subtitle != null ? subtitle : ""));
-        player.sendTitle(title, subtitle, fadeIn, stay, fadeOut);
+        String processedTitle = colorize(parsePlaceholders(player, title != null ? title : ""));
+        String processedSubtitle = colorize(parsePlaceholders(player, subtitle != null ? subtitle : ""));
+        player.sendTitle(processedTitle, processedSubtitle, fadeIn, stay, fadeOut);
     }
 
     /**

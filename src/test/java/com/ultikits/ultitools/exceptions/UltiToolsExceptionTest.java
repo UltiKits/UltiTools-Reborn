@@ -22,7 +22,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code should use default message")
-        void constructor_withErrorCode_usesDefaultMessage() {
+        void constructorWitherrorcodeUsesdefaultmessage() {
             // Test using a concrete subclass
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR.getDefaultMessage());
             
@@ -31,7 +31,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use custom message")
-        void constructor_withErrorCodeAndMessage_usesCustomMessage() {
+        void constructorWitherrorcodeandmessageUsescustommessage() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR, "Custom message");
             
             assertEquals("Custom message", exception.getMessage());
@@ -40,7 +40,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR, "Message", cause);
             
@@ -56,7 +56,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return the error code")
-        void getErrorCode_returnsErrorCode() {
+        void getErrorCodeReturnserrorcode() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_VALIDATION_FAILED, "Validation failed");
             
             assertEquals(ErrorCode.COMMAND_VALIDATION_FAILED, exception.getErrorCode());
@@ -64,7 +64,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return consistent value")
-        void getErrorCode_returnsConsistentValue() {
+        void getErrorCodeReturnsconsistentvalue() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_PARSE_ERROR, "Parse error");
             
             // Multiple calls should return the same value
@@ -81,7 +81,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code")
-        void getFormattedMessage_includesErrorCode() {
+        void getFormattedMessageIncludeserrorcode() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR, "Test message");
             
             String formatted = exception.getFormattedMessage();
@@ -93,7 +93,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should have correct format")
-        void getFormattedMessage_hasCorrectFormat() {
+        void getFormattedMessageHascorrectformat() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR, "Test");
             
             String formatted = exception.getFormattedMessage();
@@ -105,7 +105,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage with different error codes")
-        void getFormattedMessage_withDifferentErrorCodes() {
+        void getFormattedMessageWithdifferenterrorcodes() {
             ContainerException containerEx = new ContainerException(ErrorCode.BEAN_NOT_FOUND, "Bean error");
             assertTrue(containerEx.getFormattedMessage().contains("ULTI-2001"));
             
@@ -123,7 +123,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("toString should include class name")
-        void toString_includesClassName() {
+        void toStringIncludesclassname() {
             CommandException exception = new CommandException("Test");
             
             String str = exception.toString();
@@ -133,7 +133,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("toString should include formatted message")
-        void toString_includesFormattedMessage() {
+        void toStringIncludesformattedmessage() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_ERROR, "My message");
             
             String str = exception.toString();
@@ -144,7 +144,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("toString format should be: ClassName: formattedMessage")
-        void toString_hasCorrectFormat() {
+        void toStringHascorrectformat() {
             CommandException exception = new CommandException("Test");
             
             String str = exception.toString();
@@ -155,7 +155,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("toString for different exception types")
-        void toString_forDifferentExceptionTypes() {
+        void toStringFordifferentexceptiontypes() {
             ContainerException containerEx = new ContainerException("Container test");
             assertTrue(containerEx.toString().contains("ContainerException"));
             
@@ -176,7 +176,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("All exception subclasses should extend UltiToolsException")
-        void allSubclasses_extendUltiToolsException() {
+        void allSubclassesExtendultitoolsexception() {
             assertTrue(new CommandException("test") instanceof UltiToolsException);
             assertTrue(new ContainerException("test") instanceof UltiToolsException);
             assertTrue(new DataAccessException("test") instanceof UltiToolsException);
@@ -186,7 +186,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("UltiToolsException should extend RuntimeException")
-        void ultiToolsException_extendsRuntimeException() {
+        void ultiToolsExceptionExtendsruntimeexception() {
             CommandException exception = new CommandException("test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -194,7 +194,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Standard exception methods should work")
-        void standardExceptionMethods_shouldWork() {
+        void standardExceptionMethodsShouldwork() {
             Throwable cause = new RuntimeException("Cause");
             CommandException exception = new CommandException("Message", cause);
             
@@ -216,7 +216,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Exception with empty message")
-        void exception_withEmptyMessage() {
+        void exceptionWithemptymessage() {
             CommandException exception = new CommandException("");
             
             assertEquals("", exception.getMessage());
@@ -226,7 +226,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Exception with null cause")
-        void exception_withNullCause() {
+        void exceptionWithnullcause() {
             CommandException exception = new CommandException("Test", null);
             
             assertEquals(null, exception.getCause());
@@ -234,7 +234,7 @@ class UltiToolsExceptionTest {
 
         @Test
         @DisplayName("Exception with nested cause chain")
-        void exception_withNestedCauseChain() {
+        void exceptionWithnestedcausechain() {
             Throwable rootCause = new RuntimeException("Root");
             Throwable middleCause = new RuntimeException("Middle", rootCause);
             CommandException exception = new CommandException("Top", middleCause);

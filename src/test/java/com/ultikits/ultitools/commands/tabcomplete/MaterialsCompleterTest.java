@@ -26,7 +26,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("Default constructor should create completer for all materials")
-        void defaultConstructor_createsAllMaterialsCompleter() {
+        void defaultConstructorCreatesallmaterialscompleter() {
             MaterialsCompleter completer = new MaterialsCompleter();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -42,7 +42,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("Constructor with blocksOnly=true")
-        void constructor_blocksOnlyTrue() {
+        void constructorBlocksonlytrue() {
             MaterialsCompleter completer = new MaterialsCompleter(true, false);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -61,7 +61,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("Constructor with itemsOnly=true")
-        void constructor_itemsOnlyTrue() {
+        void constructorItemsOnlyTrue() {
             MaterialsCompleter completer = new MaterialsCompleter(false, true);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -80,7 +80,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("blocksOnly takes precedence over itemsOnly")
-        void blocksOnly_takesPrecedence() {
+        void blocksOnlyTakesprecedence() {
             // When both are true, blocksOnly should be applied
             MaterialsCompleter completer = new MaterialsCompleter(true, true);
             
@@ -112,7 +112,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should filter by prefix")
-        void complete_filtersByPrefix() {
+        void completeFiltersByPrefix() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"dia"})
                     .currentArgIndex(0)
@@ -130,7 +130,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should be case insensitive")
-        void complete_caseInsensitive() {
+        void completeCaseinsensitive() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"DIA"})
                     .currentArgIndex(0)
@@ -144,7 +144,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should exclude legacy materials")
-        void complete_excludesLegacyMaterials() {
+        void completeExcludeslegacymaterials() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)
@@ -161,7 +161,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should return sorted results")
-        void complete_returnsSortedResults() {
+        void completeReturnssortedresults() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"stone"})
                     .currentArgIndex(0)
@@ -177,7 +177,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty list when no match")
-        void complete_returnsEmptyList_whenNoMatch() {
+        void completeReturnsemptylistWhennomatch() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"xyz_not_a_material"})
                     .currentArgIndex(0)
@@ -190,7 +190,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("complete() should return all when input is empty")
-        void complete_returnsAll_whenInputEmpty() {
+        void completeReturnsallWheninputempty() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)
@@ -208,7 +208,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("blocksOnly() should create blocks-only completer")
-        void blocksOnly_createsBlocksOnlyCompleter() {
+        void blocksOnlyCreatesblocksonlycompleter() {
             MaterialsCompleter completer = MaterialsCompleter.blocksOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -228,7 +228,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("itemsOnly() should create items-only completer")
-        void itemsOnly_createsItemsOnlyCompleter() {
+        void itemsOnlyCreatesItemsOnlyCompleter() {
             MaterialsCompleter completer = MaterialsCompleter.itemsOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -248,7 +248,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("blocksOnly() should filter specific materials")
-        void blocksOnly_filtersSpecificMaterials() {
+        void blocksOnlyFiltersspecificmaterials() {
             MaterialsCompleter completer = MaterialsCompleter.blocksOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -264,7 +264,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("itemsOnly() should filter specific materials")
-        void itemsOnly_filtersSpecificMaterials() {
+        void itemsOnlyFiltersspecificmaterials() {
             MaterialsCompleter completer = MaterialsCompleter.itemsOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -330,7 +330,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("Blocks completer should contain STONE")
-        void blocksCompleter_containsStone() {
+        void blocksCompleterContainsstone() {
             MaterialsCompleter completer = MaterialsCompleter.blocksOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -345,7 +345,7 @@ class MaterialsCompleterTest {
 
         @Test
         @DisplayName("Items completer should filter by item status")
-        void itemsCompleter_filtersByItemStatus() {
+        void itemsCompleterFiltersbyitemstatus() {
             MaterialsCompleter completer = MaterialsCompleter.itemsOnly();
             
             TabCompletionContext context = TabCompletionContext.builder()

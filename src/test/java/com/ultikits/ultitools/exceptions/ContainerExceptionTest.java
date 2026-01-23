@@ -21,7 +21,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("Constructor with message should use BEAN_CREATION_FAILED code")
-        void constructor_withMessage_usesBeanCreationFailedCode() {
+        void constructorWithmessageUsesbeancreationfailedcode() {
             ContainerException exception = new ContainerException("Test message");
             
             assertEquals(ErrorCode.BEAN_CREATION_FAILED, exception.getErrorCode());
@@ -30,7 +30,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use specified code")
-        void constructor_withErrorCodeAndMessage_usesSpecifiedCode() {
+        void constructorWitherrorcodeandmessageUsesspecifiedcode() {
             ContainerException exception = new ContainerException(ErrorCode.BEAN_NOT_FOUND, "Bean not found");
             
             assertEquals(ErrorCode.BEAN_NOT_FOUND, exception.getErrorCode());
@@ -39,7 +39,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("Constructor with message and cause should set both")
-        void constructor_withMessageAndCause_setsBoth() {
+        void constructorWithmessageandcauseSetsboth() {
             Throwable cause = new RuntimeException("Root cause");
             ContainerException exception = new ContainerException("Test message", cause);
             
@@ -50,7 +50,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             ContainerException exception = new ContainerException(ErrorCode.CIRCULAR_DEPENDENCY, "Circular dep", cause);
             
@@ -66,7 +66,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("beanNotFound(Class) should create exception with correct code and message")
-        void beanNotFound_byClass_createsCorrectException() {
+        void beanNotFoundByclassCreatescorrectexception() {
             ContainerException exception = ContainerException.beanNotFound(String.class);
             
             assertEquals(ErrorCode.BEAN_NOT_FOUND, exception.getErrorCode());
@@ -76,7 +76,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("beanNotFound(String) should create exception with correct code and message")
-        void beanNotFound_byName_createsCorrectException() {
+        void beanNotFoundBynameCreatescorrectexception() {
             ContainerException exception = ContainerException.beanNotFound("myService");
             
             assertEquals(ErrorCode.BEAN_NOT_FOUND, exception.getErrorCode());
@@ -86,7 +86,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("circularDependency should create exception with correct code and message")
-        void circularDependency_createsCorrectException() {
+        void circularDependencyCreatescorrectexception() {
             ContainerException exception = ContainerException.circularDependency("serviceA");
             
             assertEquals(ErrorCode.CIRCULAR_DEPENDENCY, exception.getErrorCode());
@@ -96,7 +96,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("injectionFailed should create exception with correct code and message")
-        void injectionFailed_createsCorrectException() {
+        void injectionFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Injection error");
             ContainerException exception = ContainerException.injectionFailed(Object.class, String.class, cause);
             
@@ -109,7 +109,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("duplicateBean should create exception with correct code and message")
-        void duplicateBean_createsCorrectException() {
+        void duplicateBeanCreatescorrectexception() {
             ContainerException exception = ContainerException.duplicateBean("myBean", String.class);
             
             assertEquals(ErrorCode.DUPLICATE_BEAN, exception.getErrorCode());
@@ -125,7 +125,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code prefix")
-        void getFormattedMessage_includesErrorCodePrefix() {
+        void getFormattedMessageIncludeserrorcodeprefix() {
             ContainerException exception = new ContainerException("Test");
             
             String formatted = exception.getFormattedMessage();
@@ -135,7 +135,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("toString should include class name and formatted message")
-        void toString_includesClassNameAndFormattedMessage() {
+        void toStringIncludesclassnameandformattedmessage() {
             ContainerException exception = new ContainerException("Test message");
             
             String str = exception.toString();
@@ -146,7 +146,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return correct error code")
-        void getErrorCode_returnsCorrectErrorCode() {
+        void getErrorCodeReturnscorrecterrorcode() {
             ContainerException exception = new ContainerException(ErrorCode.DUPLICATE_BEAN, "Duplicate");
             
             assertEquals(ErrorCode.DUPLICATE_BEAN, exception.getErrorCode());
@@ -159,7 +159,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("ContainerException should extend UltiToolsException")
-        void containerException_extendsUltiToolsException() {
+        void containerExceptionExtendsultitoolsexception() {
             ContainerException exception = new ContainerException("Test");
             
             assertTrue(exception instanceof UltiToolsException);
@@ -167,7 +167,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("ContainerException should extend RuntimeException")
-        void containerException_extendsRuntimeException() {
+        void containerExceptionExtendsruntimeexception() {
             ContainerException exception = new ContainerException("Test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -180,7 +180,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("Empty message should be handled")
-        void emptyMessage_isHandled() {
+        void emptyMessageIshandled() {
             ContainerException exception = new ContainerException("");
             
             assertEquals("", exception.getMessage());
@@ -189,7 +189,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("beanNotFound with primitive type")
-        void beanNotFound_withPrimitiveType() {
+        void beanNotFoundWithprimitivetype() {
             ContainerException exception = ContainerException.beanNotFound(int.class);
             
             assertEquals(ErrorCode.BEAN_NOT_FOUND, exception.getErrorCode());
@@ -198,7 +198,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("beanNotFound with empty name")
-        void beanNotFound_withEmptyName() {
+        void beanNotFoundWithemptyname() {
             ContainerException exception = ContainerException.beanNotFound("");
             
             assertEquals(ErrorCode.BEAN_NOT_FOUND, exception.getErrorCode());
@@ -207,7 +207,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("circularDependency with empty bean name")
-        void circularDependency_withEmptyBeanName() {
+        void circularDependencyWithemptybeanname() {
             ContainerException exception = ContainerException.circularDependency("");
             
             assertEquals(ErrorCode.CIRCULAR_DEPENDENCY, exception.getErrorCode());
@@ -216,7 +216,7 @@ class ContainerExceptionTest {
 
         @Test
         @DisplayName("duplicateBean with empty name")
-        void duplicateBean_withEmptyName() {
+        void duplicateBeanWithemptyname() {
             ContainerException exception = ContainerException.duplicateBean("", Object.class);
             
             assertEquals(ErrorCode.DUPLICATE_BEAN, exception.getErrorCode());

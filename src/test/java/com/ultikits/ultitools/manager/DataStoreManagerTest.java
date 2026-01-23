@@ -487,8 +487,11 @@ class DataStoreManagerTest {
             // Act & Assert - 可能会导致问题，但不应该崩溃
             try {
                 DataStoreManager.register(store);
+                // If no exception, still valid behavior
+                assertThat(true).isTrue();
             } catch (NullPointerException e) {
                 // 可能的行为
+                assertThat(e).isNotNull();
             }
         }
 

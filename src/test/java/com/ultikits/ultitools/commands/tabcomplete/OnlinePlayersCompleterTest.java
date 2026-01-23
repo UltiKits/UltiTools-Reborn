@@ -84,7 +84,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("Default constructor creates standard completer")
-        void defaultConstructor_createsStandardCompleter() {
+        void defaultConstructorCreatesstandardcompleter() {
             OnlinePlayersCompleter completer = new OnlinePlayersCompleter();
             
             setupOnlinePlayers(mockRequester, mockPlayer1, mockPlayer2);
@@ -106,7 +106,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("Constructor with excludeSelf=true")
-        void constructor_excludeSelfTrue() {
+        void constructorExcludeselftrue() {
             OnlinePlayersCompleter completer = new OnlinePlayersCompleter(true, false);
             
             setupOnlinePlayers(mockRequester, mockPlayer1, mockPlayer2);
@@ -128,7 +128,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("Constructor with vanishedVisible=false")
-        void constructor_vanishedVisibleFalse() {
+        void constructorVanishedvisiblefalse() {
             OnlinePlayersCompleter completer = new OnlinePlayersCompleter(false, false);
             
             setupOnlinePlayers(mockRequester, mockPlayer1, mockPlayer2);
@@ -153,7 +153,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("Constructor with vanishedVisible=true")
-        void constructor_vanishedVisibleTrue() {
+        void constructorVanishedvisibletrue() {
             OnlinePlayersCompleter completer = new OnlinePlayersCompleter(false, true);
             
             setupOnlinePlayers(mockRequester, mockPlayer1, mockPlayer2);
@@ -176,7 +176,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("Constructor with both options true")
-        void constructor_bothOptionsTrue() {
+        void constructorBothoptionstrue() {
             OnlinePlayersCompleter completer = new OnlinePlayersCompleter(true, true);
             
             setupOnlinePlayers(mockRequester, mockPlayer1, mockPlayer2);
@@ -211,7 +211,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should filter by prefix")
-        void complete_filtersByPrefix() {
+        void completeFiltersbyprefix() {
             setupOnlinePlayers(mockPlayer1, mockPlayer2, mockPlayer3);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -228,7 +228,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should be case insensitive")
-        void complete_caseInsensitive() {
+        void completeCaseinsensitive() {
             setupOnlinePlayers(mockPlayer1, mockPlayer2);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -245,7 +245,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty list when no match")
-        void complete_returnsEmptyList_whenNoMatch() {
+        void completeReturnsemptylistWhennomatch() {
             setupOnlinePlayers(mockPlayer1, mockPlayer2);
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -261,7 +261,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should return sorted results")
-        void complete_returnsSortedResults() {
+        void completeReturnssortedresults() {
             setupOnlinePlayers(mockPlayer3, mockPlayer1, mockPlayer2); // Charlie, Alice, Bob
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -279,7 +279,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should handle empty online players")
-        void complete_handlesEmptyOnlinePlayers() {
+        void completeHandlesemptyonlineplayers() {
             setupOnlinePlayers();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -295,7 +295,7 @@ class OnlinePlayersCompleterTest {
 
         @Test
         @DisplayName("complete() should handle single player online")
-        void complete_handlesSinglePlayerOnline() {
+        void completeHandlessingleplayeronline() {
             setupOnlinePlayers(mockRequester);
             
             TabCompletionContext context = TabCompletionContext.builder()

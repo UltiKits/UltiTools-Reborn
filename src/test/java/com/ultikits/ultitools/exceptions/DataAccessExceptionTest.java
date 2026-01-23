@@ -21,7 +21,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("Constructor with message should use DATA_ACCESS_ERROR code")
-        void constructor_withMessage_usesDataAccessErrorCode() {
+        void constructorWithmessageUsesdataaccesserrorcode() {
             DataAccessException exception = new DataAccessException("Test message");
             
             assertEquals(ErrorCode.DATA_ACCESS_ERROR, exception.getErrorCode());
@@ -30,7 +30,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use specified code")
-        void constructor_withErrorCodeAndMessage_usesSpecifiedCode() {
+        void constructorWitherrorcodeandmessageUsesspecifiedcode() {
             DataAccessException exception = new DataAccessException(ErrorCode.ENTITY_NOT_FOUND, "Entity not found");
             
             assertEquals(ErrorCode.ENTITY_NOT_FOUND, exception.getErrorCode());
@@ -39,7 +39,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("Constructor with message and cause should set both")
-        void constructor_withMessageAndCause_setsBoth() {
+        void constructorWithmessageandcauseSetsboth() {
             Throwable cause = new RuntimeException("Root cause");
             DataAccessException exception = new DataAccessException("Test message", cause);
             
@@ -50,7 +50,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             DataAccessException exception = new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query failed", cause);
             
@@ -66,7 +66,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("entityNotFound should create exception with correct code and message")
-        void entityNotFound_createsCorrectException() {
+        void entityNotFoundCreatescorrectexception() {
             DataAccessException exception = DataAccessException.entityNotFound(String.class, "abc-123");
             
             assertEquals(ErrorCode.ENTITY_NOT_FOUND, exception.getErrorCode());
@@ -77,7 +77,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("entityNotFound with different identifier types")
-        void entityNotFound_withDifferentIdentifiers() {
+        void entityNotFoundWithdifferentidentifiers() {
             DataAccessException intException = DataAccessException.entityNotFound(Object.class, 123);
             assertTrue(intException.getMessage().contains("123"));
             
@@ -87,7 +87,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("connectionFailed should create exception with correct code and message")
-        void connectionFailed_createsCorrectException() {
+        void connectionFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Connection refused");
             DataAccessException exception = DataAccessException.connectionFailed(cause);
             
@@ -99,7 +99,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("queryFailed should create exception with correct code and message")
-        void queryFailed_createsCorrectException() {
+        void queryFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Syntax error");
             DataAccessException exception = DataAccessException.queryFailed("SELECT * FROM users", cause);
             
@@ -116,7 +116,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code prefix")
-        void getFormattedMessage_includesErrorCodePrefix() {
+        void getFormattedMessageIncludeserrorcodeprefix() {
             DataAccessException exception = new DataAccessException("Test");
             
             String formatted = exception.getFormattedMessage();
@@ -126,7 +126,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("toString should include class name and formatted message")
-        void toString_includesClassNameAndFormattedMessage() {
+        void toStringIncludesclassnameandformattedmessage() {
             DataAccessException exception = new DataAccessException("Test message");
             
             String str = exception.toString();
@@ -137,7 +137,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return correct error code")
-        void getErrorCode_returnsCorrectErrorCode() {
+        void getErrorCodeReturnscorrecterrorcode() {
             DataAccessException exception = new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Failed");
             
             assertEquals(ErrorCode.DATA_PERSISTENCE_FAILED, exception.getErrorCode());
@@ -150,7 +150,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("DataAccessException should extend UltiToolsException")
-        void dataAccessException_extendsUltiToolsException() {
+        void dataAccessExceptionExtendsultitoolsexception() {
             DataAccessException exception = new DataAccessException("Test");
             
             assertTrue(exception instanceof UltiToolsException);
@@ -158,7 +158,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("DataAccessException should extend RuntimeException")
-        void dataAccessException_extendsRuntimeException() {
+        void dataAccessExceptionExtendsruntimeexception() {
             DataAccessException exception = new DataAccessException("Test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -171,7 +171,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("Empty message should be handled")
-        void emptyMessage_isHandled() {
+        void emptyMessageIshandled() {
             DataAccessException exception = new DataAccessException("");
             
             assertEquals("", exception.getMessage());
@@ -180,7 +180,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("entityNotFound with null identifier")
-        void entityNotFound_withNullIdentifier() {
+        void entityNotFoundWithnullidentifier() {
             DataAccessException exception = DataAccessException.entityNotFound(Object.class, null);
             
             assertEquals(ErrorCode.ENTITY_NOT_FOUND, exception.getErrorCode());
@@ -189,7 +189,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("queryFailed with empty query")
-        void queryFailed_withEmptyQuery() {
+        void queryFailedWithemptyquery() {
             Throwable cause = new RuntimeException("Error");
             DataAccessException exception = DataAccessException.queryFailed("", cause);
             
@@ -199,7 +199,7 @@ class DataAccessExceptionTest {
 
         @Test
         @DisplayName("All data access error codes should work")
-        void allDataAccessErrorCodes_shouldWork() {
+        void allDataAccessErrorCodesShouldwork() {
             // Test all data access related error codes
             DataAccessException e1 = new DataAccessException(ErrorCode.DATA_ACCESS_ERROR, "test");
             assertEquals(ErrorCode.DATA_ACCESS_ERROR, e1.getErrorCode());

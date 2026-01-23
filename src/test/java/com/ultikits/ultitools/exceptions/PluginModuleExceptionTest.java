@@ -21,7 +21,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("Constructor with message should use PLUGIN_ERROR code")
-        void constructor_withMessage_usesPluginErrorCode() {
+        void constructorWithmessageUsespluginerrorcode() {
             PluginModuleException exception = new PluginModuleException("Test message");
             
             assertEquals(ErrorCode.PLUGIN_ERROR, exception.getErrorCode());
@@ -30,7 +30,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use specified code")
-        void constructor_withErrorCodeAndMessage_usesSpecifiedCode() {
+        void constructorWitherrorcodeandmessageUsesspecifiedcode() {
             PluginModuleException exception = new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED, "Load failed");
             
             assertEquals(ErrorCode.PLUGIN_LOAD_FAILED, exception.getErrorCode());
@@ -39,7 +39,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("Constructor with message and cause should set both")
-        void constructor_withMessageAndCause_setsBoth() {
+        void constructorWithmessageandcauseSetsboth() {
             Throwable cause = new RuntimeException("Root cause");
             PluginModuleException exception = new PluginModuleException("Test message", cause);
             
@@ -50,7 +50,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             PluginModuleException exception = new PluginModuleException(ErrorCode.PLUGIN_UNLOAD_FAILED, "Unload failed", cause);
             
@@ -66,7 +66,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("loadFailed should create exception with correct code and message")
-        void loadFailed_createsCorrectException() {
+        void loadFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Class not found");
             PluginModuleException exception = PluginModuleException.loadFailed("MyPlugin", cause);
             
@@ -78,7 +78,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("unloadFailed should create exception with correct code and message")
-        void unloadFailed_createsCorrectException() {
+        void unloadFailedCreatescorrectexception() {
             Throwable cause = new RuntimeException("Resource busy");
             PluginModuleException exception = PluginModuleException.unloadFailed("MyPlugin", cause);
             
@@ -90,7 +90,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("dependencyMissing should create exception with correct code and message")
-        void dependencyMissing_createsCorrectException() {
+        void dependencyMissingCreatescorrectexception() {
             PluginModuleException exception = PluginModuleException.dependencyMissing("MyPlugin", "RequiredLib");
             
             assertEquals(ErrorCode.PLUGIN_DEPENDENCY_ERROR, exception.getErrorCode());
@@ -101,7 +101,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("circularDependency should create exception with correct code and message")
-        void circularDependency_createsCorrectException() {
+        void circularDependencyCreatescorrectexception() {
             PluginModuleException exception = PluginModuleException.circularDependency("PluginA", "PluginB", "PluginA");
             
             assertEquals(ErrorCode.PLUGIN_CIRCULAR_DEPENDENCY, exception.getErrorCode());
@@ -112,7 +112,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("circularDependency with single plugin")
-        void circularDependency_withSinglePlugin() {
+        void circularDependencyWithsingleplugin() {
             PluginModuleException exception = PluginModuleException.circularDependency("SelfRefPlugin");
             
             assertEquals(ErrorCode.PLUGIN_CIRCULAR_DEPENDENCY, exception.getErrorCode());
@@ -121,7 +121,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("circularDependency with multiple plugins")
-        void circularDependency_withMultiplePlugins() {
+        void circularDependencyWithmultipleplugins() {
             PluginModuleException exception = PluginModuleException.circularDependency("A", "B", "C", "D", "A");
             
             String message = exception.getMessage();
@@ -139,7 +139,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code prefix")
-        void getFormattedMessage_includesErrorCodePrefix() {
+        void getFormattedMessageIncludeserrorcodeprefix() {
             PluginModuleException exception = new PluginModuleException("Test");
             
             String formatted = exception.getFormattedMessage();
@@ -149,7 +149,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("toString should include class name and formatted message")
-        void toString_includesClassNameAndFormattedMessage() {
+        void toStringIncludesclassnameandformattedmessage() {
             PluginModuleException exception = new PluginModuleException("Test message");
             
             String str = exception.toString();
@@ -160,7 +160,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return correct error code")
-        void getErrorCode_returnsCorrectErrorCode() {
+        void getErrorCodeReturnscorrecterrorcode() {
             PluginModuleException exception = new PluginModuleException(ErrorCode.PLUGIN_DEPENDENCY_ERROR, "Dep error");
             
             assertEquals(ErrorCode.PLUGIN_DEPENDENCY_ERROR, exception.getErrorCode());
@@ -173,7 +173,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("PluginModuleException should extend UltiToolsException")
-        void pluginModuleException_extendsUltiToolsException() {
+        void pluginModuleExceptionExtendsultitoolsexception() {
             PluginModuleException exception = new PluginModuleException("Test");
             
             assertTrue(exception instanceof UltiToolsException);
@@ -181,7 +181,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("PluginModuleException should extend RuntimeException")
-        void pluginModuleException_extendsRuntimeException() {
+        void pluginModuleExceptionExtendsruntimeexception() {
             PluginModuleException exception = new PluginModuleException("Test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -194,7 +194,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("Empty message should be handled")
-        void emptyMessage_isHandled() {
+        void emptyMessageIshandled() {
             PluginModuleException exception = new PluginModuleException("");
             
             assertEquals("", exception.getMessage());
@@ -203,7 +203,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("loadFailed with empty plugin name")
-        void loadFailed_withEmptyPluginName() {
+        void loadFailedWithemptypluginname() {
             Throwable cause = new RuntimeException("Error");
             PluginModuleException exception = PluginModuleException.loadFailed("", cause);
             
@@ -213,7 +213,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("unloadFailed with empty plugin name")
-        void unloadFailed_withEmptyPluginName() {
+        void unloadFailedWithemptypluginname() {
             Throwable cause = new RuntimeException("Error");
             PluginModuleException exception = PluginModuleException.unloadFailed("", cause);
             
@@ -223,7 +223,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("dependencyMissing with empty names")
-        void dependencyMissing_withEmptyNames() {
+        void dependencyMissingWithemptynames() {
             PluginModuleException exception = PluginModuleException.dependencyMissing("", "");
             
             assertEquals(ErrorCode.PLUGIN_DEPENDENCY_ERROR, exception.getErrorCode());
@@ -232,7 +232,7 @@ class PluginModuleExceptionTest {
 
         @Test
         @DisplayName("circularDependency with no plugins")
-        void circularDependency_withNoPlugins() {
+        void circularDependencyWithnoplugins() {
             PluginModuleException exception = PluginModuleException.circularDependency();
             
             assertEquals(ErrorCode.PLUGIN_CIRCULAR_DEPENDENCY, exception.getErrorCode());

@@ -22,7 +22,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("UNKNOWN_ERROR should have code 1000")
-        void unknownError_hasCorrectCode() {
+        void unknownErrorHascorrectcode() {
             assertEquals(1000, ErrorCode.UNKNOWN_ERROR.getCode());
             assertEquals("Unknown error", ErrorCode.UNKNOWN_ERROR.getDefaultMessage());
             assertEquals("ULTI-1000", ErrorCode.UNKNOWN_ERROR.getFormattedCode());
@@ -30,21 +30,21 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("INVALID_ARGUMENT should have code 1001")
-        void invalidArgument_hasCorrectCode() {
+        void invalidArgumentHascorrectcode() {
             assertEquals(1001, ErrorCode.INVALID_ARGUMENT.getCode());
             assertEquals("Invalid argument", ErrorCode.INVALID_ARGUMENT.getDefaultMessage());
         }
 
         @Test
         @DisplayName("NULL_POINTER should have code 1002")
-        void nullPointer_hasCorrectCode() {
+        void nullPointerHascorrectcode() {
             assertEquals(1002, ErrorCode.NULL_POINTER.getCode());
             assertEquals("Null pointer", ErrorCode.NULL_POINTER.getDefaultMessage());
         }
 
         @Test
         @DisplayName("ILLEGAL_STATE should have code 1003")
-        void illegalState_hasCorrectCode() {
+        void illegalStateHascorrectcode() {
             assertEquals(1003, ErrorCode.ILLEGAL_STATE.getCode());
             assertEquals("Illegal state", ErrorCode.ILLEGAL_STATE.getDefaultMessage());
         }
@@ -56,35 +56,35 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("BEAN_CREATION_FAILED should have code 2000")
-        void beanCreationFailed_hasCorrectCode() {
+        void beanCreationFailedHascorrectcode() {
             assertEquals(2000, ErrorCode.BEAN_CREATION_FAILED.getCode());
             assertEquals("Bean creation failed", ErrorCode.BEAN_CREATION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("BEAN_NOT_FOUND should have code 2001")
-        void beanNotFound_hasCorrectCode() {
+        void beanNotFoundHascorrectcode() {
             assertEquals(2001, ErrorCode.BEAN_NOT_FOUND.getCode());
             assertEquals("Bean not found", ErrorCode.BEAN_NOT_FOUND.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CIRCULAR_DEPENDENCY should have code 2002")
-        void circularDependency_hasCorrectCode() {
+        void circularDependencyHascorrectcode() {
             assertEquals(2002, ErrorCode.CIRCULAR_DEPENDENCY.getCode());
             assertEquals("Circular dependency detected", ErrorCode.CIRCULAR_DEPENDENCY.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DEPENDENCY_INJECTION_FAILED should have code 2003")
-        void dependencyInjectionFailed_hasCorrectCode() {
+        void dependencyInjectionFailedHascorrectcode() {
             assertEquals(2003, ErrorCode.DEPENDENCY_INJECTION_FAILED.getCode());
             assertEquals("Dependency injection failed", ErrorCode.DEPENDENCY_INJECTION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DUPLICATE_BEAN should have code 2004")
-        void duplicateBean_hasCorrectCode() {
+        void duplicateBeanHascorrectcode() {
             assertEquals(2004, ErrorCode.DUPLICATE_BEAN.getCode());
             assertEquals("Duplicate bean definition", ErrorCode.DUPLICATE_BEAN.getDefaultMessage());
         }
@@ -96,63 +96,63 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("DATA_ACCESS_ERROR should have code 3000")
-        void dataAccessError_hasCorrectCode() {
+        void dataAccessErrorHascorrectcode() {
             assertEquals(3000, ErrorCode.DATA_ACCESS_ERROR.getCode());
             assertEquals("Data access error", ErrorCode.DATA_ACCESS_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("ENTITY_NOT_FOUND should have code 3001")
-        void entityNotFound_hasCorrectCode() {
+        void entityNotFoundHascorrectcode() {
             assertEquals(3001, ErrorCode.ENTITY_NOT_FOUND.getCode());
             assertEquals("Entity not found", ErrorCode.ENTITY_NOT_FOUND.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DATA_PERSISTENCE_FAILED should have code 3002")
-        void dataPersistenceFailed_hasCorrectCode() {
+        void dataPersistenceFailedHascorrectcode() {
             assertEquals(3002, ErrorCode.DATA_PERSISTENCE_FAILED.getCode());
             assertEquals("Data persistence failed", ErrorCode.DATA_PERSISTENCE_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DATA_QUERY_FAILED should have code 3003")
-        void dataQueryFailed_hasCorrectCode() {
+        void dataQueryFailedHascorrectcode() {
             assertEquals(3003, ErrorCode.DATA_QUERY_FAILED.getCode());
             assertEquals("Data query failed", ErrorCode.DATA_QUERY_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DATA_INTEGRITY_VIOLATION should have code 3004")
-        void dataIntegrityViolation_hasCorrectCode() {
+        void dataIntegrityViolationHascorrectcode() {
             assertEquals(3004, ErrorCode.DATA_INTEGRITY_VIOLATION.getCode());
             assertEquals("Data integrity violation", ErrorCode.DATA_INTEGRITY_VIOLATION.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CONNECTION_FAILED should have code 3005")
-        void connectionFailed_hasCorrectCode() {
+        void connectionFailedHascorrectcode() {
             assertEquals(3005, ErrorCode.CONNECTION_FAILED.getCode());
             assertEquals("Database connection failed", ErrorCode.CONNECTION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("TRANSACTION_FAILED should have code 3006")
-        void transactionFailed_hasCorrectCode() {
+        void transactionFailedHascorrectcode() {
             assertEquals(3006, ErrorCode.TRANSACTION_FAILED.getCode());
             assertEquals("Transaction failed", ErrorCode.TRANSACTION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DATA_ENTITY_INVALID should have code 3007")
-        void dataEntityInvalid_hasCorrectCode() {
+        void dataEntityInvalidHascorrectcode() {
             assertEquals(3007, ErrorCode.DATA_ENTITY_INVALID.getCode());
             assertEquals("Data entity invalid", ErrorCode.DATA_ENTITY_INVALID.getDefaultMessage());
         }
 
         @Test
         @DisplayName("DATA_OPERATION_FAILED should have code 3008")
-        void dataOperationFailed_hasCorrectCode() {
+        void dataOperationFailedHascorrectcode() {
             assertEquals(3008, ErrorCode.DATA_OPERATION_FAILED.getCode());
             assertEquals("Data operation failed", ErrorCode.DATA_OPERATION_FAILED.getDefaultMessage());
         }
@@ -164,42 +164,42 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("COMMAND_ERROR should have code 4000")
-        void commandError_hasCorrectCode() {
+        void commandErrorHascorrectcode() {
             assertEquals(4000, ErrorCode.COMMAND_ERROR.getCode());
             assertEquals("Command error", ErrorCode.COMMAND_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("COMMAND_VALIDATION_FAILED should have code 4001")
-        void commandValidationFailed_hasCorrectCode() {
+        void commandValidationFailedHascorrectcode() {
             assertEquals(4001, ErrorCode.COMMAND_VALIDATION_FAILED.getCode());
             assertEquals("Command validation failed", ErrorCode.COMMAND_VALIDATION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("COMMAND_PERMISSION_DENIED should have code 4002")
-        void commandPermissionDenied_hasCorrectCode() {
+        void commandPermissionDeniedHascorrectcode() {
             assertEquals(4002, ErrorCode.COMMAND_PERMISSION_DENIED.getCode());
             assertEquals("Permission denied", ErrorCode.COMMAND_PERMISSION_DENIED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("COMMAND_COOLDOWN_ACTIVE should have code 4003")
-        void commandCooldownActive_hasCorrectCode() {
+        void commandCooldownActiveHascorrectcode() {
             assertEquals(4003, ErrorCode.COMMAND_COOLDOWN_ACTIVE.getCode());
             assertEquals("Command on cooldown", ErrorCode.COMMAND_COOLDOWN_ACTIVE.getDefaultMessage());
         }
 
         @Test
         @DisplayName("COMMAND_PARSE_ERROR should have code 4004")
-        void commandParseError_hasCorrectCode() {
+        void commandParseErrorHascorrectcode() {
             assertEquals(4004, ErrorCode.COMMAND_PARSE_ERROR.getCode());
             assertEquals("Command parse error", ErrorCode.COMMAND_PARSE_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("COMMAND_EXECUTION_FAILED should have code 4005")
-        void commandExecutionFailed_hasCorrectCode() {
+        void commandExecutionFailedHascorrectcode() {
             assertEquals(4005, ErrorCode.COMMAND_EXECUTION_FAILED.getCode());
             assertEquals("Command execution failed", ErrorCode.COMMAND_EXECUTION_FAILED.getDefaultMessage());
         }
@@ -211,35 +211,35 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("CONFIG_ERROR should have code 5000")
-        void configError_hasCorrectCode() {
+        void configErrorHascorrectcode() {
             assertEquals(5000, ErrorCode.CONFIG_ERROR.getCode());
             assertEquals("Configuration error", ErrorCode.CONFIG_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CONFIG_LOAD_FAILED should have code 5001")
-        void configLoadFailed_hasCorrectCode() {
+        void configLoadFailedHascorrectcode() {
             assertEquals(5001, ErrorCode.CONFIG_LOAD_FAILED.getCode());
             assertEquals("Configuration load failed", ErrorCode.CONFIG_LOAD_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CONFIG_SAVE_FAILED should have code 5002")
-        void configSaveFailed_hasCorrectCode() {
+        void configSaveFailedHascorrectcode() {
             assertEquals(5002, ErrorCode.CONFIG_SAVE_FAILED.getCode());
             assertEquals("Configuration save failed", ErrorCode.CONFIG_SAVE_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CONFIG_PARSE_FAILED should have code 5003")
-        void configParseFailed_hasCorrectCode() {
+        void configParseFailedHascorrectcode() {
             assertEquals(5003, ErrorCode.CONFIG_PARSE_FAILED.getCode());
             assertEquals("Configuration parse failed", ErrorCode.CONFIG_PARSE_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("CONFIG_VALIDATION_FAILED should have code 5004")
-        void configValidationFailed_hasCorrectCode() {
+        void configValidationFailedHascorrectcode() {
             assertEquals(5004, ErrorCode.CONFIG_VALIDATION_FAILED.getCode());
             assertEquals("Configuration validation failed", ErrorCode.CONFIG_VALIDATION_FAILED.getDefaultMessage());
         }
@@ -251,35 +251,35 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("PLUGIN_ERROR should have code 6000")
-        void pluginError_hasCorrectCode() {
+        void pluginErrorHascorrectcode() {
             assertEquals(6000, ErrorCode.PLUGIN_ERROR.getCode());
             assertEquals("Plugin error", ErrorCode.PLUGIN_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("PLUGIN_LOAD_FAILED should have code 6001")
-        void pluginLoadFailed_hasCorrectCode() {
+        void pluginLoadFailedHascorrectcode() {
             assertEquals(6001, ErrorCode.PLUGIN_LOAD_FAILED.getCode());
             assertEquals("Plugin load failed", ErrorCode.PLUGIN_LOAD_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("PLUGIN_UNLOAD_FAILED should have code 6002")
-        void pluginUnloadFailed_hasCorrectCode() {
+        void pluginUnloadFailedHascorrectcode() {
             assertEquals(6002, ErrorCode.PLUGIN_UNLOAD_FAILED.getCode());
             assertEquals("Plugin unload failed", ErrorCode.PLUGIN_UNLOAD_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("PLUGIN_DEPENDENCY_ERROR should have code 6003")
-        void pluginDependencyError_hasCorrectCode() {
+        void pluginDependencyErrorHascorrectcode() {
             assertEquals(6003, ErrorCode.PLUGIN_DEPENDENCY_ERROR.getCode());
             assertEquals("Plugin dependency error", ErrorCode.PLUGIN_DEPENDENCY_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("PLUGIN_CIRCULAR_DEPENDENCY should have code 6004")
-        void pluginCircularDependency_hasCorrectCode() {
+        void pluginCircularDependencyHascorrectcode() {
             assertEquals(6004, ErrorCode.PLUGIN_CIRCULAR_DEPENDENCY.getCode());
             assertEquals("Plugin circular dependency", ErrorCode.PLUGIN_CIRCULAR_DEPENDENCY.getDefaultMessage());
         }
@@ -291,21 +291,21 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("WEBSOCKET_ERROR should have code 7000")
-        void websocketError_hasCorrectCode() {
+        void websocketErrorHascorrectcode() {
             assertEquals(7000, ErrorCode.WEBSOCKET_ERROR.getCode());
             assertEquals("WebSocket error", ErrorCode.WEBSOCKET_ERROR.getDefaultMessage());
         }
 
         @Test
         @DisplayName("WEBSOCKET_CONNECTION_FAILED should have code 7001")
-        void websocketConnectionFailed_hasCorrectCode() {
+        void websocketConnectionFailedHascorrectcode() {
             assertEquals(7001, ErrorCode.WEBSOCKET_CONNECTION_FAILED.getCode());
             assertEquals("WebSocket connection failed", ErrorCode.WEBSOCKET_CONNECTION_FAILED.getDefaultMessage());
         }
 
         @Test
         @DisplayName("WEBSOCKET_MESSAGE_FAILED should have code 7002")
-        void websocketMessageFailed_hasCorrectCode() {
+        void websocketMessageFailedHascorrectcode() {
             assertEquals(7002, ErrorCode.WEBSOCKET_MESSAGE_FAILED.getCode());
             assertEquals("WebSocket message failed", ErrorCode.WEBSOCKET_MESSAGE_FAILED.getDefaultMessage());
         }
@@ -341,7 +341,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("getCode should return the numeric code")
-        void getCode_returnsNumericCode() {
+        void getCodeReturnsnumericcode() {
             assertEquals(1000, ErrorCode.UNKNOWN_ERROR.getCode());
             assertEquals(2001, ErrorCode.BEAN_NOT_FOUND.getCode());
             assertEquals(3001, ErrorCode.ENTITY_NOT_FOUND.getCode());
@@ -349,7 +349,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("getDefaultMessage should return the message")
-        void getDefaultMessage_returnsMessage() {
+        void getDefaultMessageReturnsmessage() {
             assertEquals("Unknown error", ErrorCode.UNKNOWN_ERROR.getDefaultMessage());
             assertEquals("Bean not found", ErrorCode.BEAN_NOT_FOUND.getDefaultMessage());
         }
@@ -361,7 +361,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("General errors should be in 1000-1999 range")
-        void generalErrors_inCorrectRange() {
+        void generalErrorsIncorrectrange() {
             assertTrue(ErrorCode.UNKNOWN_ERROR.getCode() >= 1000 && ErrorCode.UNKNOWN_ERROR.getCode() < 2000);
             assertTrue(ErrorCode.INVALID_ARGUMENT.getCode() >= 1000 && ErrorCode.INVALID_ARGUMENT.getCode() < 2000);
             assertTrue(ErrorCode.NULL_POINTER.getCode() >= 1000 && ErrorCode.NULL_POINTER.getCode() < 2000);
@@ -370,7 +370,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("Container errors should be in 2000-2999 range")
-        void containerErrors_inCorrectRange() {
+        void containerErrorsIncorrectrange() {
             assertTrue(ErrorCode.BEAN_CREATION_FAILED.getCode() >= 2000 && ErrorCode.BEAN_CREATION_FAILED.getCode() < 3000);
             assertTrue(ErrorCode.BEAN_NOT_FOUND.getCode() >= 2000 && ErrorCode.BEAN_NOT_FOUND.getCode() < 3000);
             assertTrue(ErrorCode.CIRCULAR_DEPENDENCY.getCode() >= 2000 && ErrorCode.CIRCULAR_DEPENDENCY.getCode() < 3000);
@@ -378,7 +378,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("Data access errors should be in 3000-3999 range")
-        void dataAccessErrors_inCorrectRange() {
+        void dataAccessErrorsIncorrectrange() {
             assertTrue(ErrorCode.DATA_ACCESS_ERROR.getCode() >= 3000 && ErrorCode.DATA_ACCESS_ERROR.getCode() < 4000);
             assertTrue(ErrorCode.ENTITY_NOT_FOUND.getCode() >= 3000 && ErrorCode.ENTITY_NOT_FOUND.getCode() < 4000);
             assertTrue(ErrorCode.CONNECTION_FAILED.getCode() >= 3000 && ErrorCode.CONNECTION_FAILED.getCode() < 4000);
@@ -386,7 +386,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("Command errors should be in 4000-4999 range")
-        void commandErrors_inCorrectRange() {
+        void commandErrorsIncorrectrange() {
             assertTrue(ErrorCode.COMMAND_ERROR.getCode() >= 4000 && ErrorCode.COMMAND_ERROR.getCode() < 5000);
             assertTrue(ErrorCode.COMMAND_VALIDATION_FAILED.getCode() >= 4000 && ErrorCode.COMMAND_VALIDATION_FAILED.getCode() < 5000);
             assertTrue(ErrorCode.COMMAND_PERMISSION_DENIED.getCode() >= 4000 && ErrorCode.COMMAND_PERMISSION_DENIED.getCode() < 5000);
@@ -394,7 +394,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("Configuration errors should be in 5000-5999 range")
-        void configurationErrors_inCorrectRange() {
+        void configurationErrorsIncorrectrange() {
             assertTrue(ErrorCode.CONFIG_ERROR.getCode() >= 5000 && ErrorCode.CONFIG_ERROR.getCode() < 6000);
             assertTrue(ErrorCode.CONFIG_LOAD_FAILED.getCode() >= 5000 && ErrorCode.CONFIG_LOAD_FAILED.getCode() < 6000);
             assertTrue(ErrorCode.CONFIG_SAVE_FAILED.getCode() >= 5000 && ErrorCode.CONFIG_SAVE_FAILED.getCode() < 6000);
@@ -402,7 +402,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("Plugin errors should be in 6000-6999 range")
-        void pluginErrors_inCorrectRange() {
+        void pluginErrorsIncorrectrange() {
             assertTrue(ErrorCode.PLUGIN_ERROR.getCode() >= 6000 && ErrorCode.PLUGIN_ERROR.getCode() < 7000);
             assertTrue(ErrorCode.PLUGIN_LOAD_FAILED.getCode() >= 6000 && ErrorCode.PLUGIN_LOAD_FAILED.getCode() < 7000);
             assertTrue(ErrorCode.PLUGIN_UNLOAD_FAILED.getCode() >= 6000 && ErrorCode.PLUGIN_UNLOAD_FAILED.getCode() < 7000);
@@ -410,7 +410,7 @@ class ErrorCodeTest {
 
         @Test
         @DisplayName("WebSocket errors should be in 7000-7999 range")
-        void websocketErrors_inCorrectRange() {
+        void websocketErrorsIncorrectrange() {
             assertTrue(ErrorCode.WEBSOCKET_ERROR.getCode() >= 7000 && ErrorCode.WEBSOCKET_ERROR.getCode() < 8000);
             assertTrue(ErrorCode.WEBSOCKET_CONNECTION_FAILED.getCode() >= 7000 && ErrorCode.WEBSOCKET_CONNECTION_FAILED.getCode() < 8000);
             assertTrue(ErrorCode.WEBSOCKET_MESSAGE_FAILED.getCode() >= 7000 && ErrorCode.WEBSOCKET_MESSAGE_FAILED.getCode() < 8000);

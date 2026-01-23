@@ -20,11 +20,7 @@ import lombok.Setter;
 @Setter
 @ConfigEntity("config/worlds.yml")
 public class WorldConfig extends AbstractConfigEntity {
-    
-    public WorldConfig(String configFilePath) {
-        super(configFilePath);
-    }
-    
+
     @ConfigEntry(path = "default_world", comment = "Default world name")
     private String defaultWorld = "world";
     
@@ -113,4 +109,8 @@ public class WorldConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "messages.world_deleted", comment = "World deleted message")
     private String worldDeletedMessage = "&c世界 {WORLD} 已删除！";
+
+    public WorldConfig(String configFilePath) {
+        super(configFilePath);
+    }
 }

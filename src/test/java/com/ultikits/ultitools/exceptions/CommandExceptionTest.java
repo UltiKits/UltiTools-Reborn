@@ -21,7 +21,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Constructor with message should use COMMAND_ERROR code")
-        void constructor_withMessage_usesCommandErrorCode() {
+        void constructorWithmessageUsescommanderrorcode() {
             CommandException exception = new CommandException("Test message");
             
             assertEquals(ErrorCode.COMMAND_ERROR, exception.getErrorCode());
@@ -30,7 +30,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code and message should use specified code")
-        void constructor_withErrorCodeAndMessage_usesSpecifiedCode() {
+        void constructorWitherrorcodeandmessageUsesspecifiedcode() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_VALIDATION_FAILED, "Validation failed");
             
             assertEquals(ErrorCode.COMMAND_VALIDATION_FAILED, exception.getErrorCode());
@@ -39,7 +39,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Constructor with message and cause should set both")
-        void constructor_withMessageAndCause_setsBoth() {
+        void constructorWithmessageandcauseSetsboth() {
             Throwable cause = new RuntimeException("Root cause");
             CommandException exception = new CommandException("Test message", cause);
             
@@ -50,7 +50,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Constructor with error code, message and cause should set all")
-        void constructor_withErrorCodeMessageAndCause_setsAll() {
+        void constructorWitherrorcodemessageandcauseSetsall() {
             Throwable cause = new RuntimeException("Root cause");
             CommandException exception = new CommandException(ErrorCode.COMMAND_PARSE_ERROR, "Parse error", cause);
             
@@ -66,7 +66,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("permissionDenied should create exception with correct code and message")
-        void permissionDenied_createsCorrectException() {
+        void permissionDeniedCreatescorrectexception() {
             CommandException exception = CommandException.permissionDenied("admin.command");
             
             assertEquals(ErrorCode.COMMAND_PERMISSION_DENIED, exception.getErrorCode());
@@ -76,7 +76,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("cooldownActive should create exception with correct code and message")
-        void cooldownActive_createsCorrectException() {
+        void cooldownActiveCreatescorrectexception() {
             CommandException exception = CommandException.cooldownActive(30);
             
             assertEquals(ErrorCode.COMMAND_COOLDOWN_ACTIVE, exception.getErrorCode());
@@ -86,7 +86,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("cooldownActive should show remaining seconds")
-        void cooldownActive_showsRemainingSeconds() {
+        void cooldownActiveShowsremainingseconds() {
             CommandException exception = CommandException.cooldownActive(60);
             
             assertTrue(exception.getMessage().contains("60"));
@@ -95,7 +95,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("validationFailed should create exception with correct code and message")
-        void validationFailed_createsCorrectException() {
+        void validationFailedCreatescorrectexception() {
             CommandException exception = CommandException.validationFailed("Invalid player name");
             
             assertEquals(ErrorCode.COMMAND_VALIDATION_FAILED, exception.getErrorCode());
@@ -104,7 +104,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("parseError should create exception with correct code and message")
-        void parseError_createsCorrectException() {
+        void parseErrorCreatescorrectexception() {
             CommandException exception = CommandException.parseError("abc", Integer.class);
             
             assertEquals(ErrorCode.COMMAND_PARSE_ERROR, exception.getErrorCode());
@@ -114,7 +114,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("parseError should include input and target type")
-        void parseError_includesInputAndTargetType() {
+        void parseErrorIncludesinputandtargettype() {
             CommandException exception = CommandException.parseError("invalid", Double.class);
             
             assertTrue(exception.getMessage().contains("invalid"));
@@ -128,7 +128,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("getFormattedMessage should include error code prefix")
-        void getFormattedMessage_includesErrorCodePrefix() {
+        void getFormattedMessageIncludeserrorcodeprefix() {
             CommandException exception = new CommandException("Test");
             
             String formatted = exception.getFormattedMessage();
@@ -138,7 +138,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("toString should include class name and formatted message")
-        void toString_includesClassNameAndFormattedMessage() {
+        void toStringIncludesclassnameandformattedmessage() {
             CommandException exception = new CommandException("Test message");
             
             String str = exception.toString();
@@ -149,7 +149,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("getErrorCode should return correct error code")
-        void getErrorCode_returnsCorrectErrorCode() {
+        void getErrorCodeReturnscorrecterrorcode() {
             CommandException exception = new CommandException(ErrorCode.COMMAND_EXECUTION_FAILED, "Failed");
             
             assertEquals(ErrorCode.COMMAND_EXECUTION_FAILED, exception.getErrorCode());
@@ -162,7 +162,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("CommandException should extend UltiToolsException")
-        void commandException_extendsUltiToolsException() {
+        void commandExceptionExtendsultitoolsexception() {
             CommandException exception = new CommandException("Test");
             
             assertTrue(exception instanceof UltiToolsException);
@@ -170,7 +170,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("CommandException should extend RuntimeException")
-        void commandException_extendsRuntimeException() {
+        void commandExceptionExtendsruntimeexception() {
             CommandException exception = new CommandException("Test");
             
             assertTrue(exception instanceof RuntimeException);
@@ -183,7 +183,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Empty message should be handled")
-        void emptyMessage_isHandled() {
+        void emptyMessageIshandled() {
             CommandException exception = new CommandException("");
             
             assertEquals("", exception.getMessage());
@@ -192,7 +192,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("Null cause should be handled")
-        void nullCause_isHandled() {
+        void nullCauseIshandled() {
             CommandException exception = new CommandException("Test", null);
             
             assertEquals("Test", exception.getMessage());
@@ -201,7 +201,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("permissionDenied with empty permission")
-        void permissionDenied_withEmptyPermission() {
+        void permissionDeniedWithemptypermission() {
             CommandException exception = CommandException.permissionDenied("");
             
             assertEquals(ErrorCode.COMMAND_PERMISSION_DENIED, exception.getErrorCode());
@@ -210,7 +210,7 @@ class CommandExceptionTest {
 
         @Test
         @DisplayName("cooldownActive with zero seconds")
-        void cooldownActive_withZeroSeconds() {
+        void cooldownActiveWithzeroseconds() {
             CommandException exception = CommandException.cooldownActive(0);
             
             assertEquals(ErrorCode.COMMAND_COOLDOWN_ACTIVE, exception.getErrorCode());

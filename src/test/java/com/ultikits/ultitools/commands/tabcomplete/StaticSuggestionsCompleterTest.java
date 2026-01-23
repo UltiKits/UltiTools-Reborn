@@ -28,7 +28,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Varargs constructor should accept string array")
-        void varargsConstructor_acceptsStringArray() {
+        void varargsConstructorAcceptsstringarray() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter("one", "two", "three");
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -46,7 +46,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("List constructor should accept list of strings")
-        void listConstructor_acceptsListOfStrings() {
+        void listConstructorAcceptslistofstrings() {
             List<String> items = Arrays.asList("alpha", "beta", "gamma");
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(items);
             
@@ -65,7 +65,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Constructor with case sensitivity flag")
-        void constructor_withCaseSensitivity() {
+        void constructorWithcasesensitivity() {
             List<String> items = Arrays.asList("Test", "TEST", "test");
             StaticSuggestionsCompleter caseSensitive = new StaticSuggestionsCompleter(items, true);
             StaticSuggestionsCompleter caseInsensitive = new StaticSuggestionsCompleter(items, false);
@@ -87,7 +87,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Empty varargs creates completer with no suggestions")
-        void emptyVarargs_createsEmptyCompleter() {
+        void emptyVarargsCreatesemptycompleter() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -101,7 +101,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Empty list creates completer with no suggestions")
-        void emptyList_createsEmptyCompleter() {
+        void emptyListCreatesemptycompleter() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(Collections.emptyList());
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -127,7 +127,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should return all suggestions when input is empty")
-        void complete_returnsAllSuggestions_whenInputEmpty() {
+        void completeReturnsallsuggestionsWheninputempty() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{""})
                     .currentArgIndex(0)
@@ -140,7 +140,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should filter by prefix")
-        void complete_filtersByPrefix() {
+        void completeFiltersbyprefix() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"ap"})
                     .currentArgIndex(0)
@@ -155,7 +155,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should be case insensitive by default")
-        void complete_caseInsensitiveByDefault() {
+        void completeCaseinsensitivebydefault() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"AP"})
                     .currentArgIndex(0)
@@ -170,7 +170,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty list when no match")
-        void complete_returnsEmptyList_whenNoMatch() {
+        void completeReturnsemptylistWhennomatch() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"xyz"})
                     .currentArgIndex(0)
@@ -183,7 +183,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should return sorted results")
-        void complete_returnsSortedResults() {
+        void completeReturnssortedresults() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"b"})
                     .currentArgIndex(0)
@@ -198,7 +198,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should handle single character input")
-        void complete_handlesSingleCharacterInput() {
+        void completeHandlessinglecharacterinput() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"c"})
                     .currentArgIndex(0)
@@ -212,7 +212,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("complete() should handle exact match")
-        void complete_handlesExactMatch() {
+        void completeHandlesexactmatch() {
             TabCompletionContext context = TabCompletionContext.builder()
                     .args(new String[]{"apple"})
                     .currentArgIndex(0)
@@ -231,7 +231,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Case sensitive completer should only match exact case")
-        void caseSensitive_matchesExactCase() {
+        void caseSensitiveMatchesexactcase() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(
                     Arrays.asList("Apple", "APPLE", "apple"), true);
             
@@ -248,7 +248,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Case insensitive completer should match any case")
-        void caseInsensitive_matchesAnyCase() {
+        void caseInsensitiveMatchesanycase() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(
                     Arrays.asList("Apple", "APPLE", "apple"), false);
             
@@ -264,7 +264,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Case sensitive with lowercase input")
-        void caseSensitive_lowercaseInput() {
+        void caseSensitiveLowercaseinput() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(
                     Arrays.asList("Apple", "APPLE", "apple"), true);
             
@@ -281,7 +281,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("Case sensitive with uppercase input")
-        void caseSensitive_uppercaseInput() {
+        void caseSensitiveUppercaseinput() {
             StaticSuggestionsCompleter completer = new StaticSuggestionsCompleter(
                     Arrays.asList("Apple", "APPLE", "apple"), true);
             
@@ -303,7 +303,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forBoolean() should return true and false suggestions")
-        void forBoolean_returnsTrueAndFalse() {
+        void forBooleanReturnstrueandfalse() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forBoolean();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -320,7 +320,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forBoolean() should filter by t prefix")
-        void forBoolean_filtersByTPrefix() {
+        void forBooleanFiltersbytprefix() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forBoolean();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -336,7 +336,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forBoolean() should filter by f prefix")
-        void forBoolean_filtersByFPrefix() {
+        void forBooleanFiltersbyfprefix() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forBoolean();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -352,7 +352,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forBoolean() should be case insensitive")
-        void forBoolean_caseInsensitive() {
+        void forBooleanCaseinsensitive() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forBoolean();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -373,7 +373,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forToggle() should return toggle suggestions")
-        void forToggle_returnsToggleSuggestions() {
+        void forToggleReturnstogglesuggestions() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forToggle();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -392,7 +392,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forToggle() should filter by on/off")
-        void forToggle_filtersByOnOff() {
+        void forToggleFiltersbyonoff() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forToggle();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -409,7 +409,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forToggle() should filter by enable/disable")
-        void forToggle_filtersByEnableDisable() {
+        void forToggleFiltersbyenabledisable() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forToggle();
             
             TabCompletionContext context = TabCompletionContext.builder()
@@ -425,7 +425,7 @@ class StaticSuggestionsCompleterTest {
 
         @Test
         @DisplayName("forToggle() should filter by d prefix for disable")
-        void forToggle_filtersByDPrefix() {
+        void forToggleFiltersbydprefix() {
             StaticSuggestionsCompleter completer = StaticSuggestionsCompleter.forToggle();
             
             TabCompletionContext context = TabCompletionContext.builder()

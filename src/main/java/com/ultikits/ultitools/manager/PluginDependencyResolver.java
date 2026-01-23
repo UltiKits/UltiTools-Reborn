@@ -26,7 +26,8 @@ import com.ultikits.ultitools.annotations.PluginDependency;
  * @since 6.2.0
  */
 public class PluginDependencyResolver {
-    
+
+    @SuppressWarnings("unused")
     private final Logger logger;
     
     /**
@@ -131,7 +132,7 @@ public class PluginDependencyResolver {
         
         // Build adjacency list and calculate in-degrees
         Map<String, Set<String>> adjacencyList = buildAdjacencyList(nodes, availablePlugins);
-        Map<String, Integer> inDegree = calculateInDegrees(nodes, adjacencyList, availablePlugins);
+        Map<String, Integer> inDegree = calculateInDegrees(nodes, adjacencyList);
         
         // Kahn's algorithm
         List<String> sortedNames = kahnSort(nodes.keySet(), adjacencyList, inDegree);
@@ -211,8 +212,7 @@ public class PluginDependencyResolver {
      */
     private Map<String, Integer> calculateInDegrees(
             Map<String, PluginNode> nodes,
-            Map<String, Set<String>> adjacencyList,
-            Set<String> availablePlugins) {
+            Map<String, Set<String>> adjacencyList) {
         
         Map<String, Integer> inDegree = new HashMap<>();
         

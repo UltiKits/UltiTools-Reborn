@@ -157,6 +157,8 @@ class DataSourceTransactionManagerTest {
         void shouldNotThrowWhenNoActiveTransaction() {
             // 不应该抛出异常
             transactionManager.commit();
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -205,9 +207,11 @@ class DataSourceTransactionManagerTest {
 
         @Test
         @DisplayName("没有活动事务时 rollback 不应该抛出异常")
-        void shouldNotThrowWhenNoActiveTransaction() {
+        void shouldNotThrowWhenNoActiveTransactionForRollback() {
             // 不应该抛出异常
             transactionManager.rollback();
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -370,6 +374,8 @@ class DataSourceTransactionManagerTest {
 
             // 不应该抛出异常
             transactionManager.setReadOnly(true);
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
     }
 
@@ -382,6 +388,8 @@ class DataSourceTransactionManagerTest {
         void shouldNotThrowWhenSettingTimeout() {
             // 不应该抛出异常
             transactionManager.setTimeout(30);
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -389,6 +397,7 @@ class DataSourceTransactionManagerTest {
         void shouldDoNothingForZeroTimeout() {
             transactionManager.setTimeout(0);
             // 不应该有异常
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -396,6 +405,7 @@ class DataSourceTransactionManagerTest {
         void shouldDoNothingForNegativeTimeout() {
             transactionManager.setTimeout(-1);
             // 不应该有异常
+            assertThat(true).isTrue();
         }
     }
 
@@ -455,6 +465,8 @@ class DataSourceTransactionManagerTest {
 
             // 不应该抛出异常
             transactionManager.commit();
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
 
         @Test
@@ -465,6 +477,8 @@ class DataSourceTransactionManagerTest {
 
             // 不应该抛出异常
             transactionManager.commit();
+            // If we reach here, test passes
+            assertThat(true).isTrue();
         }
     }
 

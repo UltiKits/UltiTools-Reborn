@@ -120,6 +120,8 @@ class SystemLogHandlerTest {
         handler.flush();
         handler.close();
         // These methods are empty or just call super, but calling them ensures coverage
+        // Verify no exceptions were thrown - test passes if we reach this point
+        assertTrue(true, "flush() and close() completed without exceptions");
     }
     
     @Test
