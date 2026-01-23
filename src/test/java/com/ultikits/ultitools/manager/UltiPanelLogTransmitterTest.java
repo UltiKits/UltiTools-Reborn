@@ -1,8 +1,10 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -130,10 +132,8 @@ class UltiPanelLogTransmitterTest {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(false);
 
-            // Act
-            logTransmitter.sendLog("info", "test message", "server", null);
-
-            // Assert - 不会立即发送
+            // Act & Assert - 不会立即发送，且不抛出异常
+            assertDoesNotThrow(() -> logTransmitter.sendLog("info", "test message", "server", null));
         }
 
         @Test
@@ -142,8 +142,8 @@ class UltiPanelLogTransmitterTest {
             // Arrange
             UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(null, "test");
 
-            // Act - 不应该抛出异常
-            transmitter.sendLog("info", "test message", "server", null);
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> transmitter.sendLog("info", "test message", "server", null));
         }
 
         @Test
@@ -948,14 +948,12 @@ class UltiPanelLogTransmitterTest {
         void shouldOutputToStderrOnSendException() throws Exception {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            org.mockito.Mockito.doThrow(new RuntimeException("Send failed"))
+            doThrow(new RuntimeException("Send failed"))
                 .when(mockWebSocketClient).sendMessage(any(JsonObject.class));
             logTransmitter.setBatchEnabled(false);
 
-            // Act - 不应该抛出异常
-            logTransmitter.sendLog("info", "test", "server", null);
-
-            // Assert - 异常被捕获，没有抛出
+            // Act & Assert - 异常被捕获，没有抛出
+            assertDoesNotThrow(() -> logTransmitter.sendLog("info", "test", "server", null));
         }
     }
 

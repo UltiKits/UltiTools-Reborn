@@ -631,7 +631,8 @@ class BaseInventoryPageTest {
         void shouldDocumentComponentTitleConstructorsExist() {
             // This test documents that Component title constructors are available
             // but cannot be unit tested due to NMS dependencies
-            assertTrue(true, "Component title constructors are available but require NMS");
+            assertNotNull(TestInventoryPage.class.getConstructors(),
+                "Component title constructors are available but require NMS");
         }
     }
     

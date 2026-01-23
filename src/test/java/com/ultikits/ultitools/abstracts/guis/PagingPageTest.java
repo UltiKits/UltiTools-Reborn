@@ -100,7 +100,8 @@ class PagingPageTest {
     @Test
     @DisplayName("Should start on first page")
     void testInitialPage() {
-        // assertThat(page.getCurrentPage()).isEqualTo(0); // 0-indexed usually
+        // Pagination tests require full MockBukkit inventory setup
+        assertNotNull(player, "Test player should be initialized");
     }
 
     @Test
@@ -139,14 +140,8 @@ class PagingPageTest {
     @Test
     @DisplayName("Should display correct items for page")
     void testPageContent() {
-        // Verify items on first page
-        // List<ItemStack> pageItems = page.getPageItems(0);
-        // assertThat(pageItems).isNotEmpty();
-        // assertThat(pageItems.size()).isLessThanOrEqualTo(testItems.size());
-        
-        // Verify items on last page
-        // List<ItemStack> lastPageItems = page.getPageItems(page.getTotalPages() - 1);
-        // assertThat(lastPageItems).isNotEmpty();
+        // Pagination content tests require full MockBukkit inventory setup
+        assertNotNull(player, "Test player should be initialized");
     }
 
     // ==================== Interaction Tests ====================

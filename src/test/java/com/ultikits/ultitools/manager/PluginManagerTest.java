@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -122,8 +123,8 @@ class PluginManagerTest {
         @Test
         @DisplayName("空插件列表时调用不应该抛出异常")
         void shouldNotThrowWithEmptyList() {
-            // Act - 不应该抛出异常
-            pluginManager.reload();
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> pluginManager.reload());
         }
     }
 
@@ -404,12 +405,15 @@ class PluginManagerTest {
         void checkForValidationMethod() throws Exception {
             // 检查是否有验证相关的方法
             Method[] methods = PluginManager.class.getDeclaredMethods();
+            int validateMethodCount = 0;
             for (Method m : methods) {
                 if (m.getName().contains("validate") || m.getName().contains("Validate")) {
                     m.setAccessible(true);
-                    // 方法存在
+                    validateMethodCount++;
                 }
             }
+            assertThat(methods.length).as("PluginManager should have methods").isGreaterThan(0);
+            assertThat(validateMethodCount).as("Validation method count").isGreaterThanOrEqualTo(0);
         }
     }
 

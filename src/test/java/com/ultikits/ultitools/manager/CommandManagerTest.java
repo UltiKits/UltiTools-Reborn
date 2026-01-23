@@ -266,7 +266,7 @@ class CommandManagerTest {
             map.put(mockPlugin, null);
 
             // Act & Assert - 不应该抛出异常
-            commandManager.unregisterAll(mockPlugin);
+            assertDoesNotThrow(() -> commandManager.unregisterAll(mockPlugin));
         }
     }
 
@@ -454,12 +454,9 @@ class CommandManagerTest {
         void shouldLogWarningWithoutAnnotation() {
             // Arrange
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
-            // Act
-            commandManager.register(executor);
-            
-            // Assert - 应该记录警告日志
-            // 验证日志调用
+
+            // Act & Assert - 应该记录警告日志但不抛出异常
+            assertDoesNotThrow(() -> commandManager.register(executor));
         }
     }
 
@@ -486,11 +483,9 @@ class CommandManagerTest {
         void shouldLogWarningForCoreCommandWithoutAnnotation() {
             // Arrange
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
-            // Act
-            commandManager.registerCoreCommand(executor);
-            
-            // Assert - 应该记录警告
+
+            // Act & Assert - 应该记录警告但不抛出异常
+            assertDoesNotThrow(() -> commandManager.registerCoreCommand(executor));
         }
     }
 
@@ -628,7 +623,7 @@ class CommandManagerTest {
 
             // Assert
             assertThat(result).isTrue();
-            org.mockito.Mockito.verify(sender).sendMessage("Test command executed");
+            verify(sender).sendMessage("Test command executed");
         }
 
         @Test
@@ -1394,11 +1389,9 @@ class CommandManagerTest {
         void nonAnnotatedCommandShouldLogWarning() {
             // Arrange
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
-            // Act - 不应该抛出异常，只记录警告
-            commandManager.registerCoreCommand(executor);
-            
-            // 方法正常完成
+
+            // Act & Assert - 不应该抛出异常，只记录警告
+            assertDoesNotThrow(() -> commandManager.registerCoreCommand(executor));
         }
     }
 
@@ -1836,14 +1829,12 @@ class CommandManagerTest {
             when(mockPlugin.getContext()).thenReturn(mockContext);
             when(mockContext.getBeanNamesForType(CommandExecutor.class))
                 .thenReturn(new String[]{"manualCmd"});
-            
+
             ManualRegisterCommandExecutor manualExecutor = new ManualRegisterCommandExecutor();
             when(mockContext.getBean("manualCmd", CommandExecutor.class)).thenReturn(manualExecutor);
-            
-            // Act
-            commandManager.registerAll(mockPlugin);
-            
-            // Assert - 没有异常，manualRegister=true 的命令被跳过
+
+            // Act & Assert - 没有异常，manualRegister=true 的命令被跳过
+            assertDoesNotThrow(() -> commandManager.registerAll(mockPlugin));
         }
 
         @Test

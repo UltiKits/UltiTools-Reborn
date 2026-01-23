@@ -224,7 +224,6 @@ class ExceptionInterceptorTest {
         @DisplayName("Should rethrow for method without annotation")
         void shouldRethrowForMethodWithoutAnnotation() throws Throwable {
             Method method = ServiceWithExceptionCatch.class.getMethod("methodWithoutAnnotation");
-            Object target = new ServiceWithExceptionCatch();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenThrow(new RuntimeException("Test error"));
