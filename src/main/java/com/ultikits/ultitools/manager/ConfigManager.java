@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Type;
 import java.util.*;
+import java.util.function.Function;
 import java.util.logging.Level;
 
 /**
@@ -220,6 +221,27 @@ public class ConfigManager {
     }
 
     /**
+     * Builds a JSON string from all config entities using the provided extractor function.
+     * <br>
+     * 使用提供的提取函数从所有配置实体构建JSON字符串
+     *
+     * @param extractor function to extract JsonObject from config entity <br> 从配置实体提取JsonObject的函数
+     * @return JSON string <br> JSON字符串
+     */
+    private String buildJsonFromConfigs(Function<AbstractConfigEntity, JsonObject> extractor) {
+        Gson gson = new Gson();
+        Map<String, Map<String, JsonObject>> res = new HashMap<>();
+        for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
+            Map<String, JsonObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
+            for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
+                stringStringMap.put(entityEntry.getKey(), extractor.apply(entityEntry.getValue()));
+            }
+            res.put(entry.getKey().getPluginName(), stringStringMap);
+        }
+        return gson.toJson(res);
+    }
+
+    /**
      * Get all comments.
      * <br>
      * 获取所有注释
@@ -227,16 +249,7 @@ public class ConfigManager {
      * @return all comments <br> 所有注释
      */
     public final String getComments() {
-        Gson gson = new Gson();
-        Map<String, Map<String, JsonObject>> res = new HashMap<>();
-        for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JsonObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
-            for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
-                stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().getComments());
-            }
-            res.put(entry.getKey().getPluginName(), stringStringMap);
-        }
-        return gson.toJson(res);
+        return buildJsonFromConfigs(AbstractConfigEntity::getComments);
     }
 
     /**
@@ -247,16 +260,7 @@ public class ConfigManager {
      * @return config in JSON format <br> JSON格式的配置
      */
     public final String toJson() {
-        Gson gson = new Gson();
-        Map<String, Map<String, JsonObject>> res = new HashMap<>();
-        for (Map.Entry<UltiToolsPlugin, Map<String, AbstractConfigEntity>> entry : pluginConfigMap.entrySet()) {
-            Map<String, JsonObject> stringStringMap = res.computeIfAbsent(entry.getKey().getPluginName(), k -> new HashMap<>());
-            for (Map.Entry<String, AbstractConfigEntity> entityEntry : entry.getValue().entrySet()) {
-                stringStringMap.put(entityEntry.getKey(), entityEntry.getValue().toJsonObject());
-            }
-            res.put(entry.getKey().getPluginName(), stringStringMap);
-        }
-        return gson.toJson(res);
+        return buildJsonFromConfigs(AbstractConfigEntity::toJsonObject);
     }
 
     /**

@@ -163,20 +163,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @Deprecated
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
-        this.pluginName = pluginName;
-        this.version = version;
-        this.authors = authors;
-        this.loadAfter = loadAfter;
-        this.minUltiToolsVersion = minUltiToolsVersion;
-        this.mainClass = mainClass;
-        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
-        language = createLanguageFromPath(resourceFolderPath);
-        saveResources();
-        try {
-            initConfig();
-        } catch (IOException e) {
-            getLogger().error("Failed to initialize config", e);
-        }
+        this(pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass,
+             UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + pluginName);
     }
 
     /**
