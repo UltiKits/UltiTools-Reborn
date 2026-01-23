@@ -335,7 +335,8 @@ class ClassLoaderUtilsTest {
                 "com.ultikits.ultitools.Class_With_Underscores",
                 "com.ultikits.ultitools.Class$Inner"
             };
-            
+
+            int testedCount = 0;
             for (String className : validFormats) {
                 // 格式有效，但可能因为类不存在而抛出 ClassNotFoundException
                 // 或者因为安全检查而抛出 SecurityException
@@ -343,10 +344,14 @@ class ClassLoaderUtilsTest {
                     ClassLoaderUtils.loadClass(className);
                 } catch (ClassNotFoundException e) {
                     // 这是预期的 - 类名格式正确但类不存在
+                    testedCount++;
                 } catch (SecurityException e) {
                     // 这也可能 - 因为安全策略
+                    testedCount++;
                 }
             }
+            // 验证所有类名都被测试过
+            assertThat(testedCount).isEqualTo(validFormats.length);
         }
 
         @Test

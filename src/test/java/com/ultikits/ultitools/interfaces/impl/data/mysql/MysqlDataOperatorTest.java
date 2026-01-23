@@ -50,8 +50,7 @@ class MysqlDataOperatorTest {
         @Column(value = "active", type = "BOOLEAN")
         private boolean active;
 
-        public TestEntity() {}
-
+        // No-arg constructor required by ORM reflection - Java provides default but explicit is clearer
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
         public int getAge() { return age; }

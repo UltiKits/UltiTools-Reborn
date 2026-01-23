@@ -229,7 +229,7 @@ class InventoryConfirmTest {
         @DisplayName("onOk 方法应该存在")
         void onOkMethodShouldExist() throws NoSuchMethodException {
             Method method = InventoryConfirm.class.getDeclaredMethod("onOk",
-                org.bukkit.event.inventory.InventoryClickEvent.class);
+                InventoryClickEvent.class);
 
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(void.class);
@@ -239,7 +239,7 @@ class InventoryConfirmTest {
         @DisplayName("onCancel 方法应该存在")
         void onCancelMethodShouldExist() throws NoSuchMethodException {
             Method method = InventoryConfirm.class.getDeclaredMethod("onCancel",
-                org.bukkit.event.inventory.InventoryClickEvent.class);
+                InventoryClickEvent.class);
 
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(void.class);
@@ -254,7 +254,7 @@ class InventoryConfirmTest {
         @DisplayName("onOk 方法应该有 @SneakyThrows 注解")
         void onOkShouldHaveSneakyThrows() throws NoSuchMethodException {
             Method method = InventoryConfirm.class.getDeclaredMethod("onOk",
-                org.bukkit.event.inventory.InventoryClickEvent.class);
+                InventoryClickEvent.class);
 
             // @SneakyThrows 使方法不声明受检异常
             assertThat(method.getExceptionTypes()).isEmpty();
@@ -264,7 +264,7 @@ class InventoryConfirmTest {
         @DisplayName("onCancel 方法应该有 @SneakyThrows 注解")
         void onCancelShouldHaveSneakyThrows() throws NoSuchMethodException {
             Method method = InventoryConfirm.class.getDeclaredMethod("onCancel",
-                org.bukkit.event.inventory.InventoryClickEvent.class);
+                InventoryClickEvent.class);
 
             // @SneakyThrows 使方法不声明受检异常
             assertThat(method.getExceptionTypes()).isEmpty();

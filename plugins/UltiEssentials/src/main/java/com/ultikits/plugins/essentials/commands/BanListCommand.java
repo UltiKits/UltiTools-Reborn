@@ -51,13 +51,13 @@ public class BanListCommand extends BaseEssentialsCommand {
         }
         
         int totalPages = (int) Math.ceil((double) allBans.size() / PAGE_SIZE);
-        page = Math.min(page, totalPages);
-        
-        int start = (page - 1) * PAGE_SIZE;
+        int currentPage = Math.min(page, totalPages);
+
+        int start = (currentPage - 1) * PAGE_SIZE;
         int end = Math.min(start + PAGE_SIZE, allBans.size());
         
-        sender.sendMessage(i18n("§6=== 封禁列表 ===") + 
-            " §7(" + page + "/" + totalPages + ")");
+        sender.sendMessage(i18n("§6=== 封禁列表 ===") +
+            " §7(" + currentPage + "/" + totalPages + ")");
         
         for (int i = start; i < end; i++) {
             BanData ban = allBans.get(i);

@@ -567,6 +567,6 @@ class ReflectionUtilTest {
 
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
-        public IncompatibleClass(java.util.List<String> items) {}
+        public IncompatibleClass(List<String> items) {}
     }
 }

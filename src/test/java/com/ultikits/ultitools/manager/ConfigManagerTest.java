@@ -30,7 +30,6 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 
 import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
 
 /**
  * ConfigManager 测试
@@ -43,7 +42,6 @@ class ConfigManagerTest {
     @TempDir
     File tempDir;
 
-    private ServerMock server;
     private ConfigManager configManager;
     private UltiToolsPlugin mockPlugin;
     private Logger mockLogger;
@@ -51,7 +49,7 @@ class ConfigManagerTest {
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        MockBukkit.mock(); // Server mock not stored as field - only used for initialization
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 

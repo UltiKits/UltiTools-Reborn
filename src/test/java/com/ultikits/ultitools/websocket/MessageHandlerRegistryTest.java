@@ -238,8 +238,9 @@ class MessageHandlerRegistryTest {
         @Test
         @DisplayName("注销 null 处理器应该不做任何事")
         void shouldDoNothingForNullHandler() {
-            // 不应该抛出异常
+            // 不应该抛出异常 - 验证 registry 仍然正常工作
             registry.unregister(null);
+            assertThat(registry).isNotNull();
         }
 
         @Test

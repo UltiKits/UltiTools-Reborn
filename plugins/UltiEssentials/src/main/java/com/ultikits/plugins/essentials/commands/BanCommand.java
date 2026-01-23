@@ -63,7 +63,7 @@ public class BanCommand extends BaseEssentialsCommand {
         
         switch (result) {
             case SUCCESS:
-                Bukkit.broadcastMessage(i18n("§c[封禁] §f") + 
+                Bukkit.broadcastMessage(i18n("§c[封禁] §f") +
                     target.getName() + " §7被 " + operatorName + " 永久封禁");
                 Bukkit.broadcastMessage(i18n("§7原因: §f") + reason);
                 break;
@@ -72,6 +72,9 @@ public class BanCommand extends BaseEssentialsCommand {
                 break;
             case DISABLED:
                 sender.sendMessage(i18n("§c封禁功能已禁用"));
+                break;
+            default:
+                // Handle unexpected result types
                 break;
         }
     }

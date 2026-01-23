@@ -66,13 +66,12 @@ public class LoginProtectionListener implements Listener {
     
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
-        if (shouldCancel(event.getPlayer())) {
-            // Only cancel if actually moved (not just looked around)
-            if (event.getFrom().getBlockX() != event.getTo().getBlockX() ||
-                event.getFrom().getBlockY() != event.getTo().getBlockY() ||
-                event.getFrom().getBlockZ() != event.getTo().getBlockZ()) {
-                event.setTo(event.getFrom());
-            }
+        // Only cancel if player should be blocked AND actually moved (not just looked around)
+        if (shouldCancel(event.getPlayer()) &&
+                (event.getFrom().getBlockX() != event.getTo().getBlockX() ||
+                 event.getFrom().getBlockY() != event.getTo().getBlockY() ||
+                 event.getFrom().getBlockZ() != event.getTo().getBlockZ())) {
+            event.setTo(event.getFrom());
         }
     }
     

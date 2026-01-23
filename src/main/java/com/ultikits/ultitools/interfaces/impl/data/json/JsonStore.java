@@ -29,6 +29,8 @@ public class JsonStore implements DataStore {
     private static final Map<Class<?>, Cached> dataOperatorMap = new ConcurrentHashMap<>();
     private static volatile boolean schedulerInitialized = false;
 
+    private final String storeLocation;
+
     /**
      * Initialize the flush scheduler. Called lazily when first JsonStore is created.
      * This avoids static initializer issues in test environments.
@@ -78,8 +80,6 @@ public class JsonStore implements DataStore {
     static void resetSchedulerState() {
         schedulerInitialized = false;
     }
-
-    private final String storeLocation;
 
     public JsonStore(String storeLocation) {
         initScheduler();

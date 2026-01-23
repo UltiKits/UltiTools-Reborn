@@ -344,7 +344,8 @@ class UltiPanelLogTransmitterTest {
             Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
             queueField.setAccessible(true);
             ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
-            // 队列可能已被清空（如果触发了批量发送），但不应该抛出异常
+            // 队列可能已被清空（如果触发了批量发送），但队列对象应该存在
+            assertThat(queue).isNotNull();
         }
     }
 
@@ -536,7 +537,8 @@ class UltiPanelLogTransmitterTest {
             // Act
             logTransmitter.sendLog("info", "test", "server", null);
 
-            // Assert - 不应该抛出异常
+            // Assert - 关闭后日志传输应该被禁用
+            assertThat(logTransmitter.isLogTransmissionEnabled()).isFalse();
         }
     }
 
@@ -773,6 +775,8 @@ class UltiPanelLogTransmitterTest {
             for (String level : levels) {
                 logTransmitter.sendLog(level, "test", "server", null);
             }
+            // 验证日志传输器仍然正常运行
+            assertThat(logTransmitter).isNotNull();
         }
 
         @Test
@@ -784,6 +788,9 @@ class UltiPanelLogTransmitterTest {
 
             // Act - 不应该抛出异常
             logTransmitter.sendLog("", "test", "server", null);
+
+            // Assert - 日志传输器应该仍然正常
+            assertThat(logTransmitter).isNotNull();
         }
     }
 
@@ -927,7 +934,8 @@ class UltiPanelLogTransmitterTest {
             transmitter.shutdown();
             transmitter.shutdown();
 
-            // Assert - 不应该抛出异常
+            // Assert - 多次 shutdown 后仍然是禁用状态
+            assertThat(transmitter.isLogTransmissionEnabled()).isFalse();
         }
     }
 

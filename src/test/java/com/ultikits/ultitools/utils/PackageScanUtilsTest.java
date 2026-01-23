@@ -35,13 +35,13 @@ class PackageScanUtilsTest {
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
     }
 
     @AfterEach
     void tearDown() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     // 用于测试的自定义注解

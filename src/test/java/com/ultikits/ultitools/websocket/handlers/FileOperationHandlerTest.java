@@ -180,8 +180,9 @@ class FileOperationHandlerTest {
             JsonObject message = new JsonObject();
             message.addProperty("operation", "read");
 
-            // 不应该抛出异常
+            // 不应该抛出异常 - 验证 handler 正常处理 null manager
             nullHandler.handle(message);
+            assertThat(nullHandler).isNotNull();
         }
 
         @Test

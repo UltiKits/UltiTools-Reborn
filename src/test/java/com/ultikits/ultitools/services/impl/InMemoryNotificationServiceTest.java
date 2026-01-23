@@ -41,7 +41,6 @@ class InMemoryNotificationServiceTest {
     private ServerMock server;
     private InMemoryNotificationService notificationService;
     private Logger mockLogger;
-    private VersionWrapper mockVersionWrapper;
 
     @BeforeEach
     void setUp() {
@@ -54,12 +53,12 @@ class InMemoryNotificationServiceTest {
         mockLogger = mock(Logger.class);
         when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
-        // Mock VersionWrapper
-        mockVersionWrapper = mock(VersionWrapper.class);
+        // Mock VersionWrapper - local variable as only used for stubbing
+        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
         when(UltiTools.getInstance().getVersionWrapper()).thenReturn(mockVersionWrapper);
 
         notificationService = new InMemoryNotificationService();
-        
+
         // 清空静态 Map
         clearStaticMaps();
     }

@@ -69,15 +69,23 @@ class SenderTypeValidatorTest {
 
     // Test methods with @CmdTarget annotation for testing
     @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
-    public void methodForPlayerOnly() {}
+    public void methodForPlayerOnly() {
+        // Empty test stub method - used only to test @CmdTarget annotation parsing
+    }
 
     @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
-    public void methodForConsoleOnly() {}
+    public void methodForConsoleOnly() {
+        // Empty test stub method - used only to test @CmdTarget annotation parsing
+    }
 
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-    public void methodForBoth() {}
+    public void methodForBoth() {
+        // Empty test stub method - used only to test @CmdTarget annotation parsing
+    }
 
-    public void methodWithoutCmdTarget() {}
+    public void methodWithoutCmdTarget() {
+        // Empty test stub method - used only to test behavior when @CmdTarget is missing
+    }
 
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()

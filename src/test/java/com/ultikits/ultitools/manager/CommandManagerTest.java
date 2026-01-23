@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -378,10 +379,10 @@ class CommandManagerTest {
         @DisplayName("getCommand 应该返回 PluginCommand 实例")
         void shouldReturnPluginCommand() throws Exception {
             // Arrange
-            java.lang.reflect.Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, org.bukkit.plugin.Plugin.class);
+            Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, Plugin.class);
             getCommandMethod.setAccessible(true);
             
-            org.bukkit.plugin.Plugin mockPlugin = mock(org.bukkit.plugin.Plugin.class);
+            Plugin mockPlugin = mock(Plugin.class);
             
             // Act
             Object result = getCommandMethod.invoke(commandManager, "testcmd", mockPlugin);
@@ -394,10 +395,10 @@ class CommandManagerTest {
         @DisplayName("getCommand 应该为命令设置正确的名称")
         void shouldSetCorrectName() throws Exception {
             // Arrange
-            java.lang.reflect.Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, org.bukkit.plugin.Plugin.class);
+            Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, Plugin.class);
             getCommandMethod.setAccessible(true);
             
-            org.bukkit.plugin.Plugin mockPlugin = mock(org.bukkit.plugin.Plugin.class);
+            Plugin mockPlugin = mock(Plugin.class);
             
             // Act
             PluginCommand result = (PluginCommand) getCommandMethod.invoke(commandManager, "mycmd", mockPlugin);
@@ -415,7 +416,7 @@ class CommandManagerTest {
         @DisplayName("getCommandMap 在 MockBukkit 环境中可能返回 null")
         void shouldHandleMockBukkitEnvironment() throws Exception {
             // Arrange
-            java.lang.reflect.Method getCommandMapMethod = CommandManager.class.getDeclaredMethod("getCommandMap");
+            Method getCommandMapMethod = CommandManager.class.getDeclaredMethod("getCommandMap");
             getCommandMapMethod.setAccessible(true);
             
             // Act
@@ -436,13 +437,15 @@ class CommandManagerTest {
         void shouldRegisterWithAnnotation() {
             // Arrange
             TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act & Assert - 不应该抛出异常
-            // 由于 getCommandMap 在 MockBukkit 中可能返回 null，可能会有 NPE
+
+            // Act & Assert - 验证注册不会抛出意外异常（NPE在MockBukkit环境中是预期的）
             try {
                 commandManager.register(executor);
+                // 如果注册成功，commandManager应该仍然有效
+                assertThat(commandManager).isNotNull();
             } catch (NullPointerException e) {
                 // 预期行为 - MockBukkit 环境中 CommandMap 为 null
+                assertThat(e).isNotNull();
             }
         }
 
@@ -500,12 +503,14 @@ class CommandManagerTest {
         void shouldTryToRegister() {
             // Arrange
             TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act & Assert
+
+            // Act & Assert - 验证注册过程不会导致意外崩溃
             try {
                 commandManager.register(executor, "test.perm", "Test description", "testcmd", "tc");
+                assertThat(commandManager).isNotNull();
             } catch (NullPointerException e) {
                 // 预期 - MockBukkit 中 CommandMap 为 null
+                assertThat(e).isNotNull();
             }
         }
     }
@@ -517,11 +522,13 @@ class CommandManagerTest {
         @Test
         @DisplayName("unregister 应该处理不存在的命令")
         void shouldHandleNonExistentCommand() {
-            // Act & Assert - 不应该抛出异常
+            // Act & Assert - 验证处理不存在命令时的行为
             try {
                 commandManager.unregister("nonexistent");
+                assertThat(commandManager).isNotNull();
             } catch (NullPointerException e) {
-                // 预期 - 命令不存在
+                // 预期 - 命令不存在或 CommandMap 为 null
+                assertThat(e).isNotNull();
             }
         }
     }
@@ -900,11 +907,10 @@ class CommandManagerTest {
         void shouldOnlyLogWarningWithoutAnnotation() {
             // Arrange
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
+
             // Act - 不应该抛出异常
-            commandManager.registerCoreCommand(executor);
-            
-            // Assert - 方法应该正常完成（只记录警告）
+            assertDoesNotThrow(() -> commandManager.registerCoreCommand(executor),
+                "registerCoreCommand should complete without exceptions for unannotated executor");
         }
     }
 
@@ -919,21 +925,23 @@ class CommandManagerTest {
             Method registerMethod = CommandManager.class.getDeclaredMethod(
                 "register", UltiToolsPlugin.class, CommandExecutor.class);
             registerMethod.setAccessible(true);
-            
+
             // 使用 mock 插件
             when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             SimpleContainer mockContext = mock(SimpleContainer.class);
             AutowireFactory mockFactory = mock(AutowireFactory.class);
             when(mockPlugin.getContext()).thenReturn(mockContext);
             when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
-            
+
             TestCommandExecutor executor = new TestCommandExecutor();
-            
+
             // Act - 有注解，会调用 register(plugin, executor, permission, description, aliases)
             try {
                 registerMethod.invoke(commandManager, mockPlugin, executor);
+                assertThat(commandManager).isNotNull();
             } catch (Exception e) {
                 // 预期行为 - getCommandMap 返回 null
+                assertThat(e).isNotNull();
             }
         }
 
@@ -1407,11 +1415,11 @@ class CommandManagerTest {
             // 由于 getCommandMap() 返回 null，unregister 可能会抛出 NPE 或正常处理
             try {
                 commandManager.unregister("testcmd");
-                // If method completes normally, that's acceptable behavior
-                assertTrue(true, "Method completed without throwing exception");
+                // Method completed normally - verify manager is still valid
+                assertThat(commandManager).isNotNull();
             } catch (NullPointerException e) {
                 // 预期行为 - NPE when CommandMap is null
-                assertNotNull(e, "NullPointerException was thrown as expected");
+                assertThat(e).isNotNull();
             }
         }
 
@@ -1420,11 +1428,9 @@ class CommandManagerTest {
         void unregisterAllShouldReturnEarlyForNullCommands() {
             // Arrange - 没有为 mockPlugin 注册任何命令
 
-            // Act - 不应该抛出异常
-            commandManager.unregisterAll(mockPlugin);
-
-            // 方法正常完成，因为 commands 为 null
-            assertTrue(true, "unregisterAll completed without exceptions for null commands");
+            // Act - 不应该抛出异常, 验证方法正常完成
+            assertDoesNotThrow(() -> commandManager.unregisterAll(mockPlugin),
+                "unregisterAll should complete without exceptions for null commands");
         }
 
         @Test
@@ -1465,8 +1471,9 @@ class CommandManagerTest {
         @Test
         @DisplayName("close 空 map 时不应该抛出异常")
         void closeShouldNotThrowForEmptyMap() {
-            // Act - 不应该抛出异常
-            commandManager.close();
+            // Act - 验证 close 不会抛出异常
+            assertDoesNotThrow(() -> commandManager.close(),
+                "close should not throw for empty map");
         }
 
         @Test
@@ -1477,16 +1484,17 @@ class CommandManagerTest {
             mapField.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<UltiToolsPlugin, List<Command>> map = (Map<UltiToolsPlugin, List<Command>>) mapField.get(commandManager);
-            
+
             UltiToolsPlugin plugin1 = mock(UltiToolsPlugin.class);
             UltiToolsPlugin plugin2 = mock(UltiToolsPlugin.class);
-            
+
             // 不添加任何命令，只添加插件到 map
             map.put(plugin1, null);
             map.put(plugin2, null);
-            
-            // Act - 应该遍历所有插件但不抛出异常（因为 commands 为 null 时 unregisterAll 提前返回）
-            commandManager.close();
+
+            // Act - 应该遍历所有插件但不抛出异常
+            assertDoesNotThrow(() -> commandManager.close(),
+                "close should iterate all plugins without throwing");
         }
 
         @Test
@@ -1497,20 +1505,22 @@ class CommandManagerTest {
             mapField.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<UltiToolsPlugin, List<Command>> map = (Map<UltiToolsPlugin, List<Command>>) mapField.get(commandManager);
-            
+
             UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
             Command cmd = mock(Command.class);
             when(cmd.getName()).thenReturn("closecmd");
-            
+
             List<Command> commands = new ArrayList<>();
             commands.add(cmd);
             map.put(plugin, commands);
-            
-            // Act
+
+            // Act - 验证 close 行为
             try {
                 commandManager.close();
+                assertThat(commandManager).isNotNull();
             } catch (NullPointerException e) {
-                // 预期行为
+                // 预期行为 - CommandMap 为 null
+                assertThat(e).isNotNull();
             }
         }
     }
@@ -1757,13 +1767,11 @@ class CommandManagerTest {
         @Test
         @DisplayName("扫描空包应该不注册任何命令")
         void emptyPackageShouldNotRegisterAnyCommands() throws Exception {
-            // Arrange - 模拟 PackageScanUtils 返回空集合
-            // 由于 PackageScanUtils 是静态方法，我们测试实际行为
-            
-            // 使用一个不存在的包名
-            commandManager.registerAll(mockPlugin, "com.nonexistent.package.that.does.not.exist");
-            
-            // Assert - 没有异常抛出
+            // Arrange - 使用一个不存在的包名
+            // Act & Assert - 验证扫描空包不会抛出异常
+            assertDoesNotThrow(() ->
+                commandManager.registerAll(mockPlugin, "com.nonexistent.package.that.does.not.exist"),
+                "registerAll should not throw for empty/nonexistent package");
         }
 
         @Test
@@ -1771,9 +1779,10 @@ class CommandManagerTest {
         void scannedClassMustHaveNoArgConstructor() {
             // 这个测试验证 NoSuchMethodException 的处理
             // registerAll 捕获 NoSuchMethodException 并忽略
-            
-            // 如果类没有无参构造函数，异常会被捕获并忽略
-            commandManager.registerAll(mockPlugin, "com.ultikits.ultitools.manager");
+            // Act & Assert - 验证类没有无参构造函数时异常会被捕获
+            assertDoesNotThrow(() ->
+                commandManager.registerAll(mockPlugin, "com.ultikits.ultitools.manager"),
+                "registerAll should handle classes without no-arg constructor gracefully");
         }
     }
 

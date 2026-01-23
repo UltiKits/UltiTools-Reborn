@@ -126,6 +126,7 @@ class CachedTest {
 
                 @Override
                 public void gc() {
+                    // Empty implementation - test only needs flush counting
                 }
             };
 

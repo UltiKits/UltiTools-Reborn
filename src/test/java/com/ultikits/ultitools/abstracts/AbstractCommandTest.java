@@ -186,9 +186,9 @@ class AbstractCommandTest {
     @DisplayName("Should handle empty arguments")
     void testEmptyArguments() {
         String[] emptyArgs = {};
-        
-        boolean result = testCommand.onCommand(player, mockCommand, "testcmd", emptyArgs);
-        
+
+        testCommand.onCommand(player, mockCommand, "testcmd", emptyArgs);
+
         assertThat(testCommand.executeCommandCalled).isTrue();
         assertThat(testCommand.receivedArgs).isEmpty();
     }

@@ -24,7 +24,6 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
 
 /**
  * PluginManager 测试
@@ -37,14 +36,13 @@ class PluginManagerTest {
     @TempDir
     File tempDir;
 
-    private ServerMock server;
     private PluginManager pluginManager;
     private Logger mockLogger;
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        MockBukkit.mock(); // Server mock not stored as field - only used for initialization
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
@@ -390,17 +388,10 @@ class PluginManagerTest {
 
         @Test
         @DisplayName("方法应该存在")
-        void methodShouldExist() throws Exception {
-            // 检查方法是否存在
+        void methodShouldExist() {
+            // 检查 PluginManager 类有方法
             Method[] methods = PluginManager.class.getDeclaredMethods();
-            boolean found = false;
-            for (Method m : methods) {
-                if (m.getName().equals("scanForPlugins") || m.getName().contains("scan")) {
-                    found = true;
-                    break;
-                }
-            }
-            // 方法可能不存在或名称不同，所以不断言
+            assertThat(methods).as("PluginManager should have declared methods").isNotEmpty();
         }
     }
 

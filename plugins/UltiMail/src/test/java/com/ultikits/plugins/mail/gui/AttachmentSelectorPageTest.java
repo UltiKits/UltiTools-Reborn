@@ -33,18 +33,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Disabled("MockBukkit 与 Java 21 + Paper API 存在兼容性问题，待修复")
 class AttachmentSelectorPageTest {
 
-    private ServerMock server;
     private PlayerMock player;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        
+
         // Setup mock UltiMail
         TestHelper.mockUltiMailInstance();
-        
+
         player = server.addPlayer("testplayer");
     }
 

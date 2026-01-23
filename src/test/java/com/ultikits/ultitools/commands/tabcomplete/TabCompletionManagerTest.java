@@ -597,7 +597,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestFirstArgs() should filter by current input")
-        void suggestFirstArgs_filtersByInput() throws NoSuchMethodException {
+        void suggestFirstArgsFiltersByInput() throws NoSuchMethodException {
             Map<String, Method> mappings = new HashMap<>();
             Method testMethod = String.class.getMethod("toString");
             mappings.put("add <player>", testMethod);
@@ -637,7 +637,7 @@ class TabCompletionManagerTest {
 
         @Test
         @DisplayName("suggestFirstArgs() should return sorted results")
-        void suggestFirstArgs_returnsSortedResults() throws NoSuchMethodException {
+        void suggestFirstArgsReturnsSortedResults() throws NoSuchMethodException {
             Map<String, Method> mappings = new HashMap<>();
             Method testMethod = String.class.getMethod("toString");
             mappings.put("zebra", testMethod);

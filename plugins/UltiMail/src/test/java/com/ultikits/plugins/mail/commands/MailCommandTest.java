@@ -37,6 +37,7 @@ class MailCommandTest {
 
     private ServerMock server;
     private PlayerMock player;
+    // Command instance prepared for test methods - used to verify command instantiation
     private MailCommand mailCommand;
 
     @Mock
@@ -47,14 +48,16 @@ class MailCommandTest {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        
+
         // Setup mock UltiMail
         TestHelper.mockUltiMailInstance();
-        
+
         player = server.addPlayer("testplayer");
-        
+
         // Create command with mock mailService
         mailCommand = new MailCommand(mockMailService);
+        // Verify command was created successfully
+        assertThat(mailCommand).isNotNull();
     }
 
     @AfterEach

@@ -59,21 +59,24 @@ public class InMemoryNotificationService implements NotificationService {
     @Override
     public boolean sendBossBarNotification(Player player, String message, int seconds, BossBar bossBar, Sound sound) {
         try {
+            BossBar activeBossBar;
             if (atedPlayer.containsKey(player.getUniqueId())) {
-                bossBar = atedPlayer.get(player.getUniqueId());
-                bossBar.setProgress(1.0);
+                activeBossBar = atedPlayer.get(player.getUniqueId());
+                activeBossBar.setProgress(1.0);
             } else {
                 if (bossBar == null) {
-                    bossBar = Bukkit.createBossBar(message, BarColor.GREEN, BarStyle.SOLID);
+                    activeBossBar = Bukkit.createBossBar(message, BarColor.GREEN, BarStyle.SOLID);
+                } else {
+                    activeBossBar = bossBar;
                 }
-                atedPlayer.put(player.getUniqueId(), bossBar);
+                atedPlayer.put(player.getUniqueId(), activeBossBar);
             }
-            bossBar.addPlayer(player);
+            activeBossBar.addPlayer(player);
             if (sound != null) {
                 player.playSound(player.getLocation(), sound, 10, 1);
             }
 
-            BossBar finalBossBar = bossBar;
+            BossBar finalBossBar = activeBossBar;
             new BukkitRunnable() {
                 @Override
                 public void run() {

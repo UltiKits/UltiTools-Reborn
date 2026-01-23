@@ -325,7 +325,7 @@ class ErrorCodeTest {
         @ParameterizedTest
         @EnumSource(ErrorCode.class)
         @DisplayName("All error codes should have non-null default messages")
-        void allErrorCodes_haveNonNullMessages(ErrorCode errorCode) {
+        void allErrorCodesHaveNonNullMessages(ErrorCode errorCode) {
             assertNotNull(errorCode.getDefaultMessage());
             assertTrue(errorCode.getDefaultMessage().length() > 0);
         }
@@ -333,7 +333,7 @@ class ErrorCodeTest {
         @ParameterizedTest
         @EnumSource(ErrorCode.class)
         @DisplayName("getFormattedCode should return ULTI-prefix format")
-        void getFormattedCode_returnsCorrectFormat(ErrorCode errorCode) {
+        void getFormattedCodeReturnsCorrectFormat(ErrorCode errorCode) {
             String formatted = errorCode.getFormattedCode();
             assertTrue(formatted.startsWith("ULTI-"));
             assertTrue(formatted.contains(String.valueOf(errorCode.getCode())));

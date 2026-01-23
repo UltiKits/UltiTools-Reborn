@@ -136,7 +136,7 @@ class ToastTest {
         @DisplayName("displayTo 方法应该存在且签名正确")
         void displayToMethodShouldExist() throws NoSuchMethodException {
             Method method = Toast.class.getDeclaredMethod("displayTo",
-                org.bukkit.entity.Player.class, String.class, String.class, Toast.Style.class);
+                Player.class, String.class, String.class, Toast.Style.class);
 
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
@@ -152,7 +152,7 @@ class ToastTest {
         @DisplayName("start 方法应该存在")
         void startMethodShouldExist() throws NoSuchMethodException {
             Method method = Toast.class.getDeclaredMethod("start",
-                org.bukkit.entity.Player.class);
+                Player.class);
 
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
         }
@@ -169,7 +169,7 @@ class ToastTest {
         @DisplayName("grantAdvancement 方法应该存在")
         void grantAdvancementMethodShouldExist() throws NoSuchMethodException {
             Method method = Toast.class.getDeclaredMethod("grantAdvancement",
-                org.bukkit.entity.Player.class);
+                Player.class);
 
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
         }
@@ -178,7 +178,7 @@ class ToastTest {
         @DisplayName("revokeAdvancement 方法应该存在")
         void revokeAdvancementMethodShouldExist() throws NoSuchMethodException {
             Method method = Toast.class.getDeclaredMethod("revokeAdvancement",
-                org.bukkit.entity.Player.class);
+                Player.class);
 
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
         }

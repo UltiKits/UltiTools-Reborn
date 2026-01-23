@@ -105,8 +105,9 @@ class MethodInvocationCompleterTest {
     // Executor class with @CmdSuggest annotation
     @CmdSuggest({ExternalSuggestProvider.class})
     public static class ExecutorWithCmdSuggest {
-        
+
         public void someCommand(@CmdParam(value = "type", suggest = "externalSuggest") String type) {
+            // Empty test stub - method is used to test @CmdSuggest annotation, not execution
         }
     }
 
@@ -158,7 +159,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should return empty when suggest method not found and no i18n")
-        void complete_returnsEmpty_whenSuggestMethodNotFoundAndNoI18n() throws NoSuchMethodException {
+        void completeReturnsEmptyWhenSuggestMethodNotFoundAndNoI18n() throws NoSuchMethodException {
             Method method = TestExecutor.class.getMethod("commandMethod", String.class, String.class, String.class);
             TestExecutor executor = new TestExecutor();
             
@@ -185,7 +186,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should invoke no-arg suggest method")
-        void complete_invokesNoArgSuggestMethod() throws NoSuchMethodException {
+        void completeInvokesNoArgSuggestMethod() throws NoSuchMethodException {
             Method method = TestExecutor.class.getMethod("commandMethod", String.class, String.class, String.class);
             TestExecutor executor = new TestExecutor();
             
@@ -234,7 +235,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should filter by current input")
-        void complete_filtersByCurrentInput() throws NoSuchMethodException {
+        void completeFiltersByCurrentInput() throws NoSuchMethodException {
             Method method = TestExecutor.class.getMethod("commandMethod", String.class, String.class, String.class);
             TestExecutor executor = new TestExecutor();
             
@@ -256,7 +257,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should handle array return type")
-        void complete_handlesArrayReturnType() throws Exception {
+        void completeHandlesArrayReturnType() throws Exception {
             // Create a method that references suggestArray
             TestExecutor executor = new TestExecutor();
             
@@ -341,7 +342,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("complete() should handle empty input filtering")
-        void complete_handlesEmptyInputFiltering() throws NoSuchMethodException {
+        void completeHandlesEmptyInputFiltering() throws NoSuchMethodException {
             Method method = TestExecutor.class.getMethod("commandMethod", String.class, String.class, String.class);
             TestExecutor executor = new TestExecutor();
             
@@ -637,7 +638,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("Should return i18n hint when suggest method not found")
-        void returnsI18nHint_whenMethodNotFound() throws NoSuchMethodException {
+        void returnsI18nHintWhenMethodNotFound() throws NoSuchMethodException {
             Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
             ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
             
@@ -719,7 +720,7 @@ class MethodInvocationCompleterTest {
 
         @Test
         @DisplayName("Should return empty when executor instance is null")
-        void returnsEmpty_whenExecutorNull() throws NoSuchMethodException {
+        void returnsEmptyWhenExecutorNull() throws NoSuchMethodException {
             Method method = TestExecutor.class.getMethod("commandMethod", String.class, String.class, String.class);
             
             TabCompletionContext context = TabCompletionContext.builder()

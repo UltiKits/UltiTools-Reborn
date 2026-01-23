@@ -118,6 +118,7 @@ class DataStoreTest {
 
                 @Override
                 public void destroyAllOperators() {
+                    // Empty implementation - test DataStore interface, not operator destruction
                 }
             };
 

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.handler;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -117,11 +118,12 @@ class SystemLogHandlerTest {
     
     @Test
     void testFlushAndClose() {
-        handler.flush();
-        handler.close();
         // These methods are empty or just call super, but calling them ensures coverage
-        // Verify no exceptions were thrown - test passes if we reach this point
-        assertTrue(true, "flush() and close() completed without exceptions");
+        // Verify no exceptions were thrown - assertDoesNotThrow verifies this
+        assertDoesNotThrow(() -> {
+            handler.flush();
+            handler.close();
+        }, "flush() and close() should complete without exceptions");
     }
     
     @Test

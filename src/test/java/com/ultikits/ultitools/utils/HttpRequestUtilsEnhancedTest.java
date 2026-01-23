@@ -64,9 +64,11 @@ class HttpRequestUtilsEnhancedTest {
         void settingNullShouldResetUrl() {
             HttpRequestUtils.setBaseUrlForTesting("http://test.example.com");
             HttpRequestUtils.setBaseUrlForTesting(null);
-            
+
             // 此时应该尝试从 UltiTools 获取，但因为没有运行环境会失败
-            // 我们只验证不抛出异常
+            // 验证设置 null 不会抛出异常，且之后可以设置新值
+            HttpRequestUtils.setBaseUrlForTesting("http://new.example.com");
+            assertThat(HttpRequestUtils.getBaseUrl()).isEqualTo("http://new.example.com");
         }
     }
 

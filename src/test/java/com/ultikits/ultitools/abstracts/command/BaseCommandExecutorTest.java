@@ -1008,9 +1008,10 @@ class BaseCommandExecutorTest {
         protected void handleHelp(CommandSender sender) {
             // Test stub - help handler not used in tests
         }
-        
+
         @CmdMapping(format = "echo <message...>")
         public void doEcho(Player player, @CmdParam("message") String[] messages) {
+            // Empty implementation - method is used to test varargs command mapping, not execution logic
         }
     }
     
