@@ -11,10 +11,11 @@ import java.util.List;
  * 反射工具类
  * <p>
  * 替代 hutool ReflectUtil / AnnotationUtil
- * 
+ *
  * @author wisdomme
  * @since 7.0.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Reflection utility requires setAccessible
 public final class ReflectionUtil {
     
     private ReflectionUtil() {
@@ -60,7 +61,7 @@ public final class ReflectionUtil {
             field.setAccessible(true);
             return field.get(obj);
         } catch (IllegalAccessException e) {
-            throw new RuntimeException("Failed to get field value: " + field.getName(), e);
+            throw new IllegalStateException("Failed to get field value: " + field.getName(), e);
         }
     }
     
@@ -74,7 +75,7 @@ public final class ReflectionUtil {
     public static Object getFieldValue(Object obj, String fieldName) {
         Field field = getField(obj.getClass(), fieldName);
         if (field == null) {
-            throw new RuntimeException("Field not found: " + fieldName);
+            throw new IllegalArgumentException("Field not found: " + fieldName);
         }
         return getFieldValue(obj, field);
     }
@@ -91,7 +92,7 @@ public final class ReflectionUtil {
             field.setAccessible(true);
             field.set(obj, value);
         } catch (IllegalAccessException e) {
-            throw new RuntimeException("Failed to set field value: " + field.getName(), e);
+            throw new IllegalStateException("Failed to set field value: " + field.getName(), e);
         }
     }
     
@@ -105,7 +106,7 @@ public final class ReflectionUtil {
     public static void setFieldValue(Object obj, String fieldName, Object value) {
         Field field = getField(obj.getClass(), fieldName);
         if (field == null) {
-            throw new RuntimeException("Field not found: " + fieldName);
+            throw new IllegalArgumentException("Field not found: " + fieldName);
         }
         setFieldValue(obj, field, value);
     }
@@ -140,9 +141,9 @@ public final class ReflectionUtil {
     public static <T> T newInstance(Class<T> clazz) {
         try {
             return clazz.getDeclaredConstructor().newInstance();
-        } catch (InstantiationException | IllegalAccessException | 
+        } catch (InstantiationException | IllegalAccessException |
                  InvocationTargetException | NoSuchMethodException e) {
-            throw new RuntimeException("Failed to create instance: " + clazz.getName(), e);
+            throw new IllegalStateException("Failed to create instance: " + clazz.getName(), e);
         }
     }
     
@@ -173,7 +174,7 @@ public final class ReflectionUtil {
         } catch (NoSuchMethodException e) {
             // 尝试模糊匹配
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-            throw new RuntimeException("Failed to create instance: " + clazz.getName(), e);
+            throw new IllegalStateException("Failed to create instance: " + clazz.getName(), e);
         }
         
         // 模糊匹配 - 查找参数数量相同且类型兼容的构造器
@@ -192,13 +193,13 @@ public final class ReflectionUtil {
                         constructor.setAccessible(true);
                         return (T) constructor.newInstance(params);
                     } catch (Exception e) {
-                        throw new RuntimeException("Failed to create instance: " + clazz.getName(), e);
+                        throw new IllegalStateException("Failed to create instance: " + clazz.getName(), e);
                     }
                 }
             }
         }
         
-        throw new RuntimeException("No suitable constructor found for: " + clazz.getName());
+        throw new IllegalArgumentException("No suitable constructor found for: " + clazz.getName());
     }
     
     /**
@@ -315,7 +316,7 @@ public final class ReflectionUtil {
             method.setAccessible(true);
             return (T) method.invoke(obj, args);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to invoke method: " + method.getName(), e);
+            throw new IllegalStateException("Failed to invoke method: " + method.getName(), e);
         }
     }
     

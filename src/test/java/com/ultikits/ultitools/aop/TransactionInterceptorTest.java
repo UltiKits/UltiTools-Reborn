@@ -31,6 +31,7 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("TransactionInterceptor Tests")
+@SuppressWarnings("PMD.UnusedLocalVariable") // Some test variables exist for context clarity
 class TransactionInterceptorTest {
 
     @Mock

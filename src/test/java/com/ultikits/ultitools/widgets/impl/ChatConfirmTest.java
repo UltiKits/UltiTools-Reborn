@@ -41,6 +41,7 @@ import net.kyori.adventure.text.Component;
 @DisplayName("ChatConfirm 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @ExtendWith(MockitoExtension.class)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for mocking internal state
 class ChatConfirmTest {
 
     @Mock

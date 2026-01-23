@@ -36,6 +36,7 @@ import be.seeseemelk.mockbukkit.entity.PlayerMock;
  */
 @DisplayName("PlayerEventManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.SingularField"}) // Test requires reflection for mocking internal state
 class PlayerEventManagerTest {
 
     private ServerMock server;

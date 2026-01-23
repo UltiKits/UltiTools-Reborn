@@ -140,9 +140,11 @@ jobs:
 
     - name: 💬 Generate Release Notes
       id: notes
+      env:
+        RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
       run: |
-        if [ -n "${{ github.event.inputs.release_notes }}" ]; then
-          NOTES="${{ github.event.inputs.release_notes }}"
+        if [ -n "$RELEASE_NOTES" ]; then
+          NOTES="$RELEASE_NOTES"
         else
           # 获取自上次 tag 以来的提交信息
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")

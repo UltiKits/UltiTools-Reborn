@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
  * ReflectionUtil 测试类
  */
 @DisplayName("ReflectionUtil 测试")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test for reflection utility
 class ReflectionUtilTest {
 
     // 测试用注解

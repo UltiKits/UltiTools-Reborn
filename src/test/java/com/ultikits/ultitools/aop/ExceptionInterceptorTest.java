@@ -43,6 +43,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("ExceptionInterceptor Tests")
+@SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes") // Test code intentionally throws exceptions
 class ExceptionInterceptorTest {
 
     private ExceptionInterceptor interceptor;

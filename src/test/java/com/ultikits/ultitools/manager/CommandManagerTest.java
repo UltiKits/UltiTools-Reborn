@@ -45,6 +45,7 @@ import be.seeseemelk.mockbukkit.ServerMock;
  */
 @DisplayName("CommandManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.SingularField", "PMD.UnusedLocalVariable"}) // Test requires reflection for mocking internal state
 class CommandManagerTest {
 
     private ServerMock server;

@@ -33,6 +33,7 @@ import com.ultikits.ultitools.manager.DataStoreManager;
 /**
  * Tests for JsonStore.
  */
+@SuppressWarnings("PMD.UnusedLocalVariable") // Some variables exist for test setup clarity
 class JsonStoreTest {
 
     @TempDir

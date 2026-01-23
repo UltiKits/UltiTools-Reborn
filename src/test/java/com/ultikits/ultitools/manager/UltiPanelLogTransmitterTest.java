@@ -35,6 +35,7 @@ import be.seeseemelk.mockbukkit.ServerMock;
  */
 @DisplayName("UltiPanelLogTransmitter 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.SingularField"}) // Test requires reflection for mocking internal state
 class UltiPanelLogTransmitterTest {
 
     private ServerMock server;
