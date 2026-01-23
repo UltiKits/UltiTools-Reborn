@@ -787,10 +787,10 @@ class LogStreamManagerTest {
             Method method = LogStreamManager.class.getDeclaredMethod(
                 "sendStreamResponse", String.class, String.class, String.class);
             method.setAccessible(true);
-            
-            method.invoke(logStreamManager, "client-1", "started", "Test message");
-            
+
             // webSocketClient 为 null，不应抛出异常
+            assertDoesNotThrow(() ->
+                method.invoke(logStreamManager, "client-1", "started", "Test message"));
         }
 
         @Test

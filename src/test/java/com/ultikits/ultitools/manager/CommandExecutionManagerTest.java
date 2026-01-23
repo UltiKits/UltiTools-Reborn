@@ -254,7 +254,7 @@ class CommandExecutionManagerTest {
             // 缺少必要字段
 
             // Act & Assert - 不应该抛出异常
-            manager.executeCommand(invalidData);
+            assertDoesNotThrow(() -> manager.executeCommand(invalidData));
         }
 
         @Test
@@ -806,10 +806,8 @@ class CommandExecutionManagerTest {
             when(specialMock.getServerId()).thenReturn("test-server");
             field.set(newManager, specialMock);
 
-            // Act - 执行命令
-            newManager.executeCommand(commandData);
-
-            // Assert - 不应该抛出异常，命令应该被调度
+            // Act & Assert - 不应该抛出异常，命令应该被调度
+            assertDoesNotThrow(() -> newManager.executeCommand(commandData));
         }
 
         @Test
@@ -836,10 +834,8 @@ class CommandExecutionManagerTest {
             commandData.addProperty("async", false);
             // 不添加 commandId
 
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert - 不应该抛出异常
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> manager.executeCommand(commandData));
         }
     }
 

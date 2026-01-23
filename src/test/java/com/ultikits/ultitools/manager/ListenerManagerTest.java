@@ -185,8 +185,8 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
             listenerManager.register(mockPlugin, listener);
 
-            // Act - 不应该抛出异常
-            listenerManager.unregister(listener);
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> listenerManager.unregister(listener));
         }
 
         @Test
@@ -208,7 +208,7 @@ class ListenerManagerTest {
         @DisplayName("未注册的插件不应该抛出异常")
         void shouldNotThrowForUnregisteredPlugin() {
             // Act & Assert - 不应该抛出异常
-            listenerManager.unregisterAll(mockPlugin);
+            assertDoesNotThrow(() -> listenerManager.unregisterAll(mockPlugin));
         }
 
         @Test

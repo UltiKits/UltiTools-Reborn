@@ -131,10 +131,8 @@ class ServerMonitorManagerTest {
             isMonitoringField.setAccessible(true);
             isMonitoringField.setBoolean(serverMonitorManager, true);
 
-            // Act
-            serverMonitorManager.startMonitoring();
-
-            // 已在监控中，不应该再次启动
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> serverMonitorManager.startMonitoring());
         }
     }
 
@@ -149,7 +147,7 @@ class ServerMonitorManagerTest {
             ServerMonitorManager manager = new ServerMonitorManager();
 
             // Act & Assert - 不应该抛出异常
-            manager.stopMonitoring();
+            assertDoesNotThrow(() -> manager.stopMonitoring());
         }
     }
 
@@ -165,10 +163,8 @@ class ServerMonitorManagerTest {
             clientField.setAccessible(true);
             clientField.set(serverMonitorManager, null);
 
-            // Act
-            serverMonitorManager.sendServerStatus();
-
-            // 不应该有异常
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> serverMonitorManager.sendServerStatus());
         }
 
         @Test
@@ -401,11 +397,8 @@ class ServerMonitorManagerTest {
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             when(mockWebSocketClient.getServerId()).thenReturn("test-server");
 
-            // Act
-            method.invoke(serverMonitorManager);
-
-            // Assert - 该方法可能不会发送消息，取决于内部实现
-            // 这里只验证方法可以被调用而不抛出异常
+            // Act & Assert - 方法可以被调用而不抛出异常
+            assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
         }
 
         @Test
@@ -416,8 +409,8 @@ class ServerMonitorManagerTest {
             method.setAccessible(true);
             when(mockWebSocketClient.isConnected()).thenReturn(false);
 
-            // Act - 不应该抛出异常
-            method.invoke(serverMonitorManager);
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
         }
     }
 
@@ -778,11 +771,9 @@ class ServerMonitorManagerTest {
             // Arrange
             Method method = ServerMonitorManager.class.getDeclaredMethod("updateTPS");
             method.setAccessible(true);
-            
-            // Act
-            method.invoke(serverMonitorManager);
-            
-            // Assert - 不应该抛出异常
+
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
         }
     }
 }

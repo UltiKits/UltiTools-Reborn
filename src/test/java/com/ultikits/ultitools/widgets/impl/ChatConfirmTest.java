@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.widgets.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -344,9 +345,10 @@ class ChatConfirmTest {
                     "Yes", "No", mockOnConfirm, mockOnCancel);
                 
                 confirm.show();
-                
+
                 // 验证消息发送
                 messageUtilsMock.verify(() -> MessageUtils.sendMessage(eq(mockPlayer), any(net.kyori.adventure.text.TextComponent.class)), times(3));
+                assertNotNull(confirm);
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -292,7 +293,7 @@ class DataStoreManagerTest {
         @DisplayName("空 map 时关闭不应该抛出异常")
         void shouldNotThrowOnEmptyMap() {
             // Act & Assert - 不应该抛出异常
-            DataStoreManager.close();
+            assertDoesNotThrow(() -> DataStoreManager.close());
         }
     }
 
@@ -468,7 +469,7 @@ class DataStoreManagerTest {
             }
 
             // 等待完成
-            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            latch.await(5, TimeUnit.SECONDS);
 
             // Assert - 没有异常，测试通过
         }

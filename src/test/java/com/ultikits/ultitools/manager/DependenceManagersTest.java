@@ -121,7 +121,7 @@ class DependenceManagersTest {
             setField(managers, "adventure", null);
 
             // Act & Assert - 不应该抛出异常
-            managers.closeAdventure();
+            assertDoesNotThrow(() -> managers.closeAdventure());
         }
 
         @Test
@@ -133,7 +133,7 @@ class DependenceManagersTest {
             setField(managers, "adventure", mockAdventure);
 
             // Act & Assert - 不应该抛出异常
-            managers.closeAdventure();
+            assertDoesNotThrow(() -> managers.closeAdventure());
         }
     }
 
@@ -149,7 +149,7 @@ class DependenceManagersTest {
             setField(managers, "context", null);
 
             // Act & Assert - 不应该抛出异常
-            managers.closeContext();
+            assertDoesNotThrow(() -> managers.closeContext());
         }
 
         @Test
@@ -161,7 +161,7 @@ class DependenceManagersTest {
             setField(managers, "context", mockContext);
 
             // Act & Assert - 不应该抛出异常
-            managers.closeContext();
+            assertDoesNotThrow(() -> managers.closeContext());
         }
     }
 
