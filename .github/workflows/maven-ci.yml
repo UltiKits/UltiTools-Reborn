@@ -2,7 +2,7 @@ name: UltiTools API CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "**" ]
   pull_request:
     branches: [ "main" ]
 
@@ -83,11 +83,13 @@ jobs:
         echo "✅ 测试通过，覆盖率符合要求"
 
     - name: 📤 Upload Coverage to Codacy
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: codacy/codacy-coverage-reporter-action@v1
-      with:
-        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-        coverage-reports: target/site/jacoco/jacoco.xml
+      if: github.event_name == 'push'
+      env:
+        CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
+        CODACY_ORGANIZATION_PROVIDER: gh
+        CODACY_USERNAME: UltiKits
+        CODACY_PROJECT_NAME: UltiTools-Reborn
+      run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r target/site/jacoco/jacoco.xml
 
   # ==================== 构建 SNAPSHOT 阶段 ====================
   build-snapshot:

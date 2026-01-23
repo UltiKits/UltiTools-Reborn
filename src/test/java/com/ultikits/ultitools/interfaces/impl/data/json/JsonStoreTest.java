@@ -142,7 +142,7 @@ class JsonStoreTest {
         void testGetOperatorNoAnnotation() {
             assertThatThrownBy(() -> store.getOperator(mockPlugin, NonAnnotatedTestData.class))
                 .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("No Table annotation");
+                .hasMessageContaining("No @Table annotation");
         }
         
         @Test
