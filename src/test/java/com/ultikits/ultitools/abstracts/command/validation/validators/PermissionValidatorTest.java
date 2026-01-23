@@ -72,18 +72,28 @@ class PermissionValidatorTest {
     public void methodWithPermission() {}
 
     @CmdMapping(format = "test", permission = "")
-    public void methodWithEmptyPermission() {}
+    public void methodWithEmptyPermission() {
+        // Intentionally empty - used for annotation testing
+    }
 
     @CmdMapping(format = "test", requireOp = true)
-    public void methodRequiringOp() {}
+    public void methodRequiringOp() {
+        // Intentionally empty - used for annotation testing
+    }
 
     @CmdMapping(format = "test", permission = "test.perm", requireOp = true)
-    public void methodWithPermissionAndOp() {}
+    public void methodWithPermissionAndOp() {
+        // Intentionally empty - used for annotation testing
+    }
 
     @CmdMapping(format = "test")
-    public void methodWithDefaultMapping() {}
+    public void methodWithDefaultMapping() {
+        // Intentionally empty - used for annotation testing
+    }
 
-    public void methodWithoutCmdMapping() {}
+    public void methodWithoutCmdMapping() {
+        // Intentionally empty - used for annotation testing
+    }
 
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()

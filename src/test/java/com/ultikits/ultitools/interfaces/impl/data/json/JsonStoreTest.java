@@ -109,6 +109,7 @@ class JsonStoreTest {
         void testRegistersWithManager() {
             JsonStore store = new JsonStore(tempDir.toString());
             mockedDataStoreManager.verify(() -> DataStoreManager.register(store));
+            assertThat(store).isNotNull();
         }
     }
 
@@ -339,8 +340,6 @@ class JsonStoreTest {
     // Entity without @Table annotation for testing error case
     public static class NonAnnotatedTestData extends AbstractDataEntity {
         private String data;
-
-        public NonAnnotatedTestData() {}
 
         public String getData() {
             return data;

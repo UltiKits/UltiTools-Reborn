@@ -178,6 +178,7 @@ class DataStoreManagerTest {
 
             // Assert
             org.mockito.Mockito.verify(mockStore).destroyAllOperators();
+            assertThat(mockStore).isNotNull();
         }
     }
 

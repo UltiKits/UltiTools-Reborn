@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.gui;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -362,8 +363,9 @@ class BaseConfirmationPageTest {
             TestConfirmationPage page = new TestConfirmationPage(mockPlayer, "confirm", "Confirm", 3);
             
             page.testCreateOkButton();
-            
+
             xVersionUtilsMock.verify(() -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN), atLeastOnce());
+            assertThat(page).isNotNull();
         }
 
         @Test

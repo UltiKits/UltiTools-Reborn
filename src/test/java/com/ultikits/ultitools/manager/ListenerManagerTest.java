@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -195,7 +196,7 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act & Assert - 不应该抛出异常
-            listenerManager.unregister(listener);
+            assertDoesNotThrow(() -> listenerManager.unregister(listener));
         }
     }
 
@@ -246,7 +247,7 @@ class ListenerManagerTest {
             map.put(mockPlugin, null);
 
             // Act & Assert - 不应该抛出异常
-            listenerManager.unregisterAll(mockPlugin);
+            assertDoesNotThrow(() -> listenerManager.unregisterAll(mockPlugin));
         }
     }
 

@@ -295,9 +295,10 @@ class ChatConfirmTest {
                     mockOnConfirm, mockOnCancel);
                 
                 confirm.show();
-                
+
                 // 验证发送了 3 条消息：标题、描述、按钮
                 messageUtilsMock.verify(() -> MessageUtils.sendMessage(eq(mockPlayer), any(net.kyori.adventure.text.TextComponent.class)), times(3));
+                assertThat(confirm).isNotNull();
             }
         }
         

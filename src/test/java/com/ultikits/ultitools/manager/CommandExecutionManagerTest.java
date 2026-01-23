@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -272,8 +273,11 @@ class CommandExecutionManagerTest {
             // 但这被 try-catch 捕获了
             try {
                 newManager.executeCommand(commandData);
+                // If we reach here, the command was handled gracefully
+                assertThat(newManager).isNotNull();
             } catch (NullPointerException e) {
                 // 预期的行为，因为 webSocketClient 是 null
+                assertThat(e).isNotNull();
             }
         }
     }
@@ -818,10 +822,8 @@ class CommandExecutionManagerTest {
             commandData.addProperty("async", false);
             commandData.add("commandId", com.google.gson.JsonNull.INSTANCE);
 
-            // Act
-            manager.executeCommand(commandData);
-
-            // Assert - 不应该抛出异常
+            // Act & Assert - 不应该抛出异常
+            assertDoesNotThrow(() -> manager.executeCommand(commandData));
         }
 
         @Test

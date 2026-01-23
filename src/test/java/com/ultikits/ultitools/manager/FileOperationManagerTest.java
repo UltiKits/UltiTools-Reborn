@@ -37,7 +37,6 @@ class FileOperationManagerTest {
     @TempDir
     File tempDir;
 
-    private ServerMock server;
     private FileOperationManager fileOperationManager;
     private UltiPanelWebSocketClient mockWebSocketClient;
     private Logger mockLogger;
@@ -45,7 +44,7 @@ class FileOperationManagerTest {
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        MockBukkit.mock();
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 

@@ -25,14 +25,13 @@ import be.seeseemelk.mockbukkit.entity.PlayerMock;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class AbstractCommendExecutorTest {
 
-    private ServerMock server;
     private PlayerMock player;
     private Command mockCommand;
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         player = new PlayerMock(server, "TestPlayer");
         mockCommand = Mockito.mock(Command.class);

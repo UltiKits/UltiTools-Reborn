@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -817,7 +818,7 @@ class LogStreamManagerTest {
             method.setAccessible(true);
             
             // 不应该抛出异常
-            method.invoke(logStreamManager, "client-1", "started", "Test message");
+            assertDoesNotThrow(() -> method.invoke(logStreamManager, "client-1", "started", "Test message"));
         }
     }
 

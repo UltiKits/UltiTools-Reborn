@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -245,9 +246,11 @@ class DependenceManagersTest {
             setField(managers, "context", mockContext);
 
             // Act & Assert - 多次调用不应该抛出异常
-            managers.closeContext();
-            managers.closeContext();
-            managers.closeContext();
+            assertDoesNotThrow(() -> {
+                managers.closeContext();
+                managers.closeContext();
+                managers.closeContext();
+            });
         }
 
         @Test
@@ -259,9 +262,11 @@ class DependenceManagersTest {
             setField(managers, "adventure", mockAdventure);
 
             // Act & Assert - 多次调用不应该抛出异常
-            managers.closeAdventure();
-            managers.closeAdventure();
-            managers.closeAdventure();
+            assertDoesNotThrow(() -> {
+                managers.closeAdventure();
+                managers.closeAdventure();
+                managers.closeAdventure();
+            });
         }
     }
 

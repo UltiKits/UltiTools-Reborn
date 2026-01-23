@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -351,10 +352,8 @@ class ServerMonitorManagerTest {
             clientField.setAccessible(true);
             clientField.set(serverMonitorManager, null);
 
-            // Act
-            serverMonitorManager.sendMetricsData();
-
-            // 不应该有异常
+            // Act & Assert - 不应该有异常
+            assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());
         }
     }
 
