@@ -38,8 +38,6 @@ class InMemeryTeleportServiceTest {
 
     private ServerMock server;
     private InMemeryTeleportService teleportService;
-    private Logger mockLogger;
-    private VersionWrapper mockVersionWrapper;
 
     @BeforeEach
     void setUp() {
@@ -49,11 +47,11 @@ class InMemeryTeleportServiceTest {
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
-        mockLogger = mock(Logger.class);
+        Logger mockLogger = mock(Logger.class);
         when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         // Mock VersionWrapper
-        mockVersionWrapper = mock(VersionWrapper.class);
+        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
         when(UltiTools.getInstance().getVersionWrapper()).thenReturn(mockVersionWrapper);
         when(mockVersionWrapper.getSound(any())).thenReturn(Sound.ENTITY_ENDERMAN_TELEPORT);
 

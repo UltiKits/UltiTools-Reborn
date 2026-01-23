@@ -39,6 +39,14 @@ class PlayerJoinListenerTest {
         listener = new PlayerJoinListener();
     }
 
+    private static void assertDoesNotThrow(Runnable runnable) {
+        try {
+            runnable.run();
+        } catch (Exception e) {
+            throw new AssertionError("Expected no exception but got: " + e.getClass().getName() + " - " + e.getMessage(), e);
+        }
+    }
+
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
@@ -122,7 +130,7 @@ class PlayerJoinListenerTest {
 
             // Act & Assert - 不应该抛出异常
             // PlaceholderAPI 类不存在时会捕获 NoClassDefFoundError
-            listener.onPlayerJoin(event);
+            assertDoesNotThrow(() -> listener.onPlayerJoin(event));
         }
 
         @Test

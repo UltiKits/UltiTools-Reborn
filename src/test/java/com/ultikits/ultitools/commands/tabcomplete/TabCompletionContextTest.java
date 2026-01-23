@@ -37,7 +37,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("Builder should create context with all fields")
-        void builder_createsContextWithAllFields() throws NoSuchMethodException {
+        void builderCreatesContextWithAllFields() throws NoSuchMethodException {
             Method testMethod = String.class.getMethod("toString");
             Object executor = new Object();
             String[] args = {"arg1", "arg2"};
@@ -299,7 +299,7 @@ class TabCompletionContextTest {
 
         @Test
         @DisplayName("All getters should return builder values")
-        void allGetters_returnBuilderValues() throws NoSuchMethodException {
+        void allGettersReturnBuilderValues() throws NoSuchMethodException {
             Method method = Object.class.getMethod("toString");
             Object executor = "executor";
             String[] args = {"a", "b"};

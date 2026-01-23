@@ -294,7 +294,7 @@ class SimpleContainerComprehensiveTest {
         @DisplayName("Should not instantiate lazy beans on start")
         void testLazyBeanNotInstantiatedOnStart() {
             // Given
-            LazyService.instantiated = false;
+            LazyService.resetInstantiated();
             BeanDefinition definition = new BeanDefinition(LazyService.class, "lazyService");
             definition.setLazyInit(true);
             container.registerBeanDefinition("lazyService", definition);
@@ -303,14 +303,14 @@ class SimpleContainerComprehensiveTest {
             container.start();
 
             // Then - bean should not be instantiated yet
-            assertFalse(LazyService.instantiated, "Lazy bean should not be instantiated on start");
+            assertFalse(LazyService.isInstantiated(), "Lazy bean should not be instantiated on start");
             assertTrue(container.containsBean("lazyService"), "Container should contain lazy bean definition");
-            
+
             // When retrieved
             container.getBean("lazyService");
-            
+
             // Then
-            assertTrue(LazyService.instantiated, "Lazy bean should be instantiated after retrieval");
+            assertTrue(LazyService.isInstantiated(), "Lazy bean should be instantiated after retrieval");
         }
 
         @Test
@@ -680,9 +680,25 @@ class SimpleContainerComprehensiveTest {
     }
 
     public static class LazyService {
-        public static boolean instantiated = false;
+        private static final Object INSTANTIATED_LOCK = new Object();
+        private static volatile boolean instantiated = false;
+
         public LazyService() {
-            instantiated = true;
+            synchronized (INSTANTIATED_LOCK) {
+                instantiated = true;
+            }
+        }
+
+        public static boolean isInstantiated() {
+            synchronized (INSTANTIATED_LOCK) {
+                return instantiated;
+            }
+        }
+
+        public static void resetInstantiated() {
+            synchronized (INSTANTIATED_LOCK) {
+                instantiated = false;
+            }
         }
     }
 

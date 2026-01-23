@@ -35,7 +35,6 @@ import static org.mockito.Mockito.*;
 @Disabled("MockBukkit 与 Java 21 + Paper API 存在兼容性问题，待修复")
 class MailNotifyListenerTest {
 
-    private ServerMock server;
     private PlayerMock player;
     private MailNotifyListener listener;
 
@@ -48,12 +47,12 @@ class MailNotifyListenerTest {
     @BeforeEach
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        
+
         // Setup mock UltiMail
         TestHelper.mockUltiMailInstance();
-        
+
         player = server.addPlayer("testplayer");
         
         // Create listener and inject dependencies

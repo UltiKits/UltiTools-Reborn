@@ -977,8 +977,6 @@ class BaseInventoryPageTest {
         @Test
         @DisplayName("Should calculate correct number of slots in fillArea")
         void shouldCalculateCorrectSlotsInFillArea() {
-            TestInventoryPage page = new TestInventoryPage(mockPlayer, "test", "Test", 3);
-            
             // Test calculation logic without actually filling
             // startSlot=0, endSlot=8 means row 0, columns 0-8 (9 slots)
             int startSlot = 0;

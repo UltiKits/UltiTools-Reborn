@@ -22,6 +22,7 @@ class BeanCopyUtilTest {
         private int age;
         private Double score;
         private String ignored;
+        @SuppressWarnings("PMD.UnusedPrivateField") // Static field is intentionally unused - tests that static fields are not copied
         private static String staticField = "static";
         private final String finalField = "final";
 

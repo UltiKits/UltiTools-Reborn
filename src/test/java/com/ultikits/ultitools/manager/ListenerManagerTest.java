@@ -37,20 +37,18 @@ import be.seeseemelk.mockbukkit.ServerMock;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for mocking internal state
 class ListenerManagerTest {
 
-    private ServerMock server;
     private ListenerManager listenerManager;
     private UltiToolsPlugin mockPlugin;
-    private Logger mockLogger;
 
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        MockBukkit.mock();
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
-        mockLogger = mock(Logger.class);
+        Logger mockLogger = mock(Logger.class);
         when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         // Mock plugin

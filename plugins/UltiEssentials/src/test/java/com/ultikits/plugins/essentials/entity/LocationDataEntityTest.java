@@ -20,14 +20,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("LocationDataEntity 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class LocationDataEntityTest {
-    
-    private ServerMock server;
+
     private World world;
-    
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         world = server.addSimpleWorld("testworld");
     }
     

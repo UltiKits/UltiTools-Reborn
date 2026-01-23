@@ -22,23 +22,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("TeleportService 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class TeleportServiceTest {
-    
-    private ServerMock server;
+
     private PlayerMock player;
     private TeleportService teleportService;
     private World world;
-    
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
         TestHelper.mockUltiToolsInstance();
-        
+
         player = server.addPlayer("testplayer");
         world = server.addSimpleWorld("world");
         player.setLocation(new Location(world, 0, 64, 0));
-        
+
         teleportService = new TeleportService();
     }
     

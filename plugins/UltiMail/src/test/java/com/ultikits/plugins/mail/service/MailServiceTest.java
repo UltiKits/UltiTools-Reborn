@@ -39,30 +39,29 @@ import static org.mockito.Mockito.*;
 @Disabled("MockBukkit 与 Java 21 + Paper API 存在兼容性问题，待修复")
 class MailServiceTest {
 
-    private ServerMock server;
     private PlayerMock sender;
     private PlayerMock receiver;
     private MailService mailService;
-    
+
     @Mock
     private DataOperator<MailData> mockDataOperator;
-    
+
     @Mock
     private MailConfig mockConfig;
 
     @BeforeEach
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        
+
         // Setup mock UltiMail
         UltiMail mockPlugin = TestHelper.mockUltiMailInstance();
         when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mockDataOperator);
-        
+
         // Setup config
         mockConfig = TestHelper.createMockConfig();
-        
+
         // Create players
         sender = server.addPlayer("sender");
         receiver = server.addPlayer("receiver");

@@ -9,11 +9,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
  */
 @EventListener
 public class TestScanListener implements Listener {
-    
-    public TestScanListener() {
-        // 默认构造函数，用于反射实例化
-    }
-    
+
     @org.bukkit.event.EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         // 测试用空实现

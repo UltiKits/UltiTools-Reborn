@@ -144,10 +144,12 @@ class IPluginTest {
 
                 @Override
                 public void unregisterSelf() {
+                    // Empty implementation for test - method intentionally does nothing
                 }
 
                 @Override
                 public void reloadSelf() {
+                    // Empty implementation for test - method intentionally does nothing
                 }
             };
 
@@ -165,10 +167,12 @@ class IPluginTest {
 
                 @Override
                 public void unregisterSelf() {
+                    // Empty implementation for test - method intentionally does nothing
                 }
 
                 @Override
                 public void reloadSelf() {
+                    // Empty implementation for test - method intentionally does nothing
                 }
             };
 
