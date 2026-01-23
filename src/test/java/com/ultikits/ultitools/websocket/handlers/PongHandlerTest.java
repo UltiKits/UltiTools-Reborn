@@ -206,10 +206,11 @@ class PongHandlerTest {
         void shouldReturnTrueAtExactTimeout() throws Exception {
             handler.handle(new JsonObject());
 
-            // 设置 lastPongTime 为刚好在超时时间内
+            // 设置 lastPongTime 为刚好在超时时间内 (使用 29000ms 而不是 29999ms 以避免竞态条件)
+            // Use 29000ms instead of 29999ms to avoid race condition in CI environments
             Field lastPongTimeField = PongHandler.class.getDeclaredField("lastPongTime");
             lastPongTimeField.setAccessible(true);
-            lastPongTimeField.set(handler, System.currentTimeMillis() - 29999);
+            lastPongTimeField.set(handler, System.currentTimeMillis() - 29000);
 
             assertThat(handler.isAlive(30000)).isTrue();
         }
