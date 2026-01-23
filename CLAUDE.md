@@ -21,6 +21,7 @@ Coverage reports are generated automatically during `mvn test` → `target/site/
 ## Architecture
 
 ### Core Components
+
 - **UltiTools.java** - Main Bukkit plugin entry, initializes all managers
 - **UltiToolsPlugin** - Base class for plugin modules (`abstracts/UltiToolsPlugin.java`)
 - **SimpleContainer** - Spring-like IoC container (`context/SimpleContainer.java`)
@@ -90,6 +91,7 @@ List<MyEntity> results = op.getAll(WhereCondition.builder().column("name").value
 ```
 
 ### Configuration Objects
+
 ```java
 @Getter @Setter
 @ConfigEntity(path = "config/myconfig.yml")

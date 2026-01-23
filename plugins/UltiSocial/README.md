@@ -9,12 +9,14 @@ UltiSocial 是一个基于 UltiTools-API 框架开发的 Minecraft 好友系统�
 ## ✨ 功能特性
 
 ### 🤝 好友系统
+
 - **好友请求**: 发送、接受、拒绝好友请求
 - **好友管理**: 添加、删除好友，支持收藏功能
 - **好友列表**: 美观的 GUI 界面，分页显示，区分在线/离线状态
 - **上下线通知**: 好友上下线时自动提醒
 
 ### 💬 社交功能
+
 - **私聊系统**: 只允许好友之间私聊，保护玩家隐私
 - **好友传送**: 一键传送到好友位置，支持冷却时间设置
 - **游戏模式显示**: 在好友列表中显示在线好友的游戏模式
@@ -52,6 +54,7 @@ UltiSocial 是一个基于 UltiTools-API 框架开发的 Minecraft 好友系统�
 ## 🎨 GUI 界面
 
 ### 好友列表 (`/friend`)
+
 - **54格界面**: 45个好友位 + 9个导航按钮
 - **分页支持**: 自动分页，支持多页浏览
 - **颜色区分**:
@@ -65,6 +68,7 @@ UltiSocial 是一个基于 UltiTools-API 框架开发的 Minecraft 好友系统�
   - Shift+右键：删除好友
 
 ### 黑名单管理 (`/friend blocklist`)
+
 - **独立界面**: 专属黑名单管理 GUI
 - **玩家信息**: 显示玩家头颅、拉黑时间、拉黑原因
 - **快速操作**: 左键点击解除拉黑
@@ -132,6 +136,7 @@ UltiSocial 支持多种数据存储方式（由 UltiTools-API 统一管理）：
 | status | VARCHAR | 请求状态 |
 
 #### blacklist 表
+
 | 字段 | 类型 | 描述 |
 |------|------|------|
 | id | INT | 主键 |
@@ -211,6 +216,7 @@ if (mailService.isAvailable()) {
 ```
 
 ### TeleportService 传送服务
+
 好友传送功能使用框架提供的 `TeleportService`：
 
 ```java
@@ -247,6 +253,7 @@ teleportService.teleport(player, targetPlayer.getLocation());
 ## 📊 变更日志
 
 ### v1.1.0 (当前版本)
+
 - ✨ 新增黑名单系统
   - 双向屏蔽功能
   - 独立黑名单 GUI

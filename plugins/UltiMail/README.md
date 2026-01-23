@@ -269,6 +269,7 @@ UltiMail/
 - ✅ 完善 i18n 国际化
 
 ### v1.0.0
+
 - 🎉 初始版本
 - 基础邮件收发功能
 - 物品附件支持
@@ -277,6 +278,7 @@ UltiMail/
 ## 🌍 多语言支持
 
 UltiMail 支持多语言，语言文件位于 `lang/` 目录：
+
 - `lang/zh.yml` - 简体中文
 - `lang/en.yml` - English
 

@@ -154,11 +154,12 @@ public class VIPValidator implements CommandValidator {
 ### 数据实体 (`abstracts.data`)
 
 #### 设计改进
+
 - **泛型 ID** - 类型安全的 ID 处理
 - **生命周期钩子** - 持久化事件回调
 - **审计实体** - 自动记录创建/更新信息
 
-#### 核心组件
+#### 数据实体核心组件
 
 ```
 data/
@@ -166,7 +167,7 @@ data/
 └── AuditableDataEntity.java    # 带审计字段的实体
 ```
 
-#### 迁移示例
+#### 数据实体迁移示例
 
 ```java
 // 旧代码 (已废弃)
@@ -222,11 +223,12 @@ public class PlayerData extends AuditableDataEntity<UUID> {
 
 ### GUI 系统 (`abstracts.gui`)
 
-#### 设计模式
+#### GUI 设计模式
+
 - **模板方法模式 (Template Method)** - 统一的页面结构
 - **建造者模式 (Builder)** - 快速创建确认对话框
 
-#### 核心组件
+#### GUI 核心组件
 
 ```
 gui/
@@ -235,7 +237,7 @@ gui/
 └── BaseConfirmationPage.java   # 确认对话框
 ```
 
-#### 迁移示例
+#### GUI 迁移示例
 
 ```java
 // 旧代码 - 分页 (已废弃)
@@ -427,12 +429,14 @@ void testValidatorChain() {
 ### 6.2.0 版本新增内容
 
 #### 新增类型解析器
+
 - `WorldParser` - 解析世界名称
 - `GameModeParser` - 解析游戏模式（支持名称和数字）
 - `LocationParser` - 解析位置（支持多种格式）
 - `EnchantmentParser` - 解析附魔类型
 
 #### 新增异步命令支持
+
 - `@AsyncCommand` 注解 - 标记命令为异步执行
   - `showProcessing()` - 显示处理中提示
   - `processingMessageKey()` - 自定义 i18n 消息键
@@ -601,6 +605,7 @@ Maven 集成 JaCoCo 插件，生成代码覆盖率报告：
 ---
 
 ## 单元测试覆盖
+
 - `TypeParserRegistryTest` - 类型解析器注册表测试
 - `GameModeParserTest` - 游戏模式解析器测试
 - `ValidationChainTest` - 验证链测试

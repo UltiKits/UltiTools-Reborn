@@ -18,7 +18,7 @@ UltiMail 插件包含全面的单元测试，覆盖实体、配置、服务、GU
 | 命令 | `MailCommandTest` | 8 | ⏸️ 跳过* |
 | 命令 | `SendMailCommandTest` | 7 | ⏸️ 跳过* |
 
-**总计: 87 个测试 (45 通过, 42 跳过)**
+## 总计: 87 个测试 (45 通过, 42 跳过)
 
 > *注: 需要 MockBukkit 的测试由于 Java 21 + Paper API 1.19 兼容性问题暂时跳过。
 
@@ -76,6 +76,7 @@ src/test/java/com/ultikits/plugins/mail/
 - equals/hashCode 合约
 
 ### MailConfigTest (29 个测试)
+
 - 默认配置值
 - Getter/Setter 方法
 - 边界值测试

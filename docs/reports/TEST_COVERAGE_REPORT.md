@@ -76,6 +76,7 @@ BUILD SUCCESS
 | `TypeParserRegistryTest` | 12 | 解析器注册表 |
 
 **测试场景:**
+
 - ✅ 单例模式一致性
 - ✅ String 解析
 - ✅ Integer 解析（正常/异常）
@@ -196,6 +197,7 @@ BUILD SUCCESS
 - ✅ isNew 状态追踪
 
 **AuditableDataEntity:**
+
 - ✅ onCreate 设置审计字段
 - ✅ onUpdate 设置审计字段
 - ✅ 无当前用户时使用 null
@@ -211,6 +213,7 @@ BUILD SUCCESS
 | `BaseInventoryPageTest` | 11 | GUI 基类 |
 
 **测试场景:**
+
 - ✅ 正确的页面大小（3行/6行）
 - ✅ 默认显示底部工具栏
 - ✅ 禁用底部工具栏
@@ -227,6 +230,7 @@ BUILD SUCCESS
 | `BasePaginationPageTest` | 6 | 分页页面 |
 
 **测试场景:**
+
 - ✅ 正确的页面大小
 - ✅ 按钮位置常量
 - ✅ 分页管理器初始化

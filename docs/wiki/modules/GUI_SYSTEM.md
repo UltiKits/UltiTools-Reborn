@@ -26,6 +26,7 @@ UltiTools GUI 系统基于 [ObliviateInvs](https://github.com/hamza-cskn/oblivia
 | `BaseConfirmationPage` | 确认/取消对话框 |
 
 **特点**:
+
 - 声明式页面定义
 - 内置分页逻辑
 - 统一的底部工具栏

@@ -1,17 +1,20 @@
 # UltiTools-API Copilot Instructions
 
 ## Project Overview
+
 UltiTools-API is a **Minecraft Spigot plugin framework** (Java 8) that provides annotation-driven development for Bukkit plugins. It features a custom Spring-like IoC container, ORM for data persistence, and WebSocket integration with UltiPanel for remote management.
 
 ## Architecture
 
 ### Core Components
+
 - **UltiTools.java** - Main plugin entry point, manages lifecycle and initializes managers
 - **UltiToolsPlugin** - Base class for plugin modules (extends `abstracts/UltiToolsPlugin.java`)
 - **SimpleContainer** - Custom IoC container (`context/SimpleContainer.java`) replacing Spring
 - **DataOperator/DataStore** - Abstraction for MySQL, SQLite, and JSON storage
 
 ### Key Directories
+
 ```
 src/main/java/com/ultikits/ultitools/
 ├── abstracts/      # Base classes (UltiToolsPlugin, AbstractCommandExecutor, AbstractDataEntity)
@@ -49,6 +52,7 @@ public class MyService {
 ```
 
 ### Data Entities
+
 Use `@Table` and `@Column` for ORM mapping:
 ```java
 @Table("my_data")
@@ -71,6 +75,7 @@ public class MyConfig extends AbstractConfigEntity {
 ```
 
 ### Plugin Module Setup
+
 Use `@UltiToolsModule` on main class (enables auto-registration):
 ```java
 @UltiToolsModule(scanBasePackages = {"com.example.myplugin"})
@@ -95,6 +100,7 @@ mvn javadoc:javadoc            # Generate API docs to target/apidocs/
 ## Data Storage
 
 Three storage backends, configured in `config.yml`:
+
 - `json` - File-based, human-editable, lowest reliability
 - `sqlite` - Local file, good performance (default)
 - `mysql` - Requires external DB, highest reliability

@@ -1,7 +1,7 @@
 # UltiTools-API Wiki
 
 <div align="center">
-<img src="https://github.com/UltiKits/UltiTools-Reborn/assets/62180110/f5e8e7d3-e97d-4d37-a9ab-ba3722dc6faa" width="96" height="96"/>
+<img src="https://github.com/UltiKits/UltiTools-Reborn/assets/62180110/f5e8e7d3-e97d-4d37-a9ab-ba3722dc6faa" width="96" height="96" alt="UltiTools Logo"/>
 <h2>UltiTools 6 - Minecraft Spigot 插件开发框架</h2>
 </div>
 

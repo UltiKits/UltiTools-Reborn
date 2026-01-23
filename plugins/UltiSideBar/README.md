@@ -146,6 +146,7 @@ default-enabled: true
 ### 配置热重载
 
 执行 `/sidebar reload` 时会：
+
 1. 重新加载 YAML 配置文件
 2. 清空所有玩家的内容缓存
 3. 强制刷新所有在线玩家的侧边栏
@@ -158,6 +159,7 @@ default-enabled: true
 ## 📋 更新日志
 
 ### v1.0.0
+
 - 🎉 初始版本发布
 - ✅ PlaceholderAPI 变量支持
 - ✅ 玩家偏好持久化存储

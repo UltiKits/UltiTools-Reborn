@@ -591,6 +591,7 @@ plugins/UltiTools/pluginConfig/MyUltiToolsPlugin/data/player_stats/
 ### Q: 命令没有自动注册？
 
 检查：
+
 1. 命令类是否继承 `AbstractCommandExecutor`
 2. 是否添加了 `@CmdExecutor` 注解
 3. `@UltiToolsModule` 的 `scanBasePackages` 是否包含命令类所在包

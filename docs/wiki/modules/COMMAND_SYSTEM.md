@@ -239,7 +239,7 @@ public class MyCommand extends AbstractCommandExecutor {
 
 ### 自定义补全
 
-**方式一：使用 @CmdSuggest**
+#### 方式一：使用 @CmdSuggest
 
 ```java
 @CmdMapping(format = "mode <mode>")

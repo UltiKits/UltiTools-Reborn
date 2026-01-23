@@ -9,6 +9,7 @@ UltiEssentials 是基于 UltiTools-API 框架开发的服务器基础功能插�
 ## ✨ 功能特性
 
 ### 🚀 传送功能
+
 | 命令 | 描述 | 权限 |
 |------|------|------|
 | `/back` | 返回上一个传送位置 | `ultiessentials.back` |
@@ -39,6 +40,7 @@ UltiEssentials 是基于 UltiTools-API 框架开发的服务器基础功能插�
 - `3` / `sp` / `spectator` - 旁观模式
 
 ### 🔧 管理员工具
+
 | 命令 | 描述 | 权限 |
 |------|------|------|
 | `/invsee <玩家>` | 查看玩家背包 | `ultiessentials.invsee` |
@@ -52,6 +54,7 @@ UltiEssentials 是基于 UltiTools-API 框架开发的服务器基础功能插�
 | `/wl status` | 查看白名单状态 | `ultiessentials.whitelist.manage` |
 
 ### 🎨 服务器自定义
+
 | 功能 | 描述 | 配置文件 |
 |------|------|----------|
 | MOTD 自定义 | 自定义服务器列表显示信息 | `config/motd.yml` |

@@ -19,6 +19,7 @@
 ### ✨ 功能特性
 
 #### 🌍 世界管理
+
 - **世界创建** - 支持多种环境类型（主世界/下界/末地）和地形类型（标准/超平坦/放大化/巨型生物群系）
 - **创建向导** - 交互式对话引导，60秒超时保护
 - **世界加载/卸载** - 动态加载和卸载世界，节省服务器资源
@@ -26,12 +27,14 @@
 - **自动卸载** - 空世界自动卸载，可配置等待时间
 
 #### 🚀 传送系统
+
 - **快速传送** - 支持GUI界面和命令行传送
 - **传送冷却** - 可配置的传送冷却时间
 - **出生点管理** - 每个世界独立的出生点设置
 - **权限控制** - 每个世界可单独设置访问权限
 
 #### 🛡️ 世界保护
+
 - **方块保护** - 禁止破坏/放置方块
 - **交互保护** - 禁止与方块交互
 - **爆炸保护** - 防止爆炸破坏地形
@@ -47,6 +50,7 @@
 - **世界分组** - 支持多个世界共享同一背包组
 
 #### 🔒 访问控制
+
 - **世界锁定** - 临时锁定世界入口
 - **世界封禁** - 完全禁止进入世界
 - **隐藏世界** - 从列表中隐藏世界
@@ -157,6 +161,7 @@ world_isolation:
 ### ✨ Features
 
 #### 🌍 World Management
+
 - **World Creation** - Multiple environment types (Normal/Nether/End) and terrain types (Normal/Flat/Amplified/Large Biomes)
 - **Creation Wizard** - Interactive dialog with 60-second timeout protection
 - **Load/Unload** - Dynamic world loading/unloading to save server resources
@@ -164,6 +169,7 @@ world_isolation:
 - **Auto-Unload** - Automatic unloading of empty worlds with configurable delay
 
 #### 🚀 Teleportation System
+
 - **Quick Teleport** - GUI and command-line teleportation
 - **Teleport Cooldown** - Configurable cooldown between teleports
 - **Spawn Management** - Independent spawn points per world
@@ -185,6 +191,7 @@ world_isolation:
 - **World Groups** - Multiple worlds can share the same inventory group
 
 #### 🔒 Access Control
+
 - **World Lock** - Temporarily lock world entrance
 - **World Block** - Completely block world access
 - **Hidden Worlds** - Hide worlds from the list

@@ -230,6 +230,7 @@ public class EmailVerificationService {
 ### Q: 服务未启用怎么办？
 
 检查 `config.yml` 中：
+
 - `email.enable` 是否为 `true`
 - SMTP 配置是否正确填写
 - 用户名和密码是否为空
