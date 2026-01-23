@@ -210,17 +210,22 @@ jobs:
         local-dir: "./javadoc/"
 
     - name: 📝 Release Summary
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+        ACTOR: ${{ github.actor }}
+        REPO: ${{ github.repository }}
       run: |
         echo "## 🎉 发布成功!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| 信息 | 值 |" >> $GITHUB_STEP_SUMMARY
         echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **版本** | \`v${{ needs.validate.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **类型** | ${{ github.event.inputs.release_type }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| **发布者** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **版本** | \`v${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **类型** | ${RELEASE_TYPE} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **发布者** | @${ACTOR} |" >> $GITHUB_STEP_SUMMARY
         echo "| **时间** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "🔗 [查看 Release](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.validate.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 [查看 Release](https://github.com/${REPO}/releases/tag/v${VERSION})" >> $GITHUB_STEP_SUMMARY
 
   # ==================== 试运行报告 ====================
   dry-run-report:
@@ -231,6 +236,10 @@ jobs:
     
     steps:
     - name: 📋 Dry Run Summary
+      env:
+        VERSION: ${{ needs.validate.outputs.version }}
+        RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+        ACTOR: ${{ github.actor }}
       run: |
         echo "## 🔍 试运行报告 (Dry Run)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -238,8 +247,8 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| 信息 | 值 |" >> $GITHUB_STEP_SUMMARY
         echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **版本** | \`v${{ needs.validate.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **类型** | ${{ github.event.inputs.release_type }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| **发布者** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **版本** | \`v${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **类型** | ${RELEASE_TYPE} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **发布者** | @${ACTOR} |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "✅ 所有检查通过，可以正式发布" >> $GITHUB_STEP_SUMMARY

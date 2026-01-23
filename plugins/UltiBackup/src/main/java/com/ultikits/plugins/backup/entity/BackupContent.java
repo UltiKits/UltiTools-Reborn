@@ -118,12 +118,12 @@ public class BackupContent {
     }
     
     /**
-     * Save content to file with MD5 checksum.
+     * Save content to file with SHA-256 checksum.
      * <p>
-     * 将内容保存到文件（带 MD5 校验和）。
+     * 将内容保存到文件（带 SHA-256 校验和）。
      *
      * @param file the file to save to
-     * @return the MD5 checksum of the content
+     * @return the SHA-256 checksum of the content
      * @throws IOException if save fails
      */
     public String saveToFile(File file) throws IOException {
@@ -131,7 +131,7 @@ public class BackupContent {
         if (file.getParentFile() != null && !file.getParentFile().exists()) {
             file.getParentFile().mkdirs();
         }
-        
+
         // Create YAML content
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("inventory", inventoryContents);
@@ -140,11 +140,11 @@ public class BackupContent {
         yaml.set("enderchest", enderchestContents);
         yaml.set("expLevel", expLevel);
         yaml.set("expProgress", expProgress);
-        
+
         String yamlContent = yaml.saveToString();
-        
-        // Calculate MD5 checksum
-        String checksum = calculateMD5(yamlContent);
+
+        // Calculate SHA-256 checksum
+        String checksum = calculateChecksum(yamlContent);
         
         // Write file with header
         try (BufferedWriter writer = new BufferedWriter(
@@ -210,30 +210,30 @@ public class BackupContent {
             }
         }
         
-        String actualChecksum = calculateMD5(contentBuilder.toString().trim() + "\n");
+        String actualChecksum = calculateChecksum(contentBuilder.toString().trim() + "\n");
         return expectedChecksum.equals(actualChecksum);
     }
     
     /**
-     * Calculate MD5 checksum of string.
+     * Calculate SHA-256 checksum of string.
      * <p>
-     * 计算字符串的 MD5 校验和。
+     * 计算字符串的 SHA-256 校验和。
      *
      * @param content the content to hash
-     * @return the MD5 checksum (hex string)
+     * @return the SHA-256 checksum (hex string)
      */
-    public static String calculateMD5(String content) {
+    public static String calculateChecksum(String content) {
         try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(content.getBytes(StandardCharsets.UTF_8));
-            
+
             StringBuilder sb = new StringBuilder();
             for (byte b : digest) {
                 sb.append(String.format("%02x", b));
             }
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("MD5 algorithm not available", e);
+            throw new RuntimeException("SHA-256 algorithm not available", e);
         }
     }
     
