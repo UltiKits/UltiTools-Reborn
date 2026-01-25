@@ -352,13 +352,13 @@ container.setClassLoader(customClassLoader);
 
 ```java
 public class LoggingPostProcessor implements BeanPostProcessor {
-    
+
     @Override
     public Object postProcessBeforeInitialization(Object bean, String beanName) {
         System.out.println("Before init: " + beanName);
         return bean;
     }
-    
+
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
         System.out.println("After init: " + beanName);
@@ -369,6 +369,49 @@ public class LoggingPostProcessor implements BeanPostProcessor {
 // 注册
 container.addBeanPostProcessor(new LoggingPostProcessor());
 ```
+
+### 6. AOP 代理集成
+
+框架使用 `AopProxyBeanPostProcessor` 为标注了 `@Transactional` 或 `@ExceptionCatch` 的 Bean 创建 CGLIB 代理：
+
+```java
+// AOP 后处理器自动注册
+AopProxyBeanPostProcessor aopProcessor = new AopProxyBeanPostProcessor();
+
+// 添加事务拦截器
+aopProcessor.addAdvisor(
+    AopAdvisor.forAnnotation(Transactional.class, txInterceptor, 100)
+);
+
+// 添加异常处理拦截器
+aopProcessor.addAdvisor(
+    AopAdvisor.forAnnotation(ExceptionCatch.class, exInterceptor, 200)
+);
+
+container.addBeanPostProcessor(aopProcessor);
+```
+
+**代理创建流程**:
+```
+Bean 初始化完成
+       │
+       ▼
+AopProxyBeanPostProcessor.postProcessAfterInitialization()
+       │
+       ├─→ 检查是否为 final 类
+       │         │
+       │         └─→ 是 → 跳过代理（记录警告）
+       │
+       ├─→ 扫描所有方法
+       │
+       ├─→ 匹配 AopAdvisor
+       │         │
+       │         └─→ 无匹配 → 返回原始 Bean
+       │
+       └─→ 有匹配 → 创建 CGLIB 代理 → 返回代理 Bean
+```
+
+> **详细信息**: 阅读 [AOP 系统](./AOP_SYSTEM.md) 了解完整的 AOP 和事务管理功能
 
 ---
 
@@ -410,7 +453,9 @@ container.addBeanPostProcessor(new LoggingPostProcessor());
 | 特性 | SimpleContainer | Spring |
 |------|-----------------|--------|
 | 作用域 | Singleton/Prototype | 更多作用域 |
-| AOP | ❌ 不支持 | ✅ 支持 |
+| AOP | ✅ 基于 CGLIB | ✅ JDK/CGLIB |
+| 事务管理 | ✅ @Transactional | ✅ @Transactional |
+| 异常处理 | ✅ @ExceptionCatch | ✅ @ExceptionHandler |
 | 条件装配 | ❌ 不支持 | ✅ @Conditional |
 | 配置类 | 有限支持 | 完整支持 |
 | 自动配置 | ❌ | ✅ |

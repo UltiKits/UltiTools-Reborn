@@ -18,6 +18,8 @@
 | [数据存储](./modules/DATA_STORAGE.md) | ORM 与多数据源支持 |
 | [配置管理](./modules/CONFIG_SYSTEM.md) | 配置实体与自动序列化 |
 | [GUI 系统](./modules/GUI_SYSTEM.md) | 背包界面开发 |
+| [AOP 系统](./modules/AOP_SYSTEM.md) | 声明式事务与异常处理 (6.2.0 新增) |
+| [安全系统](./modules/SECURITY.md) | 类加载安全与防护机制 (6.2.0 新增) |
 | [WebSocket 集成](./modules/WEBSOCKET.md) | UltiPanel 远程管理 |
 | [快速入门](./tutorials/QUICK_START.md) | 创建第一个 UltiTools 模块 |
 | [完整示例](./tutorials/EXAMPLES.md) | 实际开发案例 |
@@ -37,6 +39,8 @@
 | **IoC 容器** | 轻量级依赖注入容器 `SimpleContainer`，支持 `@Autowired` 自动装配 |
 | **ORM 支持** | 统一的数据访问接口，支持 MySQL、SQLite、JSON 三种存储方式 |
 | **命令映射** | 类似 Spring MVC 的命令处理，自动参数解析与类型转换 |
+| **AOP 支持** | 声明式事务管理 `@Transactional`、异常处理 `@ExceptionCatch` (6.2.0+) |
+| **安全机制** | 多层类加载安全验证，防止恶意代码执行 (6.2.0+) |
 | **GUI 框架** | 基于模板方法模式的背包界面开发基类 |
 | **远程管理** | WebSocket 集成 UltiPanel，支持服务器状态监控、远程命令执行 |
 | **国际化** | 内置多语言支持，自动加载语言文件 |
@@ -134,7 +138,15 @@ UltiTools-Reborn/
 │   │   ├── @Service, @Component, @Autowired
 │   │   ├── @Table, @Column
 │   │   ├── @ConfigEntity, @ConfigEntry
+│   │   ├── @Transactional          # 事务注解 (6.2.0+)
+│   │   ├── @ExceptionCatch         # 异常处理注解 (6.2.0+)
 │   │   └── command/                # 命令注解
+│   ├── aop/                        # AOP 系统 (6.2.0+)
+│   │   ├── AopAdvisor.java         # 通知器
+│   │   ├── AopProxyBeanPostProcessor.java
+│   │   ├── CglibProxyFactory.java  # CGLIB 代理工厂
+│   │   ├── TransactionInterceptor.java
+│   │   └── ExceptionInterceptor.java
 │   ├── context/                    # IoC 容器
 │   │   └── SimpleContainer.java
 │   ├── interfaces/                 # 核心接口
@@ -146,6 +158,9 @@ UltiTools-Reborn/
 │   │   ├── CommandManager.java     # 命令管理
 │   │   ├── ConfigManager.java      # 配置管理
 │   │   └── ServerMonitorManager.java # 服务器监控
+│   ├── utils/                      # 工具类
+│   │   ├── SecurityPolicy.java     # 安全策略 (6.2.0+)
+│   │   └── ClassLoaderUtils.java   # 安全类加载 (6.2.0+)
 │   └── websocket/                  # WebSocket 集成
 │       └── UltiPanelWebSocketClient.java
 ```
