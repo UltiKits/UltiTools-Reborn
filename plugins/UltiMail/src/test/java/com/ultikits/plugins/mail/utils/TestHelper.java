@@ -10,8 +10,10 @@ import java.lang.reflect.Field;
 import java.util.logging.Logger;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * 测试辅助工具类
@@ -47,20 +49,20 @@ public final class TestHelper {
     @SuppressWarnings("unchecked")
     public static UltiMail mockUltiMailInstance() {
         try {
-            UltiMail mockPlugin = mock(UltiMail.class);
+            UltiMail mockPlugin = mock(UltiMail.class, withSettings().lenient());
             PluginLogger mockLogger = mock(PluginLogger.class);
-            
-            // Mock i18n
-            when(mockPlugin.i18n(any(String.class))).thenAnswer(invocation -> {
+
+            // Mock i18n - lenient to avoid UnnecessaryStubbingException
+            lenient().when(mockPlugin.i18n(any(String.class))).thenAnswer(invocation -> {
                 String key = invocation.getArgument(0);
                 return "[" + key + "]"; // 返回 [key] 格式便于测试验证
             });
-            
-            when(mockPlugin.getLogger()).thenReturn(mockLogger);
-            
+
+            lenient().when(mockPlugin.getLogger()).thenReturn(mockLogger);
+
             // Mock DataOperator
             DataOperator<?> mockDataOperator = mock(DataOperator.class);
-            when(mockPlugin.getDataOperator(any())).thenReturn((DataOperator) mockDataOperator);
+            lenient().when(mockPlugin.getDataOperator(any())).thenReturn((DataOperator) mockDataOperator);
             
             // Set instance via reflection
             Field instanceField = UltiMail.class.getDeclaredField("instance");

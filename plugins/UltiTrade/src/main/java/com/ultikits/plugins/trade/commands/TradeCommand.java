@@ -69,7 +69,7 @@ public class TradeCommand extends AbstractCommendExecutor {
     
     @CmdMapping(format = "toggle")
     public void toggle(@CmdSender Player player) {
-        boolean newState = logService.toggleTrade(player.getUniqueId());
+        boolean newState = logService.toggleTrade(player);
         if (newState) {
             player.sendMessage(ChatColor.GREEN + "已开启交易功能！其他玩家现在可以向你发送交易请求。");
         } else {
@@ -96,7 +96,7 @@ public class TradeCommand extends AbstractCommendExecutor {
             return;
         }
         
-        logService.blockPlayer(player.getUniqueId(), target.getUniqueId());
+        logService.blockPlayer(player, target.getUniqueId());
         player.sendMessage(ChatColor.GREEN + "已将 " + target.getName() + " 添加到交易黑名单！");
         player.sendMessage(ChatColor.GRAY + "该玩家将无法向你发送交易请求。");
     }
@@ -114,7 +114,7 @@ public class TradeCommand extends AbstractCommendExecutor {
             return;
         }
         
-        logService.unblockPlayer(player.getUniqueId(), target.getUniqueId());
+        logService.unblockPlayer(player, target.getUniqueId());
         player.sendMessage(ChatColor.GREEN + "已将 " + target.getName() + " 从交易黑名单中移除！");
     }
     

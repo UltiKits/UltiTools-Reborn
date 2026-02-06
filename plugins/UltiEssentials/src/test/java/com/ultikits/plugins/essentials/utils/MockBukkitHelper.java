@@ -1,7 +1,7 @@
 /**
  * Synced from UltiTools-API v6.2.0 - 2026-01-08
  * Source: src/test/java/com/ultikits/ultitools/utils/MockBukkitHelper.java
- * 
+ *
  * 如需更新，请从 UltiTools-Reborn 主项目同步此文件
  */
 package com.ultikits.plugins.essentials.utils;
@@ -16,6 +16,7 @@ import be.seeseemelk.mockbukkit.MockBukkit;
  * MockBukkit 测试工具类
  * 提供健壮的 MockBukkit 清理功能，解决测试之间的单例冲突问题
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test helper requires reflection for state cleanup
 public final class MockBukkitHelper {
 
     private MockBukkitHelper() {
@@ -25,9 +26,14 @@ public final class MockBukkitHelper {
     /**
      * 安全地清理 MockBukkit 和 Bukkit 的单例状态
      * 在每个测试的 @BeforeEach 开始时调用
+     *
+     * NOTE: This method only unmocks if MockBukkit is currently mocked.
+     * It does NOT clear Bukkit.server to null, because that would break
+     * subsequent MockBukkit.mock() calls that need to initialize Registry
+     * and PotionEffectType classes.
      */
     public static void ensureCleanState() {
-        // 1. 尝试标准的 MockBukkit.unmock()
+        // Only unmock if currently mocked
         try {
             if (MockBukkit.isMocked()) {
                 MockBukkit.unmock();
@@ -35,7 +41,7 @@ public final class MockBukkitHelper {
         } catch (Exception ignored) {
         }
 
-        // 2. 强制清理 MockBukkit 的内部状态
+        // Reset the mocked flag so MockBukkit.mock() can be called again
         try {
             Field mockedField = MockBukkit.class.getDeclaredField("mocked");
             mockedField.setAccessible(true);
@@ -43,15 +49,9 @@ public final class MockBukkitHelper {
         } catch (Exception ignored) {
         }
 
-        // 3. 强制清理 Bukkit 的 server 单例
-        if (Bukkit.getServer() != null) {
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                serverField.set(null, null);
-            } catch (Exception ignored) {
-            }
-        }
+        // DO NOT clear Bukkit.server to null here!
+        // MockBukkit.unmock() already does that, and setting it to null
+        // before MockBukkit.mock() breaks Registry/PotionEffectType initialization.
     }
 
     /**
@@ -63,8 +63,5 @@ public final class MockBukkitHelper {
             MockBukkit.unmock();
         } catch (Exception ignored) {
         }
-        
-        // 确保完全清理
-        ensureCleanState();
     }
 }

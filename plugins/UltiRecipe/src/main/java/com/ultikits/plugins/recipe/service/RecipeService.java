@@ -13,6 +13,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.plugin.Plugin;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -36,8 +37,25 @@ public class RecipeService {
      */
     private final Set<NamespacedKey> registeredRecipes = new HashSet<>();
 
+    /**
+     * Plugin instance for NamespacedKey creation.
+     * Package-private for testing.
+     */
+    Plugin pluginInstance;
+
     private PluginLogger getLogger() {
         return UltiRecipe.getInstance().getLogger();
+    }
+
+    /**
+     * Get the plugin instance for NamespacedKey creation.
+     * Uses UltiTools.getInstance() in production, can be overridden in tests.
+     */
+    Plugin getPluginInstance() {
+        if (pluginInstance == null) {
+            pluginInstance = (Plugin) UltiTools.getInstance();
+        }
+        return pluginInstance;
     }
 
     /**
@@ -96,8 +114,8 @@ public class RecipeService {
             return false;
         }
 
-        // Create recipe - use UltiTools main plugin for NamespacedKey since UltiToolsPlugin doesn't extend JavaPlugin
-        NamespacedKey key = new NamespacedKey(UltiTools.getInstance(), "ultirecipe_" + name);
+        // Create recipe - use plugin instance for NamespacedKey since UltiToolsPlugin doesn't extend JavaPlugin
+        NamespacedKey key = new NamespacedKey(getPluginInstance(), "ultirecipe_" + name);
         ShapedRecipe recipe = new ShapedRecipe(key, output);
 
         // Set shape

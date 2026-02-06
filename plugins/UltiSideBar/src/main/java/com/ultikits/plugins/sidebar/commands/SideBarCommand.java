@@ -6,6 +6,7 @@ import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -77,10 +78,10 @@ public class SideBarCommand extends AbstractCommendExecutor {
     }
     
     @Override
-    protected List<String> suggest(CommandSender sender, String[] args) {
+    protected List<String> suggest(Player player, Command command, String[] args) {
         if (args.length == 1) {
             List<String> suggestions = Arrays.asList("toggle", "on", "off");
-            if (sender.hasPermission("ultisidebar.admin")) {
+            if (player.hasPermission("ultisidebar.admin")) {
                 suggestions = Arrays.asList("toggle", "on", "off", "reload");
             }
             String input = args[0].toLowerCase();
@@ -88,6 +89,6 @@ public class SideBarCommand extends AbstractCommendExecutor {
                 .filter(s -> s.startsWith(input))
                 .collect(java.util.stream.Collectors.toList());
         }
-        return super.suggest(sender, args);
+        return super.suggest(player, command, args);
     }
 }

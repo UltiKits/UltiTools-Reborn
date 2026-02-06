@@ -96,7 +96,7 @@ public class TradeListener implements Listener {
         if (event.getInventory().getHolder() instanceof TradeConfirmPage) {
             event.setCancelled(true);
             TradeConfirmPage confirmPage = (TradeConfirmPage) event.getInventory().getHolder();
-            confirmPage.handleClick(event.getRawSlot());
+            confirmPage.handleClick(event);
             return;
         }
         

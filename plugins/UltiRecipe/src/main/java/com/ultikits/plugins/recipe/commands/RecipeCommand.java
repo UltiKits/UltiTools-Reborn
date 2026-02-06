@@ -48,12 +48,12 @@ public class RecipeCommand extends BaseCommandExecutor {
     @CmdMapping(format = "list")
     public void listRecipes(@CmdSender CommandSender sender) {
         List<String> recipes = recipeService.getRecipeList();
-        
-        if (recipes.isEmpty()) {
+
+        if (recipes == null || recipes.isEmpty()) {
             sender.sendMessage(i18n("§7没有已注册的配方"));
             return;
         }
-        
+
         sender.sendMessage(i18n("§6=== 已注册的配方 ==="));
         for (String recipe : recipes) {
             sender.sendMessage("§7- §f" + recipe);

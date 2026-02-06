@@ -112,7 +112,7 @@ public class TradeService {
      */
     private void setupEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            UltiTrade.getInstance().getLogger().warning("Vault not found! Money trading disabled.");
+            UltiTrade.getInstance().getLogger().warn("Vault not found! Money trading disabled.");
             return;
         }
         

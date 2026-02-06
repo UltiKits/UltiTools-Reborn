@@ -55,7 +55,7 @@ public class UltiTrade extends UltiToolsPlugin {
         
         // Register PlaceholderAPI expansion if available
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            placeholderExpansion = new TradePlaceholderExpansion(this, tradeService, logService);
+            placeholderExpansion = new TradePlaceholderExpansion(tradeService, logService);
             if (placeholderExpansion.register()) {
                 getLogger().info("PlaceholderAPI 扩展已注册！");
             }

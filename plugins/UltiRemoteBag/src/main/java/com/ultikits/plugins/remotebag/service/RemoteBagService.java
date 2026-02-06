@@ -415,7 +415,7 @@ public class RemoteBagService {
         );
         
         for (RemoteBagData data : existing) {
-            dataOperator.del(data);
+            dataOperator.delById(data.getId());
         }
         
         return true;

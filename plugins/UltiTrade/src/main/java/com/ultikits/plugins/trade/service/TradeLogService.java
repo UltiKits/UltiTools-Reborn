@@ -9,7 +9,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.impl.data.WhereCondition;
+import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -18,7 +18,6 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 
 /**
  * Service for managing trade logs and player settings.
@@ -76,8 +75,8 @@ public class TradeLogService {
             try {
                 settingsOperator.update(settings);
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                    "Failed to save player settings: " + settings.getPlayerUuid(), e);
+                UltiTrade.getInstance().getLogger().warn(e,
+                    "Failed to save player settings: " + settings.getPlayerUuid());
             }
         }
         settingsCache.clear();
@@ -137,8 +136,8 @@ public class TradeLogService {
                     session.getPlayerExp(session.getPlayer2()));
                 
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                    "Failed to log trade", e);
+                UltiTrade.getInstance().getLogger().warn(e,
+                    "Failed to log trade");
             }
         });
     }
@@ -184,8 +183,8 @@ public class TradeLogService {
                 logOperator.insert(log);
                 
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                    "Failed to log cancelled trade", e);
+                UltiTrade.getInstance().getLogger().warn(e,
+                    "Failed to log cancelled trade");
             }
         });
     }
@@ -214,7 +213,7 @@ public class TradeLogService {
             
             for (TradeLogData log : allLogs) {
                 if (log.getTradeTime() < cutoffTime) {
-                    logOperator.del(log);
+                    logOperator.delById(log.getId());
                     deleted++;
                 }
             }
@@ -224,8 +223,8 @@ public class TradeLogService {
                     "Cleaned up " + deleted + " expired trade logs (older than " + retentionDays + " days)");
             }
         } catch (Exception e) {
-            UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                "Failed to cleanup old logs", e);
+            UltiTrade.getInstance().getLogger().warn(e,
+                "Failed to cleanup old logs");
         }
     }
     
@@ -309,8 +308,8 @@ public class TradeLogService {
             try {
                 settingsOperator.update(settings);
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                    "Failed to save player settings", e);
+                UltiTrade.getInstance().getLogger().warn(e,
+                    "Failed to save player settings");
             }
         });
     }
@@ -427,8 +426,8 @@ public class TradeLogService {
             return playerLogs;
             
         } catch (Exception e) {
-            UltiTrade.getInstance().getLogger().log(Level.WARNING, 
-                "Failed to get player logs", e);
+            UltiTrade.getInstance().getLogger().warn(e,
+                "Failed to get player logs");
             return new ArrayList<>();
         }
     }

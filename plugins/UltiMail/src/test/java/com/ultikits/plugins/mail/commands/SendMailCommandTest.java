@@ -1,20 +1,26 @@
 package com.ultikits.plugins.mail.commands;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.plugins.mail.utils.MockBukkitHelper;
 import com.ultikits.plugins.mail.utils.TestHelper;
 
 import org.bukkit.Material;
+import org.bukkit.command.CommandSender;
+import org.bukkit.conversations.Conversation;
+import org.bukkit.conversations.ConversationFactory;
+import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Method;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,218 +30,247 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for SendMailCommand.
  * <p>
- * 发送邮件命令单元测试。
- * <p>
- * 注意: 需要 MockBukkit，由于 Java 21 + Paper API 兼容性问题暂时禁用。
+ * Uses pure Mockito (no MockBukkit) for maximum compatibility.
+ * Tests focus on command structure, permissions, and item handling logic.
  */
 @DisplayName("SendMailCommand 测试")
 @ExtendWith(MockitoExtension.class)
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@Disabled("MockBukkit 与 Java 21 + Paper API 存在兼容性问题，待修复")
 class SendMailCommandTest {
 
-    private ServerMock server;
-    private PlayerMock sender;
-    private PlayerMock receiver;
+    private SendMailCommand command;
 
     @Mock
     private MailService mockMailService;
 
+    @Mock
+    private Plugin mockPlugin;
+
+    @Mock
+    private Player sender;
+
+    @Mock
+    private PlayerInventory senderInventory;
+
+    private UUID senderUuid;
+
     @BeforeEach
-    void setUp() {
-        MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
-        MockBukkit.createMockPlugin();
-        
+    void setUp() throws Exception {
         // Setup mock UltiMail
         TestHelper.mockUltiMailInstance();
-        
-        sender = server.addPlayer("sender");
-        receiver = server.addPlayer("receiver");
+
+        senderUuid = UUID.randomUUID();
+        lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
+        lenient().when(sender.getName()).thenReturn("SenderPlayer");
+        lenient().when(sender.getInventory()).thenReturn(senderInventory);
+        lenient().when(sender.isOnline()).thenReturn(true);
+
+        // Create command
+        command = new SendMailCommand(mockMailService, mockPlugin);
     }
 
     @AfterEach
     void tearDown() {
         TestHelper.cleanupMocks();
-        MockBukkitHelper.safeUnmock();
     }
 
-    @Nested
-    @DisplayName("基础发送测试")
-    class BasicSendTests {
-
-        @Test
-        @DisplayName("应该成功发送纯文本邮件")
-        void shouldSendTextMail() {
-            when(mockMailService.sendMail(any(), anyString(), anyString(), anyString(), any()))
-                .thenReturn(true);
-
-            boolean result = mockMailService.sendMail(sender, "receiver", "标题", "内容", null);
-
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("发送失败时应该返回 false")
-        void shouldReturnFalseOnFailure() {
-            when(mockMailService.sendMail(any(), anyString(), anyString(), anyString(), any()))
-                .thenReturn(false);
-
-            boolean result = mockMailService.sendMail(sender, "nonexistent", "标题", "内容", null);
-
-            assertThat(result).isFalse();
-        }
-    }
+    // ==================== sendMailWithItems Tests ====================
 
     @Nested
     @DisplayName("附件发送测试")
     class AttachmentSendTests {
 
         @Test
-        @DisplayName("普通玩家应该使用主手物品作为附件")
-        void shouldUseMainHandItemForRegularPlayer() {
-            ItemStack diamond = new ItemStack(Material.DIAMOND, 1);
-            sender.getInventory().setItemInMainHand(diamond);
+        @DisplayName("普通玩家主手为空时应该显示错误")
+        void shouldShowErrorWhenMainHandEmpty() {
+            when(sender.hasPermission("ultimail.admin.multiattach")).thenReturn(false);
+            ItemStack airItem = mock(ItemStack.class);
+            when(airItem.getType()).thenReturn(Material.AIR);
+            when(senderInventory.getItemInMainHand()).thenReturn(airItem);
 
-            ItemStack mainHand = sender.getInventory().getItemInMainHand();
+            command.sendMailWithItems(sender, "receiver", "subject");
 
-            assertThat(mainHand.getType()).isEqualTo(Material.DIAMOND);
+            verify(sender).sendMessage(ArgumentMatchers.<String>argThat(msg -> msg.contains("[error_no_item_in_hand]")));
         }
 
         @Test
-        @DisplayName("主手为空时应该拒绝附件发送")
-        void shouldRejectAttachmentWithEmptyHand() {
-            sender.getInventory().setItemInMainHand(null);
+        @DisplayName("普通玩家应该使用主手物品并清空主手")
+        void shouldUseMainHandItemAndClearHand() {
+            when(sender.hasPermission("ultimail.admin.multiattach")).thenReturn(false);
+            ItemStack diamond = mock(ItemStack.class);
+            when(diamond.getType()).thenReturn(Material.DIAMOND);
+            ItemStack clonedDiamond = mock(ItemStack.class);
+            when(diamond.clone()).thenReturn(clonedDiamond);
+            when(senderInventory.getItemInMainHand()).thenReturn(diamond);
 
-            ItemStack mainHand = sender.getInventory().getItemInMainHand();
+            // This will try to start a conversation which will fail on mock plugin,
+            // but we can verify item was taken
+            try {
+                command.sendMailWithItems(sender, "receiver", "subject");
+            } catch (Exception e) {
+                // Expected since ConversationFactory may not work with mock plugin
+            }
 
-            assertThat(mainHand.getType()).isEqualTo(Material.AIR);
-        }
-
-        @Test
-        @DisplayName("管理员应该能使用多物品附件")
-        void shouldAllowMultiAttachForAdmin() {
-            sender.addAttachment(MockBukkit.createMockPlugin(), "ultimail.admin.multiattach", true);
-
-            assertThat(sender.hasPermission("ultimail.admin.multiattach")).isTrue();
+            verify(senderInventory).setItemInMainHand(null);
         }
     }
+
+    // ==================== help Tests ====================
+
+    @Nested
+    @DisplayName("帮助命令测试")
+    class HelpTests {
+
+        @Test
+        @DisplayName("帮助命令应该显示信息")
+        void shouldShowHelpInfo() {
+            command.help(sender);
+
+            verify(sender, atLeast(3)).sendMessage(any(String.class));
+        }
+
+        @Test
+        @DisplayName("帮助应包含 sendmail 命令")
+        void shouldContainSendmailCommand() {
+            command.help(sender);
+
+            verify(sender, atLeast(1)).sendMessage(ArgumentMatchers.<String>argThat(msg ->
+                msg.contains("/sendmail")
+            ));
+        }
+
+        @Test
+        @DisplayName("帮助应包含 attach 关键字")
+        void shouldContainAttachKeyword() {
+            command.help(sender);
+
+            verify(sender, atLeast(1)).sendMessage(ArgumentMatchers.<String>argThat(msg ->
+                msg.contains("attach")
+            ));
+        }
+    }
+
+    // ==================== Annotation Tests ====================
+
+    @Nested
+    @DisplayName("注解配置测试")
+    class AnnotationTests {
+
+        @Test
+        @DisplayName("类应该有 @CmdExecutor 注解")
+        void shouldHaveCmdExecutorAnnotation() {
+            assertThat(SendMailCommand.class.isAnnotationPresent(
+                com.ultikits.ultitools.annotations.command.CmdExecutor.class
+            )).isTrue();
+        }
+
+        @Test
+        @DisplayName("@CmdExecutor 应该有正确的别名")
+        void shouldHaveCorrectAliases() {
+            com.ultikits.ultitools.annotations.command.CmdExecutor annotation =
+                SendMailCommand.class.getAnnotation(
+                    com.ultikits.ultitools.annotations.command.CmdExecutor.class
+                );
+
+            assertThat(annotation.alias()).contains("sendmail", "sm");
+        }
+
+        @Test
+        @DisplayName("@CmdExecutor 应该有正确的权限")
+        void shouldHaveCorrectPermission() {
+            com.ultikits.ultitools.annotations.command.CmdExecutor annotation =
+                SendMailCommand.class.getAnnotation(
+                    com.ultikits.ultitools.annotations.command.CmdExecutor.class
+                );
+
+            assertThat(annotation.permission()).isEqualTo("ultimail.send");
+        }
+
+        @Test
+        @DisplayName("类应该有 @CmdTarget(PLAYER) 注解")
+        void shouldHavePlayerTarget() {
+            com.ultikits.ultitools.annotations.command.CmdTarget annotation =
+                SendMailCommand.class.getAnnotation(
+                    com.ultikits.ultitools.annotations.command.CmdTarget.class
+                );
+
+            assertThat(annotation).isNotNull();
+            assertThat(annotation.value()).isEqualTo(
+                com.ultikits.ultitools.annotations.command.CmdTarget.CmdTargetType.PLAYER
+            );
+        }
+
+        @Test
+        @DisplayName("应该继承 AbstractCommandExecutor")
+        void shouldExtendAbstractCommandExecutor() {
+            assertThat(com.ultikits.ultitools.abstracts.AbstractCommandExecutor.class)
+                .isAssignableFrom(SendMailCommand.class);
+        }
+    }
+
+    // ==================== ContentPrompt Tests ====================
+
+    @Nested
+    @DisplayName("ContentPrompt 内部类测试")
+    class ContentPromptTests {
+
+        @Test
+        @DisplayName("ContentPrompt 应该存在")
+        void shouldExist() throws Exception {
+            Class<?> contentPromptClass = Class.forName(
+                "com.ultikits.plugins.mail.commands.SendMailCommand$ContentPrompt"
+            );
+            assertThat(contentPromptClass).isNotNull();
+        }
+
+        @Test
+        @DisplayName("ContentPrompt 应该有正确的构造函数")
+        void shouldHaveCorrectConstructor() throws Exception {
+            Class<?> contentPromptClass = Class.forName(
+                "com.ultikits.plugins.mail.commands.SendMailCommand$ContentPrompt"
+            );
+            contentPromptClass.getDeclaredConstructor(String.class, String.class);
+        }
+
+        @Test
+        @DisplayName("ContentPrompt 应该实现 StringPrompt")
+        void shouldExtendStringPrompt() throws Exception {
+            Class<?> contentPromptClass = Class.forName(
+                "com.ultikits.plugins.mail.commands.SendMailCommand$ContentPrompt"
+            );
+            assertThat(org.bukkit.conversations.StringPrompt.class)
+                .isAssignableFrom(contentPromptClass);
+        }
+    }
+
+    // ==================== Constructor Tests ====================
+
+    @Nested
+    @DisplayName("构造函数测试")
+    class ConstructorTests {
+
+        @Test
+        @DisplayName("应该正确创建命令实例")
+        void shouldCreateInstance() {
+            SendMailCommand cmd = new SendMailCommand(mockMailService, mockPlugin);
+            assertThat(cmd).isNotNull();
+        }
+    }
+
+    // ==================== Permission Tests ====================
 
     @Nested
     @DisplayName("权限测试")
     class PermissionTests {
 
         @Test
-        @DisplayName("有发送权限时应该允许发送")
-        void shouldAllowSendWithPermission() {
-            sender.addAttachment(MockBukkit.createMockPlugin(), "ultimail.send", true);
+        @DisplayName("ADMIN_PERMISSION 常量应该是 ultimail.admin.multiattach")
+        void shouldHaveCorrectAdminPermission() throws Exception {
+            java.lang.reflect.Field field = SendMailCommand.class.getDeclaredField("ADMIN_PERMISSION");
+            field.setAccessible(true);
+            String value = (String) field.get(null);
 
-            assertThat(sender.hasPermission("ultimail.send")).isTrue();
-        }
-
-        @Test
-        @DisplayName("多物品权限应该只给管理员")
-        void shouldRequireAdminForMultiAttach() {
-            // Regular player
-            assertThat(sender.hasPermission("ultimail.admin.multiattach")).isFalse();
-
-            // Admin
-            sender.addAttachment(MockBukkit.createMockPlugin(), "ultimail.admin.multiattach", true);
-            assertThat(sender.hasPermission("ultimail.admin.multiattach")).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("对话式输入测试")
-    class ConversationInputTests {
-
-        @Test
-        @DisplayName("应该支持取消发送")
-        void shouldSupportCancellation() {
-            String input = "cancel";
-            
-            assertThat(input.equalsIgnoreCase("cancel")).isTrue();
-        }
-
-        @Test
-        @DisplayName("正常输入应该被接受")
-        void shouldAcceptNormalInput() {
-            String input = "这是邮件内容";
-            
-            assertThat(input).isNotEmpty();
-            assertThat(input.equalsIgnoreCase("cancel")).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("接收者验证测试")
-    class ReceiverValidationTests {
-
-        @Test
-        @DisplayName("在线玩家应该能接收邮件")
-        void shouldAcceptOnlinePlayer() {
-            assertThat(receiver.isOnline()).isTrue();
-            assertThat(server.getPlayerExact("receiver")).isNotNull();
-        }
-
-        @Test
-        @DisplayName("不存在的玩家应该被拒绝")
-        void shouldRejectNonExistentPlayer() {
-            assertThat(server.getPlayerExact("nonexistent_xyz")).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("物品移除测试")
-    class ItemRemovalTests {
-
-        @Test
-        @DisplayName("发送后应该从玩家背包移除物品")
-        void shouldRemoveItemFromInventory() {
-            ItemStack diamond = new ItemStack(Material.DIAMOND, 1);
-            sender.getInventory().setItemInMainHand(diamond);
-
-            // Simulate removal after send
-            sender.getInventory().setItemInMainHand(null);
-
-            assertThat(sender.getInventory().getItemInMainHand().getType()).isEqualTo(Material.AIR);
-        }
-
-        @Test
-        @DisplayName("取消发送时应该返还物品")
-        void shouldReturnItemOnCancel() {
-            ItemStack diamond = new ItemStack(Material.DIAMOND, 1);
-            
-            // Simulate returning item on cancel
-            sender.getInventory().addItem(diamond);
-
-            assertThat(sender.getInventory().contains(Material.DIAMOND)).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("命令帮助测试")
-    class HelpTests {
-
-        @Test
-        @DisplayName("帮助信息应该包含基础命令")
-        void shouldContainBasicCommands() {
-            String[] helpLines = {
-                "/sendmail <玩家> <标题>",
-                "/sendmail <玩家> <标题> attach"
-            };
-
-            for (String line : helpLines) {
-                assertThat(line).contains("/sendmail");
-            }
-        }
-
-        @Test
-        @DisplayName("帮助信息应该提示取消方式")
-        void shouldShowCancelHint() {
-            String cancelHint = "输入 'cancel' 可取消发送";
-
-            assertThat(cancelHint).contains("cancel");
+            assertThat(value).isEqualTo("ultimail.admin.multiattach");
         }
     }
 }

@@ -55,6 +55,20 @@ public final class XVersionUtils {
     }
 
     /**
+     * Get colored wool.
+     * <p>
+     * 获取彩色羊毛
+     *
+     * @param color the color
+     * @return colored wool ItemStack
+     */
+    public static ItemStack getColoredWool(Colors color) {
+        String materialName = color.name() + "_WOOL";
+        Optional<XMaterial> xMaterial = XMaterial.matchXMaterial(materialName);
+        return xMaterial.map(XMaterial::parseItem).orElse(new ItemStack(Material.WHITE_WOOL));
+    }
+
+    /**
      * Get oak sign.
      * <p>
      * 获取告示牌

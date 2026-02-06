@@ -193,7 +193,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
             // 先关闭当前 GUI（会触发 onClose 保存）
             player.closeInventory();
             // 返回主页
-            new RemoteBagMainGUI(player, bagService, config).open();
+            new RemoteBagMainGUI(player, bagService, lockService, config).open();
         });
         
         // 设置 lore
@@ -432,5 +432,15 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         }
         bagService.setBagPage(ownerUuid, pageNum, contents);
         bagService.saveBag(ownerUuid);
+    }
+
+    /**
+     * i18n 快捷方法
+     *
+     * @param key 翻译键
+     * @return 翻译后的文本
+     */
+    private static String i18n(String key) {
+        return UltiRemoteBag.getInstance().i18n(key);
     }
 }
