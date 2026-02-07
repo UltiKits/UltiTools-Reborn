@@ -23,6 +23,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
@@ -141,7 +142,9 @@ public class CommandManager {
     public void registerAll(UltiToolsPlugin plugin) {
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
-            if (commandExecutor.getClass().getAnnotation(CmdExecutor.class).manualRegister()) continue;
+            if (commandExecutor == null) continue;
+            CmdExecutor annotation = AnnotationUtils.findAnnotation(commandExecutor.getClass(), CmdExecutor.class);
+            if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, commandExecutor);
         }
     }

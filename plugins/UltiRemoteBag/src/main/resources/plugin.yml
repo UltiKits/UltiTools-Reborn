@@ -1,0 +1,8 @@
+name: UltiRemoteBag
+version: '${project.version}'
+main: com.ultikits.plugins.remotebag.UltiRemoteBag
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []

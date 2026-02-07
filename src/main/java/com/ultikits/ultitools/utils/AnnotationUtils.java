@@ -40,6 +40,13 @@ public class AnnotationUtils {
         if (annotation != null) {
             return annotation;
         }
+        // Search meta-annotations (annotations on this class's annotations)
+        for (Annotation ann : clazz.getAnnotations()) {
+            annotation = ann.annotationType().getAnnotation(annotationType);
+            if (annotation != null) {
+                return annotation;
+            }
+        }
         return findAnnotation(clazz.getSuperclass(), annotationType);
     }
 }

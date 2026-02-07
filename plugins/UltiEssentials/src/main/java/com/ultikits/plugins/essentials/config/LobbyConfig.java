@@ -29,10 +29,10 @@ public class LobbyConfig extends AbstractConfigEntity {
     private double z = 0.0;
 
     @ConfigEntry(path = "lobby.location.yaw", comment = "水平朝向")
-    private float yaw = 0.0f;
+    private double yaw = 0.0;
 
     @ConfigEntry(path = "lobby.location.pitch", comment = "垂直朝向")
-    private float pitch = 0.0f;
+    private double pitch = 0.0;
 
     public LobbyConfig() {
         super("config/lobby.yml");
@@ -46,7 +46,7 @@ public class LobbyConfig extends AbstractConfigEntity {
     public Location getLobbyLocation() {
         return new Location(
                 Bukkit.getWorld(world),
-                x, y, z, yaw, pitch
+                x, y, z, (float) yaw, (float) pitch
         );
     }
 

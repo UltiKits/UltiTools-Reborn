@@ -1,9 +1,14 @@
 package com.ultikits.ultitools.context;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.net.JarURLConnection;
 import java.net.URL;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Bean;
@@ -46,21 +51,61 @@ public class ComponentScanner {
      */
     public void scanPackage(String basePackage) {
         try {
-            ClassLoader classLoader = container.getClassLoader() != null ? 
+            ClassLoader classLoader = container.getClassLoader() != null ?
                 container.getClassLoader() : UltiTools.getJavaPluginClassLoader();
-            
+
             String path = basePackage.replace('.', '/');
             URL resource = classLoader.getResource(path);
-            
+
             if (resource != null) {
-                File directory = new File(resource.getFile());
-                if (directory.exists()) {
-                    scanDirectory(directory, basePackage, classLoader);
+                String protocol = resource.getProtocol();
+                if ("file".equals(protocol)) {
+                    // Classes on disk (development mode)
+                    File directory = new File(resource.getFile());
+                    if (directory.exists()) {
+                        scanDirectory(directory, basePackage, classLoader);
+                    }
+                } else if ("jar".equals(protocol)) {
+                    // Classes inside a JAR file (production mode)
+                    scanJar(resource, basePackage, classLoader);
                 }
             }
         } catch (Exception e) {
             // Log warning and continue
             System.err.println("Failed to scan package: " + basePackage + ", " + e.getMessage());
+        }
+    }
+
+    /**
+     * Scan inside a JAR file for class files.
+     * <br>
+     * 扫描JAR文件中的类文件。
+     */
+    private void scanJar(URL resource, String basePackage, ClassLoader classLoader) {
+        try {
+            JarURLConnection jarConnection = (JarURLConnection) resource.openConnection();
+            JarFile jarFile = jarConnection.getJarFile();
+            String packagePath = basePackage.replace('.', '/');
+
+            Enumeration<JarEntry> entries = jarFile.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry entry = entries.nextElement();
+                String entryName = entry.getName();
+
+                if (entryName.startsWith(packagePath) && entryName.endsWith(".class") && !entry.isDirectory()) {
+                    String className = entryName
+                            .replace('/', '.')
+                            .replace(".class", "");
+                    try {
+                        Class<?> clazz = classLoader.loadClass(className);
+                        processClass(clazz);
+                    } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                        // Ignore and continue
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to scan JAR for package: " + basePackage + ", " + e.getMessage());
         }
     }
 
@@ -98,7 +143,7 @@ public class ComponentScanner {
         if (isComponent(clazz)) {
             registerComponent(clazz);
         }
-        
+
         // Check for configuration annotations
         if (clazz.isAnnotationPresent(Configuration.class)) {
             registerConfiguration(clazz);
@@ -156,7 +201,7 @@ public class ComponentScanner {
             String beanName = getBeanName(clazz);
             Object configInstance = clazz.getDeclaredConstructor().newInstance();
             container.registerSingleton(beanName, configInstance);
-            
+
             // Process @Bean methods
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.isAnnotationPresent(Bean.class)) {

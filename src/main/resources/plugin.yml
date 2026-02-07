@@ -18,3 +18,5 @@ libraries:
   - cglib:cglib-nodep:3.3.0
   - org.slf4j:slf4j-api:1.8.0-beta4
   - com.sun.mail:javax.mail:1.6.2
+  - net.kyori:adventure-platform-bukkit:4.3.2
+  - com.zaxxer:HikariCP:5.1.0

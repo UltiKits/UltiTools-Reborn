@@ -83,10 +83,10 @@ public class RemoteBagConfig extends AbstractConfigEntity {
     private String errorSound = "ENTITY_VILLAGER_NO";
     
     @ConfigEntry(path = "sound.volume", comment = "音量 (0.0-1.0)")
-    private float soundVolume = 1.0f;
+    private double soundVolume = 1.0;
     
     @ConfigEntry(path = "sound.pitch", comment = "音调 (0.5-2.0)")
-    private float soundPitch = 1.0f;
+    private double soundPitch = 1.0;
     
     // ==================== 锁定设置 ====================
     

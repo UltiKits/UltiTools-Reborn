@@ -1,0 +1,8 @@
+name: UltiWorlds
+version: '${project.version}'
+main: com.ultikits.plugins.worlds.UltiWorlds
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []

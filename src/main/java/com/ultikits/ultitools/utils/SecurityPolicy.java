@@ -59,6 +59,7 @@ public class SecurityPolicy {
     // 允许的包前缀白名单
     private static final Set<String> TRUSTED_PACKAGE_PREFIXES = new HashSet<>(Arrays.asList(
         "com.ultikits.ultitools",
+        "com.ultikits.plugins",
         "org.bukkit",
         "net.md_5.bungee",
         "io.papermc.paper",

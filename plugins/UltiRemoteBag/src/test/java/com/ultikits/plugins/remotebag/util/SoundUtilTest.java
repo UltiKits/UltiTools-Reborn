@@ -124,8 +124,8 @@ class SoundUtilTest {
         @DisplayName("Should play sound using config volume and pitch")
         void playsSoundWithConfig() {
             when(config.isSoundEnabled()).thenReturn(true);
-            when(config.getSoundVolume()).thenReturn(0.8f);
-            when(config.getSoundPitch()).thenReturn(1.2f);
+            when(config.getSoundVolume()).thenReturn(0.8);
+            when(config.getSoundPitch()).thenReturn(1.2);
 
             SoundUtil.playSound(player, "BLOCK_CHEST_OPEN", config);
 
@@ -159,8 +159,8 @@ class SoundUtilTest {
         void playsOpenSound() {
             when(config.isSoundEnabled()).thenReturn(true);
             when(config.getOpenSound()).thenReturn("BLOCK_CHEST_OPEN");
-            when(config.getSoundVolume()).thenReturn(1.0f);
-            when(config.getSoundPitch()).thenReturn(1.0f);
+            when(config.getSoundVolume()).thenReturn(1.0);
+            when(config.getSoundPitch()).thenReturn(1.0);
 
             SoundUtil.playOpenSound(player, config);
 
@@ -194,8 +194,8 @@ class SoundUtilTest {
         void playsCloseSound() {
             when(config.isSoundEnabled()).thenReturn(true);
             when(config.getCloseSound()).thenReturn("BLOCK_CHEST_CLOSE");
-            when(config.getSoundVolume()).thenReturn(1.0f);
-            when(config.getSoundPitch()).thenReturn(1.0f);
+            when(config.getSoundVolume()).thenReturn(1.0);
+            when(config.getSoundPitch()).thenReturn(1.0);
 
             SoundUtil.playCloseSound(player, config);
 
@@ -229,8 +229,8 @@ class SoundUtilTest {
         void playsPurchaseSound() {
             when(config.isSoundEnabled()).thenReturn(true);
             when(config.getPurchaseSound()).thenReturn("ENTITY_PLAYER_LEVELUP");
-            when(config.getSoundVolume()).thenReturn(1.0f);
-            when(config.getSoundPitch()).thenReturn(1.0f);
+            when(config.getSoundVolume()).thenReturn(1.0);
+            when(config.getSoundPitch()).thenReturn(1.0);
 
             SoundUtil.playPurchaseSound(player, config);
 
@@ -264,8 +264,8 @@ class SoundUtilTest {
         void playsErrorSound() {
             when(config.isSoundEnabled()).thenReturn(true);
             when(config.getErrorSound()).thenReturn("ENTITY_VILLAGER_NO");
-            when(config.getSoundVolume()).thenReturn(1.0f);
-            when(config.getSoundPitch()).thenReturn(1.0f);
+            when(config.getSoundVolume()).thenReturn(1.0);
+            when(config.getSoundPitch()).thenReturn(1.0);
 
             SoundUtil.playErrorSound(player, config);
 
@@ -298,8 +298,8 @@ class SoundUtilTest {
         @DisplayName("Should play UI_BUTTON_CLICK at half volume")
         void playsPageSoundAtHalfVolume() {
             when(config.isSoundEnabled()).thenReturn(true);
-            when(config.getSoundVolume()).thenReturn(1.0f);
-            when(config.getSoundPitch()).thenReturn(1.0f);
+            when(config.getSoundVolume()).thenReturn(1.0);
+            when(config.getSoundPitch()).thenReturn(1.0);
 
             SoundUtil.playPageSound(player, config);
 
@@ -315,8 +315,8 @@ class SoundUtilTest {
         @DisplayName("Should scale volume from config")
         void scalesVolumeFromConfig() {
             when(config.isSoundEnabled()).thenReturn(true);
-            when(config.getSoundVolume()).thenReturn(0.6f);
-            when(config.getSoundPitch()).thenReturn(1.5f);
+            when(config.getSoundVolume()).thenReturn(0.6);
+            when(config.getSoundPitch()).thenReturn(1.5);
 
             SoundUtil.playPageSound(player, config);
 

@@ -16,8 +16,10 @@ import org.bukkit.Bukkit;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
@@ -104,7 +106,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -146,7 +149,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -286,18 +290,19 @@ public class PluginManager {
                 }
                 
                 try {
-                    // 使用安全的类加载方法
-                    Class<?> aClass = ClassLoaderUtils.loadPluginClass(className);
+                    // Use security-validated class loading (checks dangerous classes/packages)
+                    // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
                     if (IPlugin.class.isAssignableFrom(aClass)) {
                         return aClass.asSubclass(UltiToolsPlugin.class);
                     }
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
                     // 记录但不中断，继续扫描其他类
-                    Bukkit.getLogger().log(Level.FINE, 
+                    Bukkit.getLogger().log(Level.FINE,
                         "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
                 } catch (SecurityException e) {
-                    // 安全异常需要记录
-                    Bukkit.getLogger().log(Level.WARNING, 
+                    // 安全异常需要记录 — only triggers for actually dangerous classes
+                    Bukkit.getLogger().log(Level.WARNING,
                         "[UltiTools-API] Security violation while loading class: " + className + " - " + e.getMessage());
                 }
             }
@@ -328,13 +333,8 @@ public class PluginManager {
         
         // 验证jar文件结构
         try (JarFile jar = new JarFile(jarFile)) {
-            // 检查是否有plugin.yml
-            if (jar.getEntry("plugin.yml") == null) {
-                Bukkit.getLogger().log(Level.WARNING, 
-                    "[UltiTools-API] No plugin.yml found in jar: " + jarFile.getName());
-                return false;
-            }
-            
+            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
+
             // 统计条目数量
             Enumeration<JarEntry> entries = jar.entries();
             int entryCount = 0;
@@ -459,6 +459,28 @@ public class PluginManager {
             }
             
             pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+
+            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+            String[] scanPackages = getPluginScanPackages(pluginClass);
+            if (scanPackages.length > 0) {
+                pluginContext.scanComponents(scanPackages);
+            }
+
+            // Register config entities as beans for @Autowired injection
+            java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
+                UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
+            if (configMap != null) {
+                for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
+                    String beanName = config.getClass().getSimpleName();
+                    beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                    pluginContext.registerSingleton(beanName, config);
+                }
+            }
+
+            // Set the static instance field before refresh() so @PostConstruct methods
+            // can call Xxx.getInstance().getDataOperator() etc.
+            setPluginStaticInstance(pluginClass, plugin);
+
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -548,6 +570,53 @@ public class PluginManager {
         }
     }
     
+    /**
+     * Set the static instance field on a plugin class before @PostConstruct runs.
+     * Most modules follow the pattern: private static XxxPlugin instance;
+     * This enables @PostConstruct methods to call Xxx.getInstance().getDataOperator() etc.
+     * <br>
+     * 在 @PostConstruct 运行之前设置插件类的静态 instance 字段。
+     *
+     * @param pluginClass the plugin class <br> 插件类
+     * @param plugin      the plugin instance <br> 插件实例
+     */
+    private void setPluginStaticInstance(Class<? extends UltiToolsPlugin> pluginClass, UltiToolsPlugin plugin) {
+        try {
+            java.lang.reflect.Field instanceField = pluginClass.getDeclaredField("instance");
+            if (java.lang.reflect.Modifier.isStatic(instanceField.getModifiers())) {
+                instanceField.setAccessible(true);
+                instanceField.set(null, plugin);
+            }
+        } catch (NoSuchFieldException ignored) {
+            // Not all plugins have a static instance field — this is fine
+        } catch (Exception e) {
+            Bukkit.getLogger().log(Level.FINE,
+                "[UltiTools-API] Could not pre-set static instance for " + pluginClass.getName());
+        }
+    }
+
+    /**
+     * Get scan packages for a plugin class.
+     * Reads from @UltiToolsModule or @ComponentScan annotations, defaults to plugin class package.
+     * <br>
+     * 获取插件类的扫描包。
+     *
+     * @param pluginClass plugin class <br> 插件类
+     * @return scan packages <br> 扫描包
+     */
+    private String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
+        UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
+        if (module != null && module.scanBasePackages().length > 0) {
+            return module.scanBasePackages();
+        }
+        ComponentScan componentScan = pluginClass.getAnnotation(ComponentScan.class);
+        if (componentScan != null) {
+            if (componentScan.value().length > 0) return componentScan.value();
+            if (componentScan.basePackages().length > 0) return componentScan.basePackages();
+        }
+        return new String[]{pluginClass.getPackage().getName()};
+    }
+
     /**
      * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
      * <br>

@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
@@ -87,7 +88,9 @@ public class ListenerManager {
     public void registerAll(UltiToolsPlugin plugin) {
         for (String listenerBean : plugin.getContext().getBeanNamesForType(Listener.class)) {
             Listener listener = plugin.getContext().getBean(listenerBean, Listener.class);
-            if (listener.getClass().getAnnotation(EventListener.class).manualRegister()) continue;
+            if (listener == null) continue;
+            EventListener annotation = AnnotationUtils.findAnnotation(listener.getClass(), EventListener.class);
+            if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, listener);
         }
     }

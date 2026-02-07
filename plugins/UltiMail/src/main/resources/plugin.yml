@@ -1,0 +1,8 @@
+name: UltiMail
+version: '${project.version}'
+main: com.ultikits.plugins.mail.UltiMail
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []

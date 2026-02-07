@@ -1,0 +1,8 @@
+name: UltiLogin
+version: '${project.version}'
+main: com.ultikits.plugins.login.UltiLogin
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []

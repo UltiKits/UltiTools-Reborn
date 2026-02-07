@@ -96,8 +96,15 @@ public class ConfigManager {
         for (Class<?> clazz : classes) {
             String path = clazz.getAnnotation(ConfigEntity.class).value();
             try {
-                AbstractConfigEntity configEntity =
-                        (AbstractConfigEntity) clazz.getDeclaredConstructor(String.class).newInstance(path);
+                AbstractConfigEntity configEntity;
+                try {
+                    configEntity =
+                            (AbstractConfigEntity) clazz.getDeclaredConstructor(String.class).newInstance(path);
+                } catch (NoSuchMethodException e) {
+                    // Try no-arg constructor (class may hardcode path via super() call)
+                    configEntity =
+                            (AbstractConfigEntity) clazz.getDeclaredConstructor().newInstance();
+                }
                 register(plugin, configEntity);
             } catch (InstantiationException |
                      InvocationTargetException |
@@ -177,6 +184,18 @@ public class ConfigManager {
             }
         }
         return configs;
+    }
+
+    /**
+     * Get all config entities for a plugin.
+     * <br>
+     * 获取插件的所有配置实体
+     *
+     * @param plugin UltiTools module <br> UltiTools模块
+     * @return All config entities <br> 所有配置实体
+     */
+    public Map<String, AbstractConfigEntity> getAllConfigEntities(UltiToolsPlugin plugin) {
+        return pluginConfigMap.get(plugin);
     }
 
     /**

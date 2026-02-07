@@ -50,12 +50,12 @@ public final class SoundUtil {
         if (!config.isSoundEnabled()) {
             return;
         }
-        playSound(player, soundName, config.getSoundVolume(), config.getSoundPitch());
+        playSound(player, soundName, (float) config.getSoundVolume(), (float) config.getSoundPitch());
     }
-    
+
     /**
      * 播放打开背包音效
-     * 
+     *
      * @param player 玩家
      * @param config 配置对象
      */
@@ -63,12 +63,12 @@ public final class SoundUtil {
         if (!config.isSoundEnabled()) {
             return;
         }
-        playSound(player, config.getOpenSound(), config.getSoundVolume(), config.getSoundPitch());
+        playSound(player, config.getOpenSound(), (float) config.getSoundVolume(), (float) config.getSoundPitch());
     }
-    
+
     /**
      * 播放关闭背包音效
-     * 
+     *
      * @param player 玩家
      * @param config 配置对象
      */
@@ -76,12 +76,12 @@ public final class SoundUtil {
         if (!config.isSoundEnabled()) {
             return;
         }
-        playSound(player, config.getCloseSound(), config.getSoundVolume(), config.getSoundPitch());
+        playSound(player, config.getCloseSound(), (float) config.getSoundVolume(), (float) config.getSoundPitch());
     }
-    
+
     /**
      * 播放购买成功音效
-     * 
+     *
      * @param player 玩家
      * @param config 配置对象
      */
@@ -89,12 +89,12 @@ public final class SoundUtil {
         if (!config.isSoundEnabled()) {
             return;
         }
-        playSound(player, config.getPurchaseSound(), config.getSoundVolume(), config.getSoundPitch());
+        playSound(player, config.getPurchaseSound(), (float) config.getSoundVolume(), (float) config.getSoundPitch());
     }
-    
+
     /**
      * 播放错误提示音效
-     * 
+     *
      * @param player 玩家
      * @param config 配置对象
      */
@@ -102,12 +102,12 @@ public final class SoundUtil {
         if (!config.isSoundEnabled()) {
             return;
         }
-        playSound(player, config.getErrorSound(), config.getSoundVolume(), config.getSoundPitch());
+        playSound(player, config.getErrorSound(), (float) config.getSoundVolume(), (float) config.getSoundPitch());
     }
-    
+
     /**
      * 播放翻页音效
-     * 
+     *
      * @param player 玩家
      * @param config 配置对象
      */
@@ -116,6 +116,6 @@ public final class SoundUtil {
             return;
         }
         // 翻页使用轻微的点击音效
-        playSound(player, "UI_BUTTON_CLICK", config.getSoundVolume() * 0.5f, config.getSoundPitch());
+        playSound(player, "UI_BUTTON_CLICK", (float) (config.getSoundVolume() * 0.5), (float) config.getSoundPitch());
     }
 }

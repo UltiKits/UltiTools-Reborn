@@ -28,6 +28,8 @@ public class DependenceManagers {
     public DependenceManagers(UltiTools plugin, ClassLoader classLoader) {
         this.context = new SimpleContainer();
         this.context.setClassLoader(classLoader);
+        // Register the main plugin so modules can resolve Plugin/JavaPlugin dependencies
+        context.registerSingleton("ultiTools", plugin);
         initAdventure(plugin);
         initInventoryAPI(plugin);
         initCoreServices();

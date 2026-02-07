@@ -4,6 +4,7 @@ import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldInventory;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -35,6 +36,7 @@ public class InventoryIsolationService {
     // Cache world groups for fast lookup
     private final Map<String, String> worldGroupCache = new ConcurrentHashMap<>();
     
+    @PostConstruct
     public void init() {
         this.dataOperator = UltiWorlds.getInstance().getDataOperator(WorldInventory.class);
         

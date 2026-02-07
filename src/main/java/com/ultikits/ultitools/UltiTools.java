@@ -14,10 +14,13 @@ import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -72,6 +75,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private final CommandManager commandManager = new CommandManager();
     @Getter
     private DependenceManagers dependenceManagers;
+    private URLClassLoader ultiToolsClassLoader;
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
@@ -164,9 +168,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onEnable() {
+        // Create class loader that includes module plugin JARs
+        ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+
         // External bukkit libraries initialization
         try {
-            dependenceManagers = new DependenceManagers(this, getClassLoader());
+            dependenceManagers = new DependenceManagers(this, ultiToolsClassLoader);
         } catch (Exception | NoClassDefFoundError error) {
             getLogger().log(Level.SEVERE, "Failed to initialize dependence managers", error);
             getServer().getPluginManager().disablePlugin(this);
@@ -215,7 +222,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            pluginManager.init(getClassLoader());
+            pluginManager.init(ultiToolsClassLoader);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -429,6 +436,40 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /**
+     * Get URLs for module plugin JARs in the UltiTools/plugins directory.
+     * <br>
+     * 获取 UltiTools/plugins 目录中模块插件JAR的URL。
+     *
+     * @return Array of URLs for module plugin JARs
+     */
+    private URL[] getModuleUrls() {
+        List<URL> urls = new ArrayList<>();
+
+        // Add server JAR
+        URL serverJar = getServerJar();
+        if (serverJar != null) {
+            urls.add(serverJar);
+        }
+
+        // Add module plugin JARs from UltiTools/plugins/
+        File pluginDir = new File(getDataFolder(), "plugins");
+        if (pluginDir.exists()) {
+            File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
+            if (pluginFiles != null) {
+                for (File f : pluginFiles) {
+                    try {
+                        urls.add(f.toURI().toURL());
+                    } catch (MalformedURLException e) {
+                        getLogger().log(Level.WARNING, "Failed to add module JAR to classpath: " + f.getName(), e);
+                    }
+                }
+            }
+        }
+
+        return urls.toArray(new URL[0]);
+    }
+
+    /**
      * Get the JavaPlugin class loader.
      * This ensures all class loading operations use the correct parent class loader.
      * <br>
@@ -440,6 +481,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public static ClassLoader getJavaPluginClassLoader() {
         UltiTools instance = getInstance();
         if (instance != null) {
+            if (instance.ultiToolsClassLoader != null) {
+                return instance.ultiToolsClassLoader;
+            }
             return instance.getClass().getClassLoader();
         }
         // Fallback for testing environments where plugin is not initialized

@@ -29,10 +29,10 @@ public class SpawnConfig extends AbstractConfigEntity {
     private double z = 0.0;
 
     @ConfigEntry(path = "spawn.location.yaw", comment = "水平朝向")
-    private float yaw = 0.0f;
+    private double yaw = 0.0;
 
     @ConfigEntry(path = "spawn.location.pitch", comment = "垂直朝向")
-    private float pitch = 0.0f;
+    private double pitch = 0.0;
 
     @ConfigEntry(path = "spawn.teleport-on-first-join", comment = "首次加入时传送到出生点")
     private boolean teleportOnFirstJoin = true;
@@ -52,7 +52,7 @@ public class SpawnConfig extends AbstractConfigEntity {
     public Location getSpawnLocation() {
         return new Location(
                 Bukkit.getWorld(world),
-                x, y, z, yaw, pitch
+                x, y, z, (float) yaw, (float) pitch
         );
     }
 

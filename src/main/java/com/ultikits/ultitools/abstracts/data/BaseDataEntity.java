@@ -3,15 +3,19 @@ package com.ultikits.ultitools.abstracts.data;
 import java.io.Serializable;
 
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
-import com.ultikits.ultitools.annotations.Column;
 
-import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 /**
  * Enhanced abstract data entity with generic ID type and lifecycle hooks.
  * Provides a type-safe foundation for persistent data entities.
  * Extends {@link AbstractDataEntity} to maintain compatibility with existing data operators.
+ * <p>
+ * Note: This class does NOT declare its own {@code id} field. It reuses the parent
+ * {@link AbstractDataEntity#getId()} field (type Object) and provides typed accessors
+ * via {@link #getId()} and {@link #setId(Serializable)}. This avoids Gson's
+ * "declares multiple JSON fields named 'id'" error.
  * <p>
  * 带有泛型 ID 类型和生命周期钩子的增强型抽象数据实体。
  * 为持久化数据实体提供类型安全的基础。
@@ -22,14 +26,33 @@ import lombok.EqualsAndHashCode;
  * @version 2.0.0
  * @since 6.2.0
  */
-@Data
-@EqualsAndHashCode(callSuper = false)
+@ToString
+@EqualsAndHashCode(callSuper = true)
 public abstract class BaseDataEntity<ID extends Serializable> extends AbstractDataEntity implements Serializable {
-    
+
     private static final long serialVersionUID = 1L;
-    
-    @Column("id")
-    private ID id;
+
+    /**
+     * Gets the entity ID with proper type casting.
+     * Delegates to parent's Object-typed id field.
+     *
+     * @return the typed entity ID
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public ID getId() {
+        return (ID) super.getId();
+    }
+
+    /**
+     * Sets the entity ID.
+     * Delegates to parent's Object-typed id field.
+     *
+     * @param id the entity ID to set
+     */
+    public void setId(ID id) {
+        super.setId(id);
+    }
     
     /**
      * Called before the entity is persisted for the first time.
@@ -108,7 +131,7 @@ public abstract class BaseDataEntity<ID extends Serializable> extends AbstractDa
      * @return true if the entity has no ID, false otherwise
      */
     public boolean isNew() {
-        return id == null;
+        return getId() == null;
     }
     
     /**

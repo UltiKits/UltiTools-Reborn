@@ -93,8 +93,8 @@ public final class UltiRemoteBagTestHelper {
         lenient().when(config.getCloseSound()).thenReturn("BLOCK_CHEST_CLOSE");
         lenient().when(config.getPurchaseSound()).thenReturn("ENTITY_PLAYER_LEVELUP");
         lenient().when(config.getErrorSound()).thenReturn("ENTITY_VILLAGER_NO");
-        lenient().when(config.getSoundVolume()).thenReturn(1.0f);
-        lenient().when(config.getSoundPitch()).thenReturn(1.0f);
+        lenient().when(config.getSoundVolume()).thenReturn(1.0);
+        lenient().when(config.getSoundPitch()).thenReturn(1.0);
         lenient().when(config.getLockTimeout()).thenReturn(300);
         lenient().when(config.isNotifyReadonlyViewers()).thenReturn(true);
         return config;

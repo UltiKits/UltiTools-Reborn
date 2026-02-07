@@ -1,0 +1,8 @@
+name: UltiTrade
+version: '${project.version}'
+main: com.ultikits.plugins.trade.UltiTrade
+authors:
+  - wisdommen
+  - UltiKits Team
+api-version: 620
+loadAfter: []

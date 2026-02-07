@@ -295,6 +295,14 @@ public class SimpleContainer {
             return (T) bean;
         }
 
+        // Fallback: check all singletons by assignability (interface/superclass resolution)
+        for (Object singleton : singletonObjects.values()) {
+            if (type.isInstance(singleton)) {
+                typeMappings.put(type, singleton); // cache for next lookup
+                return (T) singleton;
+            }
+        }
+
         if (parent != null) {
             return parent.getBean(type);
         }
@@ -588,9 +596,14 @@ public class SimpleContainer {
                     constructor.setAccessible(true);
                     bean = constructor.newInstance(constructorArgs);
                 } else {
-                    Constructor<?> constructor = beanClass.getDeclaredConstructor();
-                    constructor.setAccessible(true);
-                    bean = constructor.newInstance();
+                    // Try no-arg constructor first, fall back to constructor auto-wiring
+                    try {
+                        Constructor<?> constructor = beanClass.getDeclaredConstructor();
+                        constructor.setAccessible(true);
+                        bean = constructor.newInstance();
+                    } catch (NoSuchMethodException e) {
+                        bean = createBeanWithConstructorInjection(beanClass);
+                    }
                 }
             }
 
@@ -641,6 +654,44 @@ public class SimpleContainer {
             throw new RuntimeException("Failed to create bean: " + name, e);
         } finally {
             currentlyCreating.remove(name);
+        }
+    }
+
+    /**
+     * Create bean using constructor auto-wiring.
+     * Resolves constructor parameters from the container.
+     * <br>
+     * 使用构造器自动装配创建Bean。从容器中解析构造器参数。
+     *
+     * @param beanClass the class to instantiate <br> 要实例化的类
+     * @return new bean instance <br> 新的Bean实例
+     */
+    private Object createBeanWithConstructorInjection(Class<?> beanClass) {
+        Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
+        // Pick the constructor with the most parameters
+        Constructor<?> bestConstructor = null;
+        for (Constructor<?> c : constructors) {
+            if (bestConstructor == null || c.getParameterCount() > bestConstructor.getParameterCount()) {
+                bestConstructor = c;
+            }
+        }
+        if (bestConstructor == null) {
+            throw new RuntimeException("No constructor found for: " + beanClass.getName());
+        }
+        Class<?>[] paramTypes = bestConstructor.getParameterTypes();
+        Object[] args = new Object[paramTypes.length];
+        for (int i = 0; i < paramTypes.length; i++) {
+            args[i] = getBean(paramTypes[i]);
+            if (args[i] == null) {
+                throw new RuntimeException("Cannot resolve constructor parameter " + paramTypes[i].getName() +
+                    " for bean: " + beanClass.getName());
+            }
+        }
+        bestConstructor.setAccessible(true);
+        try {
+            return bestConstructor.newInstance(args);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to instantiate via constructor injection: " + beanClass.getName(), e);
         }
     }
 
