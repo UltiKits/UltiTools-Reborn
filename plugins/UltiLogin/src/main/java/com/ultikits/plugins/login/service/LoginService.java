@@ -24,10 +24,18 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.utils.CommonUtils;
+import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 /**
  * Service for managing player login and registration.
@@ -66,9 +74,17 @@ public class LoginService {
     
     // Timeout check task
     private BukkitTask timeoutTask;
-    
+
     // Random generator for password generation
     private final SecureRandom random = new SecureRandom();
+
+    // Pending panel login requests (requestId -> player UUID)
+    private final Map<String, UUID> pendingPanelRequests = new ConcurrentHashMap<>();
+
+    // Pending panel request timestamps (requestId -> creation time)
+    private final Map<String, Long> pendingPanelTimestamps = new ConcurrentHashMap<>();
+
+    private final Gson gson = new Gson();
     
     /**
      * Initialize the login service.
@@ -97,6 +113,8 @@ public class LoginService {
         failedAttempts.clear();
         lockedIps.clear();
         lockedUuids.clear();
+        pendingPanelRequests.clear();
+        pendingPanelTimestamps.clear();
     }
     
     /**
@@ -567,7 +585,7 @@ public class LoginService {
     private void checkTimeouts() {
         long now = System.currentTimeMillis();
         long timeout = config.getLoginTimeout() * 1000L;
-        
+
         for (Map.Entry<UUID, Long> entry : joinTimes.entrySet()) {
             if (now - entry.getValue() > timeout) {
                 Player player = Bukkit.getPlayer(entry.getKey());
@@ -577,6 +595,9 @@ public class LoginService {
                 }
             }
         }
+
+        // Clean up expired panel requests
+        cleanupExpiredPanelRequests();
     }
     
     /**
@@ -706,6 +727,198 @@ public class LoginService {
         return config;
     }
     
+    // ==================== Panel Magic Link Methods ====================
+
+    /**
+     * Check if UltiCloud panel integration is enabled.
+     */
+    public boolean isPanelEnabled() {
+        return config.isUlticloudEnabled();
+    }
+
+    /**
+     * Generate a 6-digit verification code.
+     */
+    public String generateVerificationCode() {
+        int code = 100000 + random.nextInt(900000);
+        return String.valueOf(code);
+    }
+
+    /**
+     * Request a panel magic link for a player.
+     * Calls the API Worker to create a magic link and returns the URL.
+     *
+     * @param player the player requesting the link
+     * @return PanelLinkResult with the URL or error message
+     */
+    public PanelLinkResult requestPanelLink(Player player) {
+        if (!isPanelEnabled()) {
+            return new PanelLinkResult(false, null, "Panel integration not enabled");
+        }
+
+        String requestId = UUID.randomUUID().toString();
+        String code = generateVerificationCode();
+        String playerUuid = player.getUniqueId().toString();
+        String playerName = player.getName();
+
+        // Track the pending request
+        pendingPanelRequests.put(requestId, player.getUniqueId());
+        pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+        // Build API request
+        String apiUrl;
+        try {
+            apiUrl = UltiTools.getEnv().getString("api-url");
+        } catch (Exception e) {
+            cleanupPanelRequest(requestId);
+            return new PanelLinkResult(false, null, "API URL not configured");
+        }
+
+        String serverUuid;
+        try {
+            serverUuid = CommonUtils.getUltiToolsUUID();
+        } catch (Exception e) {
+            cleanupPanelRequest(requestId);
+            return new PanelLinkResult(false, null, "Server UUID not available");
+        }
+
+        JsonObject body = new JsonObject();
+        body.addProperty("requestId", requestId);
+        body.addProperty("code", code);
+        body.addProperty("playerUuid", playerUuid);
+        body.addProperty("playerName", playerName);
+        body.addProperty("serverUuid", serverUuid);
+
+        try {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/json");
+
+            SimpleHttpClient.Response response = SimpleHttpClient.post(
+                apiUrl + "/auth/magic-link",
+                headers,
+                gson.toJson(body)
+            );
+
+            if (response.isOk()) {
+                JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
+                String url = responseBody.has("url") ? responseBody.get("url").getAsString() : null;
+                if (url != null) {
+                    return new PanelLinkResult(true, url, null);
+                }
+                cleanupPanelRequest(requestId);
+                return new PanelLinkResult(false, null, "Invalid response from API");
+            } else {
+                cleanupPanelRequest(requestId);
+                return new PanelLinkResult(false, null, "API returned status " + response.getStatus());
+            }
+        } catch (Exception e) {
+            cleanupPanelRequest(requestId);
+            UltiLogin.getInstance().getLogger().warn("Failed to request panel link: " + e.getMessage());
+            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle a panel login completion (called when API Worker confirms auth via WebSocket).
+     *
+     * @param requestId the request ID
+     * @return true if the player was successfully logged in
+     */
+    public boolean completePanelLogin(String requestId) {
+        UUID playerUuid = pendingPanelRequests.get(requestId);
+        if (playerUuid == null) {
+            return false;
+        }
+
+        cleanupPanelRequest(requestId);
+
+        Player player = Bukkit.getPlayer(playerUuid);
+        if (player == null || !player.isOnline()) {
+            return false;
+        }
+
+        // Complete the login
+        completeLogin(player);
+
+        // Update account last login
+        AccountData account = getAccount(playerUuid);
+        if (account != null) {
+            account.setLastIp(getPlayerIp(player));
+            account.setLastLogin(System.currentTimeMillis());
+            account.setLoginCount(account.getLoginCount() + 1);
+            try {
+                dataOperator.update(account);
+            } catch (IllegalAccessException e) {
+                UltiLogin.getInstance().getLogger().error("Failed to update account after panel login", e);
+            }
+        }
+
+        // Create session
+        if (config.isSessionEnabled()) {
+            String ip = getPlayerIp(player);
+            sessions.put(ip + ":" + playerUuid, System.currentTimeMillis());
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if a player has a pending panel login request.
+     */
+    public boolean hasPendingPanelRequest(UUID playerUuid) {
+        return pendingPanelRequests.containsValue(playerUuid);
+    }
+
+    /**
+     * Clean up a panel request.
+     */
+    private void cleanupPanelRequest(String requestId) {
+        pendingPanelRequests.remove(requestId);
+        pendingPanelTimestamps.remove(requestId);
+    }
+
+    /**
+     * Clean up expired panel requests (older than 5 minutes).
+     */
+    public void cleanupExpiredPanelRequests() {
+        long now = System.currentTimeMillis();
+        long expiry = 5 * 60 * 1000L; // 5 minutes
+        pendingPanelTimestamps.entrySet().removeIf(entry -> {
+            if (now - entry.getValue() > expiry) {
+                pendingPanelRequests.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+    }
+
+    /**
+     * Result of a panel link request.
+     */
+    public static class PanelLinkResult {
+        private final boolean success;
+        private final String url;
+        private final String error;
+
+        public PanelLinkResult(boolean success, String url, String error) {
+            this.success = success;
+            this.url = url;
+            this.error = error;
+        }
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public String getError() {
+            return error;
+        }
+    }
+
     /**
      * Result of login attempt.
      */

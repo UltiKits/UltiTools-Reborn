@@ -417,7 +417,7 @@ class LoginConfigTest {
         void allowedCommands() {
             LoginConfig config = createRealConfig();
             assertThat(config.getAllowedCommands())
-                    .containsExactly("login", "l", "register", "reg");
+                    .containsExactly("login", "l", "register", "reg", "panel");
         }
     }
 

@@ -91,11 +91,16 @@ public class LoginConfig extends AbstractConfigEntity {
     // ==================== 其他设置 ====================
     
     @ConfigEntry(path = "allowed-commands", comment = "未登录时允许执行的命令")
-    private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg");
+    private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg", "panel");
     
     @ConfigEntry(path = "blind-effect", comment = "未登录时给予失明效果")
     private boolean blindEffect = true;
-    
+
+    // ==================== UltiCloud 集成 ====================
+
+    @ConfigEntry(path = "ulticloud.enabled", comment = "Enable UltiCloud integration for web panel login")
+    private boolean ulticloudEnabled = false;
+
     // ==================== 消息配置 ====================
     
     @ConfigEntry(path = "messages.register-prompt", comment = "注册提示（命令模式）")

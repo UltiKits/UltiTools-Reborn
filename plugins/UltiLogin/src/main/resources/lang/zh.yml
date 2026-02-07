@@ -81,3 +81,10 @@ help_admin_forcelogin: "/logadmin forcelogin <玩家> - 强制登录玩家"
 help_admin_unregister: "/logadmin unregister <玩家> - 删除玩家账号"
 help_admin_info: "/logadmin info <玩家> - 查看玩家账号信息"
 
+# ==================== 面板集成 ====================
+panel_generating: "&7正在生成面板链接..."
+panel_link_sent: "&a点击打开面板: &n{URL}"
+panel_not_enabled: "&c此服务器未启用UltiCloud集成。"
+panel_auth_success: "&a已通过UltiCloud登录！"
+panel_error: "&c生成面板链接失败，请稍后再试。"
+

@@ -81,3 +81,10 @@ help_admin_forcelogin: "/logadmin forcelogin <player> - Force login player"
 help_admin_unregister: "/logadmin unregister <player> - Delete player account"
 help_admin_info: "/logadmin info <player> - View player account info"
 
+# ==================== Panel Integration ====================
+panel_generating: "&7Generating panel link..."
+panel_link_sent: "&aClick here to open the panel: &n{URL}"
+panel_not_enabled: "&cUltiCloud integration is not enabled on this server."
+panel_auth_success: "&aYou have been logged in via UltiCloud!"
+panel_error: "&cFailed to generate panel link. Please try again later."
+
