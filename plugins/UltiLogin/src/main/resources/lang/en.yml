@@ -86,5 +86,7 @@ panel_generating: "&7Generating panel link..."
 panel_link_sent: "&aClick here to open the panel: &n{URL}"
 panel_not_enabled: "&cUltiCloud integration is not enabled on this server."
 panel_auth_success: "&aYou have been logged in via UltiCloud!"
+panel_auth_success_owner: "&aYou have been logged in via UltiCloud! &7(Server Owner)"
+panel_auth_success_player: "&aYou have been logged in via UltiCloud! &7(Player)"
 panel_error: "&cFailed to generate panel link. Please try again later."
 

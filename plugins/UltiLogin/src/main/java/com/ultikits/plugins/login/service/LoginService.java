@@ -825,6 +825,17 @@ public class LoginService {
      * @return true if the player was successfully logged in
      */
     public boolean completePanelLogin(String requestId) {
+        return completePanelLogin(requestId, false);
+    }
+
+    /**
+     * Handle a panel login completion with role information.
+     *
+     * @param requestId the request ID
+     * @param isServerOwner whether the user is a server owner
+     * @return true if the player was successfully logged in
+     */
+    public boolean completePanelLogin(String requestId, boolean isServerOwner) {
         UUID playerUuid = pendingPanelRequests.get(requestId);
         if (playerUuid == null) {
             return false;
@@ -839,6 +850,11 @@ public class LoginService {
 
         // Complete the login
         completeLogin(player);
+
+        // Send role-specific message
+        String messageKey = isServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+            UltiLogin.getInstance().i18n(messageKey)));
 
         // Update account last login
         AccountData account = getAccount(playerUuid);

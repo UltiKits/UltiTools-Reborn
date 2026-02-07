@@ -86,5 +86,7 @@ panel_generating: "&7正在生成面板链接..."
 panel_link_sent: "&a点击打开面板: &n{URL}"
 panel_not_enabled: "&c此服务器未启用UltiCloud集成。"
 panel_auth_success: "&a已通过UltiCloud登录！"
+panel_auth_success_owner: "&a已通过UltiCloud登录！&7（服务器管理员）"
+panel_auth_success_player: "&a已通过UltiCloud登录！&7（玩家）"
 panel_error: "&c生成面板链接失败，请稍后再试。"
 
