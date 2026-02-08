@@ -42,6 +42,10 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private Runnable onConnectHandler;
     private Runnable onDisconnectHandler;
     private Consumer<String> onErrorHandler;
+    private static final int MAX_RECONNECT_ATTEMPTS = 5;
+    private static final long INITIAL_RECONNECT_DELAY_MS = 5000;
+    private int reconnectAttempts = 0;
+    private boolean intentionalDisconnect = false;
 
     /**
      * 构造函数
@@ -80,15 +84,12 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
      * 断开WebSocket连接
      */
     public void disconnect() {
-        // 停止心跳任务
+        intentionalDisconnect = true;
         if (heartbeatTask != null) {
             heartbeatTask.cancel(false);
         }
-        
         close(1000, "Client disconnect");
         isConnected = false;
-        
-        // 关闭心跳执行器
         heartbeatExecutor.shutdown();
     }
 
@@ -113,8 +114,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         // 记录发送的消息日志
         String msgType = message.has("type") && !message.get("type").isJsonNull() 
             ? message.get("type").getAsString() : "未知";
-        UltiTools.getInstance().getLogger().log(Level.INFO, 
-            String.format("[WebSocket发送] 类型: %s, 消息: %s", msgType, messageStr));
+        UltiTools.getInstance().getLogger().log(Level.FINE, 
+            String.format("[WebSocket发送] 类型: %s", msgType));
+
         
         send(messageStr);
     }
@@ -209,6 +211,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     @Override
     public void onOpen(ServerHandshake handshakedata) {
         isConnected = true;
+        reconnectAttempts = 0;
         UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("成功连接到UltiPanel WebSocket服务器！"));
         
         if (onConnectHandler != null) {
@@ -226,31 +229,43 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     public void onMessage(String message) {
         try {
             JsonObject jsonMessage = JsonParser.parseString(message).getAsJsonObject();
-            
-            // 记录接收的消息日志
-            String messageType = jsonMessage.has("type") && !jsonMessage.get("type").isJsonNull() 
+
+            String messageType = jsonMessage.has("type") && !jsonMessage.get("type").isJsonNull()
                 ? jsonMessage.get("type").getAsString() : null;
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("[WebSocket接收] 类型: %s, 消息: %s", 
-                    messageType != null ? messageType : "未知", message));
-            
-            handleMessage(jsonMessage);
-            
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : "未知"));
+
             if (messageHandler != null) {
                 messageHandler.accept(jsonMessage);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket消息解析失败: " + e.getMessage() + ", 原始消息: " + message);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket消息解析失败: " + e.getMessage());
         }
     }
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
         isConnected = false;
-        UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("已与UltiPanel WebSocket服务器断开连接！") + " Reason: " + reason);
-        
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+            UltiTools.getInstance().i18n("已与UltiPanel WebSocket服务器断开连接！") + " Reason: " + reason);
+
         if (onDisconnectHandler != null) {
             onDisconnectHandler.run();
+        }
+
+        if (!intentionalDisconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !heartbeatExecutor.isShutdown()) {
+            reconnectAttempts++;
+            long delay = INITIAL_RECONNECT_DELAY_MS * reconnectAttempts;
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                String.format("Attempting WebSocket reconnection %d/%d in %ds...",
+                    reconnectAttempts, MAX_RECONNECT_ATTEMPTS, delay / 1000));
+            heartbeatExecutor.schedule(() -> {
+                try {
+                    reconnect();
+                } catch (Exception e) {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket reconnection failed: " + e.getMessage());
+                }
+            }, delay, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -265,71 +280,4 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         }
     }
 
-    /**
-     * 处理接收到的消息
-     *
-     * @param message 接收到的JSON消息
-     */
-    private void handleMessage(JsonObject message) {
-        String type = message.has("type") && !message.get("type").isJsonNull() 
-            ? message.get("type").getAsString() : null;
-        if (type == null) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "收到无效的WebSocket消息：缺少type字段");
-            return;
-        }
-
-        switch (type) {
-            case "pong":
-                // 处理pong响应
-                UltiTools.getInstance().getLogger().log(Level.FINE, "收到pong响应");
-                break;
-            case "notification":
-                // 处理通知消息
-                JsonObject data = message.has("data") && message.get("data").isJsonObject() 
-                    ? message.getAsJsonObject("data") : null;
-                if (data != null) {
-                    String notificationMessage = data.has("message") && !data.get("message").isJsonNull() 
-                        ? data.get("message").getAsString() : null;
-                    UltiTools.getInstance().getLogger().log(Level.INFO, "收到通知: " + notificationMessage);
-                }
-                break;
-            case "subscribe":
-                // 处理订阅响应
-                JsonObject subscribeData = message.has("data") && message.get("data").isJsonObject() 
-                    ? message.getAsJsonObject("data") : null;
-                if (subscribeData != null && subscribeData.has("subscribed") 
-                    && !subscribeData.get("subscribed").isJsonNull() 
-                    && subscribeData.get("subscribed").getAsBoolean()) {
-                    String serverId = subscribeData.has("serverId") && !subscribeData.get("serverId").isJsonNull() 
-                        ? subscribeData.get("serverId").getAsString() : null;
-                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功订阅服务器: " + serverId);
-                }
-                break;
-            case "unsubscribe":
-                // 处理取消订阅响应
-                JsonObject unsubscribeData = message.has("data") && message.get("data").isJsonObject() 
-                    ? message.getAsJsonObject("data") : null;
-                if (unsubscribeData != null && unsubscribeData.has("unsubscribed") 
-                    && !unsubscribeData.get("unsubscribed").isJsonNull() 
-                    && unsubscribeData.get("unsubscribed").getAsBoolean()) {
-                    String serverId = unsubscribeData.has("serverId") && !unsubscribeData.get("serverId").isJsonNull() 
-                        ? unsubscribeData.get("serverId").getAsString() : null;
-                    UltiTools.getInstance().getLogger().log(Level.INFO, "成功取消订阅服务器: " + serverId);
-                }
-                break;
-            case "error":
-                // 处理错误消息
-                JsonObject errorData = message.has("data") && message.get("data").isJsonObject() 
-                    ? message.getAsJsonObject("data") : null;
-                if (errorData != null) {
-                    String errorMessage = errorData.has("message") && !errorData.get("message").isJsonNull() 
-                        ? errorData.get("message").getAsString() : null;
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "服务器错误: " + errorMessage);
-                }
-                break;
-            default:
-                UltiTools.getInstance().getLogger().log(Level.FINE, "收到未知类型的消息: " + type);
-                break;
-        }
-    }
 }

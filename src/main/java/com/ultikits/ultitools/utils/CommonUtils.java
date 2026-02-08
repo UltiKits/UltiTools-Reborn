@@ -36,7 +36,7 @@ public class CommonUtils {
      * @throws IOException if an I/O error occurs
      */
     @SuppressWarnings("unchecked")
-    public static String getUltiToolsUUID() throws IOException {
+    public static synchronized String getUltiToolsUUID() throws IOException {
         File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
         Map<String, Object> json;
         
@@ -53,6 +53,9 @@ public class CommonUtils {
         
         if (!json.containsKey("uuid")) {
             json.put("uuid", UUID.randomUUID().toString().replace("-", ""));
+            if (!dataFile.getParentFile().exists()) {
+                dataFile.getParentFile().mkdirs();
+            }
             try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
                 GSON.toJson(json, writer);
             }

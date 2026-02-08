@@ -96,23 +96,30 @@ public class HttpRequestUtils {
         Map<String, Object> paramMap = new HashMap<>();
         paramMap.put("username", username);
         paramMap.put("password", password);
-        
-        // 清理 baseUrl，移除可能的换行符或空白字符
+
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         String fullUrl = cleanBaseUrl + "/user/getToken";
-        
-        // 使用 application/x-www-form-urlencoded 格式发送请求
+
         Map<String, String> headers = new HashMap<>();
         headers.put("Content-Type", "application/x-www-form-urlencoded");
-        
+
         Response response = SimpleHttpClient.post(fullUrl, headers, paramMap);
-        
+
+        if (!response.isOk()) {
+            throw new RuntimeException("Failed to get auth token: HTTP " + response.getStatus() + " - " + response.body());
+        }
+
         String tokenJson = response.body();
+        if (tokenJson == null || tokenJson.trim().isEmpty()) {
+            throw new RuntimeException("Empty response from auth endpoint");
+        }
+
         TokenEntity tokenEntity = new Gson().fromJson(tokenJson, TokenEntity.class);
-        
-        // 解码JWT payload以填充用户信息
+        if (tokenEntity == null || tokenEntity.getAccess_token() == null || tokenEntity.getAccess_token().isEmpty()) {
+            throw new RuntimeException("Auth response missing access_token");
+        }
+
         tokenEntity.decodeJwtPayload();
-        
         return tokenEntity;
     }
 
@@ -139,17 +146,18 @@ public class HttpRequestUtils {
      * 向API服务器注册新服务器。
      *
      * @param uuid   the unique identifier for the server <br> 服务器的唯一标识符
+     * @param name   the display name for the server <br> 服务器的显示名称
      * @param port   the port number of the server <br> 服务器的端口号
      * @param domain the domain name of the server <br> 服务器的域名
      * @param ssl    whether SSL is enabled <br> 是否启用SSL
      * @param token  the authentication token <br> 身份验证令牌
      * @return HttpResponse containing the registration result <br> 包含注册结果的HttpResponse
      */
-    protected static Response registerServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+    protected static Response registerServer(String uuid, String name, int port, String domain, boolean ssl, TokenEntity token) {
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
-                .name("MC Server")
+                .name(name)
                 .port(port)
                 .ssl(ssl)
                 .domain(domain)
@@ -157,9 +165,6 @@ public class HttpRequestUtils {
         
         // 使用 FormData 格式发送请求
         Map<String, Object> formMap = new HashMap<>();
-        System.out.println("Server data: " + new Gson().toJson(serverEntityVO));
-        System.out.println("Token user ID: " + token.getUser_id());
-        System.out.println("Decoded token info: " + token.getDecodedInfo());
 
         formMap.put("id", token.getUser_id());  // 使用token中的用户ID
         formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确

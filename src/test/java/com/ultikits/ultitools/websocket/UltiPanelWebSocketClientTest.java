@@ -327,15 +327,6 @@ class UltiPanelWebSocketClientTest {
     class PrivateMethodTests {
 
         @Test
-        @DisplayName("handleMessage 方法应该存在")
-        void handleMessageMethodShouldExist() throws NoSuchMethodException {
-            Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
-                "handleMessage", JsonObject.class);
-
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("startHeartbeat 方法应该存在")
         void startHeartbeatMethodShouldExist() throws NoSuchMethodException {
             Method method = UltiPanelWebSocketClient.class.getDeclaredMethod("startHeartbeat");

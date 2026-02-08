@@ -242,12 +242,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
         String password = UltiTools.getInstance().getConfig().getString("account.password");
         boolean loginRequired = username != null && password != null && !username.isEmpty() && !password.isEmpty();
         boolean loginSuccess = false;
-        try {
-            if (loginRequired) {
+        if (loginRequired) {
+            try {
                 loginSuccess = loginAccount(username, password);
+            } catch (Exception e) {
+                getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
             }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
         if (loginSuccess && getConfig().getBoolean("web-editor.enable")) {
             getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));

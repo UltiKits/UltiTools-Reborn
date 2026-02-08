@@ -67,10 +67,10 @@ class HttpRequestUtilsTest {
         @DisplayName("registerServer方法应该存在且返回SimpleHttpClient.Response")
         void registerServerMethodShouldExist() throws Exception {
             Method method = HttpRequestUtils.class.getDeclaredMethod(
-                "registerServer", String.class, int.class, String.class, boolean.class, TokenEntity.class);
+                "registerServer", String.class, String.class, int.class, String.class, boolean.class, TokenEntity.class);
             assertThat(method).isNotNull();
             assertThat(method.getReturnType()).isEqualTo(SimpleHttpClient.Response.class);
-            assertThat(method.getParameterCount()).isEqualTo(5);
+            assertThat(method.getParameterCount()).isEqualTo(6);
         }
 
         @Test
@@ -136,7 +136,7 @@ class HttpRequestUtilsTest {
         @DisplayName("registerServer方法应该是protected的")
         void registerServerShouldBeProtected() throws Exception {
             Method method = HttpRequestUtils.class.getDeclaredMethod(
-                "registerServer", String.class, int.class, String.class, boolean.class, TokenEntity.class);
+                "registerServer", String.class, String.class, int.class, String.class, boolean.class, TokenEntity.class);
             assertThat(Modifier.isProtected(method.getModifiers())).isTrue();
         }
 
