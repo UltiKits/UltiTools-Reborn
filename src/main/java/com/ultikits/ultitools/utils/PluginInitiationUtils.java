@@ -82,6 +82,56 @@ public class PluginInitiationUtils {
     }
 
     /**
+     * Login to UltiPanel using an existing token (from magic-link or saved token).
+     * Registers or updates the server without needing username/password.
+     * <br>
+     * 使用现有令牌登录UltiPanel（来自魔法链接或保存的令牌）。
+     *
+     * @param existingToken the pre-authenticated token
+     * @return true if server registration/update succeeded
+     * @throws IOException if an I/O error occurs
+     */
+    public static boolean loginWithToken(TokenEntity existingToken) throws IOException {
+        token = existingToken;
+        boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
+        String uuid = CommonUtils.getUltiToolsUUID();
+        int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
+        String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
+
+        try (Response uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token)) {
+            if (uuidResponse.getStatus() == 404) {
+                String serverName = org.bukkit.Bukkit.getServer().getName();
+                if (serverName == null || serverName.trim().isEmpty()) {
+                    serverName = "MC Server";
+                }
+                if (serverName.length() > 64) {
+                    serverName = serverName.substring(0, 64);
+                }
+                try (Response registerResponse = HttpRequestUtils.registerServer(uuid, serverName, port, domain, ssl, token)) {
+                    if (!registerResponse.isOk()) {
+                        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                            "Server registration failed: HTTP " + registerResponse.getStatus() + " - " + registerResponse.body());
+                        return false;
+                    }
+                }
+            } else if (uuidResponse.isOk()) {
+                try (Response updateResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token)) {
+                    if (!updateResponse.isOk()) {
+                        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                            "Server update failed: HTTP " + updateResponse.getStatus() + " - " + updateResponse.body());
+                        return false;
+                    }
+                }
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "Failed to check server status: HTTP " + uuidResponse.getStatus() + " - " + uuidResponse.body());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Initialize websocket.
      * <br>
      * 初始化websocket。
