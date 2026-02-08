@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -89,6 +92,90 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Extract the "data" field from a backend API envelope response.
+     * The backend wraps responses as {"code":"200","msg":"Success","data":...}.
+     * <br>
+     * 从后端API信封响应中提取"data"字段。
+     *
+     * @param body the raw JSON response body
+     * @param clazz the class to deserialize the data field into
+     * @param <T> the target type
+     * @return the deserialized data, or null if absent or response indicates error
+     */
+    private static <T> T unwrapData(String body, Class<T> clazz) {
+        try {
+            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+            if (!"200".equals(code)) {
+                return null;
+            }
+            JsonElement data = wrapper.get("data");
+            if (data == null || data.isJsonNull()) {
+                return null;
+            }
+            return GSON.fromJson(data, clazz);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract the "data" field from a backend API envelope response (generic type version).
+     * <br>
+     * 从后端API信封响应中提取"data"字段（泛型版本）。
+     *
+     * @param body the raw JSON response body
+     * @param type the Type to deserialize the data field into
+     * @param <T> the target type
+     * @return the deserialized data, or null if absent or response indicates error
+     */
+    private static <T> T unwrapData(String body, Type type) {
+        try {
+            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+            if (!"200".equals(code)) {
+                return null;
+            }
+            JsonElement data = wrapper.get("data");
+            if (data == null || data.isJsonNull()) {
+                return null;
+            }
+            return GSON.fromJson(data, type);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Extract a String value from the "data" field of a backend API envelope response.
+     * Handles both quoted JSON strings and primitive values.
+     * <br>
+     * 从后端API信封响应的"data"字段中提取字符串值。
+     *
+     * @param body the raw JSON response body
+     * @return the data as a String, or null if absent or response indicates error
+     */
+    private static String unwrapStringData(String body) {
+        try {
+            JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+            String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+            if (!"200".equals(code)) {
+                return null;
+            }
+            JsonElement data = wrapper.get("data");
+            if (data == null || data.isJsonNull()) {
+                return null;
+            }
+            if (data.isJsonPrimitive()) {
+                return data.getAsString();
+            }
+            return data.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Get plugin list online.
      * <br>
      * 在线获取插件列表。
@@ -105,7 +192,8 @@ public class PluginInstallUtils {
             }
             String body = httpResponse.body();
             Type listType = new TypeToken<List<PluginEntity>>(){}.getType();
-            return GSON.fromJson(body, listType);
+            List<PluginEntity> result = unwrapData(body, listType);
+            return result != null ? result : pluginEntities;
         }
     }
 
@@ -127,7 +215,7 @@ public class PluginInstallUtils {
             if (!httpResponse.isOk()) {
                 return null;
             }
-            return httpResponse.body();
+            return unwrapStringData(httpResponse.body());
         }
     }
 
@@ -149,7 +237,7 @@ public class PluginInstallUtils {
                 return null;
             }
             Type listType = new TypeToken<List<String>>(){}.getType();
-            return GSON.fromJson(httpResponse.body(), listType);
+            return unwrapData(httpResponse.body(), listType);
         }
     }
 
@@ -170,7 +258,7 @@ public class PluginInstallUtils {
             if (!httpResponse.isOk()) {
                 return null;
             }
-            return httpResponse.body();
+            return unwrapStringData(httpResponse.body());
         }
     }
 
@@ -191,7 +279,7 @@ public class PluginInstallUtils {
             if (!httpResponse.isOk()) {
                 return null;
             }
-            return httpResponse.body();
+            return unwrapStringData(httpResponse.body());
         }
     }
 
@@ -208,7 +296,7 @@ public class PluginInstallUtils {
             if (!httpResponse.isOk()) {
                 return null;
             }
-            return GSON.fromJson(httpResponse.body(), PluginEntity.class);
+            return unwrapData(httpResponse.body(), PluginEntity.class);
         }
     }
 

@@ -39,6 +39,8 @@
         <gui.version>4.3.0</gui.version>
         <!-- Default excluded test groups - override with -DexcludedGroups= to run isolated tests -->
         <excludedGroups>isolated</excludedGroups>
+        <!-- Default API URL for production; override with -Dultitools.api.url=http://localhost:8787 for dev -->
+        <ultitools.api.url>https://api.ultikits.com</ultitools.api.url>
     </properties>
 
     <distributionManagement>

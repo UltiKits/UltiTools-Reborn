@@ -3,6 +3,9 @@ package com.ultikits.ultitools.utils;
 import static com.ultikits.ultitools.utils.PluginInstallUtils.getPlugin;
 import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVersion;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
@@ -27,8 +30,28 @@ public class VersionUtils {
      * @return the newest UltiTools version string <br> UltiTools最新版本字符串
      */
     public static String getUltiToolsNewestVersion() {
-        try (Response httpResponse = SimpleHttpClient.get("https://api.ultikits.com/plugin/ultitools/newest")) {
-            return httpResponse.body();
+        try (Response httpResponse = SimpleHttpClient.get(PluginInstallUtils.getBaseUrl() + "/plugin/ultitools/newest")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            String body = httpResponse.body();
+            try {
+                JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+                String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+                if (!"200".equals(code)) {
+                    return null;
+                }
+                JsonElement data = wrapper.get("data");
+                if (data == null || data.isJsonNull()) {
+                    return null;
+                }
+                if (data.isJsonPrimitive()) {
+                    return data.getAsString();
+                }
+                return data.toString();
+            } catch (Exception e) {
+                return null;
+            }
         }
     }
 
