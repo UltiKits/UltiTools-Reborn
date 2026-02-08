@@ -165,9 +165,9 @@ EcoConfig config = UltiEconomy.getInstance().getConfig(EcoConfig.class);
 double interestRate = config.getInterestRate();
 ```
 
-### IOC Container
+### IoC Container
 
-UltiTools-API provides a Spring IOC container, which can manage all the Beans in your plugin and automatically inject dependencies.
+UltiTools-API provides a built-in IoC container with Spring-like dependency injection, three-level cache for circular dependency resolution, and AOP support via CGLIB proxies.
 
 ```java
 // @Service marks the type as a Bean, and UltiTools-API will automatically scan and register it
@@ -451,9 +451,7 @@ UltiTools-Reborn/
 | ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | Recorded every moment of our development journey          |
 | ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | The strongest Java IDE for a pleasant development experience |
 | ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | Helped solve many repetitive and tedious tasks        |
-| ![wakatime](https://img.shields.io/badge/Spring-6DB33F?style=for-the-badge&logo=spring&logoColor=white)                   | Brought many high-tech features to the plugin            |
 | ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | Official build tool                 |
-| ![Socket.io](https://img.shields.io/badge/Socket.io-black?style=for-the-badge&logo=socket.io&badgeColor=010101)            | Official built-in WebSocket client          |
 
 ## License
 
@@ -461,6 +459,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Related Projects
 
-- [UltiCore-Core](https://github.com/wisdommen/UltiCore-Core) - Cross-version compatibility layer
-- [UltiPanel](https://panel.ultikits.com) - Web-based server management dashboard
+- [UltiPanel Worker](https://github.com/UltiKits/UltiPanel-Worker) - Cloudflare Workers API backend
+- [UltiPanel Frontend](https://github.com/UltiKits/UltiPanelFrontend) - Vue 3 web dashboard
 - [UltiKits Plugins](https://www.spigotmc.org/resources/authors/wisdomme.505795/) - Official UltiTools modules
