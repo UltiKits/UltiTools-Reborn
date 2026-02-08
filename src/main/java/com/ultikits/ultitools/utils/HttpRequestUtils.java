@@ -93,6 +93,9 @@ public class HttpRequestUtils {
      * @return TokenEntity containing the authentication token <br> 包含身份验证令牌的TokenEntity
      */
     protected static TokenEntity getToken(String username, String password) {
+        if (!ApiRateLimiter.isAllowed("getToken", 30_000)) {
+            throw new RuntimeException("Rate limited: please wait before retrying authentication");
+        }
         Map<String, Object> paramMap = new HashMap<>();
         paramMap.put("username", username);
         paramMap.put("password", password);
@@ -154,6 +157,9 @@ public class HttpRequestUtils {
      * @return HttpResponse containing the registration result <br> 包含注册结果的HttpResponse
      */
     protected static Response registerServer(String uuid, String name, int port, String domain, boolean ssl, TokenEntity token) {
+        if (!ApiRateLimiter.isAllowed("registerServer", 60_000)) {
+            throw new RuntimeException("Rate limited: please wait before retrying server registration");
+        }
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
@@ -188,6 +194,9 @@ public class HttpRequestUtils {
      * @return HttpResponse containing the update result <br> 包含更新结果的HttpResponse
      */
     protected static Response updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
+        if (!ApiRateLimiter.isAllowed("updateServer", 60_000)) {
+            throw new RuntimeException("Rate limited: please wait before retrying server update");
+        }
         String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
         ServerEntityVO serverEntityVO = ServerEntityVO.builder()
                 .uuid(uuid)
