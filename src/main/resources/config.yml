@@ -20,6 +20,9 @@ web-editor:
     enable: true
     domain: "api.ultikits.com"
 
+# [DEPRECATED] Password-based login is deprecated.
+# Use /ulticloud login for secure passwordless authentication instead.
+# These fields are kept for backwards compatibility but will be removed in a future version.
 account:
   username: ""
   password: ""
