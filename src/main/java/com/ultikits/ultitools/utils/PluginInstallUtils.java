@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -37,7 +38,9 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
  * @since 6.0.0
  */
 public class PluginInstallUtils {
-    private static final Gson GSON = new Gson();
+    private static final Gson GSON = new GsonBuilder()
+            .setDateFormat("yyyy-MM-dd HH:mm:ss")
+            .create();
 
     // Use lazy initialization to avoid static initializer dependency on UltiTools
     private static volatile String baseUrl;
