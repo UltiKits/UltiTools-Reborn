@@ -31,6 +31,7 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Language;
@@ -52,6 +53,8 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.utils.ApiRateLimiter;
+import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
@@ -237,18 +240,36 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Initialize metrics
         new Metrics(this, 8652);
 
-        // Embed web server initialization & Account login
-        String username = UltiTools.getInstance().getConfig().getString("account.username");
-        String password = UltiTools.getInstance().getConfig().getString("account.password");
-        boolean loginRequired = username != null && password != null && !username.isEmpty() && !password.isEmpty();
+        // UltiCloud authentication — try saved token first, fall back to config password
         boolean loginSuccess = false;
-        if (loginRequired) {
-            try {
-                loginSuccess = loginAccount(username, password);
-            } catch (Exception e) {
-                getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
+        try {
+            // 1. Try saved token from data.json (magic-link login)
+            com.ultikits.ultitools.entities.TokenEntity savedToken = CloudAuthManager.loadSavedToken();
+            if (savedToken != null) {
+                getLogger().log(Level.INFO, "Found saved UltiCloud token, authenticating...");
+                if (ApiRateLimiter.isAllowed("startup-login")) {
+                    loginSuccess = PluginInitiationUtils.loginWithToken(savedToken);
+                } else {
+                    getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
+                }
             }
+
+            // 2. Fall back to config.yml password (legacy, will be deprecated)
+            if (!loginSuccess) {
+                String username = getConfig().getString("account.username");
+                String password = getConfig().getString("account.password");
+                boolean hasCredentials = username != null && password != null && !username.isEmpty() && !password.isEmpty();
+                if (hasCredentials && ApiRateLimiter.isAllowed("startup-login")) {
+                    loginSuccess = loginAccount(username, password);
+                    if (loginSuccess) {
+                        getLogger().log(Level.INFO, "Consider using /ulticloud login for passwordless authentication.");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
         }
+
         if (loginSuccess && getConfig().getBoolean("web-editor.enable")) {
             getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
             try {
@@ -270,7 +291,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         CommandManager commandManager = getCommandManager();
         commandManager.registerCoreCommand(new UltiToolsCommands());
         commandManager.registerCoreCommand(new PluginInstallCommands());
-        
+        commandManager.registerCoreCommand(new CloudLoginCommand());
+
         // Register log transmission test commands for development/testing
         // 注册日志传输测试命令（用于开发/测试）
         try {
@@ -286,12 +308,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         boolean finalLoginSuccess = loginSuccess;
         getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
-            if (loginRequired) {
-                if (finalLoginSuccess) {
-                    getLogger().log(Level.INFO, String.format(i18n("UltiKits账户 %s 登录成功！"), username));
-                } else {
-                    getLogger().log(Level.WARNING, String.format(i18n("UltiKits账户 %s 登录失败！云端相关功能将无法使用！"), username));
-                }
+            if (finalLoginSuccess) {
+                getLogger().log(Level.INFO, i18n("UltiCloud: Connected!"));
+            } else {
+                getLogger().log(Level.INFO, "UltiCloud: Not connected. Use /ulticloud login to authenticate.");
             }
             if (getConfig().getBoolean("web-editor.enable")) {
                 getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
@@ -326,6 +346,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             logStreamManager.shutdown();
         }
         
+        CloudAuthManager.stopPolling();
         dependenceManagers.closeAdventure();
         stopWebsocket();
         pluginManager.close();
