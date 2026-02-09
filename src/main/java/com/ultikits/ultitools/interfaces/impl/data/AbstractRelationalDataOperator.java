@@ -91,6 +91,22 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
     }
 
     protected ResultSetHandler<List<T>> getListHandler() {
+        // Build mappings from SQL column names to Java field names and boolean detection.
+        // Gson matches JSON keys to Java field names, so we must use field names (camelCase)
+        // as map keys, not SQL column names (snake_case).
+        Map<String, String> columnToFieldName = new LinkedHashMap<>();
+        Map<String, Boolean> booleanColumns = new LinkedHashMap<>();
+        for (Field f : ReflectionUtil.getFields(type)) {
+            if (f.isAnnotationPresent(Column.class)) {
+                Column col = f.getAnnotation(Column.class);
+                String sqlName = col.value().toLowerCase();
+                columnToFieldName.put(sqlName, f.getName());
+                if (f.getType() == boolean.class || f.getType() == Boolean.class) {
+                    booleanColumns.put(sqlName, true);
+                }
+            }
+        }
+
         return rs -> {
             List<T> list = new ArrayList<>();
             ResultSetMetaData meta = rs.getMetaData();
@@ -98,9 +114,15 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
             while (rs.next()) {
                 Map<String, Object> map = new LinkedHashMap<>();
                 for (int i = 1; i <= cols; i++) {
-                    // Convert column name to lowercase for consistent matching with Java field names
                     String colName = meta.getColumnLabel(i).toLowerCase();
-                    map.put(colName, rs.getObject(i));
+                    Object value = rs.getObject(i);
+                    // SQLite stores BOOLEAN as INTEGER (0/1); convert for Gson compatibility
+                    if (value instanceof Number && booleanColumns.containsKey(colName)) {
+                        value = ((Number) value).intValue() != 0;
+                    }
+                    // Use Java field name as key so Gson can match it during deserialization
+                    String fieldName = columnToFieldName.getOrDefault(colName, colName);
+                    map.put(fieldName, value);
                 }
                 String json = GSON.toJson(map);
                 list.add(GSON.fromJson(json, type));
