@@ -231,6 +231,7 @@ UltiTools-API includes built-in WebSocket support for remote server management t
 - **Log Streaming** - Real-time server log viewing
 - **File Management** - Remote config editing
 - **Plugin Control** - Enable/disable plugins remotely
+- **Magic Link Auth** - Players run `/panel` in-game to get a browser link; the plugin auto-detects completion and logs them in
 
 ```java
 // Custom WebSocket message handling
