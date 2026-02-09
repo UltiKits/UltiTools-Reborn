@@ -224,7 +224,17 @@ public class PluginInitiationUtils {
                     case "update_config":
                         handleConfigUpdate(data);
                         break;
-                    
+
+                    // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
+                    case "auth_complete":
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                            "Received auth_complete message: " + (data != null ? data.toString() : "null"));
+                        break;
+                    case "magic_link_response":
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                            "Received magic_link_response message: " + (data != null ? data.toString() : "null"));
+                        break;
+
                     default:
                         UltiTools.getInstance().getLogger().log(Level.WARNING, 
                             String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));

@@ -29,8 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
-
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -84,6 +82,9 @@ public class LoginService {
     // Pending panel request timestamps (requestId -> creation time)
     private final Map<String, Long> pendingPanelTimestamps = new ConcurrentHashMap<>();
 
+    // Active polling tasks per player (playerUUID -> task)
+    private final Map<UUID, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
+
     private final Gson gson = new Gson();
     
     /**
@@ -107,6 +108,10 @@ public class LoginService {
         if (timeoutTask != null) {
             timeoutTask.cancel();
         }
+        for (BukkitTask task : pollingTasks.values()) {
+            task.cancel();
+        }
+        pollingTasks.clear();
         loggedInPlayers.clear();
         joinTimes.clear();
         originalLocations.clear();
@@ -457,6 +462,10 @@ public class LoginService {
         loggedInPlayers.remove(uuid);
         joinTimes.remove(uuid);
         originalLocations.remove(uuid);
+        BukkitTask pollingTask = pollingTasks.remove(uuid);
+        if (pollingTask != null) {
+            pollingTask.cancel();
+        }
     }
     
     /**
@@ -816,6 +825,108 @@ public class LoginService {
             UltiLogin.getInstance().getLogger().warn("Failed to request panel link: " + e.getMessage());
             return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Start polling the Worker API for auth completion.
+     * Polls every 3 seconds for up to 5 minutes, then auto-cancels.
+     *
+     * @param playerUuid the player's UUID string
+     * @param player the online player
+     */
+    public void startAuthPolling(String playerUuid, Player player) {
+        UUID uuid = player.getUniqueId();
+
+        // Cancel any existing polling task for this player
+        BukkitTask existing = pollingTasks.remove(uuid);
+        if (existing != null) {
+            existing.cancel();
+        }
+
+        String apiUrl;
+        try {
+            apiUrl = UltiTools.getEnv().getString("api-url");
+        } catch (Exception e) {
+            UltiLogin.getInstance().getLogger().warn("Cannot start auth polling: API URL not configured");
+            return;
+        }
+
+        String pollUrl = apiUrl + "/auth/magic-link/poll?playerUuid=" + playerUuid;
+        final int maxPolls = 100; // 100 * 3s = 5 minutes
+        final int[] pollCount = {0};
+
+        BukkitTask task = Bukkit.getScheduler().runTaskTimerAsynchronously(UltiTools.getInstance(), () -> {
+            pollCount[0]++;
+
+            if (!player.isOnline() || pollCount[0] > maxPolls) {
+                BukkitTask self = pollingTasks.remove(uuid);
+                if (self != null) {
+                    self.cancel();
+                }
+                return;
+            }
+
+            try {
+                SimpleHttpClient.Response response = SimpleHttpClient.get(pollUrl);
+                if (!response.isOk()) {
+                    return;
+                }
+
+                JsonObject body = JsonParser.parseString(response.getBody()).getAsJsonObject();
+                JsonObject data = body.has("data") && body.get("data").isJsonObject()
+                    ? body.getAsJsonObject("data") : null;
+                if (data == null) {
+                    return;
+                }
+
+                String status = data.has("status") ? data.get("status").getAsString() : null;
+                if (!"completed".equals(status)) {
+                    return;
+                }
+
+                // Auth completed — cancel polling
+                BukkitTask self = pollingTasks.remove(uuid);
+                if (self != null) {
+                    self.cancel();
+                }
+
+                boolean isServerOwner = data.has("is_server_owner")
+                    && !data.get("is_server_owner").isJsonNull()
+                    && data.get("is_server_owner").getAsBoolean();
+
+                // Find the requestId for this player so completePanelLogin can clean up
+                String requestId = null;
+                for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
+                    if (entry.getValue().equals(uuid)) {
+                        requestId = entry.getKey();
+                        break;
+                    }
+                }
+
+                final String foundRequestId = requestId;
+                final boolean finalIsServerOwner = isServerOwner;
+
+                // Complete login on main thread
+                Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+                    if (foundRequestId != null) {
+                        completePanelLogin(foundRequestId, finalIsServerOwner);
+                    } else {
+                        // No pending request found, just complete login directly
+                        completeLogin(player);
+                        String messageKey = finalIsServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            UltiLogin.getInstance().i18n(messageKey)));
+                    }
+                });
+            } catch (Exception e) {
+                UltiLogin.getInstance().getLogger().debug("Auth poll error: " + e.getMessage());
+            }
+        }, 60L, 60L); // 60 ticks = 3 seconds
+
+        pollingTasks.put(uuid, task);
     }
 
     /**

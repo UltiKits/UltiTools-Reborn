@@ -70,6 +70,9 @@ public class PanelCommand extends AbstractCommendExecutor {
                     message.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
                         new ComponentBuilder(ChatColor.GRAY + "Click to open panel").create()));
                     player.spigot().sendMessage(message);
+
+                    // Start polling for auth completion
+                    loginService.startAuthPolling(player.getUniqueId().toString(), player);
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                         UltiLogin.getInstance().i18n("panel_error")));
