@@ -810,7 +810,14 @@ public class LoginService {
 
             if (response.isOk()) {
                 JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
-                String url = responseBody.has("url") ? responseBody.get("url").getAsString() : null;
+                // API returns wrapped response: {"code":"200","data":{"url":"..."}}
+                String url = null;
+                if (responseBody.has("data") && responseBody.get("data").isJsonObject()) {
+                    JsonObject data = responseBody.getAsJsonObject("data");
+                    url = data.has("url") ? data.get("url").getAsString() : null;
+                } else if (responseBody.has("url")) {
+                    url = responseBody.get("url").getAsString();
+                }
                 if (url != null) {
                     return new PanelLinkResult(true, url, null);
                 }

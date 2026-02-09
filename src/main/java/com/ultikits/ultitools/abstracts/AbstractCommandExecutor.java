@@ -1049,6 +1049,10 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
     private boolean checkParameters(String[] args, Method method, CommandSender commandSender, Command command) {
         // 从 mappings 中获取 method 对应的格式字符串
         String format = mappings.inverse().get(method);
+        // Handle zero-arg commands: empty format means no parameters expected
+        if (format.isEmpty()) {
+            return args.length == 0;
+        }
         // 按空格分割格式字符串
         String[] formatArgs = format.split(" ");
 
