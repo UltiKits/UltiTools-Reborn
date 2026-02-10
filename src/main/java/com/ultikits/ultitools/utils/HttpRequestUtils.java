@@ -172,7 +172,7 @@ public class HttpRequestUtils {
         // 使用 FormData 格式发送请求
         Map<String, Object> formMap = new HashMap<>();
 
-        formMap.put("id", token.getUser_id());  // 使用token中的用户ID
+        formMap.put("id", token.getUserIdAsString());  // 使用token中的用户ID（字符串形式避免浮点问题）
         formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
         
         Map<String, String> headers = new HashMap<>();
@@ -207,7 +207,7 @@ public class HttpRequestUtils {
         
         // 使用 FormData 格式发送请求
         Map<String, Object> formMap = new HashMap<>();
-        formMap.put("id", token.getUser_id());  // 使用token中的用户ID
+        formMap.put("id", token.getUserIdAsString());  // 使用token中的用户ID（字符串形式避免浮点问题）
         formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
         
         Map<String, String> headers = new HashMap<>();
