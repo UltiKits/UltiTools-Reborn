@@ -36,7 +36,7 @@ public class CloudLoginCommand extends AbstractCommandExecutor {
         }
 
         if (!ApiRateLimiter.isLoginAllowed()) {
-            long remaining = ApiRateLimiter.getRemainingCooldown("login", 300_000);
+            long remaining = ApiRateLimiter.getRemainingCooldown("login", 60_000);
             sender.sendMessage(ChatColor.RED + "Please wait " + remaining + " seconds before trying again.");
             return;
         }

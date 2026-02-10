@@ -32,6 +32,9 @@ public class ServerMonitorManager {
     private final long[] tpsHistory5m = new long[300];  // 5分钟TPS历史
     private final long[] tpsHistory15m = new long[900]; // 15分钟TPS历史
     private int historyIndex = 0;
+
+    // CPU采样（在Bukkit主线程定期采样，batch_update线程读取）
+    private volatile double lastCpuUsage = 0.0;
     
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
@@ -72,8 +75,8 @@ public class ServerMonitorManager {
         // 每5秒发送一次batch_update（包含status、metrics，每12个tick包含plugins，每次包含logs）
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
 
-        // 启动TPS计算任务
-        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTPS, 0L, 20L);
+        // 启动TPS计算 + CPU采样任务（每秒）
+        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
     }
     
     /**
@@ -150,32 +153,36 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 获取CPU使用率
+     * 获取CPU使用率（返回缓存值，由定期采样更新）
      */
     private double getCPUUsage() {
+        return lastCpuUsage;
+    }
+
+    /**
+     * 采样CPU使用率并更新缓存值
+     */
+    private void sampleCpuUsage() {
         try {
             OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
             if (osBean instanceof com.sun.management.OperatingSystemMXBean) {
                 com.sun.management.OperatingSystemMXBean sunOsBean = (com.sun.management.OperatingSystemMXBean) osBean;
                 double cpuLoad = sunOsBean.getProcessCpuLoad();
                 if (cpuLoad >= 0) {
-                    return cpuLoad * 100;
+                    lastCpuUsage = cpuLoad * 100;
+                    return;
                 }
             }
-            
+
             // 备选方案：使用系统负载
             double systemLoad = osBean.getSystemLoadAverage();
             if (systemLoad >= 0) {
-                // 将系统负载转换为百分比（近似值）
                 int processors = osBean.getAvailableProcessors();
-                return Math.min((systemLoad / processors) * 100, 100);
+                lastCpuUsage = Math.min((systemLoad / processors) * 100, 100);
             }
-            
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE, "无法获取CPU使用率: " + e.getMessage());
         }
-        
-        return 0.0; // 默认值
     }
     
     /**
@@ -428,14 +435,18 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 更新TPS计算 - 每秒执行一次
+     * 更新TPS计算 + CPU采样 - 每秒执行一次（20 ticks）
      */
-    private void updateTPS() {
+    private void updateTpsAndCpu() {
         long currentTime = System.currentTimeMillis();
         long timeDiff = currentTime - lastTick;
+
+        // CPU采样（每次调用都采样，让JVM有足够数据返回非-1值）
+        sampleCpuUsage();
         
-        // 计算这一秒的TPS（理论上应该接近1000ms）
-        double currentTPS = 1000.0 / Math.max(timeDiff, 50.0); // 防止除零，最小50ms
+        // Task runs every 20 ticks. At 20 TPS, timeDiff ≈ 1000ms.
+        // TPS = 20 ticks * (1000ms / actual_elapsed_ms)
+        double currentTPS = 20000.0 / Math.max(timeDiff, 50.0);
         currentTPS = Math.min(currentTPS, 20.0); // 限制最大TPS为20
         
         // 存储到历史数组

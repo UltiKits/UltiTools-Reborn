@@ -14,7 +14,7 @@ public class ApiRateLimiter {
 
     private static final Map<String, Long> lastCallTimestamps = new ConcurrentHashMap<>();
     private static final long DEFAULT_COOLDOWN_MS = 60_000; // 1 minute default
-    private static final long LOGIN_COOLDOWN_MS = 300_000;  // 5 minutes for login attempts
+    private static final long LOGIN_COOLDOWN_MS = 60_000;   // 1 minute for login attempts
 
     /**
      * Check if an API call is allowed. Returns true if enough time has passed
