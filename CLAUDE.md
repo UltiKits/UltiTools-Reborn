@@ -33,8 +33,8 @@ Coverage reports are generated automatically during `mvn test` → `target/site/
    - Component scanning → bean creation → `@Autowired` injection → `@PostConstruct`
    - Auto-registers `@CmdExecutor` commands and `@EventListener` listeners
    - Calls `plugin.registerSelf()`
-6. **WebSocket managers** — ServerMonitor, CommandExecution, FileOperation, LogStream
-7. **bStats metrics** → account login → WebSocket client connection
+6. **WebSocket managers** — ServerMonitor (batch_update), CommandExecution, FileOperation, LogStream
+7. **bStats metrics** → token-based UltiCloud auth → WebSocket client connection
 
 Shutdown reverses this: `unregisterSelf()` → `@PreDestroy` → close contexts → close DataStore.
 
@@ -76,6 +76,24 @@ Multi-layer plugin sandboxing via `SecurityPolicy.java` — enforced at classloa
 4. **JAR validation** — max 100MB file size, max 10,000 entries (Zip Bomb prevention), max 1,000 classes scanned per JAR
 
 Add trusted packages at runtime: `SecurityPolicy.addTrustedPackage("com.myplugin")`
+
+### UltiCloud Authentication
+
+Token-only authentication via `ulticloud login` (magic-link flow, **console-only** — cannot be run in-game). Password-based login (`loginAccount`/`getToken`) has been removed. On startup, the framework attempts to restore a saved token; if none exists, the server runs without cloud features until the admin authenticates from the server console.
+
+- **CloudAuthManager** — Handles magic-link login flow, token persistence, and session management
+- **Rate limiting** — All UltiCloud API calls are rate-limited via `ApiRateLimiter`
+- **WebSocket always connects** when authenticated (no `web-editor.enable` config gate)
+
+### WebSocket Batch Updates
+
+`ServerMonitorManager` sends a single `batch_update` WebSocket message every 5 seconds containing:
+- `status` — server status (always included)
+- `metrics` — TPS, memory, player count (always included)
+- `plugins` — plugin list (every 60 seconds / 12th tick)
+- `logs` — drained from `UltiPanelLogTransmitter` in external drain mode
+
+This replaces the previous approach of separate scheduled tasks for `server_status`, `plugin_list`, and `metrics_data`.
 
 ### Paper Libraries Loader
 
@@ -187,6 +205,7 @@ public class MyService {
 3. **Commands** with `manualRegister = true` need explicit registration via `getCommandManager().register()`
 4. **i18n** — Use `i18n("key")` method for translations, language files in `lang/`
 5. **Storage backends** — Configurable in `config.yml`: `json`, `sqlite` (default), `mysql`
-6. **AOP proxies** — `final` classes/methods can't be proxied; self-invocation bypasses AOP
-7. **SecurityPolicy** — Plugin classes must pass security checks at load time; add trusted packages via `SecurityPolicy.addTrustedPackage()` if a legitimate class is blocked
-8. **Paper vs Spigot** — Paper auto-downloads `libraries:` from `plugin.yml`; Spigot requires shaded dependencies
+6. **No `web-editor` or `account` config** — These sections were removed; WebSocket connects automatically when token-authenticated via `ulticloud login`
+7. **AOP proxies** — `final` classes/methods can't be proxied; self-invocation bypasses AOP
+8. **SecurityPolicy** — Plugin classes must pass security checks at load time; add trusted packages via `SecurityPolicy.addTrustedPackage()` if a legitimate class is blocked
+9. **Paper vs Spigot** — Paper auto-downloads `libraries:` from `plugin.yml`; Spigot requires shaded dependencies

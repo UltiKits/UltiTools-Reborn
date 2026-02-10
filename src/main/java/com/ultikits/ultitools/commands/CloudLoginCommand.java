@@ -24,7 +24,7 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
  *   /ulticloud status — Show current auth status
  */
 @CmdExecutor(description = "UltiCloud Authentication Commands", alias = "ulticloud", requireOp = true)
-@CmdTarget(CmdTarget.CmdTargetType.BOTH)
+@CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
 public class CloudLoginCommand extends AbstractCommandExecutor {
 
     @CmdMapping(format = "login")

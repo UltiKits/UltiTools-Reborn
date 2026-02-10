@@ -224,27 +224,15 @@ UltiTools also offers the Adventure API.
 
 ### WebSocket & UltiPanel Integration
 
-UltiTools-API includes built-in WebSocket support for remote server management through UltiPanel:
+UltiTools-API includes built-in WebSocket support for remote server management through UltiPanel. Authentication is token-only via `/ulticloud login` (magic-link flow — no passwords stored on the server).
 
-- **Real-time Monitoring** - Server TPS, memory, CPU, online players
+- **Batch Updates** - Single `batch_update` message every 5s with status, metrics, plugins (every 60s), and logs
+- **Real-time Monitoring** - Server TPS, memory, online players
 - **Remote Commands** - Execute commands from web dashboard
-- **Log Streaming** - Real-time server log viewing
+- **Log Streaming** - Real-time server log viewing via batch updates
 - **File Management** - Remote config editing
 - **Plugin Control** - Enable/disable plugins remotely
-- **Magic Link Auth** - Players run `/panel` in-game to get a browser link; the plugin auto-detects completion and logs them in
-
-```java
-// Custom WebSocket message handling
-@Service
-public class MyWebSocketHandler {
-    @Autowired
-    private UltiPanelWebSocketClient webSocketClient;
-    
-    public void sendCustomMessage(String type, Object data) {
-        webSocketClient.send(new WebSocketMessage(type, data));
-    }
-}
-```
+- **Magic Link Auth** - Admins run `ulticloud login` from the server console; the plugin auto-detects completion and connects to UltiPanel (this command cannot be used in-game)
 
 ## Quick Start
 
