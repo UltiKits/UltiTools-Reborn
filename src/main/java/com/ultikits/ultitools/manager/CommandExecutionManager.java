@@ -87,10 +87,8 @@ public class CommandExecutionManager {
         try {
             String command = commandData.has("command") && !commandData.get("command").isJsonNull() 
                 ? commandData.get("command").getAsString() : null;
-            String executor = commandData.has("executor") && !commandData.get("executor").isJsonNull() 
+            String executor = commandData.has("executor") && !commandData.get("executor").isJsonNull()
                 ? commandData.get("executor").getAsString() : null;
-            boolean async = commandData.has("async") && !commandData.get("async").isJsonNull() 
-                && commandData.get("async").getAsBoolean();
             String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull()
                 ? commandData.get("commandId").getAsString() : null;
 
@@ -115,20 +113,14 @@ public class CommandExecutionManager {
             long startTime = System.currentTimeMillis();
             
             UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("执行命令: %s (ID: %s, 执行者: %s, 异步: %s)", 
-                command, commandId, executor, async));
+                String.format("执行命令: %s (ID: %s, 执行者: %s)",
+                command, commandId, executor));
             
-            if (async) {
-                // 异步执行
-                Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
-                    executeCommandInternal(command, executor, commandId, startTime);
-                });
-            } else {
-                // 同步执行
-                Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
-                    executeCommandInternal(command, executor, commandId, startTime);
-                });
-            }
+            // Bukkit.dispatchCommand() MUST run on the main server thread.
+            // Paper's AsyncCatcher will reject async dispatch.
+            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                executeCommandInternal(command, executor, commandId, startTime);
+            });
             
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "执行命令时发生错误: " + e.getMessage());
