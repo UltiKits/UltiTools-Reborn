@@ -861,4 +861,153 @@ class CommandExecutionManagerTest {
             verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
+
+    @Nested
+    @DisplayName("Command Blocklist Security Tests")
+    class CommandBlocklistTests {
+
+        @Test
+        @DisplayName("should reject blocked commands")
+        void shouldRejectBlockedCommands() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Arrays.asList("op", "deop", "stop", "ban-ip"));
+            newManager.setBlockedCommands(blocked);
+
+            // Assert
+            assertThat(newManager.isCommandAllowed("op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("stop")).isFalse();
+            assertThat(newManager.isCommandAllowed("ban-ip 127.0.0.1")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should allow safe commands")
+        void shouldAllowSafeCommands() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Arrays.asList("op", "deop", "stop"));
+            newManager.setBlockedCommands(blocked);
+
+            // Assert
+            assertThat(newManager.isCommandAllowed("say Hello")).isTrue();
+            assertThat(newManager.isCommandAllowed("list")).isTrue();
+            assertThat(newManager.isCommandAllowed("tps")).isTrue();
+        }
+
+        @Test
+        @DisplayName("should strip leading slash from command")
+        void shouldStripLeadingSlash() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("op"));
+            newManager.setBlockedCommands(blocked);
+
+            // Assert
+            assertThat(newManager.isCommandAllowed("/op player123")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should reject default dangerous commands")
+        void shouldRejectDefaultDangerousCommands() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            // Using default blocklist
+
+            // Assert - test various dangerous commands
+            assertThat(newManager.isCommandAllowed("op someuser")).isFalse();
+            assertThat(newManager.isCommandAllowed("deop someuser")).isFalse();
+            assertThat(newManager.isCommandAllowed("stop")).isFalse();
+            assertThat(newManager.isCommandAllowed("restart")).isFalse();
+            assertThat(newManager.isCommandAllowed("reload")).isFalse();
+            assertThat(newManager.isCommandAllowed("ban-ip 1.2.3.4")).isFalse();
+            assertThat(newManager.isCommandAllowed("pardon-ip 1.2.3.4")).isFalse();
+            assertThat(newManager.isCommandAllowed("whitelist add player")).isFalse();
+            assertThat(newManager.isCommandAllowed("save-off")).isFalse();
+            assertThat(newManager.isCommandAllowed("save-all")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should be case insensitive")
+        void shouldBeCaseInsensitive() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("op"));
+            newManager.setBlockedCommands(blocked);
+
+            // Assert
+            assertThat(newManager.isCommandAllowed("OP player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("Op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("oP player123")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should reject null or empty commands")
+        void shouldRejectNullOrEmptyCommands() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            // Assert
+            assertThat(newManager.isCommandAllowed(null)).isFalse();
+            assertThat(newManager.isCommandAllowed("")).isFalse();
+            assertThat(newManager.isCommandAllowed("   ")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should extract base command correctly")
+        void shouldExtractBaseCommandCorrectly() {
+            // Arrange
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            java.util.Set<String> blocked = new java.util.HashSet<>(java.util.Collections.singletonList("teleport"));
+            newManager.setBlockedCommands(blocked);
+
+            // Assert
+            assertThat(newManager.isCommandAllowed("teleport player1 player2")).isFalse();
+            assertThat(newManager.isCommandAllowed("teleport @a ~ ~ ~")).isFalse();
+            assertThat(newManager.isCommandAllowed("  teleport   arg1   arg2  ")).isFalse();
+        }
+
+        @Test
+        @DisplayName("blocked command should send error result via WebSocket")
+        void blockedCommandShouldSendErrorResult() {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "op hacker123");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "blocked-cmd-test");
+
+            // Act
+            manager.executeCommand(commandData);
+
+            // Assert - should send error message, not schedule the command
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            assertThat(result.get("type").getAsString()).isEqualTo("command_result");
+
+            JsonObject data = result.getAsJsonObject("data");
+            assertThat(data.get("success").getAsBoolean()).isFalse();
+            assertThat(data.get("output").getAsString()).contains("blocked", "security");
+        }
+
+        @Test
+        @DisplayName("blocked command should not be scheduled")
+        void blockedCommandShouldNotBeScheduled() {
+            // Arrange
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "stop");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "stop-cmd-test");
+
+            int initialTaskCount = server.getScheduler().getPendingTasks().size();
+
+            // Act
+            manager.executeCommand(commandData);
+
+            // Assert - no new task should be scheduled
+            assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
+        }
+    }
 }

@@ -564,4 +564,50 @@ class FileOperationManagerTest {
             assertThat(java.lang.reflect.Modifier.isPrivate(field.getModifiers())).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("isPathAllowed 敏感文件阻止测试")
+    class IsPathAllowedTests {
+
+        @Test
+        @DisplayName("should block access to sensitive files")
+        void shouldBlockSensitiveFiles() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed("server.properties")).isFalse();
+            assertThat(manager.isPathAllowed("ops.json")).isFalse();
+            assertThat(manager.isPathAllowed("whitelist.json")).isFalse();
+            assertThat(manager.isPathAllowed("banned-ips.json")).isFalse();
+            assertThat(manager.isPathAllowed("banned-players.json")).isFalse();
+            assertThat(manager.isPathAllowed("eula.txt")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should allow access to plugin config files")
+        void shouldAllowPluginConfigs() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml")).isTrue();
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json")).isTrue();
+        }
+
+        @Test
+        @DisplayName("should block write to .jar files")
+        void shouldBlockJarWrites() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed("plugins/evil.jar")).isFalse();
+            assertThat(manager.isPathAllowed("server.jar")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should block null and empty paths")
+        void shouldBlockNullAndEmptyPaths() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed(null)).isFalse();
+            assertThat(manager.isPathAllowed("")).isFalse();
+            assertThat(manager.isPathAllowed("  ")).isFalse();
+        }
+    }
 }

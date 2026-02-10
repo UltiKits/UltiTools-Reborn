@@ -5,6 +5,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 
@@ -22,7 +25,18 @@ public class FileOperationManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
     private final Gson gson = new Gson();
-    
+
+    private static final Set<String> BLOCKED_FILES = new HashSet<String>(Arrays.asList(
+        "server.properties", "ops.json", "whitelist.json",
+        "banned-ips.json", "banned-players.json", "eula.txt",
+        "usercache.json", "bukkit.yml", "spigot.yml",
+        "paper.yml", "paper-global.yml", "paper-world-defaults.yml"
+    ));
+
+    private static final Set<String> BLOCKED_EXTENSIONS = new HashSet<String>(Arrays.asList(
+        ".jar", ".sh", ".bat", ".exe", ".class"
+    ));
+
     public FileOperationManager() {
         this.serverRoot = new File(System.getProperty("user.dir"));
     }
@@ -34,7 +48,44 @@ public class FileOperationManager {
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
     }
-    
+
+    /**
+     * 检查文件路径是否允许远程访问
+     * Check if a file path is allowed for remote access.
+     *
+     * @param path 文件路径
+     * @return 是否允许访问
+     */
+    public boolean isPathAllowed(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return false;
+        }
+
+        String normalized = path.trim().replace("\\", "/");
+        // Strip leading slash
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+
+        // Check blocked file names (basename only)
+        String fileName = normalized.contains("/")
+            ? normalized.substring(normalized.lastIndexOf("/") + 1)
+            : normalized;
+
+        if (BLOCKED_FILES.contains(fileName.toLowerCase())) {
+            return false;
+        }
+
+        // Check blocked extensions
+        for (String ext : BLOCKED_EXTENSIONS) {
+            if (fileName.toLowerCase().endsWith(ext)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * 处理文件操作请求
      */
@@ -85,6 +136,12 @@ public class FileOperationManager {
      */
     private void handleReadOperation(String path, JsonObject operationData, String operationId) {
         try {
+            if (!isPathAllowed(path)) {
+                sendFileOperationResult(operationId, "read", path, false,
+                    "Access denied: this file is protected", null);
+                return;
+            }
+
             File file = getSecureFile(path);
             if (!file.exists()) {
                 sendFileOperationResult(operationId, "read", path, false, "File not found", null);
@@ -129,12 +186,18 @@ public class FileOperationManager {
      */
     private void handleWriteOperation(String path, JsonObject operationData, String operationId) {
         try {
+            if (!isPathAllowed(path)) {
+                sendFileOperationResult(operationId, "write", path, false,
+                    "Access denied: this file is protected", null);
+                return;
+            }
+
             File file = getSecureFile(path);
-            String content = operationData.has("content") && !operationData.get("content").isJsonNull() 
+            String content = operationData.has("content") && !operationData.get("content").isJsonNull()
                 ? operationData.get("content").getAsString() : null;
-            boolean append = operationData.has("append") && !operationData.get("append").isJsonNull() 
+            boolean append = operationData.has("append") && !operationData.get("append").isJsonNull()
                 && operationData.get("append").getAsBoolean();
-            
+
             if (content == null) {
                 sendFileOperationResult(operationId, "write", path, false, "Content cannot be null", null);
                 return;
@@ -213,6 +276,12 @@ public class FileOperationManager {
      */
     private void handleDeleteOperation(String path, JsonObject operationData, String operationId) {
         try {
+            if (!isPathAllowed(path)) {
+                sendFileOperationResult(operationId, "delete", path, false,
+                    "Access denied: this file is protected", null);
+                return;
+            }
+
             File file = getSecureFile(path);
             if (!file.exists()) {
                 sendFileOperationResult(operationId, "delete", path, false, "File not found", null);

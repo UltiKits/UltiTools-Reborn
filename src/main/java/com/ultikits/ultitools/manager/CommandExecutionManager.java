@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -20,9 +23,53 @@ public class CommandExecutionManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;
     private final Gson gson = new Gson();
-    
+
+    /**
+     * 远程命令执行黑名单
+     * Blocklist of dangerous commands that should not be executed remotely
+     */
+    private Set<String> blockedCommands = new HashSet<>(Arrays.asList(
+        "op", "deop", "stop", "restart", "reload", "ban-ip",
+        "pardon-ip", "whitelist", "save-off", "save-all"
+    ));
+
     public CommandExecutionManager() {
         this.pendingCommands = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * 设置命令黑名单
+     * Set the blocklist of commands that should not be executed remotely
+     *
+     * @param commands Set of command names to block (case-insensitive)
+     */
+    public void setBlockedCommands(Set<String> commands) {
+        this.blockedCommands = commands;
+    }
+
+    /**
+     * 检查命令是否允许远程执行
+     * Check if a command is allowed for remote execution.
+     * Extracts the base command (first word) and checks against blocklist.
+     *
+     * @param command The command to check (with or without leading slash)
+     * @return true if command is allowed, false if blocked or invalid
+     */
+    public boolean isCommandAllowed(String command) {
+        if (command == null || command.trim().isEmpty()) {
+            return false;
+        }
+
+        String trimmed = command.trim();
+        // Strip leading slash
+        if (trimmed.startsWith("/")) {
+            trimmed = trimmed.substring(1);
+        }
+
+        // Extract base command (first word before space)
+        String baseCommand = trimmed.split("\\s+")[0].toLowerCase();
+
+        return !blockedCommands.contains(baseCommand);
     }
     
     /**
@@ -44,11 +91,23 @@ public class CommandExecutionManager {
                 ? commandData.get("executor").getAsString() : null;
             boolean async = commandData.has("async") && !commandData.get("async").isJsonNull() 
                 && commandData.get("async").getAsBoolean();
-            String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
+            String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull()
                 ? commandData.get("commandId").getAsString() : null;
-            
+
             if (command == null || command.trim().isEmpty()) {
                 sendCommandResult(commandId, false, "Command cannot be empty", 0);
+                return;
+            }
+
+            // 安全检查：检查命令是否在黑名单中
+            // Security check: verify command is not blocked
+            if (!isCommandAllowed(command)) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    String.format("Blocked remote command execution: %s (ID: %s)", command, commandId));
+                String blockedCmd = command.trim().startsWith("/")
+                    ? command.trim().substring(1).split("\\s+")[0]
+                    : command.trim().split("\\s+")[0];
+                sendCommandResult(commandId, false, "Command blocked by security policy: " + blockedCmd, 0);
                 return;
             }
             

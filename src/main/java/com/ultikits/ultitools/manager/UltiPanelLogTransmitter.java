@@ -26,7 +26,9 @@ import lombok.Setter;
  * @version 1.0.0
  */
 public class UltiPanelLogTransmitter {
-    
+
+    private static final int MAX_QUEUE_SIZE = 1000;
+
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
@@ -153,8 +155,13 @@ public class UltiPanelLogTransmitter {
      * 添加日志到批量队列
      */
     private void addToBatch(JsonObject logData) {
+        // Drop oldest entries if queue is full
+        while (logQueue.size() >= MAX_QUEUE_SIZE) {
+            logQueue.poll(); // Discard oldest
+        }
+
         logQueue.offer(logData);
-        
+
         // 如果队列满了，立即发送
         if (logQueue.size() >= batchSize) {
             sendBatch();
