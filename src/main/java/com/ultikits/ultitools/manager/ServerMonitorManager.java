@@ -1,6 +1,5 @@
 package com.ultikits.ultitools.manager;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
@@ -25,7 +24,8 @@ public class ServerMonitorManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ScheduledExecutorService scheduler;
     private boolean isMonitoring = false;
-    
+    private int tickCount = 0;
+
     // TPS计算相关
     private long lastTick = System.currentTimeMillis();
     private final long[] tpsHistory1m = new long[60];   // 1分钟TPS历史
@@ -59,19 +59,19 @@ public class ServerMonitorManager {
         // 等待WebSocket连接建立后，立即发送初始状态
         Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
             if (webSocketClient != null && webSocketClient.isConnected()) {
-                sendServerStatus();
+                sendBatchUpdate();
             }
         }, 20L); // 等待1秒
-        
-        // 按照文档建议，每30秒发送一次服务器状态
-        scheduler.scheduleAtFixedRate(this::sendServerStatus, 30, 30, TimeUnit.SECONDS);
-        
-        // 每60秒发送一次插件列表
-        scheduler.scheduleAtFixedRate(this::sendPluginList, 45, 60, TimeUnit.SECONDS);
-        
-        // 每2分钟发送一次性能数据
-        scheduler.scheduleAtFixedRate(this::sendMetricsData, 90, 120, TimeUnit.SECONDS);
-        
+
+        // 启用日志传输器的外部排空模式（日志将由batch_update统一发送）
+        LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+        if (lsm != null && lsm.getLogTransmitter() != null) {
+            lsm.getLogTransmitter().setExternalDrainMode(true);
+        }
+
+        // 每5秒发送一次batch_update（包含status、metrics，每12个tick包含plugins，每次包含logs）
+        scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
+
         // 启动TPS计算任务
         Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTPS, 0L, 20L);
     }
@@ -263,149 +263,165 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 发送插件列表
+     * 发送batch_update消息，合并status、metrics、plugins、logs到单条WebSocket帧
+     * 每5秒调用一次，plugins每12个tick（60秒）包含一次
      */
-    private void sendPluginList() {
+    private void sendBatchUpdate() {
         try {
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "plugin_list");
-            
-            JsonObject data = new JsonObject();
-            JsonArray plugins = new JsonArray();
-            
-            for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
-                JsonObject pluginInfo = new JsonObject();
-                pluginInfo.addProperty("name", plugin.getName());
-                pluginInfo.addProperty("version", plugin.getDescription().getVersion());
-                pluginInfo.addProperty("enabled", plugin.isEnabled());
-                
-                if (!plugin.getDescription().getAuthors().isEmpty()) {
-                    pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
-                } else {
-                    pluginInfo.addProperty("author", "Unknown");
-                }
-                
-                pluginInfo.addProperty("description", plugin.getDescription().getDescription());
-                plugins.add(pluginInfo);
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
             }
-            
-            data.add("plugins", plugins);
-            data.addProperty("totalCount", plugins.size());
-            
-            message.add("data", data);
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
             message.addProperty("serverId", webSocketClient.getServerId());
-            
+            message.addProperty("timestamp", System.currentTimeMillis());
+
+            JsonObject data = new JsonObject();
+
+            // 始终包含status
+            data.add("status", getCurrentServerStatusData());
+
+            // 始终包含metrics
+            data.add("metrics", getCurrentMetricsData());
+
+            // 每12个tick（60秒）包含plugins（Worker expects raw array, not wrapper object）
+            if (tickCount % 12 == 0) {
+                data.add("plugins", getCurrentPluginArray());
+            }
+
+            // 从日志传输器排空日志
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm != null && lsm.getLogTransmitter() != null) {
+                JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
+                if (logs.size() > 0) {
+                    data.add("logs", logs);
+                }
+            }
+
+            message.add("data", data);
             webSocketClient.sendMessage(message);
-            
+
+            tickCount++;
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送插件列表失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Failed to send batch update: " + e.getMessage(), e);
         }
     }
-    
+
     /**
-     * 发送性能统计数据
+     * 获取当前插件列表数组
+     */
+    private JsonArray getCurrentPluginArray() {
+        JsonArray plugins = new JsonArray();
+
+        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
+            JsonObject pluginInfo = new JsonObject();
+            pluginInfo.addProperty("name", plugin.getName());
+            pluginInfo.addProperty("version", plugin.getDescription().getVersion());
+            pluginInfo.addProperty("enabled", plugin.isEnabled());
+
+            if (plugin.getDescription().getAuthors() != null && !plugin.getDescription().getAuthors().isEmpty()) {
+                pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
+            } else {
+                pluginInfo.addProperty("author", "Unknown");
+            }
+
+            pluginInfo.addProperty("description", plugin.getDescription().getDescription());
+            plugins.add(pluginInfo);
+        }
+
+        return plugins;
+    }
+
+    /**
+     * 获取当前插件列表数据（带wrapper，用于独立plugin_list消息）
+     */
+    private JsonObject getCurrentPluginList() {
+        JsonObject data = new JsonObject();
+        JsonArray plugins = getCurrentPluginArray();
+        data.add("plugins", plugins);
+        data.addProperty("totalCount", plugins.size());
+        return data;
+    }
+
+    /**
+     * 获取当前性能统计数据
+     */
+    private JsonObject getCurrentMetricsData() {
+        JsonObject data = new JsonObject();
+
+        // 玩家活动统计
+        JsonObject playerActivity = new JsonObject();
+        playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
+        playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
+        data.add("playerActivity", playerActivity);
+
+        // 服务器性能
+        JsonObject serverPerformance = new JsonObject();
+        double[] tps = calculateTPS();
+        double avgTPS = 0;
+        for (double t : tps) {
+            avgTPS += t;
+        }
+        avgTPS /= tps.length;
+        serverPerformance.addProperty("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
+
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemory = runtime.maxMemory();
+        long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+        double memoryUsage = ((double) usedMemory / maxMemory) * 100;
+        serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
+
+        serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
+
+        data.add("serverPerformance", serverPerformance);
+
+        // 插件使用情况
+        JsonObject pluginUsage = new JsonObject();
+        pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
+        pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
+        data.add("pluginUsage", pluginUsage);
+
+        return data;
+    }
+
+    /**
+     * 发送性能统计数据（独立消息，用于on-demand请求）
      */
     public void sendMetricsData() {
         try {
             JsonObject message = new JsonObject();
             message.addProperty("type", "metrics_data");
-            
-            JsonObject data = new JsonObject();
-            
-            // 玩家活动统计
-            JsonObject playerActivity = new JsonObject();
-            playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
-            playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
-            // TODO: 这里可以添加更多统计信息，如每日登录数等
-            data.add("playerActivity", playerActivity);
-            
-            // 服务器性能
-            JsonObject serverPerformance = new JsonObject();
-            double[] tps = calculateTPS();
-            double avgTPS = 0;
-            for (double t : tps) {
-                avgTPS += t;
-            }
-            avgTPS /= tps.length;
-            serverPerformance.addProperty("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
-            
-            Runtime runtime = Runtime.getRuntime();
-            long maxMemory = runtime.maxMemory();
-            long usedMemory = runtime.totalMemory() - runtime.freeMemory();
-            double memoryUsage = ((double) usedMemory / maxMemory) * 100;
-            serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
-            
-            // 磁盘使用率（简化实现）
-            serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
-            
-            data.add("serverPerformance", serverPerformance);
-            
-            // 插件使用情况
-            JsonObject pluginUsage = new JsonObject();
-            pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
-            pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
-            data.add("pluginUsage", pluginUsage);
-            
+
+            JsonObject data = getCurrentMetricsData();
+
             message.add("data", data);
             message.addProperty("serverId", webSocketClient.getServerId());
-            
+
             webSocketClient.sendMessage(message);
-            
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
         }
     }
     
     /**
-     * 发送性能统计数据（带请求ID）
+     * 发送性能统计数据（带请求ID，用于响应后端请求）
      */
     public void sendMetricsDataWithRequestId(String requestId) {
         try {
             JsonObject message = new JsonObject();
             message.addProperty("type", "metrics_data");
             message.addProperty("requestId", requestId);
-            
-            JsonObject data = new JsonObject();
-            
-            // 玩家活动统计
-            JsonObject playerActivity = new JsonObject();
-            playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
-            playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
-            // TODO: 这里可以添加更多统计信息，如每日登录数等
-            data.add("playerActivity", playerActivity);
-            
-            // 服务器性能
-            JsonObject serverPerformance = new JsonObject();
-            double[] tps = calculateTPS();
-            double avgTPS = 0;
-            for (double t : tps) {
-                avgTPS += t;
-            }
-            avgTPS /= tps.length;
-            serverPerformance.addProperty("averageTPS", Math.round(avgTPS * 100.0) / 100.0);
-            
-            Runtime runtime = Runtime.getRuntime();
-            long maxMemory = runtime.maxMemory();
-            long usedMemory = runtime.totalMemory() - runtime.freeMemory();
-            double memoryUsage = ((double) usedMemory / maxMemory) * 100;
-            serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
-            
-            // 磁盘使用率（简化实现）
-            serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
-            
-            data.add("serverPerformance", serverPerformance);
-            
-            // 插件使用情况
-            JsonObject pluginUsage = new JsonObject();
-            pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
-            pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
-            data.add("pluginUsage", pluginUsage);
-            
+
+            JsonObject data = getCurrentMetricsData();
+
             message.add("data", data);
             message.addProperty("serverId", webSocketClient.getServerId());
-            
+
             webSocketClient.sendMessage(message);
-            
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
         }

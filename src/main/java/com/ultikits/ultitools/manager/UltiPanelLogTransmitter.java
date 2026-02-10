@@ -32,7 +32,10 @@ public class UltiPanelLogTransmitter {
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
-    
+
+    // 外部排空模式：当为true时，sendBatch()不再自动发送，由外部调用drainQueue()获取日志
+    private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
+
     // 批量发送配置
     @Getter @Setter
     private boolean batchEnabled = true;
@@ -178,15 +181,25 @@ public class UltiPanelLogTransmitter {
     
     /**
      * 发送批量日志
+     * 当externalDrainMode为true时，仅丢弃超出队列上限的旧条目，不发送
      */
     private void sendBatch() {
-        if (logQueue.isEmpty() || !webSocketClient.isConnected()) {
+        if (logQueue.isEmpty()) {
             return;
         }
-        
+
+        // 外部排空模式下，仅做队列溢出保护（addToBatch已处理），不发送
+        if (externalDrainMode.get()) {
+            return;
+        }
+
+        if (!webSocketClient.isConnected()) {
+            return;
+        }
+
         try {
             JsonArray logs = new JsonArray();
-            
+
             // 从队列中取出日志
             for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
                 JsonObject log = logQueue.poll();
@@ -194,7 +207,7 @@ public class UltiPanelLogTransmitter {
                     logs.add(log);
                 }
             }
-            
+
             if (logs.size() > 0) {
                 // 发送批量日志消息
                 JsonObject batchMessage = new JsonObject();
@@ -202,17 +215,52 @@ public class UltiPanelLogTransmitter {
                 batchMessage.addProperty("serverId", serverId);
                 batchMessage.add("data", logs);
                 batchMessage.addProperty("timestamp", System.currentTimeMillis());
-                
+
                 webSocketClient.sendMessage(batchMessage);
-                
+
                 // 记录批量发送信息
-                UltiTools.getInstance().getLogger().log(Level.FINE, 
+                UltiTools.getInstance().getLogger().log(Level.FINE,
                     String.format("[UltiPanel] 批量发送 %d 条日志", logs.size()));
             }
-            
+
         } catch (Exception e) {
             System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 从队列中排空日志条目，返回JsonArray
+     * 供外部调用者（如ServerMonitorManager的batch_update）使用
+     *
+     * @param maxItems 最多取出的条目数
+     * @return 日志条目的JsonArray
+     */
+    public JsonArray drainQueue(int maxItems) {
+        JsonArray logs = new JsonArray();
+        for (int i = 0; i < maxItems && !logQueue.isEmpty(); i++) {
+            JsonObject log = logQueue.poll();
+            if (log != null) {
+                logs.add(log);
+            }
+        }
+        return logs;
+    }
+
+    /**
+     * 设置外部排空模式
+     * 当启用时，sendBatch()不再自动发送日志，改由外部通过drainQueue()获取
+     *
+     * @param enabled 是否启用外部排空模式
+     */
+    public void setExternalDrainMode(boolean enabled) {
+        this.externalDrainMode.set(enabled);
+    }
+
+    /**
+     * 检查是否处于外部排空模式
+     */
+    public boolean isExternalDrainMode() {
+        return externalDrainMode.get();
     }
     
     /**
@@ -290,10 +338,18 @@ public class UltiPanelLogTransmitter {
     
     /**
      * 立即发送队列中的所有日志
+     * 临时禁用外部排空模式以确保日志被发送
      */
     public void flushLogs() {
-        while (!logQueue.isEmpty()) {
-            sendBatch();
+        boolean wasExternalDrain = externalDrainMode.getAndSet(false);
+        try {
+            while (!logQueue.isEmpty()) {
+                sendBatch();
+            }
+        } finally {
+            if (wasExternalDrain) {
+                externalDrainMode.set(true);
+            }
         }
     }
     

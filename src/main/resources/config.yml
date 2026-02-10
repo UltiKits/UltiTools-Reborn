@@ -13,20 +13,6 @@ datasource:
 # en for English, zh 为中文
 language: "zh"
 
-web-editor:
-  enable: false
-  port: 4567
-  https:
-    enable: true
-    domain: "api.ultikits.com"
-
-# [DEPRECATED] Password-based login is deprecated.
-# Use /ulticloud login for secure passwordless authentication instead.
-# These fields are kept for backwards compatibility but will be removed in a future version.
-account:
-  username: ""
-  password: ""
-
 mysql:
   enable: false
   host: localhost

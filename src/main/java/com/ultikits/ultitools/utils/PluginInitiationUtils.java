@@ -29,59 +29,6 @@ public class PluginInitiationUtils {
     private static TokenEntity token;
 
     /**
-     * Login to UltiPanel account and register/update server information.
-     * <br>
-     * 登录UltiPanel账户并注册/更新服务器信息。
-     *
-     * @param username the account username <br> 账户用户名
-     * @param password the account password <br> 账户密码
-     * @return true if login successful, false otherwise <br> 登录是否成功
-     * @throws IOException if an I/O error occurs during login <br> 如果登录过程中发生I/O错误
-     */
-    public static boolean loginAccount(String username, String password) throws IOException {
-        boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
-        token = HttpRequestUtils.getToken(username, password);
-        String uuid = CommonUtils.getUltiToolsUUID();
-        int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
-        String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
-
-        try (Response uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token)) {
-            if (uuidResponse.getStatus() == 404) {
-                // Server not registered yet, register it
-                String serverName = org.bukkit.Bukkit.getServer().getName();
-                if (serverName == null || serverName.trim().isEmpty()) {
-                    serverName = "MC Server";
-                }
-                if (serverName.length() > 64) {
-                    serverName = serverName.substring(0, 64);
-                }
-                try (Response registerResponse = HttpRequestUtils.registerServer(uuid, serverName, port, domain, ssl, token)) {
-                    if (!registerResponse.isOk()) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
-                            "Server registration failed: HTTP " + registerResponse.getStatus() + " - " + registerResponse.body());
-                        return false;
-                    }
-                }
-            } else if (uuidResponse.isOk()) {
-                // Server exists, update it
-                try (Response updateResponse = HttpRequestUtils.updateServer(uuid, port, domain, ssl, token)) {
-                    if (!updateResponse.isOk()) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
-                            "Server update failed: HTTP " + updateResponse.getStatus() + " - " + updateResponse.body());
-                        return false;
-                    }
-                }
-            } else {
-                // Unexpected error (401, 500, 503, etc.)
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "Failed to check server status: HTTP " + uuidResponse.getStatus() + " - " + uuidResponse.body());
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
      * Registers or updates the server without needing username/password.
      * <br>
@@ -93,10 +40,10 @@ public class PluginInitiationUtils {
      */
     public static boolean loginWithToken(TokenEntity existingToken) throws IOException {
         token = existingToken;
-        boolean ssl = UltiTools.getInstance().getConfig().getBoolean("web-editor.https.enable");
         String uuid = CommonUtils.getUltiToolsUUID();
-        int port = UltiTools.getInstance().getConfig().getInt("web-editor.port");
-        String domain = UltiTools.getInstance().getConfig().getString("web-editor.https.domain");
+        int port = org.bukkit.Bukkit.getServer().getPort();
+        String domain = "";
+        boolean ssl = true;
 
         try (Response uuidResponse = HttpRequestUtils.getServerByUUID(uuid, token)) {
             if (uuidResponse.getStatus() == 404) {

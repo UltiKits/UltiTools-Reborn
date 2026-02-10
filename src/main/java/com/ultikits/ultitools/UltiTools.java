@@ -1,7 +1,6 @@
 package com.ultikits.ultitools;
 
 import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
-import static com.ultikits.ultitools.utils.PluginInitiationUtils.loginAccount;
 import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
 
@@ -254,23 +253,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 }
             }
 
-            // 2. Fall back to config.yml password (legacy, will be deprecated)
+            // If no saved token, user needs to run /ulticloud login
             if (!loginSuccess) {
-                String username = getConfig().getString("account.username");
-                String password = getConfig().getString("account.password");
-                boolean hasCredentials = username != null && password != null && !username.isEmpty() && !password.isEmpty();
-                if (hasCredentials && ApiRateLimiter.isAllowed("startup-login")) {
-                    loginSuccess = loginAccount(username, password);
-                    if (loginSuccess) {
-                        getLogger().log(Level.INFO, "Consider using /ulticloud login for passwordless authentication.");
-                    }
-                }
+                getLogger().log(Level.FINE, "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
             }
         } catch (Exception e) {
             getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
         }
 
-        if (loginSuccess && getConfig().getBoolean("web-editor.enable")) {
+        if (loginSuccess) {
             getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
             try {
                 PluginInitiationUtils.initWebsocket();
@@ -313,10 +304,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
             } else {
                 getLogger().log(Level.INFO, "UltiCloud: Not connected. Use /ulticloud login to authenticate.");
             }
-            if (getConfig().getBoolean("web-editor.enable")) {
+            if (finalLoginSuccess) {
                 getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
-            } else {
-                getLogger().log(Level.INFO, i18n("网页编辑器未启用！"));
             }
             getLogger().log(Level.INFO, String.format(i18n("数据存储方式：%s"), dataStore.getStoreType()));
             String ultiToolsNewestVersion = getUltiToolsNewestVersion();

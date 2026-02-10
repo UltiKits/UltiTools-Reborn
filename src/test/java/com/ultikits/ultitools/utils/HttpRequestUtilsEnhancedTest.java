@@ -94,13 +94,6 @@ class HttpRequestUtilsEnhancedTest {
     class MethodSignatureTests {
 
         @Test
-        @DisplayName("应该有 getToken 方法")
-        void shouldHaveGetTokenMethod() throws Exception {
-            Method method = HttpRequestUtils.class.getDeclaredMethod("getToken", String.class, String.class);
-            assertThat(method).isNotNull();
-        }
-
-        @Test
         @DisplayName("应该有 getServerByUUID 方法")
         void shouldHaveGetServerByUUIDMethod() throws Exception {
             Method method = HttpRequestUtils.class.getDeclaredMethod("getServerByUUID", String.class, com.ultikits.ultitools.entities.TokenEntity.class);

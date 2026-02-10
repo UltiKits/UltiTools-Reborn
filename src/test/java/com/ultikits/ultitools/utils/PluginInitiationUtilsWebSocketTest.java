@@ -55,18 +55,6 @@ class PluginInitiationUtilsWebSocketTest {
     class PublicMethodSignatureTests {
 
         @Test
-        @DisplayName("loginAccount 方法应该存在且签名正确")
-        void loginAccountMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "loginAccount", String.class, String.class);
-            
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
-            assertThat(method.getExceptionTypes()).contains(java.io.IOException.class);
-        }
-
-        @Test
         @DisplayName("initWebsocket 方法应该存在且签名正确")
         void initWebsocketMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod("initWebsocket");
@@ -366,29 +354,4 @@ class PluginInitiationUtilsWebSocketTest {
         }
     }
 
-    @Nested
-    @DisplayName("登录参数测试")
-    class LoginParameterTests {
-
-        @Test
-        @DisplayName("loginAccount 应该接受用户名和密码参数")
-        void loginAccountShouldAcceptUsernameAndPassword() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "loginAccount", String.class, String.class);
-            Class<?>[] paramTypes = method.getParameterTypes();
-            
-            assertThat(paramTypes).hasSize(2);
-            assertThat(paramTypes[0]).isEqualTo(String.class);
-            assertThat(paramTypes[1]).isEqualTo(String.class);
-        }
-
-        @Test
-        @DisplayName("loginAccount 应该返回 boolean 表示登录结果")
-        void loginAccountShouldReturnBoolean() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod(
-                "loginAccount", String.class, String.class);
-            
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
-        }
-    }
 }

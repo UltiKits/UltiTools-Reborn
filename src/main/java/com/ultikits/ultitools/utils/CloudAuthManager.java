@@ -239,9 +239,7 @@ public class CloudAuthManager {
                                 // Try to initialize cloud features
                                 try {
                                     PluginInitiationUtils.loginWithToken(token);
-                                    if (UltiTools.getInstance().getConfig().getBoolean("web-editor.enable")) {
-                                        PluginInitiationUtils.initWebsocket();
-                                    }
+                                    PluginInitiationUtils.initWebsocket();
                                 } catch (Exception e) {
                                     UltiTools.getInstance().getLogger().log(Level.WARNING,
                                         "Cloud features initialization failed: " + e.getMessage());

@@ -84,49 +84,6 @@ public class HttpRequestUtils {
     }
 
     /**
-     * Get authentication token from the API server.
-     * <br>
-     * 从API服务器获取身份验证令牌。
-     *
-     * @param username the username for authentication <br> 用于身份验证的用户名
-     * @param password the password for authentication <br> 用于身份验证的密码
-     * @return TokenEntity containing the authentication token <br> 包含身份验证令牌的TokenEntity
-     */
-    protected static TokenEntity getToken(String username, String password) {
-        if (!ApiRateLimiter.isAllowed("getToken", 30_000)) {
-            throw new RuntimeException("Rate limited: please wait before retrying authentication");
-        }
-        Map<String, Object> paramMap = new HashMap<>();
-        paramMap.put("username", username);
-        paramMap.put("password", password);
-
-        String cleanBaseUrl = getBaseUrl() != null ? getBaseUrl().trim() : "";
-        String fullUrl = cleanBaseUrl + "/user/getToken";
-
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/x-www-form-urlencoded");
-
-        Response response = SimpleHttpClient.post(fullUrl, headers, paramMap);
-
-        if (!response.isOk()) {
-            throw new RuntimeException("Failed to get auth token: HTTP " + response.getStatus() + " - " + response.body());
-        }
-
-        String tokenJson = response.body();
-        if (tokenJson == null || tokenJson.trim().isEmpty()) {
-            throw new RuntimeException("Empty response from auth endpoint");
-        }
-
-        TokenEntity tokenEntity = new Gson().fromJson(tokenJson, TokenEntity.class);
-        if (tokenEntity == null || tokenEntity.getAccess_token() == null || tokenEntity.getAccess_token().isEmpty()) {
-            throw new RuntimeException("Auth response missing access_token");
-        }
-
-        tokenEntity.decodeJwtPayload();
-        return tokenEntity;
-    }
-
-    /**
      * Get server information by UUID from the API server.
      * <br>
      * 通过UUID从API服务器获取服务器信息。

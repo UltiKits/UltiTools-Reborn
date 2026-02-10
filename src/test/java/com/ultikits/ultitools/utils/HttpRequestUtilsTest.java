@@ -43,17 +43,6 @@ class HttpRequestUtilsTest {
     class MethodSignatureTests {
 
         @Test
-        @DisplayName("getToken方法应该存在且参数正确")
-        void getTokenMethodShouldExist() throws Exception {
-            Method method = HttpRequestUtils.class.getDeclaredMethod(
-                "getToken", String.class, String.class);
-            assertThat(method).isNotNull();
-            assertThat(method.getReturnType()).isEqualTo(TokenEntity.class);
-            assertThat(method.getParameterCount()).isEqualTo(2);
-            assertThat(method.getParameterTypes()).containsExactly(String.class, String.class);
-        }
-
-        @Test
         @DisplayName("getServerByUUID方法应该存在且返回SimpleHttpClient.Response")
         void getServerByUUIDMethodShouldExist() throws Exception {
             Method method = HttpRequestUtils.class.getDeclaredMethod(
@@ -117,13 +106,6 @@ class HttpRequestUtilsTest {
     @Nested
     @DisplayName("方法访问修饰符测试")
     class MethodAccessModifierTests {
-
-        @Test
-        @DisplayName("getToken方法应该是protected的")
-        void getTokenShouldBeProtected() throws Exception {
-            Method method = HttpRequestUtils.class.getDeclaredMethod("getToken", String.class, String.class);
-            assertThat(Modifier.isProtected(method.getModifiers())).isTrue();
-        }
 
         @Test
         @DisplayName("getServerByUUID方法应该是protected的")

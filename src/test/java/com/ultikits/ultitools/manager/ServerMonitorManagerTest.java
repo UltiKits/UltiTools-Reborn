@@ -385,32 +385,33 @@ class ServerMonitorManagerTest {
     }
 
     @Nested
-    @DisplayName("sendPluginList 测试")
-    class SendPluginListTests {
+    @DisplayName("getCurrentPluginList 测试")
+    class GetCurrentPluginListTests {
 
         @Test
         @DisplayName("应该能够调用私有方法")
         void shouldCallPrivateMethod() throws Exception {
-            // Arrange - sendPluginList 方法在内部会检查连接状态
-            Method method = ServerMonitorManager.class.getDeclaredMethod("sendPluginList");
+            // Arrange - getCurrentPluginList 返回插件列表数据
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentPluginList");
             method.setAccessible(true);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
 
             // Act & Assert - 方法可以被调用而不抛出异常
             assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
         }
 
         @Test
-        @DisplayName("WebSocket 未连接时应该安全处理")
-        void shouldHandleSafelyWhenNotConnected() throws Exception {
+        @DisplayName("应该返回包含插件数据的 JsonObject")
+        void shouldReturnPluginData() throws Exception {
             // Arrange
-            Method method = ServerMonitorManager.class.getDeclaredMethod("sendPluginList");
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentPluginList");
             method.setAccessible(true);
-            when(mockWebSocketClient.isConnected()).thenReturn(false);
 
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
+            // Act
+            JsonObject result = (JsonObject) method.invoke(serverMonitorManager);
+
+            // Assert - 应该包含 plugins 数组和 totalCount
+            assertThat(result.has("plugins")).isTrue();
+            assertThat(result.has("totalCount")).isTrue();
         }
     }
 
