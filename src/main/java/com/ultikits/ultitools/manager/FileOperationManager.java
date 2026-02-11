@@ -249,6 +249,14 @@ public class FileOperationManager {
             
             JsonArray fileList = new JsonArray();
             for (File file : files) {
+                // Filter out protected files from directory listings
+                String childPath = (path == null || path.isEmpty() || path.equals("/"))
+                    ? file.getName()
+                    : path + "/" + file.getName();
+                if (!file.isDirectory() && !isPathAllowed(childPath)) {
+                    continue;
+                }
+
                 JsonObject fileInfo = new JsonObject();
                 fileInfo.addProperty("name", file.getName());
                 fileInfo.addProperty("isDirectory", file.isDirectory());

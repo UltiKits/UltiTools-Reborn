@@ -69,6 +69,12 @@ public class CommandExecutionManager {
         // Extract base command (first word before space)
         String baseCommand = trimmed.split("\\s+")[0].toLowerCase();
 
+        // Strip namespace prefix (e.g., "bukkit:op" -> "op", "minecraft:stop" -> "stop")
+        int colonIndex = baseCommand.indexOf(':');
+        if (colonIndex >= 0) {
+            baseCommand = baseCommand.substring(colonIndex + 1);
+        }
+
         return !blockedCommands.contains(baseCommand);
     }
     

@@ -566,6 +566,182 @@ class FileOperationManagerTest {
     }
 
     @Nested
+    @DisplayName("Directory listing should filter protected files")
+    class HandleListOperationFilterTests {
+
+        @Test
+        @DisplayName("should exclude blocked files from directory listing")
+        void shouldExcludeBlockedFilesFromListing() throws Exception {
+            // Arrange
+            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+            serverRootField.setAccessible(true);
+            serverRootField.set(fileOperationManager, tempDir);
+
+            // Create a subdirectory with a mix of allowed and blocked files
+            File testDir = new File(tempDir, "serverdir");
+            testDir.mkdirs();
+            new File(testDir, "config.yml").createNewFile();
+            new File(testDir, "data.json").createNewFile();
+            new File(testDir, "server.properties").createNewFile();  // blocked
+            new File(testDir, "ops.json").createNewFile();           // blocked
+            new File(testDir, "plugin.jar").createNewFile();         // blocked extension
+
+            Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+            handleList.setAccessible(true);
+
+            // Act
+            handleList.invoke(fileOperationManager, "serverdir", new JsonObject(), "filter-test");
+
+            // Assert - verify the WebSocket message was sent with filtered results
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            JsonObject data = result.getAsJsonObject("data");
+            assertThat(data.get("success").getAsBoolean()).isTrue();
+
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+            java.util.Set<String> listedNames = new java.util.HashSet<>();
+            for (int i = 0; i < files.size(); i++) {
+                listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
+            }
+
+            // Allowed files should be present
+            assertThat(listedNames).contains("config.yml", "data.json");
+            // Blocked files should NOT be present
+            assertThat(listedNames).doesNotContain("server.properties", "ops.json", "plugin.jar");
+        }
+
+        @Test
+        @DisplayName("should still include directories in listing")
+        void shouldIncludeDirectoriesInListing() throws Exception {
+            // Arrange
+            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+            serverRootField.setAccessible(true);
+            serverRootField.set(fileOperationManager, tempDir);
+
+            File testDir = new File(tempDir, "dirtest");
+            testDir.mkdirs();
+            new File(testDir, "plugins").mkdirs();
+            new File(testDir, "world").mkdirs();
+            new File(testDir, "config.yml").createNewFile();
+
+            Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+            handleList.setAccessible(true);
+
+            // Act
+            handleList.invoke(fileOperationManager, "dirtest", new JsonObject(), "dir-test");
+
+            // Assert
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            JsonObject data = result.getAsJsonObject("data");
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+
+            java.util.Set<String> listedNames = new java.util.HashSet<>();
+            for (int i = 0; i < files.size(); i++) {
+                listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
+            }
+
+            // Directories should always be listed
+            assertThat(listedNames).contains("plugins", "world", "config.yml");
+        }
+
+        @Test
+        @DisplayName("should exclude all blocked extensions from listing")
+        void shouldExcludeAllBlockedExtensions() throws Exception {
+            // Arrange
+            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+            serverRootField.setAccessible(true);
+            serverRootField.set(fileOperationManager, tempDir);
+
+            File testDir = new File(tempDir, "extdir");
+            testDir.mkdirs();
+            new File(testDir, "allowed.txt").createNewFile();
+            new File(testDir, "script.sh").createNewFile();     // blocked
+            new File(testDir, "start.bat").createNewFile();     // blocked
+            new File(testDir, "malware.exe").createNewFile();   // blocked
+            new File(testDir, "MyClass.class").createNewFile(); // blocked
+
+            Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+            handleList.setAccessible(true);
+
+            // Act
+            handleList.invoke(fileOperationManager, "extdir", new JsonObject(), "ext-test");
+
+            // Assert
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            JsonObject data = result.getAsJsonObject("data");
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+
+            java.util.Set<String> listedNames = new java.util.HashSet<>();
+            for (int i = 0; i < files.size(); i++) {
+                listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
+            }
+
+            assertThat(listedNames).contains("allowed.txt");
+            assertThat(listedNames).doesNotContain("script.sh", "start.bat", "malware.exe", "MyClass.class");
+        }
+
+        @Test
+        @DisplayName("should exclude all blocked filenames from listing")
+        void shouldExcludeAllBlockedFilenames() throws Exception {
+            // Arrange
+            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+            serverRootField.setAccessible(true);
+            serverRootField.set(fileOperationManager, tempDir);
+
+            File testDir = new File(tempDir, "allblocked");
+            testDir.mkdirs();
+            // Create all blocked files
+            new File(testDir, "server.properties").createNewFile();
+            new File(testDir, "ops.json").createNewFile();
+            new File(testDir, "whitelist.json").createNewFile();
+            new File(testDir, "banned-ips.json").createNewFile();
+            new File(testDir, "banned-players.json").createNewFile();
+            new File(testDir, "eula.txt").createNewFile();
+            new File(testDir, "usercache.json").createNewFile();
+            new File(testDir, "bukkit.yml").createNewFile();
+            new File(testDir, "spigot.yml").createNewFile();
+            new File(testDir, "paper.yml").createNewFile();
+            new File(testDir, "paper-global.yml").createNewFile();
+            new File(testDir, "paper-world-defaults.yml").createNewFile();
+            // And one allowed file
+            new File(testDir, "readme.txt").createNewFile();
+
+            Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+            handleList.setAccessible(true);
+
+            // Act
+            handleList.invoke(fileOperationManager, "allblocked", new JsonObject(), "all-blocked-test");
+
+            // Assert
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            JsonObject data = result.getAsJsonObject("data");
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+
+            java.util.Set<String> listedNames = new java.util.HashSet<>();
+            for (int i = 0; i < files.size(); i++) {
+                listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
+            }
+
+            assertThat(listedNames).containsExactly("readme.txt");
+        }
+    }
+
+    @Nested
     @DisplayName("isPathAllowed 敏感文件阻止测试")
     class IsPathAllowedTests {
 

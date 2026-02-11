@@ -1009,5 +1009,76 @@ class CommandExecutionManagerTest {
             // Assert - no new task should be scheduled
             assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
         }
+
+        @Test
+        @DisplayName("should block namespace-prefixed blocked commands (bukkit:op, minecraft:stop)")
+        void shouldBlockNamespacePrefixedCommands() {
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            assertThat(newManager.isCommandAllowed("bukkit:op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:deop player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:stop")).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:reload")).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:ban-ip 1.2.3.4")).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:whitelist add player")).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:save-off")).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:save-all")).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:pardon-ip 1.2.3.4")).isFalse();
+            assertThat(newManager.isCommandAllowed("spigot:restart")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should block namespace-prefixed commands with leading slash")
+        void shouldBlockNamespacePrefixedCommandsWithSlash() {
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            assertThat(newManager.isCommandAllowed("/bukkit:op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("/minecraft:stop")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should block namespace-prefixed commands case-insensitively")
+        void shouldBlockNamespacePrefixedCommandsCaseInsensitive() {
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            assertThat(newManager.isCommandAllowed("Bukkit:OP player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("MINECRAFT:STOP")).isFalse();
+            assertThat(newManager.isCommandAllowed("Bukkit:Reload")).isFalse();
+        }
+
+        @Test
+        @DisplayName("should allow namespace-prefixed commands that are not in blocklist")
+        void shouldAllowSafeNamespacePrefixedCommands() {
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            assertThat(newManager.isCommandAllowed("bukkit:help")).isTrue();
+            assertThat(newManager.isCommandAllowed("minecraft:say Hello")).isTrue();
+            assertThat(newManager.isCommandAllowed("essentials:tps")).isTrue();
+        }
+
+        @Test
+        @DisplayName("namespace-prefixed blocked command should not be scheduled via executeCommand")
+        void namespacePrefixedBlockedCommandShouldNotBeScheduled() {
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "bukkit:op hacker");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "namespace-bypass-test");
+
+            int initialTaskCount = server.getScheduler().getPendingTasks().size();
+
+            manager.executeCommand(commandData);
+
+            assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
+
+            org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject result = captor.getValue();
+            JsonObject data = result.getAsJsonObject("data");
+            assertThat(data.get("success").getAsBoolean()).isFalse();
+            assertThat(data.get("output").getAsString()).contains("blocked");
+        }
     }
 }
