@@ -34,7 +34,7 @@ Coverage reports are generated automatically during `mvn test` → `target/site/
    - Auto-registers `@CmdExecutor` commands and `@EventListener` listeners
    - Calls `plugin.registerSelf()`
 6. **WebSocket managers** — ServerMonitor (batch_update), CommandExecution, FileOperation, LogStream
-7. **bStats metrics** → token-based UltiCloud auth → WebSocket client connection
+7. **bStats metrics** → token-based UltiCloud auth → WebSocket client connection (Bearer token auth, exponential backoff reconnection)
 
 Shutdown reverses this: `unregisterSelf()` → `@PreDestroy` → close contexts → close DataStore.
 
@@ -77,6 +77,23 @@ Multi-layer plugin sandboxing via `SecurityPolicy.java` — enforced at classloa
 
 Add trusted packages at runtime: `SecurityPolicy.addTrustedPackage("com.myplugin")`
 
+### WebSocket Remote Management Security
+
+The WebSocket subsystem provides remote server management through UltiPanel with multiple security layers:
+
+**CommandExecutionManager** — Remote command execution with:
+- **Command blocklist** — `op`, `deop`, `stop`, `restart`, `reload`, `ban-ip`, `pardon-ip`, `whitelist`, `save-off`, `save-all` blocked by default
+- **Namespace stripping** — `bukkit:op`, `minecraft:stop` etc. are caught by stripping the prefix before blocklist check
+- **Main thread dispatch** — All commands dispatched via `Bukkit.getScheduler().runTask()` to prevent Paper's AsyncCatcher rejection
+
+**FileOperationManager** — Remote file CRUD with:
+- **Path traversal protection** — Canonical path validation ensures files stay within server root
+- **File blocklist** — `server.properties`, `ops.json`, `whitelist.json`, `banned-ips.json`, `eula.txt`, etc.
+- **Extension blocklist** — `.jar`, `.sh`, `.bat`, `.exe`, `.class` blocked from read/write/delete
+- **Directory listing filtering** — Protected files hidden from `list` operation responses
+
+**WebSocket client** — `UltiPanelWebSocketClient` uses Bearer token auth in headers, 60s heartbeat interval, and exponential backoff reconnection (max 5 attempts).
+
 ### UltiCloud Authentication
 
 Token-only authentication via `ulticloud login` (magic-link flow, **console-only** — cannot be run in-game). Password-based login (`loginAccount`/`getToken`) has been removed. On startup, the framework attempts to restore a saved token; if none exists, the server runs without cloud features until the admin authenticates from the server console.
@@ -106,10 +123,14 @@ src/main/java/com/ultikits/ultitools/
 ├── annotations/    # Framework annotations (@Service, @Autowired, @CmdExecutor, @Table, etc.)
 ├── aop/            # AOP system (CglibProxyFactory, TransactionInterceptor, ExceptionInterceptor)
 ├── context/        # IoC container (SimpleContainer, ComponentScanner)
-├── manager/        # Core managers (PluginManager, CommandManager, ListenerManager, ConfigManager)
+├── manager/        # Core managers + WebSocket managers:
+│   │               #   PluginManager, CommandManager, ListenerManager, ConfigManager,
+│   │               #   CommandExecutionManager, FileOperationManager, ServerMonitorManager,
+│   │               #   LogStreamManager, UltiPanelLogTransmitter
 ├── interfaces/     # Core interfaces (DataOperator, DataStore, VersionWrapper) + impl/
-├── websocket/      # UltiPanel WebSocket client for remote management
-└── utils/          # Utility classes (SecurityPolicy, XVersionUtils, ClassLoaderUtils)
+├── websocket/      # UltiPanel WebSocket client + message handler registry
+│   └── handlers/   # Message handlers: Command, FileOperation, LogStream, Pong, ServerStatus
+└── utils/          # Utility classes (SecurityPolicy, XVersionUtils, CloudAuthManager, ApiRateLimiter)
 
 docs/wiki/          # Complete project documentation (primarily Chinese with English technical terms)
 ```
@@ -200,7 +221,7 @@ public class MyService {
 
 ## Common Gotchas
 
-1. **Bukkit thread safety** — Use `Bukkit.getScheduler()` for async operations
+1. **Bukkit thread safety** — Use `Bukkit.getScheduler()` for async operations. Remote commands MUST be dispatched on the main thread (`runTask()`) or Paper's AsyncCatcher will reject them.
 2. **Event listeners** require `@EventListener` annotation (not just Bukkit's `Listener`)
 3. **Commands** with `manualRegister = true` need explicit registration via `getCommandManager().register()`
 4. **i18n** — Use `i18n("key")` method for translations, language files in `lang/`
@@ -209,3 +230,5 @@ public class MyService {
 7. **AOP proxies** — `final` classes/methods can't be proxied; self-invocation bypasses AOP
 8. **SecurityPolicy** — Plugin classes must pass security checks at load time; add trusted packages via `SecurityPolicy.addTrustedPackage()` if a legitimate class is blocked
 9. **Paper vs Spigot** — Paper auto-downloads `libraries:` from `plugin.yml`; Spigot requires shaded dependencies
+10. **Remote command blocklist bypass** — Namespace prefixes (e.g. `bukkit:op`) are stripped before blocklist check; always test with both `cmd` and `namespace:cmd` forms
+11. **File operation security** — `FileOperationManager` uses canonical path checks; never construct `File` objects from user input without `getSecureFile()` validation

@@ -51,11 +51,13 @@ I hope my plugin can help with your plugin development! XD
 ### Key Features
 
 - 🎯 **Annotation-Driven Development** - Commands, listeners, configs auto-registered via annotations
-- 🔧 **IoC Container** - Spring-like dependency injection with `@Service`, `@Autowired`
+- 🔧 **IoC Container** - Spring-like dependency injection with `@Service`, `@Autowired`, three-level cache for circular deps
+- 🔀 **AOP Proxies** - `@Transactional` and `@ExceptionCatch` via CGLIB runtime proxies
 - 💾 **Unified Data Storage** - Seamless MySQL/SQLite/JSON support with ORM-style API
 - ⚙️ **Config as Objects** - Type-safe configuration with auto-reload
 - 🖥️ **GUI Framework** - Easy inventory GUI development with pagination support
-- 🌐 **WebSocket Integration** - Remote server management via UltiPanel
+- 🌐 **WebSocket Integration** - Remote server management via UltiPanel with security hardening
+- 🔒 **Plugin Sandbox** - Class blacklisting, path traversal protection, command blocklists
 - 🌍 **i18n Support** - Built-in internationalization
 - 📦 **Hot Module Loading** - Load/unload modules without server restart
 
@@ -228,11 +230,12 @@ UltiTools-API includes built-in WebSocket support for remote server management t
 
 - **Batch Updates** - Single `batch_update` message every 5s with status, metrics, plugins (every 60s), and logs
 - **Real-time Monitoring** - Server TPS, memory, online players
-- **Remote Commands** - Execute commands from web dashboard
+- **Remote Commands** - Execute commands from web dashboard with blocklist protection (`op`, `stop`, `reload`, etc. blocked; namespace prefix bypass prevention)
 - **Log Streaming** - Real-time server log viewing via batch updates
-- **File Management** - Remote config editing
+- **File Management** - Remote config editing with path traversal protection, sensitive file blocklist, and executable extension blocking
 - **Plugin Control** - Enable/disable plugins remotely
 - **Magic Link Auth** - Admins run `ulticloud login` from the server console; the plugin auto-detects completion and connects to UltiPanel (this command cannot be used in-game)
+- **Auto-Reconnect** - Exponential backoff reconnection (up to 5 attempts) with Bearer token authentication
 
 ## Quick Start
 
@@ -377,10 +380,16 @@ UltiTools-Reborn/
 │   ├── UltiTools.java           # Main plugin entry
 │   ├── abstracts/               # Base classes (UltiToolsPlugin, AbstractCommandExecutor, etc.)
 │   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Table, etc.)
-│   ├── context/                 # IoC container (SimpleContainer)
-│   ├── manager/                 # Core managers (Command, Listener, Config, Plugin)
-│   ├── interfaces/              # Core interfaces (DataOperator, DataStore)
-│   └── websocket/               # UltiPanel WebSocket integration
+│   ├── aop/                     # AOP system (CglibProxyFactory, TransactionInterceptor)
+│   ├── context/                 # IoC container (SimpleContainer, ComponentScanner)
+│   ├── manager/                 # Core managers (Command, Listener, Config, Plugin) +
+│   │                            #   WebSocket managers (CommandExecution, FileOperation,
+│   │                            #   ServerMonitor, LogStream)
+│   ├── interfaces/              # Core interfaces (DataOperator, DataStore) + impl/
+│   ├── websocket/               # UltiPanel WebSocket client + message handler registry
+│   │   └── handlers/            # Message handlers (Command, FileOperation, LogStream, Pong)
+│   └── utils/                   # SecurityPolicy, CloudAuthManager, ApiRateLimiter
+├── plugins/                     # Built-in plugin modules (11 modules)
 ├── docs/wiki/                   # Project documentation
 └── pom.xml                      # Maven build configuration
 ```
@@ -439,7 +448,7 @@ UltiTools-Reborn/
 | ![Java](https://img.shields.io/badge/java-%23ED8B00.svg?style=for-the-badge&logo=openjdk&logoColor=white)                 | Development language |
 | ![wakatime](https://img.shields.io/badge/WakaTime-000000?style=for-the-badge&amp;logo=WakaTime&amp;logoColor=white)       | Recorded every moment of our development journey          |
 | ![wakatime](https://img.shields.io/badge/IntelliJ_IDEA-000000.svg?style=for-the-badge&logo=intellij-idea&logoColor=white) | The strongest Java IDE for a pleasant development experience |
-| ![wakatime](https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white)                  | Helped solve many repetitive and tedious tasks        |
+| ![Claude](https://img.shields.io/badge/Claude-191919?style=for-the-badge&logo=anthropic&logoColor=white)                   | AI-assisted development, testing, and security hardening |
 | ![wakatime](https://img.shields.io/badge/apache_maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)        | Official build tool                 |
 
 ## License
