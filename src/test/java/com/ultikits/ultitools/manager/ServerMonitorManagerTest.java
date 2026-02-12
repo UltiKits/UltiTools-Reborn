@@ -541,7 +541,7 @@ class ServerMonitorManagerTest {
         @DisplayName("应该更新 historyIndex")
         void shouldUpdateHistoryIndex() throws Exception {
             // Arrange
-            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTPS");
+            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTpsAndCpu");
             method.setAccessible(true);
 
             Field indexField = ServerMonitorManager.class.getDeclaredField("historyIndex");
@@ -559,7 +559,7 @@ class ServerMonitorManagerTest {
         @DisplayName("应该更新 lastTick")
         void shouldUpdateLastTick() throws Exception {
             // Arrange
-            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTPS");
+            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTpsAndCpu");
             method.setAccessible(true);
 
             Field lastTickField = ServerMonitorManager.class.getDeclaredField("lastTick");
@@ -770,7 +770,7 @@ class ServerMonitorManagerTest {
         @DisplayName("updateTPS 应该更新历史记录")
         void shouldUpdateHistory() throws Exception {
             // Arrange
-            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTPS");
+            Method method = ServerMonitorManager.class.getDeclaredMethod("updateTpsAndCpu");
             method.setAccessible(true);
 
             // Act & Assert - 不应该抛出异常
