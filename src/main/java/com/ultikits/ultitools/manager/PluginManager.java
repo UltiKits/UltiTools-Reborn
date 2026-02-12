@@ -42,6 +42,8 @@ public class PluginManager {
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
     private ClassLoader classLoader;
+    @Getter
+    private TaskManager taskManager;
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -52,6 +54,7 @@ public class PluginManager {
      */
     public void init(ClassLoader classLoader) throws IOException {
         this.classLoader = classLoader;
+        this.taskManager = new TaskManager(UltiTools.getInstance());
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -208,6 +211,10 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance <br> UltiTools模块实例
      */
     public void unregister(UltiToolsPlugin plugin) {
+        // Cancel all @Scheduled tasks before unregistering
+        if (taskManager != null) {
+            taskManager.cancelAll(plugin);
+        }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         plugin.getContext().close();
@@ -393,6 +400,12 @@ public class PluginManager {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
                 pluginList.add(plugin);
+                // Register @Scheduled methods from all beans
+                if (taskManager != null && plugin.getContext() != null) {
+                    for (Object bean : plugin.getContext().getSingletonValues()) {
+                        taskManager.registerScheduledMethods(plugin, bean);
+                    }
+                }
                 Bukkit.getLogger().log(
                         Level.INFO,
                         String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion())
@@ -459,6 +472,8 @@ public class PluginManager {
             }
             
             pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+            // Register plugin as UltiToolsPlugin type so services can inject it via constructor
+            pluginContext.registerType(UltiToolsPlugin.class, plugin);
 
             // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
             String[] scanPackages = getPluginScanPackages(pluginClass);

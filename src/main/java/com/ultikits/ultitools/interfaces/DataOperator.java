@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
 /**
  * Data operation interface.
@@ -138,4 +139,15 @@ public interface DataOperator<T extends AbstractDataEntity> {
      * @throws IllegalAccessException Please refer{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
+
+    /**
+     * Returns a new fluent query builder for this data operator.
+     * <p>
+     * 返回此数据操作器的新流式查询构建器。
+     *
+     * @return a new Query builder
+     */
+    default Query<T> query() {
+        return new QueryImpl<>(this);
+    }
 }

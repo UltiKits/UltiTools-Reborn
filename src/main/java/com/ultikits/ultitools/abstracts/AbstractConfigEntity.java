@@ -14,6 +14,10 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.NotEmpty;
+import com.ultikits.ultitools.annotations.config.Pattern;
+import com.ultikits.ultitools.annotations.config.Range;
+import com.ultikits.ultitools.annotations.config.Size;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -106,7 +110,10 @@ public abstract class AbstractConfigEntity {
         if (!upToDate) {
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
         }
-        
+
+        // Validate fields and reset invalid values to defaults
+        validateFields();
+
         // Notify listeners after initialization
         notifyChangeListeners();
     }
@@ -177,6 +184,107 @@ public abstract class AbstractConfigEntity {
         return jsonObject;
     }
     
+    // ==================== Configuration Validation ====================
+
+    /**
+     * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
+     * Invalid values are reset to their Java field initializer defaults and a warning is logged.
+     * <p>
+     * 验证所有带验证注解的字段。无效值将重置为Java字段初始化默认值并记录警告。
+     */
+    protected void validateFields() {
+        // Create a fresh instance to get default values
+        Object defaultInstance;
+        try {
+            defaultInstance = this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Cannot create default instance for validation: " + this.getClass().getSimpleName());
+            return;
+        }
+
+        boolean modified = false;
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (!field.isAnnotationPresent(ConfigEntry.class)) {
+                continue;
+            }
+            field.setAccessible(true);
+            try {
+                Object value = field.get(this);
+                Object defaultValue = field.get(defaultInstance);
+
+                // @Range validation for numeric fields
+                Range range = field.getAnnotation(Range.class);
+                if (range != null && value instanceof Number) {
+                    double num = ((Number) value).doubleValue();
+                    if (num < range.min() || num > range.max()) {
+                        LOGGER.warning(String.format(
+                            "[UltiTools-API] Config '%s' field '%s' value %s out of range [%s, %s]. Reset to default: %s",
+                            configFilePath, field.getName(), value, range.min(), range.max(), defaultValue
+                        ));
+                        field.set(this, defaultValue);
+                        modified = true;
+                    }
+                }
+
+                // @NotEmpty validation for String fields
+                NotEmpty notEmpty = field.getAnnotation(NotEmpty.class);
+                if (notEmpty != null) {
+                    if (value == null || value.toString().trim().isEmpty()) {
+                        LOGGER.warning(String.format(
+                            "[UltiTools-API] Config '%s' field '%s' is empty. Reset to default: %s",
+                            configFilePath, field.getName(), defaultValue
+                        ));
+                        field.set(this, defaultValue);
+                        modified = true;
+                    }
+                }
+
+                // @Size validation for Collections and Strings
+                Size size = field.getAnnotation(Size.class);
+                if (size != null && value != null) {
+                    int len = -1;
+                    if (value instanceof java.util.Collection) {
+                        len = ((java.util.Collection<?>) value).size();
+                    } else if (value instanceof String) {
+                        len = ((String) value).length();
+                    }
+                    if (len >= 0 && (len < size.min() || len > size.max())) {
+                        LOGGER.warning(String.format(
+                            "[UltiTools-API] Config '%s' field '%s' size %d out of bounds [%d, %d]. Reset to default: %s",
+                            configFilePath, field.getName(), len, size.min(), size.max(), defaultValue
+                        ));
+                        field.set(this, defaultValue);
+                        modified = true;
+                    }
+                }
+
+                // @Pattern validation for String fields
+                Pattern pattern = field.getAnnotation(Pattern.class);
+                if (pattern != null && value instanceof String) {
+                    if (!((String) value).matches(pattern.regex())) {
+                        LOGGER.warning(String.format(
+                            "[UltiTools-API] Config '%s' field '%s' value '%s' does not match pattern '%s'. Reset to default: %s",
+                            configFilePath, field.getName(), value, pattern.regex(), defaultValue
+                        ));
+                        field.set(this, defaultValue);
+                        modified = true;
+                    }
+                }
+            } catch (IllegalAccessException e) {
+                LOGGER.log(Level.WARNING, "Failed to validate field: " + field.getName(), e);
+            }
+        }
+
+        // Save corrected values back to disk
+        if (modified && ultiToolsPlugin != null) {
+            try {
+                save();
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Failed to save corrected config: " + configFilePath, e);
+            }
+        }
+    }
+
     // ==================== Configuration Change Listener Support ====================
     
     /**
@@ -272,7 +380,10 @@ public abstract class AbstractConfigEntity {
                 }
             }
         }
-        
+
+        // Validate fields and reset invalid values to defaults
+        validateFields();
+
         // Notify listeners
         notifyChangeListeners();
     }

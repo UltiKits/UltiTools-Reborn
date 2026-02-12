@@ -11,11 +11,15 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Component;
+import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
+
+import org.bukkit.configuration.file.YamlConfiguration;
 
 /**
  * Component scanner to find and register components.
@@ -139,6 +143,11 @@ public class ComponentScanner {
      * 处理类的组件注解。
      */
     private void processClass(Class<?> clazz) {
+        // Check @ConditionalOnConfig before registering anything
+        if (!shouldRegister(clazz)) {
+            return;
+        }
+
         // Check for component annotations
         if (isComponent(clazz)) {
             registerComponent(clazz);
@@ -148,6 +157,45 @@ public class ComponentScanner {
         if (clazz.isAnnotationPresent(Configuration.class)) {
             registerConfiguration(clazz);
         }
+    }
+
+    /**
+     * Check if a class should be registered based on @ConditionalOnConfig.
+     * <br>
+     * 根据 @ConditionalOnConfig 检查类是否应被注册。
+     *
+     * @param clazz the class to check
+     * @return true if the class should be registered
+     */
+    private boolean shouldRegister(Class<?> clazz) {
+        ConditionalOnConfig condition = clazz.getAnnotation(ConditionalOnConfig.class);
+        if (condition == null) {
+            return true;
+        }
+
+        // Retrieve the plugin from the container
+        UltiToolsPlugin plugin = null;
+        try {
+            plugin = container.getBean(UltiToolsPlugin.class);
+        } catch (Exception e) {
+            // No plugin in container — skip conditional (register by default)
+            return true;
+        }
+
+        if (plugin == null || plugin.getResourceFolderPath() == null) {
+            return true;
+        }
+
+        // Load the referenced config file from the plugin's config folder
+        File configFile = new File(plugin.getResourceFolderPath(), condition.value());
+        if (!configFile.exists()) {
+            // Config file doesn't exist yet — feature disabled
+            return condition.negate();
+        }
+
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(configFile);
+        boolean value = yaml.getBoolean(condition.path(), false);
+        return condition.negate() ? !value : value;
     }
 
     /**

@@ -476,6 +476,17 @@ public class SimpleContainer {
     }
 
     /**
+     * Get all singleton bean instances registered in this container (not including parent).
+     * <p>
+     * 获取此容器中注册的所有单例 Bean 实例（不包含父容器）。
+     *
+     * @return unmodifiable collection of singleton beans
+     */
+    public java.util.Collection<Object> getSingletonValues() {
+        return java.util.Collections.unmodifiableCollection(singletonObjects.values());
+    }
+
+    /**
      * Set display name.
      * <br>
      * 设置显示名称。

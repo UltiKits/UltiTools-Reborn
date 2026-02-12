@@ -272,10 +272,57 @@ class SimpleContainerTest {
         }
     }
 
-    // Test helper class
+    @Test
+    @DisplayName("Should resolve bean by registered superclass type")
+    void testResolveBeanBySuperclassType() {
+        // Given - register a concrete instance under its interface/superclass type
+        ConcreteService concreteService = new ConcreteService();
+        container.registerType(BaseService.class, concreteService);
+
+        // When - retrieve by superclass type
+        BaseService retrieved = container.getBean(BaseService.class);
+
+        // Then
+        assertNotNull(retrieved);
+        assertEquals(concreteService, retrieved);
+        assertTrue(retrieved instanceof ConcreteService);
+    }
+
+    @Test
+    @DisplayName("Should resolve bean by both concrete and registered superclass type")
+    void testResolveBeanByBothConcreteAndSuperclassType() {
+        // Given - register singleton (maps concrete class) and registerType (maps superclass)
+        ConcreteService concreteService = new ConcreteService();
+        container.registerSingleton("concreteService", concreteService);
+        container.registerType(BaseService.class, concreteService);
+
+        // When
+        ConcreteService byConcrete = container.getBean(ConcreteService.class);
+        BaseService byBase = container.getBean(BaseService.class);
+
+        // Then
+        assertNotNull(byConcrete);
+        assertNotNull(byBase);
+        assertEquals(byConcrete, byBase);
+    }
+
+    // Test helper classes
     public static class TestService {
         public String getName() {
             return "TestService";
+        }
+    }
+
+    public static class BaseService {
+        public String getType() {
+            return "base";
+        }
+    }
+
+    public static class ConcreteService extends BaseService {
+        @Override
+        public String getType() {
+            return "concrete";
         }
     }
 }
