@@ -394,14 +394,9 @@ UltiTools-Reborn/
 | [@qianmo2233](https://github.com/qianmo2233) | Developer, Documentation Maintainer |
 | [@Shpries](https://github.com/Shpries) | Developer |
 | [@JueChenChen](https://github.com/JueChenChen) | Issue Feedback & Suggestions |
+| 拾柒 | Graphic Designer |
 
 <br>
-
-## Related Projects
-
-- [UltiPanel Worker](https://github.com/UltiKits/UltiPanel-Worker) — Cloudflare Workers API backend
-- [UltiPanel Frontend](https://github.com/UltiKits/UltiPanelFrontend) — Vue 3 web dashboard
-- [UltiKits Plugins](https://www.spigotmc.org/resources/authors/wisdomme.505795/) — Official plugin modules
 
 ## License
 
