@@ -24,7 +24,7 @@ import com.ultikits.ultitools.annotations.Scheduled;
  * 管理插件模块的定时任务。扫描 Bean 中标注 {@link Scheduled} 的方法并注册为 Bukkit 任务。
  * 插件卸载时自动取消所有任务。
  *
- * @since 7.0.0
+ * @since 6.2.0
  */
 public class TaskManager {
 

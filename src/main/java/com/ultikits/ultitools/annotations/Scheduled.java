@@ -29,7 +29,7 @@ import java.lang.annotation.Target;
  * }
  * }</pre>
  *
- * @since 7.0.0
+ * @since 6.2.0
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
