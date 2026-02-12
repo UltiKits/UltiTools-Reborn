@@ -295,6 +295,17 @@ public class SimpleContainer {
             return (T) bean;
         }
 
+        // Check bean definitions by assignability (interface/superclass → impl resolution)
+        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
+            if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
+                bean = getBean(entry.getKey());
+                if (bean != null) {
+                    typeMappings.put(type, bean);
+                    return (T) bean;
+                }
+            }
+        }
+
         // Fallback: check all singletons by assignability (interface/superclass resolution)
         for (Object singleton : singletonObjects.values()) {
             if (type.isInstance(singleton)) {

@@ -41,19 +41,26 @@ public class MenuCommands extends AbstractCommandExecutor {
     /**
      * 快捷打开菜单: /menu <name>
      * <p>
-     * Shorthand to open menu directly
+     * Shorthand to open menu directly.
+     * No @CmdTarget(PLAYER) here — the wildcard pattern would intercept
+     * "list"/"reload" before the framework tries the exact-match mappings,
+     * rejecting console senders. Instead we accept BOTH and check manually.
      */
     @CmdMapping(format = "<name>")
-    @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
     public void onQuickOpen(
-            @CmdSender Player player,
+            @CmdSender CommandSender sender,
             @CmdParam(value = "name", suggest = "suggestMenuNames") String name
     ) {
         // Prevent conflict with list/reload subcommands
-        if ("list".equalsIgnoreCase(name) || "reload".equalsIgnoreCase(name)) {
+        if ("list".equalsIgnoreCase(name) || "reload".equalsIgnoreCase(name)
+                || "open".equalsIgnoreCase(name) || "help".equalsIgnoreCase(name)) {
             return;
         }
-        openMenuByName(player, name);
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + plugin.i18n("只有玩家才能打开菜单！"));
+            return;
+        }
+        openMenuByName((Player) sender, name);
     }
 
     /**
