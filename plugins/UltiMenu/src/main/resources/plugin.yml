@@ -1,0 +1,7 @@
+name: UltiTools-Menu
+version: '${project.version}'
+main: com.ultikits.plugins.menu.PluginMain
+base-package: com.ultikits.plugins.menu
+api-version: 620
+authors: [ wisdomme ]
+softdepend: [ PlaceholderAPI, Vault ]

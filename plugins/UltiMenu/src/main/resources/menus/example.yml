@@ -1,0 +1,58 @@
+# Example menu - copy and customize!
+# 示例菜单 - 复制并自定义！
+size: 27
+title: "&6&lServer Menu &r&7- {player}"
+command: servermenu
+permission: null
+bind-item: COMPASS
+bind-name: "&6Server Menu"
+bind-lore: "&eRight-click to open"
+
+buttons:
+  info:
+    item: BOOK
+    position: 10
+    name: "&b&lServer Info"
+    lore:
+      - "&7Welcome to the server!"
+      - "&7Online: &a%server_online%"
+    player-commands: []
+    console-commands: []
+    price: 0
+    close-on-click: false
+
+  spawn:
+    item: ENDER_PEARL
+    position: 12
+    name: "&d&lSpawn"
+    lore:
+      - "&7Teleport to spawn"
+      - "&7Cost: &aFree"
+    player-commands:
+      - "spawn"
+    console-commands: []
+    price: 0
+
+  kit-starter:
+    item: IRON_SWORD
+    position: 14
+    name: "&e&lStarter Kit"
+    lore:
+      - "&7Get starter items"
+      - "&7Cost: &c$100"
+    player-commands: []
+    console-commands:
+      - "give {player} iron_sword 1"
+      - "give {player} iron_pickaxe 1"
+      - "give {player} bread 16"
+    price: 100
+
+  rules:
+    item: WRITABLE_BOOK
+    position: 16
+    name: "&c&lServer Rules"
+    lore:
+      - "&7Click to view rules"
+    open-menu: rules
+    price: 0
+    close-on-click: false

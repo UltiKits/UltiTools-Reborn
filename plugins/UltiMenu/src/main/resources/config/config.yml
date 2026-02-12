@@ -1,0 +1,2 @@
+# Global click debounce in milliseconds / 全局点击防抖毫秒数
+click_cooldown_ms: 200

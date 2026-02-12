@@ -1,0 +1,19 @@
+{
+  "自定义菜单功能": "Custom Menu",
+  "没有找到菜单配置文件": "No menu configuration files found",
+  "已加载菜单: ": "Menu loaded: ",
+  "加载菜单失败: ": "Failed to load menu: ",
+  "共加载 %d 个菜单": "Loaded %d menus",
+  "菜单 '%s' 不存在！": "Menu '%s' does not exist!",
+  "你没有权限打开此菜单！": "You don't have permission to open this menu!",
+  "你没有权限使用此按钮！": "You don't have permission to use this button!",
+  "你没有权限执行此命令！": "You don't have permission to execute this command!",
+  "经济系统不可用！": "Economy system is not available!",
+  "余额不足！需要 %s": "Insufficient balance! Requires %s",
+  "扣款失败！": "Withdrawal failed!",
+  "已扣除 %s": "Deducted %s",
+  "没有可用的菜单": "No menus available",
+  "=== 可用菜单 ===": "=== Available Menus ===",
+  "已重新加载 %d 个菜单": "Reloaded %d menus",
+  "=== 自定义菜单 ===\n/menu <名字> 打开菜单\n/menu open <名字> 打开菜单\n/menu list 列出所有菜单\n/menu reload 重新加载菜单\n================": "=== Custom Menu ===\n/menu <name> Open a menu\n/menu open <name> Open a menu\n/menu list List all menus\n/menu reload Reload all menus\n================"
+}
