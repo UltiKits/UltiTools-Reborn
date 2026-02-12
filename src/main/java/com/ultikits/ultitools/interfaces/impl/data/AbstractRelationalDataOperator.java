@@ -1,12 +1,15 @@
 package com.ultikits.ultitools.interfaces.impl.data;
 
 import java.lang.reflect.Field;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -57,8 +60,11 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
      */
     protected AbstractRelationalDataOperator(DataSource dataSource, Class<T> type) {
         this.type = type;
-        this.dataSource = dataSource;
-        this.queryRunner = new QueryRunner(dataSource);
+        // Wrap for transaction awareness — when TransactionManager has an active
+        // transaction, getConnection() returns the transaction's connection instead
+        // of a fresh auto-commit one.
+        this.dataSource = new TransactionAwareDataSource(dataSource, () -> this.transactionManager);
+        this.queryRunner = new QueryRunner(this.dataSource);
         Table tableAnnotation = ReflectionUtil.getAnnotation(type, Table.class);
         if (tableAnnotation == null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
@@ -384,6 +390,167 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
                     "Failed to update entity", e);
         }
     }
+
+    // ===== Transaction support =====
+
+    @Override
+    public <R> R transaction(Callable<R> action) throws Exception {
+        if (transactionManager == null) {
+            return action.call();
+        }
+        transactionManager.begin();
+        try {
+            R result = action.call();
+            transactionManager.commit();
+            return result;
+        } catch (Exception e) {
+            transactionManager.rollback();
+            throw e;
+        }
+    }
+
+    @Override
+    public void transaction(Runnable action) {
+        try {
+            transaction((Callable<Void>) () -> {
+                action.run();
+                return null;
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                    "Transaction failed", e);
+        }
+    }
+
+    // ===== JDBC batch operations =====
+
+    @Override
+    public void insertAll(List<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        transaction(() -> {
+            List<ColumnMapping> columns = getColumnMappings();
+            StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
+            StringBuilder placeholders = new StringBuilder(") VALUES (");
+            boolean first = true;
+            for (ColumnMapping col : columns) {
+                if (!first) {
+                    sql.append(", ");
+                    placeholders.append(", ");
+                }
+                sql.append("`").append(col.columnName).append("`");
+                placeholders.append("?");
+                first = false;
+            }
+            sql.append(placeholders).append(")");
+
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                for (T entity : entities) {
+                    int idx = 1;
+                    for (ColumnMapping col : columns) {
+                        Object value = col.field.get(entity);
+                        if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
+                            String json = GSON.toJson(value);
+                            if (json.startsWith("\"") && json.endsWith("\"")) {
+                                json = json.substring(1, json.length() - 1);
+                            }
+                            value = json;
+                        }
+                        pstmt.setObject(idx++, value);
+                    }
+                    pstmt.addBatch();
+                }
+                pstmt.executeBatch();
+            } catch (SQLException | IllegalAccessException e) {
+                throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                        "Batch insert failed", e);
+            }
+        });
+    }
+
+    @Override
+    public void updateAll(List<T> entities) throws IllegalAccessException {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+        try {
+            transaction((Callable<Void>) () -> {
+                List<ColumnMapping> columns = getColumnMappings();
+                StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+                boolean first = true;
+                for (ColumnMapping col : columns) {
+                    if (!first) {
+                        sql.append(", ");
+                    }
+                    sql.append("`").append(col.columnName).append("` = ?");
+                    first = false;
+                }
+                sql.append(" WHERE id = ?");
+
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                    for (T entity : entities) {
+                        int idx = 1;
+                        for (ColumnMapping col : columns) {
+                            Object value = col.field.get(entity);
+                            if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
+                                String json = GSON.toJson(value);
+                                if (json.startsWith("\"") && json.endsWith("\"")) {
+                                    json = json.substring(1, json.length() - 1);
+                                }
+                                value = json;
+                            }
+                            pstmt.setObject(idx++, value);
+                        }
+                        pstmt.setObject(idx, entity.getId());
+                        pstmt.addBatch();
+                    }
+                    pstmt.executeBatch();
+                } catch (SQLException | IllegalAccessException e) {
+                    throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                            "Batch update failed", e);
+                }
+                return null;
+            });
+        } catch (IllegalAccessException e) {
+            throw e;
+        } catch (DataAccessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                    "Batch update transaction failed", e);
+        }
+    }
+
+    // ===== Column mapping helper =====
+
+    private static class ColumnMapping {
+        final String columnName;
+        final Field field;
+
+        ColumnMapping(String columnName, Field field) {
+            this.columnName = columnName;
+            this.field = field;
+        }
+    }
+
+    private List<ColumnMapping> getColumnMappings() {
+        List<ColumnMapping> mappings = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(type)) {
+            if (field.isAnnotationPresent(Column.class)) {
+                field.setAccessible(true);
+                Column col = field.getAnnotation(Column.class);
+                mappings.add(new ColumnMapping(col.value(), field));
+            }
+        }
+        return mappings;
+    }
+
+    // ===== Table creation (abstract) =====
 
     /**
      * Creates the SQL statement to create the table.

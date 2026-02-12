@@ -11,9 +11,11 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
@@ -264,6 +266,67 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
         }
         for (File file : rubbishBin) {
             FileUtils.del(file);
+        }
+    }
+
+    // ===== Transaction support (snapshot-based) =====
+
+    @Override
+    public synchronized <R> R transaction(Callable<R> action) throws Exception {
+        // Deep copy: serialize/deserialize to break references
+        // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
+        Map<Object, T> snapshot = new HashMap<>();
+        for (Map.Entry<Object, T> entry : cache.entrySet()) {
+            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
+        }
+        try {
+            return action.call();
+        } catch (Exception e) {
+            // Rollback: restore cache from deep copy
+            cache.clear();
+            cache.putAll(snapshot);
+            throw e;
+        }
+    }
+
+    @Override
+    public synchronized void transaction(Runnable action) {
+        try {
+            transaction((Callable<Void>) () -> {
+                action.run();
+                return null;
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Transaction failed", e);
+        }
+    }
+
+    @Override
+    public synchronized void insertAll(List<T> entities) {
+        transaction(() -> {
+            for (T entity : entities) {
+                insert(entity);
+            }
+        });
+    }
+
+    @Override
+    public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
+        try {
+            transaction((Callable<Void>) () -> {
+                for (T entity : entities) {
+                    update(entity);
+                }
+                return null;
+            });
+        } catch (IllegalAccessException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Batch update failed", e);
         }
     }
 

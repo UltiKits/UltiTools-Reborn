@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import java.util.List;
+import java.util.concurrent.Callable;
 
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -149,5 +150,61 @@ public interface DataOperator<T extends AbstractDataEntity> {
      */
     default Query<T> query() {
         return new QueryImpl<>(this);
+    }
+
+    /**
+     * Execute operations within a transaction. All operations commit together
+     * or roll back on exception. For SQL backends, uses database transactions.
+     * For JSON, uses snapshot-based rollback.
+     * <p>
+     * 在事务中执行操作。所有操作一起提交或在异常时回滚。
+     *
+     * @param action the operations to execute
+     * @param <R> the return type
+     * @return the result of the action
+     * @throws Exception if the action fails
+     */
+    default <R> R transaction(Callable<R> action) throws Exception {
+        return action.call();
+    }
+
+    /**
+     * Execute operations within a transaction (void variant).
+     * <p>
+     * 在事务中执行操作（无返回值）。
+     *
+     * @param action the operations to execute
+     */
+    default void transaction(Runnable action) {
+        action.run();
+    }
+
+    /**
+     * Insert multiple entities atomically. Uses JDBC batch for SQL backends.
+     * <p>
+     * 批量原子插入。SQL后端使用JDBC批处理。
+     *
+     * @param entities the entities to insert
+     */
+    default void insertAll(List<T> entities) {
+        transaction(() -> {
+            for (T entity : entities) {
+                insert(entity);
+            }
+        });
+    }
+
+    /**
+     * Update multiple entities atomically. Uses JDBC batch for SQL backends.
+     * <p>
+     * 批量原子更新。SQL后端使用JDBC批处理。
+     *
+     * @param entities the entities to update
+     * @throws IllegalAccessException if field access fails
+     */
+    default void updateAll(List<T> entities) throws IllegalAccessException {
+        for (T entity : entities) {
+            update(entity);
+        }
     }
 }
