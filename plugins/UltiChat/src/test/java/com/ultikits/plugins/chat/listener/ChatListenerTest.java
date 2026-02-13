@@ -47,7 +47,7 @@ class ChatListenerTest {
         emojiService = mock(EmojiService.class);
 
         listener = new ChatListener(
-                ChatTestHelper.getMockPlugin(), chatConfig, channelConfig,
+                chatConfig, channelConfig,
                 antiSpamService, channelService, emojiService
         );
 

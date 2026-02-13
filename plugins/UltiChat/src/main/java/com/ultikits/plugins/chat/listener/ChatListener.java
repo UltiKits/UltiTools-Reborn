@@ -5,7 +5,6 @@ import com.ultikits.plugins.chat.config.ChannelConfig;
 import com.ultikits.plugins.chat.service.AntiSpamService;
 import com.ultikits.plugins.chat.service.ChannelService;
 import com.ultikits.plugins.chat.service.EmojiService;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -36,7 +35,7 @@ public class ChatListener implements Listener {
     private final ChannelService channelService;
     private final EmojiService emojiService;
 
-    public ChatListener(UltiToolsPlugin plugin, ChatConfig chatConfig, ChannelConfig channelConfig,
+    public ChatListener(ChatConfig chatConfig, ChannelConfig channelConfig,
                         AntiSpamService antiSpamService, ChannelService channelService,
                         EmojiService emojiService) {
         this.chatConfig = chatConfig;
