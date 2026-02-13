@@ -207,85 +207,89 @@ public class WorldService {
                 .replace("%world%", worldName));
             return false;
         }
-        
+
         WorldSettings settings = getOrCreateSettings(worldName);
-        
-        // Check if blocked
+
+        if (!checkTeleportPermissions(player, worldName, settings)) {
+            return false;
+        }
+
+        Location destination = resolveDestination(world, settings);
+        player.teleport(destination);
+        setTpCooldown(player.getUniqueId());
+
+        String displayName = settings.getDisplayName() != null ? settings.getDisplayName() : worldName;
+        player.sendMessage(plugin.i18n("success.teleported")
+            .replace("%world%", displayName));
+
+        sendDescription(player, displayName, settings);
+        executePostTeleportCommands(player.getName(), worldName, settings);
+
+        return true;
+    }
+
+    private boolean checkTeleportPermissions(Player player, String worldName, WorldSettings settings) {
         if (settings.isBlocked() && !player.hasPermission("ultiworlds.bypass.blocked")) {
             player.sendMessage(plugin.i18n("error.world_blocked"));
             return false;
         }
-        
-        // Check if locked
         if (settings.isLocked() && !player.hasPermission("ultiworlds.bypass.locked")) {
             player.sendMessage(plugin.i18n("error.world_locked"));
             return false;
         }
-        
-        // Check permission
-        if (config.isPermissionPerWorld() && 
-            !player.hasPermission("ultiworlds.world." + worldName) &&
-            !player.hasPermission("ultiworlds.world.*")) {
+        if (config.isPermissionPerWorld()
+                && !player.hasPermission("ultiworlds.world." + worldName)
+                && !player.hasPermission("ultiworlds.world.*")) {
             player.sendMessage(plugin.i18n("error.no_permission"));
             return false;
         }
-        
-        // Check cooldown
         if (!canTeleport(player.getUniqueId())) {
             int remaining = getRemainingCooldown(player.getUniqueId());
             player.sendMessage(plugin.i18n("error.cooldown")
                 .replace("%time%", String.valueOf(remaining)));
             return false;
         }
-        
-        // Determine location
-        Location destination;
-        if (config.isUseSpawnLocation() && settings.getSpawnX() != 0) {
-            destination = new Location(world, 
-                settings.getSpawnX(), 
-                settings.getSpawnY(), 
-                settings.getSpawnZ(),
-                settings.getSpawnYaw(),
-                settings.getSpawnPitch());
-        } else if (config.isUseSpawnLocation()) {
-            destination = world.getSpawnLocation();
-        } else {
-            destination = world.getSpawnLocation();
-        }
-        
-        player.teleport(destination);
-        setTpCooldown(player.getUniqueId());
-        
-        String displayName = settings.getDisplayName() != null ? settings.getDisplayName() : worldName;
-        player.sendMessage(plugin.i18n("success.teleported")
-            .replace("%world%", displayName));
-
-        // Show description if configured
-        if (config.isShowDescriptionOnTeleport() && settings.getDescription() != null
-                && !settings.getDescription().isEmpty()) {
-            String[] lines = settings.getDescription().split("\\n");
-            for (String line : lines) {
-                String parsed = org.bukkit.ChatColor.translateAlternateColorCodes('&',
-                    line.replace("{player}", player.getName())
-                        .replace("{world}", displayName));
-                player.sendMessage(parsed);
-            }
-        }
-
-        // Execute post-teleport commands
-        if (settings.getPostTeleportCommands() != null && !settings.getPostTeleportCommands().isEmpty()) {
-            String[] commands = settings.getPostTeleportCommands().split("\\n");
-            for (String cmd : commands) {
-                String parsed = cmd.trim()
-                    .replace("{player}", player.getName())
-                    .replace("{world}", worldName);
-                if (!parsed.isEmpty()) {
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), parsed);
-                }
-            }
-        }
-
         return true;
+    }
+
+    private Location resolveDestination(World world, WorldSettings settings) {
+        if (config.isUseSpawnLocation() && settings.getSpawnX() != 0) {
+            return new Location(world,
+                settings.getSpawnX(), settings.getSpawnY(), settings.getSpawnZ(),
+                settings.getSpawnYaw(), settings.getSpawnPitch());
+        }
+        return world.getSpawnLocation();
+    }
+
+    private void sendDescription(Player player, String displayName, WorldSettings settings) {
+        if (!config.isShowDescriptionOnTeleport()) {
+            return;
+        }
+        String description = settings.getDescription();
+        if (description == null || description.isEmpty()) {
+            return;
+        }
+        for (String line : description.split("\\n")) {
+            String parsed = org.bukkit.ChatColor.translateAlternateColorCodes('&',
+                line.replace("{player}", player.getName())
+                    .replace("{world}", displayName));
+            player.sendMessage(parsed);
+        }
+    }
+
+    private void executePostTeleportCommands(String playerName, String worldName, WorldSettings settings) {
+        String commands = settings.getPostTeleportCommands();
+        if (commands == null || commands.isEmpty()) {
+            return;
+        }
+        for (String cmd : commands.split("\\n")) {
+            String parsed = cmd.trim()
+                .replace("{player}", playerName)
+                .replace("{world}", worldName);
+            if (!parsed.isEmpty()) {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), parsed);
+            }
+        }
     }
     
     /**

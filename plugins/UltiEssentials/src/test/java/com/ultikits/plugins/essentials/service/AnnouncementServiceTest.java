@@ -66,32 +66,32 @@ class AnnouncementServiceTest {
 
     private void setField(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(target, value);
     }
 
     @SuppressWarnings("unchecked")
     private Map<UUID, BossBar> getActiveBossBars() throws Exception {
         Field field = AnnouncementService.class.getDeclaredField("activeBossBars");
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         return (Map<UUID, BossBar>) field.get(service);
     }
 
     private int getIndex(String fieldName) throws Exception {
         Field field = AnnouncementService.class.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         return (int) field.get(service);
     }
 
     private void setIndex(String fieldName, int value) throws Exception {
         Field field = AnnouncementService.class.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(service, value);
     }
 
     private void invokePrivateMethod(String methodName) throws Exception {
         Method method = AnnouncementService.class.getDeclaredMethod(methodName);
-        method.setAccessible(true);
+        method.setAccessible(true); // NOPMD - test reflection
         method.invoke(service);
     }
 

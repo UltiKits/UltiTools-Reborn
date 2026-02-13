@@ -36,14 +36,14 @@ class ScheduledCommandServiceTest {
 
     private void setField(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(target, value);
     }
 
     @SuppressWarnings("unchecked")
     private List<BukkitTask> getTasks(ScheduledCommandService svc) throws Exception {
         Field field = svc.getClass().getDeclaredField("tasks");
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         return (List<BukkitTask>) field.get(svc);
     }
 
