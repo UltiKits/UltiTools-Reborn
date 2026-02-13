@@ -33,13 +33,9 @@ class UltiRemoteBagTest {
 
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        // Set instance field to null first
-        UltiRemoteBagTestHelper.setStaticField(UltiRemoteBag.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiRemoteBag.getInstance()).isSameAs(plugin);
     }
 
     @Test
@@ -85,10 +81,4 @@ class UltiRemoteBagTest {
         assertThat(langs).containsExactly("zh", "en");
     }
 
-    @Test
-    @DisplayName("getInstance should return null when not registered")
-    void getInstanceNull() throws Exception {
-        UltiRemoteBagTestHelper.setStaticField(UltiRemoteBag.class, "instance", null);
-        assertThat(UltiRemoteBag.getInstance()).isNull();
-    }
 }

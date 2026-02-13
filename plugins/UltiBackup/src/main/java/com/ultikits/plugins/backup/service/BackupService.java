@@ -1,17 +1,17 @@
 package com.ultikits.plugins.backup.service;
 
-import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.config.BackupConfig;
 import com.ultikits.plugins.backup.entity.BackupContent;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 import com.ultikits.ultitools.annotations.PostConstruct;
 import java.io.File;
@@ -34,13 +34,17 @@ import java.util.*;
  */
 @Service
 public class BackupService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private BackupConfig config;
-    
+
     private DataOperator<BackupMetadata> dataOperator;
     private File backupsDirectory;
-    
+    private Plugin bukkitPlugin;
+
     /**
      * Initialize the service.
      * <p>
@@ -48,24 +52,13 @@ public class BackupService {
      */
     @PostConstruct
     public void init() {
-        this.dataOperator = UltiBackup.getInstance().getDataOperator(BackupMetadata.class);
-        
+        this.dataOperator = plugin.getDataOperator(BackupMetadata.class);
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+
         // Ensure backups directory exists
-        this.backupsDirectory = new File(UltiTools.getInstance().getDataFolder(), "backups");
+        this.backupsDirectory = new File(bukkitPlugin.getDataFolder(), "backups");
         if (!backupsDirectory.exists()) {
             backupsDirectory.mkdirs();
-        }
-        
-        // Start auto backup task
-        if (config.isAutoBackupEnabled() && config.getAutoBackupInterval() > 0) {
-            Bukkit.getScheduler().runTaskTimerAsynchronously(
-                UltiTools.getInstance(),
-                this::autoBackupAll,
-                config.getAutoBackupInterval() * 60 * 20L,
-                config.getAutoBackupInterval() * 60 * 20L
-            );
-            UltiBackup.getInstance().getLogger().info("Auto backup task started with interval: " + 
-                config.getAutoBackupInterval() + " minutes");
         }
     }
     
@@ -92,7 +85,7 @@ public class BackupService {
         
         try {
             // Save cold data to file
-            File backupFile = new File(UltiTools.getInstance().getDataFolder(), metadata.getFilePath());
+            File backupFile = new File(bukkitPlugin.getDataFolder(), metadata.getFilePath());
             String checksum = content.saveToFile(backupFile);
             metadata.setChecksum(checksum);
             
@@ -102,12 +95,12 @@ public class BackupService {
             // Clean up old backups
             cleanupOldBackups(UUID.fromString(player.getUniqueId().toString()));
             
-            UltiBackup.getInstance().getLogger().info("Created backup for " + player.getName() + 
+            plugin.getLogger().info("Created backup for " + player.getName() + 
                 ": " + metadata.getFilePath());
             
             return metadata;
         } catch (IOException e) {
-            UltiBackup.getInstance().getLogger().error(e, 
+            plugin.getLogger().error(e, 
                 "Failed to create backup for " + player.getName());
             return null;
         }
@@ -122,16 +115,13 @@ public class BackupService {
      * @return list of backups sorted by time descending
      */
     public List<BackupMetadata> getBackups(UUID playerUuid) {
-        List<BackupMetadata> backups = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<BackupMetadata> backups = dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
+
         // Sort by time descending
         backups.sort((a, b) -> Long.compare(b.getBackupTime(), a.getBackupTime()));
-        
+
         return backups;
     }
     
@@ -168,7 +158,7 @@ public class BackupService {
         try {
             return BackupContent.verifyChecksum(backupFile, metadata.getChecksum());
         } catch (IOException e) {
-            UltiBackup.getInstance().getLogger().warn(e, 
+            plugin.getLogger().warn(e, 
                 "Failed to verify checksum for backup: " + metadata.getId());
             return false;
         }
@@ -195,7 +185,7 @@ public class BackupService {
         try {
             return BackupContent.loadFromFile(backupFile);
         } catch (IOException e) {
-            UltiBackup.getInstance().getLogger().warn(e, 
+            plugin.getLogger().warn(e, 
                 "Failed to load backup content: " + metadata.getId());
             return null;
         }
@@ -253,12 +243,12 @@ public class BackupService {
                 config.isBackupExp()
             );
             
-            UltiBackup.getInstance().getLogger().info("Restored backup " + metadata.getId() + 
+            plugin.getLogger().info("Restored backup " + metadata.getId() + 
                 " to player " + player.getName());
             
             return RestoreResult.SUCCESS;
         } catch (Exception e) {
-            UltiBackup.getInstance().getLogger().error(e, 
+            plugin.getLogger().error(e, 
                 "Failed to restore backup " + metadata.getId() + " to " + player.getName());
             return RestoreResult.RESTORE_FAILED;
         }
@@ -321,24 +311,30 @@ public class BackupService {
     
     /**
      * Auto backup all online players.
+     * Runs every 30 minutes (36000 ticks). Checks config.auto_backup.enabled before executing.
      * <p>
      * 自动备份所有在线玩家。
+     * 每 30 分钟运行一次（36000 刻）。执行前检查 config.auto_backup.enabled。
      */
-    private void autoBackupAll() {
-        Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
-            int count = 0;
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                if (player.hasPermission("ultibackup.auto")) {
-                    BackupMetadata result = createBackup(player, "AUTO");
-                    if (result != null) {
-                        count++;
-                    }
+    @Scheduled(period = 36000, async = false)
+    public void autoBackupAll() {
+        // Check if auto backup is enabled
+        if (!config.isAutoBackupEnabled()) {
+            return;
+        }
+
+        int count = 0;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.hasPermission("ultibackup.auto")) {
+                BackupMetadata result = createBackup(player, "AUTO");
+                if (result != null) {
+                    count++;
                 }
             }
-            if (count > 0) {
-                UltiBackup.getInstance().getLogger().info("Auto backup completed: " + count + " players");
-            }
-        });
+        }
+        if (count > 0) {
+            plugin.getLogger().info("Auto backup completed: " + count + " players");
+        }
     }
     
     /**

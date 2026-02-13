@@ -4,8 +4,8 @@ import com.ultikits.plugins.backup.UltiBackupTestHelper;
 import com.ultikits.plugins.backup.config.BackupConfig;
 import com.ultikits.plugins.backup.entity.BackupContent;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -54,6 +54,7 @@ class BackupServiceTest {
         service = new BackupService();
 
         // Inject dependencies via reflection (normally done by @Autowired / @PostConstruct)
+        UltiBackupTestHelper.setField(service, "plugin", UltiBackupTestHelper.getMockPlugin());
         UltiBackupTestHelper.setField(service, "config", config);
         UltiBackupTestHelper.setField(service, "dataOperator", dataOperator);
         UltiBackupTestHelper.setField(service, "backupsDirectory",
@@ -78,14 +79,18 @@ class BackupServiceTest {
         @Test
         @DisplayName("Should query by player UUID")
         void queriesByUuid() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(new ArrayList<>());
+            Query<BackupMetadata> query = mock(Query.class);
+            when(dataOperator.query()).thenReturn(query);
+            when(query.where("player_uuid")).thenReturn(query);
+            when(query.eq(playerUuid.toString())).thenReturn(query);
+            when(query.list()).thenReturn(new ArrayList<>());
 
             service.getBackups(playerUuid);
 
-            ArgumentCaptor<WhereCondition> captor = ArgumentCaptor.forClass(WhereCondition.class);
-            verify(dataOperator).getAll(captor.capture());
-            assertThat(captor.getValue().getColumn()).isEqualTo("player_uuid");
-            assertThat(captor.getValue().getValue()).isEqualTo(playerUuid.toString());
+            verify(dataOperator).query();
+            verify(query).where("player_uuid");
+            verify(query).eq(playerUuid.toString());
+            verify(query).list();
         }
 
         @Test
@@ -95,8 +100,11 @@ class BackupServiceTest {
             BackupMetadata newer = BackupMetadata.builder().backupTime(2000L).build();
             BackupMetadata newest = BackupMetadata.builder().backupTime(3000L).build();
 
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(new ArrayList<>(Arrays.asList(older, newest, newer)));
+            Query<BackupMetadata> query = mock(Query.class);
+            when(dataOperator.query()).thenReturn(query);
+            when(query.where("player_uuid")).thenReturn(query);
+            when(query.eq(playerUuid.toString())).thenReturn(query);
+            when(query.list()).thenReturn(new ArrayList<>(Arrays.asList(older, newest, newer)));
 
             List<BackupMetadata> result = service.getBackups(playerUuid);
 
@@ -107,7 +115,11 @@ class BackupServiceTest {
         @Test
         @DisplayName("Should return empty list when no backups")
         void emptyList() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(new ArrayList<>());
+            Query<BackupMetadata> query = mock(Query.class);
+            when(dataOperator.query()).thenReturn(query);
+            when(query.where("player_uuid")).thenReturn(query);
+            when(query.eq(playerUuid.toString())).thenReturn(query);
+            when(query.list()).thenReturn(new ArrayList<>());
 
             List<BackupMetadata> result = service.getBackups(playerUuid);
 

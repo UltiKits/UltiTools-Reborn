@@ -1,8 +1,9 @@
 package com.ultikits.plugins.essentials.commands;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.annotations.Autowired;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
@@ -24,6 +25,9 @@ import java.util.stream.Collectors;
  */
 public abstract class BaseEssentialsCommand extends BaseCommandExecutor {
 
+    @Autowired
+    protected UltiToolsPlugin plugin;
+
     /**
      * Gets the localized string from the plugin's language file.
      *
@@ -31,7 +35,7 @@ public abstract class BaseEssentialsCommand extends BaseCommandExecutor {
      * @return the localized string
      */
     protected String i18n(String key) {
-        return UltiEssentials.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 
     /**

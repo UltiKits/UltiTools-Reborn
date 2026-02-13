@@ -1,6 +1,5 @@
 package com.ultikits.plugins.essentials.listener;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;

@@ -2,7 +2,7 @@ package com.ultikits.plugins.login.commands;
 
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
@@ -20,10 +20,10 @@ import org.bukkit.entity.Player;
     alias = {"register", "reg"},
     description = "注册账号"
 )
-public class RegisterCommand extends AbstractCommendExecutor {
-    
+public class RegisterCommand extends BaseCommandExecutor {
+
     private final LoginService loginService;
-    
+
     public RegisterCommand(LoginService loginService) {
         this.loginService = loginService;
     }

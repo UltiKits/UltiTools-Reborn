@@ -1,6 +1,6 @@
 package com.ultikits.plugins.trade.entity;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import lombok.Data;
@@ -23,7 +23,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("trade_logs")
-public class TradeLogData extends AbstractDataEntity {
+public class TradeLogData extends BaseDataEntity<String> {
     
     /**
      * Unique trade ID

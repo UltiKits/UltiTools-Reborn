@@ -1,8 +1,8 @@
 package com.ultikits.plugins.mail.gui;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BasePaginationPage;
 import com.ultikits.ultitools.entities.Colors;
 import mc.obliviate.inventory.Icon;
@@ -27,12 +27,14 @@ import java.util.List;
 public class SentboxGUI extends BasePaginationPage {
     
     private final MailService mailService;
+    private final UltiToolsPlugin plugin;
     private final List<MailData> mails;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
-    
-    public SentboxGUI(@NotNull Player player, MailService mailService) {
-        super(player, "sentbox-gui", i18n("sentbox_gui_title").replace("{0}", player.getName()), 6);
+
+    public SentboxGUI(@NotNull Player player, MailService mailService, UltiToolsPlugin plugin) {
+        super(player, "sentbox-gui", plugin.i18n("sentbox_gui_title").replace("{0}", player.getName()), 6);
         this.mailService = mailService;
+        this.plugin = plugin;
         this.mails = mailService.getSentMails(player.getUniqueId());
     }
     
@@ -105,8 +107,8 @@ public class SentboxGUI extends BasePaginationPage {
         return icon;
     }
     
-    private static String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+    private String i18n(String key) {
+        return plugin.i18n(key);
     }
     
     @Override

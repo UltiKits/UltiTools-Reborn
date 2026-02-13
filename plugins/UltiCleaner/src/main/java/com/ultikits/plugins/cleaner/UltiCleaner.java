@@ -2,6 +2,7 @@ package com.ultikits.plugins.cleaner;
 
 import com.ultikits.plugins.cleaner.service.ChunkUnloadService;
 import com.ultikits.plugins.cleaner.service.CleanerService;
+import com.ultikits.plugins.cleaner.service.TpsAwareScheduler;
 import com.ultikits.plugins.cleaner.utils.ServerTypeUtil;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -24,51 +25,36 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.cleaner"})
 public class UltiCleaner extends UltiToolsPlugin {
 
-    private static UltiCleaner instance;
-
-    public static UltiCleaner getInstance() {
-        return instance;
-    }
-
     @Override
     public boolean registerSelf() {
-        instance = this;
-        
         // Log server type
         getLogger().info("Detected server: " + ServerTypeUtil.getServerSoftware());
-        
-        // Initialize cleaner service
+
+        // Load configuration caches
         CleanerService cleanerService = getContext().getBean(CleanerService.class);
         if (cleanerService != null) {
             cleanerService.init();
         }
-        
-        // Initialize chunk unload service
+
+        // Initialize TPS scheduler
+        TpsAwareScheduler tpsScheduler = getContext().getBean(TpsAwareScheduler.class);
+        if (tpsScheduler != null) {
+            tpsScheduler.init();
+        }
+
+        // Initialize chunk unload service logging
         ChunkUnloadService chunkUnloadService = getContext().getBean(ChunkUnloadService.class);
         if (chunkUnloadService != null) {
             chunkUnloadService.init();
         }
-        
+
         getLogger().info(i18n("cleaner_enabled"));
         return true;
     }
 
     @Override
     public void unregisterSelf() {
-        // Shutdown cleaner service
-        CleanerService cleanerService = getContext().getBean(CleanerService.class);
-        if (cleanerService != null) {
-            cleanerService.shutdown();
-        }
-        
-        // Shutdown chunk unload service
-        ChunkUnloadService chunkUnloadService = getContext().getBean(ChunkUnloadService.class);
-        if (chunkUnloadService != null) {
-            chunkUnloadService.shutdown();
-        }
-        
         getLogger().info(i18n("cleaner_disabled"));
-        instance = null;
     }
 
     @Override

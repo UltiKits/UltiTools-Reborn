@@ -3,7 +3,6 @@ package com.ultikits.plugins.recipe;
 import com.ultikits.plugins.recipe.service.RecipeService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
-import lombok.Getter;
 
 /**
  * UltiRecipe - Custom recipe management plugin for Minecraft servers.
@@ -24,23 +23,15 @@ import lombok.Getter;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.recipe"})
 public class UltiRecipe extends UltiToolsPlugin {
 
-    private static UltiRecipe instance;
-
-    public static UltiRecipe getInstance() {
-        return instance;
-    }
-
     @Override
     public boolean registerSelf() {
-        instance = this;
-        
         // Initialize recipe service
         RecipeService recipeService = getContext().getBean(RecipeService.class);
         if (recipeService != null) {
             int count = recipeService.initRecipes();
             getLogger().info(String.format(i18n("已注册 %d 个自定义配方"), count));
         }
-        
+
         getLogger().info(i18n("UltiRecipe 已启用！"));
         return true;
     }
@@ -52,9 +43,8 @@ public class UltiRecipe extends UltiToolsPlugin {
         if (recipeService != null) {
             recipeService.removeRecipes();
         }
-        
+
         getLogger().info(i18n("UltiRecipe 已禁用！"));
-        instance = null;
     }
 
     @Override

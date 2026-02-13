@@ -1,11 +1,10 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.ChestLockData;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Location;
@@ -35,10 +34,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ChestLockService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private EssentialsConfig config;
-    
+
     private DataOperator<ChestLockData> lockOperator;
-    
+
     // Cache for quick lookups
     private final Map<String, ChestLockData> lockCache = new ConcurrentHashMap<>();
     
@@ -79,7 +81,7 @@ public class ChestLockService {
      */
     @PostConstruct
     public void init() {
-        this.lockOperator = UltiEssentials.getInstance().getDataOperator(ChestLockData.class);
+        this.lockOperator = plugin.getDataOperator(ChestLockData.class);
         loadCache();
     }
     

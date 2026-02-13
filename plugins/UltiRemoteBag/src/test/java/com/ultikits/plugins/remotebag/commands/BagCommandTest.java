@@ -8,6 +8,7 @@ import com.ultikits.plugins.remotebag.entity.BagOpenResult;
 import com.ultikits.plugins.remotebag.enums.LockType;
 import com.ultikits.plugins.remotebag.service.BagLockService;
 import com.ultikits.plugins.remotebag.service.RemoteBagService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
@@ -57,14 +58,13 @@ class BagCommandTest {
         lockService = mock(BagLockService.class);
         config = UltiRemoteBagTestHelper.createDefaultConfig();
 
-        command = new BagCommand(bagService, lockService, config);
+        UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
+        when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+        command = new BagCommand(mockPlugin, bagService, lockService, config);
 
         playerUuid = UUID.randomUUID();
         player = UltiRemoteBagTestHelper.createMockPlayer("TestPlayer", playerUuid);
-
-        // Mock i18n
-        when(UltiRemoteBag.getInstance().i18n(anyString()))
-                .thenAnswer(inv -> inv.getArgument(0));
     }
 
     @AfterEach

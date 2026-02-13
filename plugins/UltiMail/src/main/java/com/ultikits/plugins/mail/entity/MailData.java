@@ -1,6 +1,6 @@
 package com.ultikits.plugins.mail.entity;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -19,7 +19,7 @@ import lombok.EqualsAndHashCode;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Table("mail_messages")
-public class MailData extends AbstractDataEntity {
+public class MailData extends BaseDataEntity<String> {
     
     @Column("sender_uuid")
     private String senderUuid;
@@ -76,6 +76,8 @@ public class MailData extends AbstractDataEntity {
     private boolean deletedByReceiver;
     
     public MailData() {
+        // Generate timestamp-based ID
+        this.setId(String.valueOf(System.currentTimeMillis()));
         this.sentTime = System.currentTimeMillis();
         this.read = false;
         this.claimed = false;

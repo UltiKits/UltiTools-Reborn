@@ -4,8 +4,8 @@ import com.ultikits.plugins.sidebar.UltiSideBar;
 import com.ultikits.plugins.sidebar.UltiSideBarTestHelper;
 import com.ultikits.plugins.sidebar.config.SideBarConfig;
 import com.ultikits.plugins.sidebar.data.SideBarPreference;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -32,6 +32,8 @@ class SideBarServiceTest {
     private SideBarConfig config;
     @SuppressWarnings("unchecked")
     private DataOperator<SideBarPreference> dataOperator = mock(DataOperator.class);
+    @SuppressWarnings("unchecked")
+    private Query<SideBarPreference> query = mock(Query.class);
 
     private Player player;
     private UUID playerUuid;
@@ -48,9 +50,16 @@ class SideBarServiceTest {
         lenient().when(config.getLines()).thenReturn(Arrays.asList("Line 1", "Line 2"));
         lenient().when(config.getWorldBlacklist()).thenReturn(Collections.emptyList());
 
+        // Setup query chain mocking
+        lenient().when(dataOperator.query()).thenReturn(query);
+        lenient().when(query.where(anyString())).thenReturn(query);
+        lenient().when(query.eq(any())).thenReturn(query);
+        lenient().when(query.list()).thenReturn(Collections.emptyList());
+
         service = new SideBarService();
 
         // Inject dependencies via reflection
+        UltiSideBarTestHelper.setField(service, "plugin", UltiSideBarTestHelper.getMockPlugin());
         UltiSideBarTestHelper.setField(service, "config", config);
         UltiSideBarTestHelper.setField(service, "dataOperator", dataOperator);
 
@@ -104,8 +113,12 @@ class SideBarServiceTest {
                 @SuppressWarnings("unchecked")
                 DataOperator<SideBarPreference> pluginDataOp =
                     UltiSideBarTestHelper.getMockPlugin().getDataOperator(SideBarPreference.class);
-                when(pluginDataOp.getAll(any(WhereCondition.class)))
-                    .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+                @SuppressWarnings("unchecked")
+                Query<SideBarPreference> pluginQuery = mock(Query.class);
+                when(pluginDataOp.query()).thenReturn(pluginQuery);
+                when(pluginQuery.where(anyString())).thenReturn(pluginQuery);
+                when(pluginQuery.eq(any())).thenReturn(pluginQuery);
+                when(pluginQuery.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
                 ScoreboardManager scoreboardManager = mock(ScoreboardManager.class);
                 Scoreboard scoreboard = mock(Scoreboard.class);
@@ -118,7 +131,7 @@ class SideBarServiceTest {
                 service.init();
 
                 // Should query for player preferences
-                verify(pluginDataOp, atLeastOnce()).getAll(any(WhereCondition.class));
+                verify(pluginDataOp, atLeastOnce()).query();
             }
         }
     }
@@ -156,7 +169,7 @@ class SideBarServiceTest {
 
             service.enableSidebar(player);
 
-            verify(dataOperator, never()).getAll(any());
+            verify(dataOperator, never()).query();
             verify(dataOperator, never()).insert(any());
         }
 
@@ -164,7 +177,7 @@ class SideBarServiceTest {
         @DisplayName("Should not enable in blacklisted world")
         void blacklistedWorld() {
             when(config.getWorldBlacklist()).thenReturn(Collections.singletonList("world"));
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+            when(query.list()).thenReturn(Collections.emptyList());
 
             service.enableSidebar(player);
 
@@ -187,7 +200,7 @@ class SideBarServiceTest {
                 when(objective.getScore(anyString())).thenReturn(score);
                 when(scoreboard.getEntries()).thenReturn(Collections.emptySet());
 
-                when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+                when(query.list()).thenReturn(Collections.emptyList());
 
                 service.enableSidebar(player);
 
@@ -199,7 +212,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should update database with enabled state")
         void updatesDatabase() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+            when(query.list()).thenReturn(Collections.emptyList());
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 ScoreboardManager scoreboardManager = mock(ScoreboardManager.class);
@@ -230,7 +243,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should update database and remove scoreboard")
         void disables() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+            when(query.list()).thenReturn(Collections.emptyList());
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 ScoreboardManager scoreboardManager = mock(ScoreboardManager.class);
@@ -258,8 +271,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should toggle from enabled to disabled")
         void toggleOff() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 ScoreboardManager scoreboardManager = mock(ScoreboardManager.class);
@@ -277,8 +289,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should toggle from disabled to enabled")
         void toggleOn() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 ScoreboardManager scoreboardManager = mock(ScoreboardManager.class);
@@ -299,7 +310,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should enable by default when no preference exists")
         void toggleDefaultEnabled() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+            when(query.list()).thenReturn(Collections.emptyList());
             when(config.isDefaultEnabled()).thenReturn(true);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
@@ -336,8 +347,7 @@ class SideBarServiceTest {
         @DisplayName("Should return false in blacklisted world")
         void blacklistedWorld() {
             when(config.getWorldBlacklist()).thenReturn(Collections.singletonList("world"));
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
             boolean result = service.isSidebarEnabled(player);
 
@@ -347,8 +357,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should return true when enabled in database")
         void enabledInDb() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
             boolean result = service.isSidebarEnabled(player);
 
@@ -358,8 +367,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should return false when disabled in database")
         void disabledInDb() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
 
             boolean result = service.isSidebarEnabled(player);
 
@@ -369,7 +377,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should use default enabled when no preference exists")
         void defaultEnabled() {
-            when(dataOperator.getAll(any(WhereCondition.class))).thenReturn(Collections.emptyList());
+            when(query.list()).thenReturn(Collections.emptyList());
             when(config.isDefaultEnabled()).thenReturn(true);
 
             boolean result = service.isSidebarEnabled(player);
@@ -505,8 +513,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should schedule sidebar enable for player")
         void schedulesEnable() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
@@ -521,8 +528,7 @@ class SideBarServiceTest {
         @Test
         @DisplayName("Should not schedule when disabled in database")
         void doesNotScheduleWhenDisabled() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), false)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
@@ -588,8 +594,7 @@ class SideBarServiceTest {
         void enablesInAllowedWorld() throws Exception {
             when(config.getWorldBlacklist()).thenReturn(Collections.emptyList());
             when(config.isEnabled()).thenReturn(true);
-            when(dataOperator.getAll(any(WhereCondition.class)))
-                .thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
+            when(query.list()).thenReturn(Arrays.asList(new SideBarPreference(playerUuid.toString(), true)));
 
             Map<UUID, Scoreboard> scoreboards = new HashMap<>();
             UltiSideBarTestHelper.setField(service, "playerScoreboards", scoreboards);

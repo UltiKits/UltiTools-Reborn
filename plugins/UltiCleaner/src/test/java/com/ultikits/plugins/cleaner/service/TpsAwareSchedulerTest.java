@@ -23,6 +23,7 @@ class TpsAwareSchedulerTest {
 
         // Inject dependencies via reflection
         UltiCleanerTestHelper.setField(scheduler, "config", config);
+        UltiCleanerTestHelper.setField(scheduler, "plugin", UltiCleanerTestHelper.getMockPlugin());
     }
 
     @AfterEach

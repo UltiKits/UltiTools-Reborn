@@ -8,6 +8,8 @@ import java.util.Map;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.NotEmpty;
+import com.ultikits.ultitools.annotations.config.Range;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -85,11 +87,13 @@ public class RecipeConfig extends AbstractConfigEntity {
         /**
          * Material name (e.g., DIAMOND_SWORD).
          */
+        @NotEmpty
         private String material;
 
         /**
          * Output amount.
          */
+        @Range(min = 1, max = 64)
         private int amount = 1;
 
         /**

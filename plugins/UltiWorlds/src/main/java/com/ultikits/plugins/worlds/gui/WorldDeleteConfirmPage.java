@@ -1,7 +1,7 @@
 package com.ultikits.plugins.worlds.gui;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.service.WorldService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage;
 
 import org.bukkit.entity.Player;
@@ -16,11 +16,13 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 public class WorldDeleteConfirmPage extends BaseConfirmationPage {
     
     private final WorldService worldService;
+    private final UltiToolsPlugin plugin;
     private final String worldName;
-    
-    public WorldDeleteConfirmPage(Player player, WorldService worldService, String worldName) {
-        super(player, "delete-" + worldName, i18n("gui.delete.title").replace("%world%", worldName), 3);
+
+    public WorldDeleteConfirmPage(Player player, WorldService worldService, String worldName, UltiToolsPlugin plugin) {
+        super(player, "delete-" + worldName, plugin.i18n("gui.delete.title").replace("%world%", worldName), 3);
         this.worldService = worldService;
+        this.plugin = plugin;
         this.worldName = worldName;
     }
     
@@ -43,7 +45,7 @@ public class WorldDeleteConfirmPage extends BaseConfirmationPage {
     /**
      * Get i18n message from plugin.
      */
-    private static String i18n(String key) {
-        return UltiWorlds.getInstance().i18n(key);
+    private String i18n(String key) {
+        return plugin.i18n(key);
     }
 }

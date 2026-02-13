@@ -1,12 +1,11 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.HomeData;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Location;
@@ -27,22 +26,25 @@ import java.util.*;
 @Slf4j
 @Service
 public class HomeService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private EssentialsConfig config;
-    
+
     @Autowired
     private TeleportService teleportService;
-    
+
     private DataOperator<HomeData> homeOperator;
-    
+
     /**
      * Initializes the service with the data operator.
      * Automatically called by the IoC container after construction.
      */
     @PostConstruct
     public void init() {
-        this.homeOperator = UltiEssentials.getInstance().getDataOperator(HomeData.class);
+        this.homeOperator = plugin.getDataOperator(HomeData.class);
     }
     
     /**
@@ -52,12 +54,9 @@ public class HomeService {
      * @return list of homes
      */
     public List<HomeData> getHomes(UUID playerUuid) {
-        return homeOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+        return homeOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
     }
     
     /**
@@ -69,17 +68,10 @@ public class HomeService {
      */
     @Nullable
     public HomeData getHome(UUID playerUuid, String name) {
-        List<HomeData> homes = homeOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build(),
-            WhereCondition.builder()
-                .column("name")
-                .value(name.toLowerCase())
-                .build()
-        );
-        return homes.isEmpty() ? null : homes.get(0);
+        return homeOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .where("name").eq(name.toLowerCase())
+            .first();
     }
     
     /**

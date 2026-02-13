@@ -44,6 +44,7 @@ class BackupListenerTest {
         when(backupService.getConfig()).thenReturn(config);
 
         listener = new BackupListener();
+        UltiBackupTestHelper.setField(listener, "plugin", UltiBackupTestHelper.getMockPlugin());
         UltiBackupTestHelper.setField(listener, "backupService", backupService);
 
         playerUuid = UUID.randomUUID();

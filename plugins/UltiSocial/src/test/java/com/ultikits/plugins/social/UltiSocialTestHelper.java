@@ -1,10 +1,9 @@
 package com.ultikits.plugins.social;
 
 import com.ultikits.plugins.social.config.SocialConfig;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
-import com.ultikits.ultitools.manager.CommandManager;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -21,11 +20,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
- * Test helper for mocking UltiTools framework singletons.
+ * Test helper for mocking UltiTools framework dependencies.
  * <p>
- * UltiTools is a {@code final class extends JavaPlugin} — it cannot be mocked.
- * This helper mocks only UltiSocial (extends abstract UltiToolsPlugin) and
- * avoids any code paths that call {@code UltiTools.getInstance()}.
+ * Since UltiSocial no longer uses a static singleton, this helper creates
+ * a mock UltiToolsPlugin that can be injected into services and commands
+ * via reflection (simulating @Autowired injection).
  * <p>
  * Call {@link #setUp()} in {@code @BeforeEach} and {@link #tearDown()} in {@code @AfterEach}.
  */
@@ -33,12 +32,12 @@ public final class UltiSocialTestHelper {
 
     private UltiSocialTestHelper() {}
 
-    private static UltiSocial mockPlugin;
+    private static UltiToolsPlugin mockPlugin;
     private static PluginLogger mockLogger;
     private static Server mockServer;
 
     /**
-     * Set up UltiSocial singleton mock. Must be called before each test.
+     * Set up mock dependencies. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
@@ -49,9 +48,8 @@ public final class UltiSocialTestHelper {
         serverField.set(null, mockServer);
         lenient().when(mockServer.getOnlinePlayers()).thenReturn(Collections.emptyList());
 
-        // Mock UltiSocial singleton (abstract UltiToolsPlugin — mockable)
-        mockPlugin = mock(UltiSocial.class);
-        setStaticField(UltiSocial.class, "instance", mockPlugin);
+        // Mock UltiToolsPlugin (not UltiSocial -- no more singleton)
+        mockPlugin = mock(UltiToolsPlugin.class);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -67,10 +65,10 @@ public final class UltiSocialTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiSocial.class, "instance", null);
+        mockPlugin = null;
 
         // Reset Bukkit.server to null
         Field serverField = Bukkit.class.getDeclaredField("server");
@@ -78,7 +76,7 @@ public final class UltiSocialTestHelper {
         serverField.set(null, null);
     }
 
-    public static UltiSocial getMockPlugin() {
+    public static UltiToolsPlugin getMockPlugin() {
         return mockPlugin;
     }
 

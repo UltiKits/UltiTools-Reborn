@@ -2,7 +2,7 @@ package com.ultikits.plugins.essentials.entity;
 
 import java.util.UUID;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -26,8 +26,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("essentials_chest_locks")
-public class ChestLockData extends AbstractDataEntity {
-    
+public class ChestLockData extends BaseDataEntity<UUID> {
+
     /**
      * Unique identifier for this lock.
      */
@@ -88,5 +88,15 @@ public class ChestLockData extends AbstractDataEntity {
      */
     public static String createLocationKey(String world, int x, int y, int z) {
         return world + ":" + x + ":" + y + ":" + z;
+    }
+
+    @Override
+    public UUID getId() {
+        return uuid;
+    }
+
+    @Override
+    public void setId(UUID id) {
+        this.uuid = id;
     }
 }

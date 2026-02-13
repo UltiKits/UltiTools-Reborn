@@ -1,11 +1,11 @@
 package com.ultikits.plugins.backup.listener;
 
-import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.gui.BackupGUI;
 import com.ultikits.plugins.backup.gui.BackupPreviewGUI;
 import com.ultikits.plugins.backup.gui.ForceRestoreConfirmPage;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
@@ -30,7 +30,10 @@ import org.bukkit.event.player.PlayerQuitEvent;
  */
 @EventListener
 public class BackupListener implements Listener {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private BackupService backupService;
     
@@ -130,7 +133,7 @@ public class BackupListener implements Listener {
             if (event.isLeftClick()) {
                 if (event.isShiftClick()) {
                     // Preview backup content
-                    BackupPreviewGUI.open(player, backup, backupService);
+                    BackupPreviewGUI.open(plugin, player, backup, backupService);
                 } else {
                     // Restore backup
                     handleRestore(player, gui.getTargetUuid(), backup);
@@ -194,7 +197,7 @@ public class BackupListener implements Listener {
                 sender.sendMessage(i18n("backup.message.checksum_hint"));
                 // Open force restore confirmation
                 sender.closeInventory();
-                ForceRestoreConfirmPage.open(sender, backup, backupService);
+                ForceRestoreConfirmPage.open(plugin, sender, backup, backupService);
                 break;
                 
             case NOT_FOUND:
@@ -231,6 +234,6 @@ public class BackupListener implements Listener {
      * Get i18n message.
      */
     private String i18n(String key) {
-        return UltiBackup.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

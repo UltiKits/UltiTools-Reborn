@@ -1,10 +1,9 @@
 package com.ultikits.plugins.remotebag.service;
 
-import com.ultikits.plugins.remotebag.UltiRemoteBag;
 import com.ultikits.plugins.remotebag.config.RemoteBagConfig;
 import com.ultikits.plugins.remotebag.entity.RemoteBagData;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.utils.EconomyUtils;
@@ -27,30 +26,35 @@ import java.util.stream.Collectors;
  */
 @Service
 public class RemoteBagService {
-    
-    @Autowired
-    private RemoteBagConfig config;
-    
+
+    private final UltiToolsPlugin plugin;
+    private final RemoteBagConfig config;
+
     private DataOperator<RemoteBagData> dataOperator;
-    
+
     // Cache for player bags - Map<PlayerUUID, Map<PageNumber, ItemStack[]>>
     private final Map<UUID, Map<Integer, ItemStack[]>> bagCache = new ConcurrentHashMap<>();
-    
+
+    public RemoteBagService(UltiToolsPlugin plugin, RemoteBagConfig config) {
+        this.plugin = plugin;
+        this.config = config;
+    }
+
     /**
      * Initialize the service.
      */
     public void init() {
-        this.dataOperator = UltiRemoteBag.getInstance().getDataOperator(RemoteBagData.class);
-        
-        // Start auto-save task
-        if (config.getAutoSaveInterval() > 0) {
-            Bukkit.getScheduler().runTaskTimerAsynchronously(
-                UltiTools.getInstance(),
-                this::saveAllBags,
-                config.getAutoSaveInterval() * 20L,
-                config.getAutoSaveInterval() * 20L
-            );
-        }
+        this.dataOperator = plugin.getDataOperator(RemoteBagData.class);
+    }
+
+    /**
+     * Auto-save all bags task.
+     * Runs every 300 seconds (6000 ticks) if auto-save is enabled in config.
+     * Note: Period is fixed at 300 seconds. Adjust config.auto_save_interval to 300 or disable (0).
+     */
+    @Scheduled(period = 6000) // 300 seconds * 20 ticks = 6000 ticks
+    public void autoSaveTask() {
+        saveAllBags();
     }
     
     /**
@@ -72,28 +76,25 @@ public class RemoteBagService {
     
     /**
      * Load bag from database if not in cache.
-     * 
+     *
      * @param playerUuid 玩家 UUID
      */
     public void loadBagIfNeeded(UUID playerUuid) {
         if (bagCache.containsKey(playerUuid)) {
             return;
         }
-        
+
         Map<Integer, ItemStack[]> pages = new HashMap<>();
-        
-        List<RemoteBagData> data = dataOperator.getAll(
-            com.ultikits.ultitools.entities.WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+
+        List<RemoteBagData> data = dataOperator.query()
+                .where("player_uuid").eq(playerUuid.toString())
+                .list();
+
         for (RemoteBagData bagData : data) {
             ItemStack[] items = deserializeItems(bagData.getContents());
             pages.put(bagData.getPageNumber(), items);
         }
-        
+
         bagCache.put(playerUuid, pages);
     }
     
@@ -123,22 +124,16 @@ public class RemoteBagService {
         if (pages == null) {
             return;
         }
-        
+
         for (Map.Entry<Integer, ItemStack[]> entry : pages.entrySet()) {
             String contents = serializeItems(entry.getValue());
-            
+
             // Check if exists
-            List<RemoteBagData> existing = dataOperator.getAll(
-                com.ultikits.ultitools.entities.WhereCondition.builder()
-                    .column("player_uuid")
-                    .value(playerUuid.toString())
-                    .build(),
-                com.ultikits.ultitools.entities.WhereCondition.builder()
-                    .column("page_number")
-                    .value(entry.getKey())
-                    .build()
-            );
-            
+            List<RemoteBagData> existing = dataOperator.query()
+                    .where("player_uuid").eq(playerUuid.toString())
+                    .where("page_number").eq(entry.getKey())
+                    .list();
+
             if (existing.isEmpty()) {
                 dataOperator.insert(RemoteBagData.create(playerUuid, entry.getKey(), contents));
             } else {
@@ -148,7 +143,7 @@ public class RemoteBagService {
                 try {
                     dataOperator.update(data);
                 } catch (IllegalAccessException e) {
-                    UltiRemoteBag.getInstance().getLogger().error("Failed to update bag data", e);
+                    plugin.getLogger().error("Failed to update bag data", e);
                 }
             }
         }
@@ -401,23 +396,17 @@ public class RemoteBagService {
         
         // 从缓存中移除
         pages.remove(page);
-        
+
         // 从数据库中删除
-        List<RemoteBagData> existing = dataOperator.getAll(
-                com.ultikits.ultitools.entities.WhereCondition.builder()
-                        .column("player_uuid")
-                        .value(playerUuid.toString())
-                        .build(),
-                com.ultikits.ultitools.entities.WhereCondition.builder()
-                        .column("page_number")
-                        .value(page)
-                        .build()
-        );
-        
+        List<RemoteBagData> existing = dataOperator.query()
+                .where("player_uuid").eq(playerUuid.toString())
+                .where("page_number").eq(page)
+                .list();
+
         for (RemoteBagData data : existing) {
             dataOperator.delById(data.getId());
         }
-        
+
         return true;
     }
     

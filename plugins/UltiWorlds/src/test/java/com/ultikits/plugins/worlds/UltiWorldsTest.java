@@ -1,7 +1,5 @@
 package com.ultikits.plugins.worlds;
 
-import com.ultikits.plugins.worlds.service.WorldService;
-import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 
 import org.junit.jupiter.api.*;
@@ -20,17 +18,12 @@ import static org.mockito.Mockito.*;
 @DisplayName("UltiWorlds Main Class Tests")
 class UltiWorldsTest {
 
-    @AfterEach
-    void tearDown() throws Exception {
-        UltiWorldsTestHelper.tearDown();
-    }
-
     @Nested
     @DisplayName("Plugin Lifecycle")
     class PluginLifecycle {
 
         @Test
-        @DisplayName("registerSelf should set instance and return true")
+        @DisplayName("registerSelf should return true")
         void registerSelf() throws Exception {
             UltiWorlds plugin = mock(UltiWorlds.class);
             PluginLogger logger = mock(PluginLogger.class);
@@ -38,52 +31,41 @@ class UltiWorldsTest {
             when(plugin.i18n(anyString())).thenReturn("worlds_enabled");
             when(plugin.registerSelf()).thenCallRealMethod();
 
-            // Set instance field to null first
-            UltiWorldsTestHelper.setStaticField(UltiWorlds.class, "instance", null);
-
             boolean result = plugin.registerSelf();
 
             assertThat(result).isTrue();
-            assertThat(UltiWorlds.getInstance()).isSameAs(plugin);
             verify(logger).info("worlds_enabled");
         }
 
         @Test
-        @DisplayName("unregisterSelf should shutdown services and log message")
+        @DisplayName("unregisterSelf should log message")
         void unregisterSelf() throws Exception {
             UltiWorlds plugin = mock(UltiWorlds.class);
             PluginLogger logger = mock(PluginLogger.class);
-            SimpleContainer context = mock(SimpleContainer.class);
-            WorldService worldService = mock(WorldService.class);
 
             when(plugin.getLogger()).thenReturn(logger);
-            when(plugin.getContext()).thenReturn(context);
             when(plugin.i18n(anyString())).thenReturn("worlds_disabled");
-            when(context.getBean(WorldService.class)).thenReturn(worldService);
             doCallRealMethod().when(plugin).unregisterSelf();
 
             plugin.unregisterSelf();
 
-            verify(worldService).shutdown();
             verify(logger).info("worlds_disabled");
         }
 
         @Test
-        @DisplayName("unregisterSelf should handle null WorldService gracefully")
-        void unregisterSelfNullService() throws Exception {
+        @DisplayName("unregisterSelf should not fail when called multiple times")
+        void unregisterSelfMultipleTimes() throws Exception {
             UltiWorlds plugin = mock(UltiWorlds.class);
             PluginLogger logger = mock(PluginLogger.class);
-            SimpleContainer context = mock(SimpleContainer.class);
 
             when(plugin.getLogger()).thenReturn(logger);
-            when(plugin.getContext()).thenReturn(context);
             when(plugin.i18n(anyString())).thenReturn("worlds_disabled");
-            when(context.getBean(WorldService.class)).thenReturn(null);
             doCallRealMethod().when(plugin).unregisterSelf();
 
             plugin.unregisterSelf();
+            plugin.unregisterSelf(); // Call twice
 
-            verify(logger).info("worlds_disabled");
+            verify(logger, times(2)).info("worlds_disabled");
         }
 
         @Test
@@ -117,23 +99,26 @@ class UltiWorldsTest {
     }
 
     @Nested
-    @DisplayName("Singleton Access")
-    class SingletonAccess {
+    @DisplayName("Annotation Tests")
+    class AnnotationTests {
 
         @Test
-        @DisplayName("getInstance should return null when not registered")
-        void getInstanceNull() throws Exception {
-            UltiWorldsTestHelper.setStaticField(UltiWorlds.class, "instance", null);
-            assertThat(UltiWorlds.getInstance()).isNull();
+        @DisplayName("should have @UltiToolsModule annotation")
+        void shouldHaveModuleAnnotation() {
+            assertThat(UltiWorlds.class.isAnnotationPresent(
+                com.ultikits.ultitools.annotations.UltiToolsModule.class
+            )).isTrue();
         }
 
         @Test
-        @DisplayName("getInstance should return instance after registration")
-        void getInstanceAfterRegister() throws Exception {
-            UltiWorlds plugin = mock(UltiWorlds.class);
-            UltiWorldsTestHelper.setStaticField(UltiWorlds.class, "instance", plugin);
+        @DisplayName("should scan correct packages")
+        void shouldScanCorrectPackages() {
+            com.ultikits.ultitools.annotations.UltiToolsModule annotation =
+                UltiWorlds.class.getAnnotation(
+                    com.ultikits.ultitools.annotations.UltiToolsModule.class
+                );
 
-            assertThat(UltiWorlds.getInstance()).isSameAs(plugin);
+            assertThat(annotation.scanBasePackages()).contains("com.ultikits.plugins.worlds");
         }
     }
 }

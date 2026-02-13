@@ -252,8 +252,27 @@ teleportService.teleport(player, targetPlayer.getLocation());
 
 ## 📊 变更日志
 
-### v1.1.0 (当前版本)
+### v1.1.0 (当前版本) - 2026-02-12
 
+#### UltiTools-API v6.2.0 迁移
+- 🚀 **Query DSL**: 数据库查询全面升级到新的 Query DSL API
+  - 替换所有 `WhereCondition.builder()` 为 `dataOperator.query().where().eq()`
+  - 更流畅的链式调用，更易读的代码
+  - 自动优化的 SQL 生成
+- 🚀 **@Scheduled 定时任务**: 使用声明式定时任务替代手动 `runTaskTimer`
+  - 好友请求过期清理改为 `@Scheduled(period = 1200, async = true)`
+  - 自动生命周期管理，无需手动取消
+- 🚀 **配置验证**: 添加 `@Range` 和 `@NotEmpty` 注解
+  - `maxFriends`: 1-500 范围验证
+  - `requestTimeout`: 10-3600 秒范围验证
+  - `tpCooldown`: 0-3600 秒范围验证
+  - 所有消息字段添加 `@NotEmpty` 验证
+- 🚀 **现代基类**: 迁移到新的基类
+  - `FriendshipData` / `BlacklistData`: `AbstractDataEntity` → `BaseDataEntity<String>`
+  - `FriendCommand`: `AbstractCommandExecutor` → `BaseCommandExecutor`
+- 📝 **代码质量**: 移除过时导入，优化代码结构
+
+#### 功能特性
 - ✨ 新增黑名单系统
   - 双向屏蔽功能
   - 独立黑名单 GUI

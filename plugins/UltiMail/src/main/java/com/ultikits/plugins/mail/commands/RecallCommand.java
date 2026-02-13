@@ -1,19 +1,19 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,11 +32,16 @@ import java.util.concurrent.atomic.AtomicInteger;
     permission = "ultimail.recall",
     description = "召回玩家回归服务器"
 )
-public class RecallCommand extends AbstractCommandExecutor {
-    
+public class RecallCommand extends BaseCommandExecutor {
+
+    private Plugin bukkitPlugin;
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private MailConfig config;
-    
+
     @Autowired
     private MailService mailService;
     
@@ -69,9 +74,14 @@ public class RecallCommand extends AbstractCommandExecutor {
         }
         
         sender.sendMessage(ChatColor.YELLOW + "正在发送召回通知...");
-        
+
+        // Lazy init bukkitPlugin
+        if (bukkitPlugin == null) {
+            bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+        }
+
         // Run async to avoid blocking main thread
-        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             int[] results = sendRecallNotifications(sender.getName(), message);
             int totalPlayers = results[0];
             int gameMails = results[1];
@@ -79,7 +89,7 @@ public class RecallCommand extends AbstractCommandExecutor {
             int failed = results[3];
             
             // Send result back on main thread
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
                 sender.sendMessage(ChatColor.GREEN + "召回通知发送完成！");
                 sender.sendMessage(ChatColor.AQUA + "共找到 " + ChatColor.WHITE + totalPlayers + ChatColor.AQUA + " 名注册玩家");
                 sender.sendMessage(ChatColor.AQUA + "游戏内邮件: " + ChatColor.WHITE + gameMails + ChatColor.AQUA + " 封");
@@ -139,7 +149,7 @@ public class RecallCommand extends AbstractCommandExecutor {
                     emails.incrementAndGet();
                 } catch (Exception e) {
                     // Email failed, but game mail may have succeeded
-                    UltiMail.getInstance().getLogger().warn(
+                    plugin.getLogger().warn(
                         "Failed to send email to " + playerInfo.email + ": " + e.getMessage()
                     );
                 }
@@ -170,7 +180,7 @@ public class RecallCommand extends AbstractCommandExecutor {
         mail.setContent(content);
         mail.setSentTime(System.currentTimeMillis());
         
-        DataOperator<MailData> dataOperator = UltiMail.getInstance().getDataOperator(MailData.class);
+        DataOperator<MailData> dataOperator = plugin.getDataOperator(MailData.class);
         dataOperator.insert(mail);
     }
     
@@ -295,14 +305,14 @@ public class RecallCommand extends AbstractCommandExecutor {
             }
         } catch (Exception e) {
             // UltiLogin not available, fall back to mail data
-            UltiMail.getInstance().getLogger().info(
+            plugin.getLogger().info(
                 "UltiLogin not found, using mail data to find registered players"
             );
         }
         
         // Also check mail data for any receivers
         if (players.isEmpty()) {
-            DataOperator<MailData> mailOperator = UltiMail.getInstance().getDataOperator(MailData.class);
+            DataOperator<MailData> mailOperator = plugin.getDataOperator(MailData.class);
             List<MailData> allMails = mailOperator.getAll();
             Set<String> seen = new HashSet<>();
             

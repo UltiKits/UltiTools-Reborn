@@ -32,13 +32,12 @@ public final class UltiLoginTestHelper {
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiLogin singleton mock. Must be called before each test.
+     * Set up UltiLogin mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiLogin singleton
+        // Mock UltiLogin (no singleton — plugin instance is injected via @Autowired)
         mockPlugin = mock(UltiLogin.class);
-        setStaticField(UltiLogin.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -54,10 +53,10 @@ public final class UltiLoginTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiLogin.class, "instance", null);
+        mockPlugin = null;
     }
 
     public static UltiLogin getMockPlugin() {
@@ -155,7 +154,7 @@ public final class UltiLoginTestHelper {
         account.setLastLogin(System.currentTimeMillis());
         account.setLoginCount(5);
         account.setFailedAttempts(0);
-        account.setId("test-id-" + playerUuid);
+        account.setId(playerUuid.hashCode());
         return account;
     }
 

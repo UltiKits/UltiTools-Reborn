@@ -190,9 +190,9 @@ class MailDataTest {
             MailData mail1 = createTestMail();
             MailData mail2 = createTestMail();
 
-            // Note: AbstractDataEntity uses ID for equals
-            mail1.setId(1);
-            mail2.setId(1);
+            // Note: BaseDataEntity uses ID for equals
+            mail1.setId("1");
+            mail2.setId("1");
 
             assertThat(mail1).isEqualTo(mail2);
             assertThat(mail1.hashCode()).isEqualTo(mail2.hashCode());
@@ -204,8 +204,8 @@ class MailDataTest {
             MailData mail1 = createTestMail();
             MailData mail2 = createTestMail();
 
-            mail1.setId(1);
-            mail2.setId(2);
+            mail1.setId("1");
+            mail2.setId("2");
 
             assertThat(mail1).isNotEqualTo(mail2);
         }

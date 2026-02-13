@@ -1,9 +1,9 @@
 package com.ultikits.plugins.mail.listener;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.plugins.mail.utils.TestHelper;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -15,7 +15,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.lang.reflect.Field;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -56,10 +55,12 @@ class MailNotifyListenerTest {
 
     private UUID playerUuid;
 
+    private UltiToolsPlugin mockPlugin;
+
     @BeforeEach
     void setUp() throws Exception {
-        // Setup UltiMail mock
-        TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        mockPlugin = TestHelper.mockUltiToolsPlugin();
 
         // Use real config
         config = new MailConfig();
@@ -74,10 +75,6 @@ class MailNotifyListenerTest {
         mockedBukkit = mockStatic(Bukkit.class);
         mockedBukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
 
-        // Note: UltiTools.getInstance() returns null by default, but the scheduler
-        // mock accepts any() for the plugin argument, so this is fine.
-        // Cannot mock UltiTools directly due to missing Vault dependency in test classpath.
-
         // Mock scheduler to capture and run the delayed task immediately
         lenient().when(mockScheduler.runTaskLater(any(), any(Runnable.class), anyLong()))
             .thenAnswer(invocation -> {
@@ -86,10 +83,11 @@ class MailNotifyListenerTest {
                 return mockTask;
             });
 
-        // Create listener and inject
+        // Create listener and inject dependencies
         listener = new MailNotifyListener();
-        injectField(listener, "mailService", mockMailService);
-        injectField(listener, "config", config);
+        TestHelper.injectField(listener, "mailService", mockMailService);
+        TestHelper.injectField(listener, "config", config);
+        TestHelper.injectField(listener, "plugin", mockPlugin);
     }
 
     @AfterEach
@@ -98,11 +96,6 @@ class MailNotifyListenerTest {
         TestHelper.cleanupMocks();
     }
 
-    private void injectField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(target, value);
-    }
 
     // ==================== Notification Toggle Tests ====================
 

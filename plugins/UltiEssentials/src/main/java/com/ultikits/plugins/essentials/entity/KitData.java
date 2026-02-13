@@ -2,7 +2,7 @@ package com.ultikits.plugins.essentials.entity;
 
 import java.util.UUID;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -26,8 +26,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("essentials_kits")
-public class KitData extends AbstractDataEntity {
-    
+public class KitData extends BaseDataEntity<UUID> {
+
     /**
      * Unique identifier for this kit.
      */
@@ -100,5 +100,15 @@ public class KitData extends AbstractDataEntity {
      */
     public boolean isOneTime() {
         return cooldown == -1;
+    }
+
+    @Override
+    public UUID getId() {
+        return uuid;
+    }
+
+    @Override
+    public void setId(UUID id) {
+        this.uuid = id;
     }
 }

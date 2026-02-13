@@ -41,6 +41,7 @@ class RecipeServiceTest {
         service = new RecipeService();
 
         // Inject dependencies via reflection (normally done by @Autowired)
+        UltiRecipeTestHelper.setField(service, "plugin", UltiRecipeTestHelper.getMockPlugin());
         UltiRecipeTestHelper.setField(service, "config", config);
         // Inject mock plugin for NamespacedKey creation
         UltiRecipeTestHelper.setField(service, "pluginInstance", UltiRecipeTestHelper.getMockJavaPlugin());
@@ -58,20 +59,8 @@ class RecipeServiceTest {
     class InitRecipes {
 
         @Test
-        @DisplayName("Should return 0 when recipes disabled")
-        void disabledRecipes() {
-            when(config.isEnabled()).thenReturn(false);
-
-            int count = service.initRecipes();
-
-            assertThat(count).isZero();
-            verify(UltiRecipeTestHelper.getMockLogger()).info("Custom recipes are disabled");
-        }
-
-        @Test
         @DisplayName("Should return 0 when no recipes configured")
         void noRecipes() {
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(null);
 
             int count = service.initRecipes();
@@ -83,7 +72,6 @@ class RecipeServiceTest {
         @Test
         @DisplayName("Should return 0 when recipes map is empty")
         void emptyRecipes() {
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(new HashMap<>());
 
             int count = service.initRecipes();
@@ -133,7 +121,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("invalid", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             int count = service.initRecipes();
@@ -154,7 +141,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("invalid", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             int count = service.initRecipes();
@@ -180,7 +166,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("invalid", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             try (MockedStatic<Material> materialMock = mockStatic(Material.class)) {
@@ -204,6 +189,7 @@ class RecipeServiceTest {
 
             // Create a spy to mock getPluginInstance() to throw exception
             RecipeService spyService = spy(new RecipeService());
+            UltiRecipeTestHelper.setField(spyService, "plugin", UltiRecipeTestHelper.getMockPlugin());
             UltiRecipeTestHelper.setField(spyService, "config", configWithRecipes);
             doThrow(new RuntimeException("Test error")).when(spyService).getPluginInstance();
 
@@ -394,7 +380,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("invalid_shape", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
@@ -445,7 +430,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("multi_char", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
@@ -488,7 +472,6 @@ class RecipeServiceTest {
             Map<String, RecipeConfig.RecipeDefinition> recipes = new HashMap<>();
             recipes.put("unknown_mat", recipe);
 
-            when(config.isEnabled()).thenReturn(true);
             when(config.getRecipes()).thenReturn(recipes);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);

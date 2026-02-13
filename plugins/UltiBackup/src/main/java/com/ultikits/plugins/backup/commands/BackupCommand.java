@@ -1,11 +1,12 @@
 package com.ultikits.plugins.backup.commands;
 
-import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.gui.BackupGUI;
 import com.ultikits.plugins.backup.gui.ForceRestoreConfirmPage;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
@@ -35,12 +36,12 @@ import java.util.stream.Collectors;
     description = "backup.command.description"
 )
 public class BackupCommand extends BaseCommandExecutor {
-    
-    private final BackupService backupService;
-    
-    public BackupCommand(BackupService backupService) {
-        this.backupService = backupService;
-    }
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
+    private BackupService backupService;
     
     /**
      * Open backup GUI (default command).
@@ -49,7 +50,7 @@ public class BackupCommand extends BaseCommandExecutor {
      */
     @CmdMapping(format = "")
     public void openBackups(@CmdSender Player player) {
-        BackupGUI gui = new BackupGUI(backupService, player, player.getUniqueId(), player.getName());
+        BackupGUI gui = new BackupGUI(plugin, backupService, player, player.getUniqueId(), player.getName());
         player.openInventory(gui.getInventory());
     }
     
@@ -140,7 +141,7 @@ public class BackupCommand extends BaseCommandExecutor {
         BackupMetadata backup = backups.get(number - 1);
         
         // Open confirmation GUI
-        ForceRestoreConfirmPage.open(player, backup, backupService);
+        ForceRestoreConfirmPage.open(plugin, player, backup, backupService);
     }
     
     /**
@@ -183,7 +184,7 @@ public class BackupCommand extends BaseCommandExecutor {
             return;
         }
         
-        BackupGUI gui = new BackupGUI(backupService, sender, target.getUniqueId(), targetName);
+        BackupGUI gui = new BackupGUI(plugin, backupService, sender, target.getUniqueId(), targetName);
         sender.openInventory(gui.getInventory());
     }
     
@@ -306,6 +307,6 @@ public class BackupCommand extends BaseCommandExecutor {
      * 获取 i18n 消息。
      */
     private String i18n(String key) {
-        return UltiBackup.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

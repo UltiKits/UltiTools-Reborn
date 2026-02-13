@@ -30,69 +30,86 @@ import org.bukkit.Bukkit;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.trade"})
 public class UltiTrade extends UltiToolsPlugin {
 
-    private static UltiTrade instance;
     private TradePlaceholderExpansion placeholderExpansion;
-
-    public static UltiTrade getInstance() {
-        return instance;
-    }
 
     @Override
     public boolean registerSelf() {
-        instance = this;
-        
-        // Initialize TradeLogService
-        TradeLogService logService = getContext().getBean(TradeLogService.class);
-        if (logService != null) {
-            logService.init();
-        }
-        
-        // Initialize TradeService
-        TradeService tradeService = getContext().getBean(TradeService.class);
-        if (tradeService != null) {
-            tradeService.init();
-        }
-        
+
+        // Initialize services
+        initializeServices();
+
         // Register PlaceholderAPI expansion if available
-        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            placeholderExpansion = new TradePlaceholderExpansion(tradeService, logService);
-            if (placeholderExpansion.register()) {
-                getLogger().info("PlaceholderAPI 扩展已注册！");
-            }
-        } else {
-            getLogger().info("PlaceholderAPI 未找到，跳过 Placeholder 注册。");
-        }
-        
+        registerPlaceholderAPI();
+
         getLogger().info(i18n("UltiTrade 已启用！"));
         return true;
     }
 
     @Override
     public void unregisterSelf() {
-        // Shutdown TradeService
-        TradeService tradeService = getContext().getBean(TradeService.class);
-        if (tradeService != null) {
-            tradeService.shutdown();
-        }
-        
-        // Shutdown TradeLogService
-        TradeLogService logService = getContext().getBean(TradeLogService.class);
-        if (logService != null) {
-            logService.shutdown();
-        }
-        
+        // Shutdown services
+        shutdownServices();
+
         // Unregister PlaceholderAPI expansion
         if (placeholderExpansion != null) {
             placeholderExpansion.unregister();
             placeholderExpansion = null;
         }
-        
+
         getLogger().info(i18n("UltiTrade 已禁用！"));
-        instance = null;
     }
 
     @Override
     public void reloadSelf() {
         getLogger().info(i18n("UltiTrade 配置已重载！"));
+    }
+
+    /**
+     * Initialize all services required by the plugin.
+     * Services are retrieved from the IoC container and initialized in order.
+     */
+    private void initializeServices() {
+        TradeLogService logService = getContext().getBean(TradeLogService.class);
+        if (logService != null) {
+            logService.init();
+        }
+
+        TradeService tradeService = getContext().getBean(TradeService.class);
+        if (tradeService != null) {
+            tradeService.init();
+        }
+    }
+
+    /**
+     * Shutdown all services in reverse order.
+     */
+    private void shutdownServices() {
+        TradeService tradeService = getContext().getBean(TradeService.class);
+        if (tradeService != null) {
+            tradeService.shutdown();
+        }
+
+        TradeLogService logService = getContext().getBean(TradeLogService.class);
+        if (logService != null) {
+            logService.shutdown();
+        }
+    }
+
+    /**
+     * Register PlaceholderAPI expansion if the plugin is available.
+     */
+    private void registerPlaceholderAPI() {
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) {
+            getLogger().info("PlaceholderAPI 未找到，跳过 Placeholder 注册。");
+            return;
+        }
+
+        TradeService tradeService = getContext().getBean(TradeService.class);
+        TradeLogService logService = getContext().getBean(TradeLogService.class);
+
+        placeholderExpansion = new TradePlaceholderExpansion(tradeService, logService);
+        if (placeholderExpansion.register()) {
+            getLogger().info("PlaceholderAPI 扩展已注册！");
+        }
     }
 }

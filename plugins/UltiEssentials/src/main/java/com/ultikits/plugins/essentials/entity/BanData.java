@@ -2,7 +2,7 @@ package com.ultikits.plugins.essentials.entity;
 
 import java.util.UUID;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -26,8 +26,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("essentials_bans")
-public class BanData extends AbstractDataEntity {
-    
+public class BanData extends BaseDataEntity<UUID> {
+
     /**
      * Unique identifier for this ban record.
      */
@@ -117,5 +117,15 @@ public class BanData extends AbstractDataEntity {
         }
         long remaining = expireTime - System.currentTimeMillis();
         return Math.max(0, remaining);
+    }
+
+    @Override
+    public UUID getId() {
+        return uuid;
+    }
+
+    @Override
+    public void setId(UUID id) {
+        this.uuid = id;
     }
 }

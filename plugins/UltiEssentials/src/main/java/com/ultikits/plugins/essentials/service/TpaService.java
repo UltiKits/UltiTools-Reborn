@@ -1,13 +1,13 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -29,8 +29,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TpaService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private EssentialsConfig config;
-    
+
+    private Plugin bukkitPlugin;
+
     /**
      * Active TPA requests: target UUID -> request
      */
@@ -52,7 +57,7 @@ public class TpaService {
      */
     @PostConstruct
     public void init() {
-        // Service initialization if needed
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     }
     
     /**
@@ -150,11 +155,11 @@ public class TpaService {
         if (request.getType() == TpaType.TPA) {
             // Sender teleports to target
             sender.teleport(target.getLocation());
-            sender.sendMessage(UltiEssentials.getInstance().i18n("传送成功！"));
+            sender.sendMessage(plugin.i18n("传送成功！"));
         } else {
             // Target teleports to sender
             target.teleport(sender.getLocation());
-            target.sendMessage(UltiEssentials.getInstance().i18n("传送成功！"));
+            target.sendMessage(plugin.i18n("传送成功！"));
         }
         
         cancelRequest(target.getUniqueId());
@@ -176,7 +181,7 @@ public class TpaService {
         // Notify sender
         Player sender = Bukkit.getPlayer(request.getSenderUuid());
         if (sender != null && sender.isOnline()) {
-            sender.sendMessage(UltiEssentials.getInstance().i18n("你的传送请求被拒绝了"));
+            sender.sendMessage(plugin.i18n("你的传送请求被拒绝了"));
         }
         
         cancelRequest(target.getUniqueId());
@@ -248,16 +253,16 @@ public class TpaService {
                     Player target = Bukkit.getPlayer(targetUuid);
                     
                     if (sender != null && sender.isOnline()) {
-                        sender.sendMessage(UltiEssentials.getInstance().i18n("传送请求已超时"));
+                        sender.sendMessage(plugin.i18n("传送请求已超时"));
                     }
                     if (target != null && target.isOnline()) {
-                        target.sendMessage(UltiEssentials.getInstance().i18n("传送请求已超时"));
+                        target.sendMessage(plugin.i18n("传送请求已超时"));
                     }
                     
                     cancelRequest(targetUuid);
                 }
             }
-        }.runTaskLater(UltiTools.getInstance(), timeout * 20L);
+        }.runTaskLater(bukkitPlugin, timeout * 20L);
         
         timeoutTasks.put(targetUuid, task);
     }

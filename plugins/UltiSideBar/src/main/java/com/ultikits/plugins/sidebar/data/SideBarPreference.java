@@ -1,6 +1,6 @@
 package com.ultikits.plugins.sidebar.data;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -21,7 +21,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("sidebar_preferences")
-public class SideBarPreference extends AbstractDataEntity {
+public class SideBarPreference extends BaseDataEntity<Long> {
 
     /**
      * Player UUID string.

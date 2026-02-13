@@ -1,10 +1,10 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.plugins.mail.utils.TestHelper;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.Bukkit;
@@ -44,6 +44,8 @@ class RecallCommandTest {
 
     private MailConfig config;
 
+    private UltiToolsPlugin mockPlugin;
+
     @Mock
     private MailService mockMailService;
 
@@ -64,8 +66,8 @@ class RecallCommandTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() throws Exception {
-        // Setup mock UltiMail
-        UltiMail mockPlugin = TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        mockPlugin = TestHelper.mockUltiToolsPlugin();
         DataOperator<MailData> mockDataOperator = mock(DataOperator.class);
         when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mockDataOperator);
 
@@ -86,9 +88,6 @@ class RecallCommandTest {
         mockedBukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
         mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[0]);
 
-        // Note: UltiTools.getInstance() returns null by default, but the scheduler
-        // mock accepts any() for the plugin argument, so this is fine.
-
         // Mock scheduler to capture and run runnables
         lenient().when(mockScheduler.runTaskAsynchronously(any(), any(Runnable.class)))
             .thenAnswer(invocation -> {
@@ -103,22 +102,17 @@ class RecallCommandTest {
                 return mockTask;
             });
 
-        // Create command and inject
+        // Create command and inject dependencies
         recallCommand = new RecallCommand();
-        injectField(recallCommand, "config", config);
-        injectField(recallCommand, "mailService", mockMailService);
+        TestHelper.injectField(recallCommand, "config", config);
+        TestHelper.injectField(recallCommand, "mailService", mockMailService);
+        TestHelper.injectField(recallCommand, "plugin", mockPlugin);
     }
 
     @AfterEach
     void tearDown() {
         mockedBukkit.close();
         TestHelper.cleanupMocks();
-    }
-
-    private void injectField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 
     // ==================== Permission Tests ====================
@@ -267,7 +261,6 @@ class RecallCommandTest {
         void shouldCreateGameMail() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -289,7 +282,6 @@ class RecallCommandTest {
         void shouldUseCustomMessage() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -309,7 +301,6 @@ class RecallCommandTest {
         void shouldReplaceServerPlaceholderInSubject() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -330,7 +321,6 @@ class RecallCommandTest {
         void shouldReplaceSenderPlaceholderInContent() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -351,7 +341,6 @@ class RecallCommandTest {
         void shouldUseSYSTEMasSenderUuid() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -371,7 +360,6 @@ class RecallCommandTest {
         void shouldUseServerNameAsSenderName() throws Exception {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailDataOperator = mock(DataOperator.class);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailDataOperator);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -406,7 +394,6 @@ class RecallCommandTest {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailOp = mock(DataOperator.class);
             when(mailOp.getAll()).thenReturn(new ArrayList<>());
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
 
             Method method = RecallCommand.class.getDeclaredMethod("getAllRegisteredPlayers");
@@ -441,7 +428,6 @@ class RecallCommandTest {
             mails.add(mail3);
 
             when(mailOp.getAll()).thenReturn(mails);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
             mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[0]);
 
@@ -468,7 +454,6 @@ class RecallCommandTest {
             mails.add(mail);
 
             when(mailOp.getAll()).thenReturn(mails);
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
             mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[0]);
 
@@ -495,7 +480,6 @@ class RecallCommandTest {
             mails.add(mail);
             when(mailOp.getAll()).thenReturn(mails);
 
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
 
             // Same player also in offline list
@@ -538,7 +522,6 @@ class RecallCommandTest {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailOp = mock(DataOperator.class);
             when(mailOp.getAll()).thenReturn(new ArrayList<>());
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -560,7 +543,6 @@ class RecallCommandTest {
             @SuppressWarnings("unchecked")
             DataOperator<MailData> mailOp = mock(DataOperator.class);
             when(mailOp.getAll()).thenReturn(new ArrayList<>());
-            UltiMail mockPlugin = UltiMail.getInstance();
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
 
             Method method = RecallCommand.class.getDeclaredMethod(
@@ -667,9 +649,9 @@ class RecallCommandTest {
         }
 
         @Test
-        @DisplayName("应该继承 AbstractCommandExecutor")
-        void shouldExtendAbstractCommandExecutor() {
-            assertThat(com.ultikits.ultitools.abstracts.AbstractCommandExecutor.class)
+        @DisplayName("应该继承 BaseCommandExecutor")
+        void shouldExtendBaseCommandExecutor() {
+            assertThat(com.ultikits.ultitools.abstracts.command.BaseCommandExecutor.class)
                 .isAssignableFrom(RecallCommand.class);
         }
     }

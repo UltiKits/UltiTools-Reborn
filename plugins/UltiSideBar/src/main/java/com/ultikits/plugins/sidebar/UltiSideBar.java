@@ -21,21 +21,13 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.sidebar"})
 public class UltiSideBar extends UltiToolsPlugin {
 
-    private static UltiSideBar instance;
-
-    public static UltiSideBar getInstance() {
-        return instance;
-    }
-
     @Override
     public boolean registerSelf() {
-        instance = this;
-        
         SideBarService sideBarService = getContext().getBean(SideBarService.class);
         if (sideBarService != null) {
             sideBarService.init();
         }
-        
+
         getLogger().info(i18n("sidebar_enabled"));
         return true;
     }
@@ -46,16 +38,15 @@ public class UltiSideBar extends UltiToolsPlugin {
         if (sideBarService != null) {
             sideBarService.shutdown();
         }
-        
+
         getLogger().info(i18n("sidebar_disabled"));
-        instance = null;
     }
 
     @Override
     public void reloadSelf() {
         // Reload all configs
         getConfigManager().reloadConfigs(this);
-        
+
         SideBarService sideBarService = getContext().getBean(SideBarService.class);
         if (sideBarService != null) {
             sideBarService.reload();

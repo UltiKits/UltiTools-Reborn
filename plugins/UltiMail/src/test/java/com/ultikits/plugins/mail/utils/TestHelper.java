@@ -1,13 +1,12 @@
 package com.ultikits.plugins.mail.utils;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 
 import java.lang.reflect.Field;
-import java.util.logging.Logger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
@@ -16,67 +15,63 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 /**
- * 测试辅助工具类
- * 提供 Mock UltiTools 和 UltiMail 实例的功能
+ * Test helper for mocking UltiTools framework dependencies.
+ * <p>
+ * Since UltiMail no longer uses a static singleton, this helper creates
+ * a mock UltiToolsPlugin that can be injected into services and commands
+ * via reflection (simulating @Autowired injection).
  */
 public final class TestHelper {
 
     private TestHelper() {
     }
 
-    /**
-     * Mock UltiTools 单例实例
-     */
-    public static UltiTools mockUltiToolsInstance() {
-        try {
-            UltiTools mockUltiTools = mock(UltiTools.class);
-            Logger mockLogger = mock(Logger.class);
-            when(mockUltiTools.getLogger()).thenReturn(mockLogger);
-            
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, mockUltiTools);
-            
-            return mockUltiTools;
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to mock UltiTools instance", e);
-        }
-    }
+    private static UltiToolsPlugin mockPlugin;
 
     /**
-     * Mock UltiMail 单例实例
+     * Create a mock UltiToolsPlugin for injection into beans.
+     * Returns the same instance on repeated calls within a test lifecycle.
      */
     @SuppressWarnings("unchecked")
-    public static UltiMail mockUltiMailInstance() {
-        try {
-            UltiMail mockPlugin = mock(UltiMail.class, withSettings().lenient());
-            PluginLogger mockLogger = mock(PluginLogger.class);
+    public static UltiToolsPlugin mockUltiToolsPlugin() {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class, withSettings().lenient());
+        PluginLogger mockLogger = mock(PluginLogger.class);
 
-            // Mock i18n - lenient to avoid UnnecessaryStubbingException
-            lenient().when(mockPlugin.i18n(any(String.class))).thenAnswer(invocation -> {
-                String key = invocation.getArgument(0);
-                return "[" + key + "]"; // 返回 [key] 格式便于测试验证
-            });
+        // Mock i18n - returns [key] format for test assertions
+        lenient().when(plugin.i18n(any(String.class))).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            return "[" + key + "]";
+        });
 
-            lenient().when(mockPlugin.getLogger()).thenReturn(mockLogger);
+        lenient().when(plugin.getLogger()).thenReturn(mockLogger);
 
-            // Mock DataOperator
-            DataOperator<?> mockDataOperator = mock(DataOperator.class);
-            lenient().when(mockPlugin.getDataOperator(any())).thenReturn((DataOperator) mockDataOperator);
-            
-            // Set instance via reflection
-            Field instanceField = UltiMail.class.getDeclaredField("instance");
-            instanceField.setAccessible(true);
-            instanceField.set(null, mockPlugin);
-            
-            return mockPlugin;
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to mock UltiMail instance", e);
-        }
+        // Mock DataOperator
+        DataOperator<?> mockDataOperator = mock(DataOperator.class);
+        lenient().when(plugin.getDataOperator(any())).thenReturn((DataOperator) mockDataOperator);
+
+        mockPlugin = plugin;
+        return plugin;
     }
 
     /**
-     * 创建 Mock MailConfig
+     * @deprecated Use {@link #mockUltiToolsPlugin()} instead.
+     * Kept for backward compatibility during migration.
+     */
+    @Deprecated
+    @SuppressWarnings("unchecked")
+    public static UltiToolsPlugin mockUltiMailInstance() {
+        return mockUltiToolsPlugin();
+    }
+
+    /**
+     * Get the most recently created mock plugin.
+     */
+    public static UltiToolsPlugin getMockPlugin() {
+        return mockPlugin;
+    }
+
+    /**
+     * Create a mock MailConfig with default values.
      */
     public static MailConfig createMockConfig() {
         MailConfig config = mock(MailConfig.class);
@@ -92,19 +87,31 @@ public final class TestHelper {
     }
 
     /**
-     * 清理所有 Mock 实例
+     * Inject a value into a field via reflection (simulates @Autowired).
+     */
+    public static void injectField(Object target, String fieldName, Object value) throws Exception {
+        Class<?> clazz = target.getClass();
+        while (clazz != null) {
+            try {
+                Field field = clazz.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                field.set(target, value);
+                return;
+            } catch (NoSuchFieldException e) {
+                clazz = clazz.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException("Field '" + fieldName + "' not found in " + target.getClass().getName());
+    }
+
+    /**
+     * Clean up mock state.
      */
     public static void cleanupMocks() {
+        mockPlugin = null;
+
         try {
-            // Clean UltiMail instance
-            Field ultiMailField = UltiMail.class.getDeclaredField("instance");
-            ultiMailField.setAccessible(true);
-            ultiMailField.set(null, null);
-        } catch (Exception ignored) {
-        }
-        
-        try {
-            // Clean UltiTools instance
+            // Clean UltiTools instance if set
             Field ultiToolsField = UltiTools.class.getDeclaredField("ultiTools");
             ultiToolsField.setAccessible(true);
             ultiToolsField.set(null, null);

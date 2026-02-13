@@ -1,12 +1,12 @@
 package com.ultikits.plugins.worlds.service;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldInventory;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.utils.ItemStackUtils;
 
@@ -21,16 +21,21 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for managing per-world inventory isolation.
+ * Only registered when world_isolation.enabled is true in config.
  *
  * @author wisdomme
  * @version 2.0.0
  */
 @Service
+@ConditionalOnConfig(value = "config/worlds.yml", path = "world_isolation.enabled")
 public class InventoryIsolationService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private WorldConfig config;
-    
+
     private DataOperator<WorldInventory> dataOperator;
     
     // Cache world groups for fast lookup
@@ -38,7 +43,7 @@ public class InventoryIsolationService {
     
     @PostConstruct
     public void init() {
-        this.dataOperator = UltiWorlds.getInstance().getDataOperator(WorldInventory.class);
+        this.dataOperator = plugin.getDataOperator(WorldInventory.class);
         
         // Parse shared world groups
         parseWorldGroups();
@@ -79,8 +84,6 @@ public class InventoryIsolationService {
      * Save player inventory for current world.
      */
     public void saveInventory(Player player, String worldName) {
-        if (!config.isInventoryIsolation()) return;
-        
         String group = getWorldGroup(worldName);
         WorldInventory inv = getOrCreateInventory(player.getUniqueId(), group);
         
@@ -122,7 +125,7 @@ public class InventoryIsolationService {
             
             dataOperator.update(inv);
         } catch (Exception e) {
-            UltiWorlds.getInstance().getLogger().error("Failed to save inventory for " + player.getName(), e);
+            plugin.getLogger().error("Failed to save inventory for " + player.getName(), e);
         }
     }
     
@@ -130,8 +133,6 @@ public class InventoryIsolationService {
      * Load player inventory for target world.
      */
     public void loadInventory(Player player, String worldName) {
-        if (!config.isInventoryIsolation()) return;
-        
         String group = getWorldGroup(worldName);
         WorldInventory inv = getOrCreateInventory(player.getUniqueId(), group);
         
@@ -192,7 +193,7 @@ public class InventoryIsolationService {
                 }
             }
         } catch (Exception e) {
-            UltiWorlds.getInstance().getLogger().error("Failed to load inventory for " + player.getName(), e);
+            plugin.getLogger().error("Failed to load inventory for " + player.getName(), e);
         }
     }
     
@@ -200,15 +201,15 @@ public class InventoryIsolationService {
      * Get or create inventory record.
      */
     private WorldInventory getOrCreateInventory(UUID playerUuid, String worldGroup) {
-        List<WorldInventory> existing = dataOperator.getAll(
-            WhereCondition.builder().column("player_uuid").value(playerUuid.toString()).build(),
-            WhereCondition.builder().column("world_group").value(worldGroup).build()
-        );
-        
-        if (!existing.isEmpty()) {
-            return existing.get(0);
+        WorldInventory existing = dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .where("world_group").eq(worldGroup)
+            .first();
+
+        if (existing != null) {
+            return existing;
         }
-        
+
         WorldInventory inv = WorldInventory.create(playerUuid, worldGroup);
         dataOperator.insert(inv);
         return inv;
@@ -265,8 +266,6 @@ public class InventoryIsolationService {
      * Handle player world change.
      */
     public void onWorldChange(Player player, World from, World to) {
-        if (!config.isInventoryIsolation()) return;
-        
         String fromGroup = getWorldGroup(from.getName());
         String toGroup = getWorldGroup(to.getName());
         

@@ -1,6 +1,5 @@
 package com.ultikits.plugins.remotebag.commands;
 
-import com.ultikits.plugins.remotebag.UltiRemoteBag;
 import com.ultikits.plugins.remotebag.config.RemoteBagConfig;
 import com.ultikits.plugins.remotebag.entity.BagOpenResult;
 import com.ultikits.plugins.remotebag.enums.AccessMode;
@@ -9,7 +8,8 @@ import com.ultikits.plugins.remotebag.gui.RemoteBagMainGUI;
 import com.ultikits.plugins.remotebag.service.BagLockService;
 import com.ultikits.plugins.remotebag.service.RemoteBagService;
 import com.ultikits.plugins.remotebag.util.SoundUtil;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
@@ -39,13 +39,15 @@ import java.util.UUID;
     permission = "ultibag.use",
     description = "远程背包系统"
 )
-public class BagCommand extends AbstractCommendExecutor {
-    
+public class BagCommand extends BaseCommandExecutor {
+
+    private final UltiToolsPlugin plugin;
     private final RemoteBagService bagService;
     private final BagLockService lockService;
     private final RemoteBagConfig config;
-    
-    public BagCommand(RemoteBagService bagService, BagLockService lockService, RemoteBagConfig config) {
+
+    public BagCommand(UltiToolsPlugin plugin, RemoteBagService bagService, BagLockService lockService, RemoteBagConfig config) {
+        this.plugin = plugin;
         this.bagService = bagService;
         this.lockService = lockService;
         this.config = config;
@@ -58,7 +60,7 @@ public class BagCommand extends AbstractCommendExecutor {
      */
     @CmdMapping(format = "")
     public void openMainPage(@CmdSender Player player) {
-        new RemoteBagMainGUI(player, bagService, lockService, config).open();
+        new RemoteBagMainGUI(player, plugin, bagService, lockService, config).open();
     }
     
     /**
@@ -87,7 +89,7 @@ public class BagCommand extends AbstractCommendExecutor {
         // 尝试打开
         BagOpenResult result = lockService.ownerOpen(player.getUniqueId(), page, player);
         if (result.isSuccess()) {
-            new RemoteBagContentGUI(player, player.getUniqueId(), page,
+            new RemoteBagContentGUI(player, plugin, player.getUniqueId(), page,
                     bagService, lockService, config, result.getAccessMode()).open();
         } else {
             SoundUtil.playErrorSound(player, config);
@@ -166,7 +168,7 @@ public class BagCommand extends AbstractCommendExecutor {
             if (mode == AccessMode.READ_ONLY) {
                 admin.sendMessage(result.getMessage());
             }
-            new RemoteBagContentGUI(admin, ownerUuid, page,
+            new RemoteBagContentGUI(admin, plugin, ownerUuid, page,
                     bagService, lockService, config, mode).open();
         } else {
             SoundUtil.playErrorSound(admin, config);
@@ -318,6 +320,6 @@ public class BagCommand extends AbstractCommendExecutor {
      * i18n 快捷方法
      */
     private String i18n(String key) {
-        return UltiRemoteBag.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

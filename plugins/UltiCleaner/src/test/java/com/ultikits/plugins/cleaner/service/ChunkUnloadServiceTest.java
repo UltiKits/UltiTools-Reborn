@@ -40,6 +40,7 @@ class ChunkUnloadServiceTest {
         // Inject dependencies via reflection
         UltiCleanerTestHelper.setField(service, "config", config);
         UltiCleanerTestHelper.setField(service, "tpsScheduler", tpsScheduler);
+        UltiCleanerTestHelper.setField(service, "plugin", UltiCleanerTestHelper.getMockPlugin());
     }
 
     @AfterEach
@@ -77,15 +78,13 @@ class ChunkUnloadServiceTest {
     class Initialization {
 
         @Test
-        @DisplayName("Should not init when chunk unload disabled")
+        @DisplayName("Should not log when chunk unload disabled")
         void disabledDoesNotInit() {
             when(config.isChunkUnloadEnabled()).thenReturn(false);
 
             assertThatCode(() -> service.init()).doesNotThrowAnyException();
 
-            // Should not create any tasks
-            verify(UltiCleanerTestHelper.getMockScheduler(), never())
-                    .runTaskTimer(any(), any(Runnable.class), eq(600L), eq(600L));
+            // Note: @Scheduled tasks are registered by framework, not in init()
         }
 
         @Test
@@ -95,9 +94,8 @@ class ChunkUnloadServiceTest {
 
             assertThatCode(() -> service.init()).doesNotThrowAnyException();
 
-            // Should create a task timer
-            verify(UltiCleanerTestHelper.getMockScheduler(), atLeastOnce())
-                    .runTaskTimer(any(), any(Runnable.class), anyLong(), anyLong());
+            // Note: @Scheduled tasks are registered by framework, not in init()
+            // init() only logs the initialization message now
         }
     }
 

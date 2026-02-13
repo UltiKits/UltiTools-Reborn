@@ -1,8 +1,8 @@
 package com.ultikits.plugins.worlds.gui;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.plugins.worlds.service.WorldService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BasePaginationPage;
 
 import mc.obliviate.inventory.Icon;
@@ -24,10 +24,12 @@ import java.util.List;
 public class WorldListPage extends BasePaginationPage {
     
     private final WorldService worldService;
-    
-    public WorldListPage(Player player, WorldService worldService) {
-        super(player, "world-list", i18n("gui.title"), 6);
+    private final UltiToolsPlugin plugin;
+
+    public WorldListPage(Player player, WorldService worldService, UltiToolsPlugin plugin) {
+        super(player, "world-list", plugin.i18n("gui.title"), 6);
         this.worldService = worldService;
+        this.plugin = plugin;
     }
     
     @Override
@@ -163,7 +165,7 @@ public class WorldListPage extends BasePaginationPage {
     /**
      * Get i18n message from plugin.
      */
-    private static String i18n(String key) {
-        return UltiWorlds.getInstance().i18n(key);
+    private String i18n(String key) {
+        return plugin.i18n(key);
     }
 }

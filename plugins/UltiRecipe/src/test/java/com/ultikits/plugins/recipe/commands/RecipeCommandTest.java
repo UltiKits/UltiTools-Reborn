@@ -31,6 +31,7 @@ class RecipeCommandTest {
         command = new RecipeCommand();
 
         // Inject dependencies via reflection
+        UltiRecipeTestHelper.setField(command, "plugin", UltiRecipeTestHelper.getMockPlugin());
         UltiRecipeTestHelper.setField(command, "recipeService", service);
 
         sender = UltiRecipeTestHelper.createMockSender("TestSender");

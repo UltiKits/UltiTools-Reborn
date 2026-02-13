@@ -17,32 +17,25 @@ import java.util.List;
     scanBasePackages = {"com.ultikits.plugins.backup"}
 )
 public class UltiBackup extends UltiToolsPlugin {
-    
-    private static UltiBackup instance;
-    
+
     @Override
     public boolean registerSelf() {
-        instance = this;
         getLogger().info("UltiBackup has been enabled!");
         return true;
     }
-    
+
     @Override
     public void unregisterSelf() {
         getLogger().info("UltiBackup has been disabled!");
     }
-    
+
     @Override
     public void reloadSelf() {
         getLogger().info("UltiBackup configuration reloaded!");
     }
-    
+
     @Override
     public List<String> supported() {
         return Arrays.asList("zh", "en");
-    }
-    
-    public static UltiBackup getInstance() {
-        return instance;
     }
 }

@@ -1,6 +1,6 @@
 package com.ultikits.plugins.login.entity;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -16,7 +16,7 @@ import lombok.EqualsAndHashCode;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Table("login_accounts")
-public class AccountData extends AbstractDataEntity {
+public class AccountData extends BaseDataEntity<Integer> {
     
     @Column("player_uuid")
     private String playerUuid;

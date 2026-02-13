@@ -1,11 +1,11 @@
 package com.ultikits.plugins.essentials.commands;
 
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -29,6 +29,10 @@ public class HideCommand extends BaseEssentialsCommand {
         this.config = config;
     }
 
+    private Plugin getBukkitPlugin() {
+        return Bukkit.getPluginManager().getPlugin("UltiTools");
+    }
+
     @CmdMapping(format = "")
     public void toggleHide(@CmdSender Player player) {
         if (!config.isHideEnabled()) {
@@ -40,7 +44,7 @@ public class HideCommand extends BaseEssentialsCommand {
             // Disable vanish
             HIDDEN_PLAYERS.remove(player.getUniqueId());
             for (Player online : Bukkit.getOnlinePlayers()) {
-                online.showPlayer(UltiTools.getInstance(), player);
+                online.showPlayer(getBukkitPlugin(), player);
             }
             player.sendMessage(i18n("隐身模式已关闭"));
         } else {
@@ -48,7 +52,7 @@ public class HideCommand extends BaseEssentialsCommand {
             HIDDEN_PLAYERS.add(player.getUniqueId());
             for (Player online : Bukkit.getOnlinePlayers()) {
                 if (!online.hasPermission("ultiessentials.hide.see")) {
-                    online.hidePlayer(UltiTools.getInstance(), player);
+                    online.hidePlayer(getBukkitPlugin(), player);
                 }
             }
             player.sendMessage(i18n("隐身模式已开启"));

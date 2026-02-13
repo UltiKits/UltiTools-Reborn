@@ -1,13 +1,12 @@
 package com.ultikits.plugins.login.service;
 
-import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.Autowired;
-import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.PreDestroy;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -15,6 +14,7 @@ import org.bukkit.Location;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
@@ -41,37 +41,34 @@ import com.ultikits.ultitools.utils.SimpleHttpClient;
  * @author wisdomme
  * @version 1.1.0
  */
-@Service
+@com.ultikits.ultitools.annotations.Service
 public class LoginService {
-    
-    @Autowired
-    private LoginConfig config;
-    
-    private DataOperator<AccountData> dataOperator;
-    
+
+    private final UltiToolsPlugin plugin;
+    private final LoginConfig config;
+    private final DataOperator<AccountData> dataOperator;
+    private final Plugin bukkitPlugin;
+
     // Track logged in players
     private final Map<UUID, Boolean> loggedInPlayers = new ConcurrentHashMap<>();
-    
+
     // Track player join times for timeout
     private final Map<UUID, Long> joinTimes = new ConcurrentHashMap<>();
-    
+
     // Track player original locations
     private final Map<UUID, Location> originalLocations = new ConcurrentHashMap<>();
-    
+
     // Sessions (IP:UUID -> last login time)
     private final Map<String, Long> sessions = new ConcurrentHashMap<>();
-    
+
     // Failed login attempts tracking (IP -> count)
     private final Map<String, Integer> failedAttempts = new ConcurrentHashMap<>();
-    
+
     // Locked IPs (IP -> unlock time)
     private final Map<String, Long> lockedIps = new ConcurrentHashMap<>();
-    
+
     // Locked UUIDs (UUID -> unlock time)
     private final Map<UUID, Long> lockedUuids = new ConcurrentHashMap<>();
-    
-    // Timeout check task
-    private BukkitTask timeoutTask;
 
     // Random generator for password generation
     private final SecureRandom random = new SecureRandom();
@@ -86,28 +83,23 @@ public class LoginService {
     private final Map<UUID, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
 
     private final Gson gson = new Gson();
-    
+
     /**
-     * Initialize the login service.
+     * Constructor with dependency injection.
      */
-    public void init() {
-        dataOperator = UltiLogin.getInstance().getDataOperator(AccountData.class);
-        
-        // Start timeout check task
-        timeoutTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTools.getInstance(),
-            this::checkTimeouts,
-            20L, 20L // Every second
-        );
+    public LoginService(UltiToolsPlugin plugin, LoginConfig config) {
+        this.plugin = plugin;
+        this.config = config;
+        this.dataOperator = plugin.getDataOperator(AccountData.class);
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     }
-    
+
     /**
-     * Shutdown the service.
+     * Cleanup on shutdown.
      */
+    @PreDestroy
     public void shutdown() {
-        if (timeoutTask != null) {
-            timeoutTask.cancel();
-        }
+        // Cancel all polling tasks
         for (BukkitTask task : pollingTasks.values()) {
             task.cancel();
         }
@@ -126,25 +118,19 @@ public class LoginService {
      * Check if player is registered.
      */
     public boolean isRegistered(UUID playerUuid) {
-        List<AccountData> accounts = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+        List<AccountData> accounts = dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
         return !accounts.isEmpty();
     }
-    
+
     /**
      * Check if player is registered by name.
      */
     public boolean isRegisteredByName(String playerName) {
-        List<AccountData> accounts = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_name")
-                .value(playerName)
-                .build()
-        );
+        List<AccountData> accounts = dataOperator.query()
+            .where("player_name").eq(playerName)
+            .list();
         return !accounts.isEmpty();
     }
     
@@ -376,7 +362,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            UltiLogin.getInstance().getLogger().error("Failed to update account", e);
+            plugin.getLogger().error("Failed to update account", e);
         }
         
         // Create session
@@ -523,7 +509,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            UltiLogin.getInstance().getLogger().error("Failed to reset password", e);
+            plugin.getLogger().error("Failed to reset password", e);
             return null;
         }
         
@@ -547,7 +533,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            UltiLogin.getInstance().getLogger().error("Failed to reset password", e);
+            plugin.getLogger().error("Failed to reset password", e);
             return false;
         }
         
@@ -579,19 +565,18 @@ public class LoginService {
      * Get account by player name.
      */
     public AccountData getAccountByName(String playerName) {
-        List<AccountData> accounts = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_name")
-                .value(playerName)
-                .build()
-        );
+        List<AccountData> accounts = dataOperator.query()
+            .where("player_name").eq(playerName)
+            .list();
         return accounts.isEmpty() ? null : accounts.get(0);
     }
     
     /**
      * Check for login timeouts.
+     * Runs every second (20 ticks).
      */
-    private void checkTimeouts() {
+    @Scheduled(period = 20, async = false)
+    public void checkTimeouts() {
         long now = System.currentTimeMillis();
         long timeout = config.getLoginTimeout() * 1000L;
 
@@ -613,12 +598,9 @@ public class LoginService {
      * Get account by UUID.
      */
     public AccountData getAccount(UUID playerUuid) {
-        List<AccountData> accounts = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+        List<AccountData> accounts = dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
         return accounts.isEmpty() ? null : accounts.get(0);
     }
     
@@ -646,7 +628,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            UltiLogin.getInstance().getLogger().error("Failed to update account", e);
+            plugin.getLogger().error("Failed to update account", e);
             return false;
         }
         
@@ -657,12 +639,9 @@ public class LoginService {
      * Count registrations by IP.
      */
     private int countRegistrationsByIp(String ip) {
-        List<AccountData> accounts = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("register_ip")
-                .value(ip)
-                .build()
-        );
+        List<AccountData> accounts = dataOperator.query()
+            .where("register_ip").eq(ip)
+            .list();
         return accounts.size();
     }
     
@@ -829,7 +808,7 @@ public class LoginService {
             }
         } catch (Exception e) {
             cleanupPanelRequest(requestId);
-            UltiLogin.getInstance().getLogger().warn("Failed to request panel link: " + e.getMessage());
+            plugin.getLogger().warn("Failed to request panel link: " + e.getMessage());
             return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
         }
     }
@@ -854,7 +833,7 @@ public class LoginService {
         try {
             apiUrl = UltiTools.getEnv().getString("api-url");
         } catch (Exception e) {
-            UltiLogin.getInstance().getLogger().warn("Cannot start auth polling: API URL not configured");
+            plugin.getLogger().warn("Cannot start auth polling: API URL not configured");
             return;
         }
 
@@ -862,7 +841,7 @@ public class LoginService {
         final int maxPolls = 100; // 100 * 3s = 5 minutes
         final int[] pollCount = {0};
 
-        BukkitTask task = Bukkit.getScheduler().runTaskTimerAsynchronously(UltiTools.getInstance(), () -> {
+        BukkitTask task = Bukkit.getScheduler().runTaskTimerAsynchronously(bukkitPlugin, () -> {
             pollCount[0]++;
 
             if (!player.isOnline() || pollCount[0] > maxPolls) {
@@ -914,7 +893,7 @@ public class LoginService {
                 final boolean finalIsServerOwner = isServerOwner;
 
                 // Complete login on main thread
-                Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
                     if (!player.isOnline()) {
                         return;
                     }
@@ -925,11 +904,11 @@ public class LoginService {
                         completeLogin(player);
                         String messageKey = finalIsServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            UltiLogin.getInstance().i18n(messageKey)));
+                            plugin.i18n(messageKey)));
                     }
                 });
             } catch (Exception e) {
-                UltiLogin.getInstance().getLogger().debug("Auth poll error: " + e.getMessage());
+                plugin.getLogger().debug("Auth poll error: " + e.getMessage());
             }
         }, 60L, 60L); // 60 ticks = 3 seconds
 
@@ -972,7 +951,7 @@ public class LoginService {
         // Send role-specific message
         String messageKey = isServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-            UltiLogin.getInstance().i18n(messageKey)));
+            plugin.i18n(messageKey)));
 
         // Update account last login
         AccountData account = getAccount(playerUuid);
@@ -983,7 +962,7 @@ public class LoginService {
             try {
                 dataOperator.update(account);
             } catch (IllegalAccessException e) {
-                UltiLogin.getInstance().getLogger().error("Failed to update account after panel login", e);
+                plugin.getLogger().error("Failed to update account after panel login", e);
             }
         }
 

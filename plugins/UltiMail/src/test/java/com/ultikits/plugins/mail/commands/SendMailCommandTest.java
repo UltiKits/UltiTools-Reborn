@@ -1,6 +1,6 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.plugins.mail.utils.TestHelper;
@@ -56,8 +56,8 @@ class SendMailCommandTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Setup mock UltiMail
-        TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        UltiToolsPlugin mockUltiPlugin = TestHelper.mockUltiToolsPlugin();
 
         senderUuid = UUID.randomUUID();
         lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
@@ -65,8 +65,9 @@ class SendMailCommandTest {
         lenient().when(sender.getInventory()).thenReturn(senderInventory);
         lenient().when(sender.isOnline()).thenReturn(true);
 
-        // Create command
+        // Create command and inject dependencies
         command = new SendMailCommand(mockMailService, mockPlugin);
+        TestHelper.injectField(command, "ultiPlugin", mockUltiPlugin);
     }
 
     @AfterEach
@@ -201,9 +202,9 @@ class SendMailCommandTest {
         }
 
         @Test
-        @DisplayName("应该继承 AbstractCommandExecutor")
-        void shouldExtendAbstractCommandExecutor() {
-            assertThat(com.ultikits.ultitools.abstracts.AbstractCommandExecutor.class)
+        @DisplayName("应该继承 BaseCommandExecutor")
+        void shouldExtendBaseCommandExecutor() {
+            assertThat(com.ultikits.ultitools.abstracts.command.BaseCommandExecutor.class)
                 .isAssignableFrom(SendMailCommand.class);
         }
     }

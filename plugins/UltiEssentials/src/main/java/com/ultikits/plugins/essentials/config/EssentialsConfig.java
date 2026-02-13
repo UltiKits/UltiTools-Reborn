@@ -3,6 +3,8 @@ package com.ultikits.plugins.essentials.config;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.Range;
+import com.ultikits.ultitools.annotations.config.NotEmpty;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -28,12 +30,15 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.wild.enabled", comment = "启用 /wild 随机传送")
     private boolean wildEnabled = true;
 
+    @Range(min = 100, max = 100000)
     @ConfigEntry(path = "features.wild.max-range", comment = "随机传送最大范围")
     private int wildMaxRange = 10000;
 
+    @Range(min = 10, max = 10000)
     @ConfigEntry(path = "features.wild.min-range", comment = "随机传送最小范围")
     private int wildMinRange = 100;
 
+    @Range(min = 0, max = 3600)
     @ConfigEntry(path = "features.wild.cooldown", comment = "随机传送冷却时间(秒)")
     private int wildCooldown = 60;
 
@@ -50,6 +55,7 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.speed.enabled", comment = "启用 /speed 速度命令")
     private boolean speedEnabled = true;
 
+    @Range(min = 1, max = 10)
     @ConfigEntry(path = "features.speed.max-speed", comment = "最大速度倍数")
     private int speedMaxSpeed = 10;
 
@@ -83,9 +89,11 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.home.enabled", comment = "启用 /home 家系统")
     private boolean homeEnabled = true;
 
+    @Range(min = 1, max = 100)
     @ConfigEntry(path = "features.home.default-max-homes", comment = "默认最大家数量")
     private int homeDefaultMaxHomes = 3;
 
+    @Range(min = 0, max = 60)
     @ConfigEntry(path = "features.home.teleport-warmup", comment = "传送预热时间(秒)，0为立即传送")
     private int homeTeleportWarmup = 3;
 
@@ -96,9 +104,11 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.tpa.enabled", comment = "启用 /tpa 传送请求")
     private boolean tpaEnabled = true;
 
+    @Range(min = 5, max = 300)
     @ConfigEntry(path = "features.tpa.timeout", comment = "传送请求超时时间(秒)")
     private int tpaTimeout = 30;
 
+    @Range(min = 0, max = 600)
     @ConfigEntry(path = "features.tpa.cooldown", comment = "发送请求冷却时间(秒)")
     private int tpaCooldown = 10;
 
@@ -109,6 +119,7 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.warp.enabled", comment = "启用 /warp 地标系统")
     private boolean warpEnabled = true;
 
+    @Range(min = 0, max = 60)
     @ConfigEntry(path = "features.warp.teleport-warmup", comment = "地标传送预热时间(秒)")
     private int warpTeleportWarmup = 3;
 
@@ -133,9 +144,11 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.scoreboard.auto-enable", comment = "玩家进入时自动启用计分板")
     private boolean scoreboardAutoEnable = true;
 
+    @Range(min = 1, max = 60)
     @ConfigEntry(path = "features.scoreboard.update-interval", comment = "计分板更新间隔(秒)")
     private int scoreboardUpdateInterval = 1;
 
+    @NotEmpty
     @ConfigEntry(path = "features.scoreboard.title", comment = "计分板标题 (支持PlaceholderAPI)")
     private String scoreboardTitle = "&6&l服务器信息";
 
@@ -157,6 +170,7 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.chat.format-enabled", comment = "启用聊天格式化")
     private boolean chatFormatEnabled = true;
 
+    @NotEmpty
     @ConfigEntry(path = "features.chat.format", comment = "聊天格式 (支持PlaceholderAPI)")
     private String chatFormat = "&7[&f%player_world%&7] &f{player}&7: &f{message}";
 
@@ -186,9 +200,11 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.announcement.chat.enabled", comment = "启用聊天公告")
     private boolean announcementChatEnabled = true;
 
+    @Range(min = 10, max = 3600)
     @ConfigEntry(path = "features.announcement.chat.interval", comment = "聊天公告间隔(秒)")
     private int announcementChatInterval = 300;
 
+    @NotEmpty
     @ConfigEntry(path = "features.announcement.chat.prefix", comment = "聊天公告前缀")
     private String announcementChatPrefix = "&6[公告] &f";
 
@@ -202,9 +218,11 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.announcement.bossbar.enabled", comment = "启用Boss栏公告")
     private boolean announcementBossBarEnabled = false;
 
+    @Range(min = 10, max = 3600)
     @ConfigEntry(path = "features.announcement.bossbar.interval", comment = "Boss栏公告间隔(秒)")
     private int announcementBossBarInterval = 60;
 
+    @Range(min = 1, max = 60)
     @ConfigEntry(path = "features.announcement.bossbar.duration", comment = "Boss栏显示时长(秒)")
     private int announcementBossBarDuration = 10;
 
@@ -220,15 +238,19 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.announcement.title.enabled", comment = "启用标题公告")
     private boolean announcementTitleEnabled = false;
 
+    @Range(min = 10, max = 3600)
     @ConfigEntry(path = "features.announcement.title.interval", comment = "标题公告间隔(秒)")
     private int announcementTitleInterval = 600;
 
+    @Range(min = 0, max = 100)
     @ConfigEntry(path = "features.announcement.title.fade-in", comment = "标题淡入时间(tick)")
     private int announcementTitleFadeIn = 10;
 
+    @Range(min = 1, max = 200)
     @ConfigEntry(path = "features.announcement.title.stay", comment = "标题停留时间(tick)")
     private int announcementTitleStay = 70;
 
+    @Range(min = 0, max = 100)
     @ConfigEntry(path = "features.announcement.title.fade-out", comment = "标题淡出时间(tick)")
     private int announcementTitleFadeOut = 20;
 
@@ -252,15 +274,18 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.deathpunish.money.enabled", comment = "启用金币惩罚")
     private boolean deathPunishMoneyEnabled = false;
 
+    @Range(min = 0, max = 100)
     @ConfigEntry(path = "features.deathpunish.money.percent", comment = "掉落金币百分比")
     private double deathPunishMoneyPercent = 10.0;
 
+    @Range(min = 0, max = 1000000)
     @ConfigEntry(path = "features.deathpunish.money.max", comment = "最大掉落金币 (0为无限制)")
     private double deathPunishMoneyMax = 1000.0;
 
     @ConfigEntry(path = "features.deathpunish.item.enabled", comment = "启用物品掉落惩罚")
     private boolean deathPunishItemDropEnabled = false;
 
+    @Range(min = 0, max = 100)
     @ConfigEntry(path = "features.deathpunish.item.drop-chance", comment = "物品掉落概率(%)")
     private double deathPunishItemDropChance = 50.0;
 
@@ -276,6 +301,7 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.deathpunish.exp.enabled", comment = "启用经验惩罚")
     private boolean deathPunishExpEnabled = false;
 
+    @Range(min = 0, max = 100)
     @ConfigEntry(path = "features.deathpunish.exp.percent", comment = "额外经验损失百分比")
     private double deathPunishExpPercent = 20.0;
 
@@ -302,6 +328,7 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.nameprefix.suffix-format", comment = "后缀格式 (支持PlaceholderAPI)")
     private String nameSuffixFormat = "";
 
+    @Range(min = 1, max = 60)
     @ConfigEntry(path = "features.nameprefix.update-interval", comment = "更新间隔(秒)")
     private int namePrefixUpdateInterval = 5;
 

@@ -3,12 +3,11 @@ package com.ultikits.plugins.login.commands;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -31,10 +30,10 @@ import java.util.UUID;
     permission = "ultilogin.admin",
     description = "登录系统管理命令"
 )
-public class LoginAdminCommand extends AbstractCommendExecutor {
-    
+public class LoginAdminCommand extends BaseCommandExecutor {
+
     private final LoginService loginService;
-    
+
     public LoginAdminCommand(LoginService loginService) {
         this.loginService = loginService;
     }

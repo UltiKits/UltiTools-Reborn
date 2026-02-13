@@ -1,6 +1,5 @@
 package com.ultikits.plugins.login;
 
-import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
@@ -21,34 +20,15 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.login"})
 public class UltiLogin extends UltiToolsPlugin {
 
-    private static UltiLogin instance;
-
-    public static UltiLogin getInstance() {
-        return instance;
-    }
-
     @Override
     public boolean registerSelf() {
-        instance = this;
-        
-        LoginService loginService = getContext().getBean(LoginService.class);
-        if (loginService != null) {
-            loginService.init();
-        }
-        
         getLogger().info(i18n("UltiLogin 已启用！"));
         return true;
     }
 
     @Override
     public void unregisterSelf() {
-        LoginService loginService = getContext().getBean(LoginService.class);
-        if (loginService != null) {
-            loginService.shutdown();
-        }
-        
         getLogger().info(i18n("UltiLogin 已禁用！"));
-        instance = null;
     }
 
     @Override

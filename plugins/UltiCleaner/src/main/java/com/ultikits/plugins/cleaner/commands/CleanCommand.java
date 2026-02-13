@@ -3,7 +3,7 @@ package com.ultikits.plugins.cleaner.commands;
 import com.ultikits.plugins.cleaner.service.ChunkUnloadService;
 import com.ultikits.plugins.cleaner.service.CleanerService;
 import com.ultikits.plugins.cleaner.service.TpsAwareScheduler;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
@@ -24,7 +24,7 @@ import java.util.Map;
     permission = "ulticleaner.clean",
     description = "清理地面物品和实体"
 )
-public class CleanCommand extends AbstractCommendExecutor {
+public class CleanCommand extends BaseCommandExecutor {
     
     private final CleanerService cleanerService;
     private final ChunkUnloadService chunkUnloadService;

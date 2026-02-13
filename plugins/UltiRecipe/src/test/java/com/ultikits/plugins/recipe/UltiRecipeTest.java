@@ -12,17 +12,12 @@ import static org.mockito.Mockito.*;
 @DisplayName("UltiRecipe Main Class Tests")
 class UltiRecipeTest {
 
-    @AfterEach
-    void tearDown() throws Exception {
-        UltiRecipeTestHelper.tearDown();
-    }
-
     @Nested
-    @DisplayName("Singleton Management")
-    class SingletonManagement {
+    @DisplayName("Lifecycle Methods")
+    class LifecycleMethods {
 
         @Test
-        @DisplayName("registerSelf should set instance and return true")
+        @DisplayName("registerSelf should return true and init recipes")
         void registerSelf() throws Exception {
             UltiRecipe plugin = mock(UltiRecipe.class);
             PluginLogger logger = mock(PluginLogger.class);
@@ -36,32 +31,16 @@ class UltiRecipeTest {
             when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             when(plugin.registerSelf()).thenCallRealMethod();
 
-            // Set instance field to null first
-            UltiRecipeTestHelper.setStaticField(UltiRecipe.class, "instance", null);
-
             boolean result = plugin.registerSelf();
 
             assertThat(result).isTrue();
-            assertThat(UltiRecipe.getInstance()).isSameAs(plugin);
             verify(service).initRecipes();
             verify(logger).info(contains("已注册"));
             verify(logger).info(contains("已启用"));
         }
 
         @Test
-        @DisplayName("getInstance should return null when not registered")
-        void getInstanceNull() throws Exception {
-            UltiRecipeTestHelper.setStaticField(UltiRecipe.class, "instance", null);
-            assertThat(UltiRecipe.getInstance()).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("Lifecycle Methods")
-    class LifecycleMethods {
-
-        @Test
-        @DisplayName("unregisterSelf should remove recipes and clear instance")
+        @DisplayName("unregisterSelf should remove recipes")
         void unregisterSelf() throws Exception {
             UltiRecipe plugin = mock(UltiRecipe.class);
             PluginLogger logger = mock(PluginLogger.class);
@@ -74,14 +53,10 @@ class UltiRecipeTest {
             when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             doCallRealMethod().when(plugin).unregisterSelf();
 
-            // Set instance first
-            UltiRecipeTestHelper.setStaticField(UltiRecipe.class, "instance", plugin);
-
             plugin.unregisterSelf();
 
             verify(service).removeRecipes();
             verify(logger).info(contains("已禁用"));
-            // Note: instance is set to null in real method but we can't verify it without calling again
         }
 
         @Test
@@ -150,8 +125,8 @@ class UltiRecipeTest {
     class ServiceIntegration {
 
         @Test
-        @DisplayName("registerSelf should handle service initialization failure")
-        void registerSelfServiceFails() throws Exception {
+        @DisplayName("registerSelf should handle zero recipes")
+        void registerSelfZeroRecipes() throws Exception {
             UltiRecipe plugin = mock(UltiRecipe.class);
             PluginLogger logger = mock(PluginLogger.class);
             SimpleContainer context = mock(SimpleContainer.class);
@@ -163,8 +138,6 @@ class UltiRecipeTest {
             when(service.initRecipes()).thenReturn(0);
             when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             when(plugin.registerSelf()).thenCallRealMethod();
-
-            UltiRecipeTestHelper.setStaticField(UltiRecipe.class, "instance", null);
 
             boolean result = plugin.registerSelf();
 
@@ -182,8 +155,6 @@ class UltiRecipeTest {
             when(plugin.getContext()).thenReturn(null);
             when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             when(plugin.registerSelf()).thenCallRealMethod();
-
-            UltiRecipeTestHelper.setStaticField(UltiRecipe.class, "instance", null);
 
             // Should throw NPE when trying to get bean from null context
             assertThatThrownBy(() -> plugin.registerSelf())

@@ -1,18 +1,17 @@
 package com.ultikits.plugins.sidebar.service;
 
-import com.ultikits.plugins.sidebar.UltiSideBar;
 import com.ultikits.plugins.sidebar.config.SideBarConfig;
 import com.ultikits.plugins.sidebar.data.SideBarPreference;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scoreboard.*;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -29,6 +28,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SideBarService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private SideBarConfig config;
     
     // Track player scoreboard state
@@ -42,21 +44,25 @@ public class SideBarService {
     
     // Update task
     private BukkitTask updateTask;
-    
+
+    // Bukkit plugin instance for scheduler calls
+    private Plugin bukkitPlugin;
+
     // PlaceholderAPI availability
     private boolean placeholderApiAvailable = false;
-    
+
     /**
      * Initialize the sidebar service.
      */
     public void init() {
         // Initialize data operator for persistent storage
-        dataOperator = UltiSideBar.getInstance().getDataOperator(SideBarPreference.class);
-        
+        dataOperator = plugin.getDataOperator(SideBarPreference.class);
+        bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+
         // Check PlaceholderAPI
         placeholderApiAvailable = Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null;
         if (!placeholderApiAvailable) {
-            UltiSideBar.getInstance().getLogger().warn("PlaceholderAPI not found! Variables will not work.");
+            plugin.getLogger().warn("PlaceholderAPI not found! Variables will not work.");
         }
         
         // Register config change listener
@@ -129,7 +135,7 @@ public class SideBarService {
         }
         
         updateTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTools.getInstance(),
+            bukkitPlugin,
             this::updateAllSidebars,
             0L, config.getUpdateInterval()
         );
@@ -209,17 +215,15 @@ public class SideBarService {
      * Returns true if not found (default enabled based on config).
      */
     private boolean isSidebarEnabledInDatabase(UUID playerUuid) {
-        List<SideBarPreference> prefs = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<SideBarPreference> prefs = dataOperator.query()
+            .where("player_uuid")
+            .eq(playerUuid.toString())
+            .list();
+
         if (prefs.isEmpty()) {
             return config.isDefaultEnabled();
         }
-        
+
         Boolean enabled = prefs.get(0).getEnabled();
         return enabled != null ? enabled : config.isDefaultEnabled();
     }
@@ -228,13 +232,11 @@ public class SideBarService {
      * Set sidebar enabled state in database.
      */
     private void setSidebarEnabledInDatabase(UUID playerUuid, boolean enabled) {
-        List<SideBarPreference> existing = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<SideBarPreference> existing = dataOperator.query()
+            .where("player_uuid")
+            .eq(playerUuid.toString())
+            .list();
+
         if (existing.isEmpty()) {
             // Insert new record
             SideBarPreference pref = new SideBarPreference(playerUuid.toString(), enabled);
@@ -358,7 +360,7 @@ public class SideBarService {
         if (isSidebarEnabledInDatabase(player.getUniqueId())) {
             // Delay to allow other plugins to load
             Bukkit.getScheduler().runTaskLater(
-                UltiTools.getInstance(),
+                bukkitPlugin,
                 () -> enableSidebar(player),
                 10L
             );
