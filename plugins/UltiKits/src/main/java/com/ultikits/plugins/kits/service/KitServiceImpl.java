@@ -185,80 +185,74 @@ public class KitServiceImpl implements KitService {
             return ClaimResult.NOT_FOUND;
         }
 
-        // Permission check
-        if (kit.hasPermission() && !player.hasPermission(kit.getPermission())) {
-            return ClaimResult.NO_PERMISSION;
+        ClaimResult validationResult = validateClaim(player, kit);
+        if (validationResult != null) {
+            return validationResult;
         }
 
-        // Level check
-        if (kit.hasLevelRequirement() && player.getLevel() < kit.getLevelRequired()) {
-            return ClaimResult.INSUFFICIENT_LEVEL;
-        }
-
-        // Economy check
-        if (!kit.isFree()) {
-            if (!EconomyUtils.isAvailable()) {
-                return ClaimResult.INSUFFICIENT_FUNDS;
-            }
-            if (!EconomyUtils.has(player, kit.getPrice())) {
-                return ClaimResult.INSUFFICIENT_FUNDS;
-            }
-        }
-
-        // Cooldown / one-time check
-        KitClaimData claim = getClaimData(player.getUniqueId(), kit.getName());
-        if (claim != null) {
-            if (kit.isOneTime()) {
-                return ClaimResult.ALREADY_CLAIMED;
-            }
-            long remaining = getRemainingCooldown(player, kit);
-            if (remaining > 0) {
-                return ClaimResult.ON_COOLDOWN;
-            }
-        }
-
-        // Check kit has items
-        if (!kit.hasItems()) {
-            return ClaimResult.EMPTY_KIT;
-        }
-
-        // Deserialize items
         ItemStack[] items = deserializeItems(kit.getItems());
         if (items == null || items.length == 0) {
             return ClaimResult.EMPTY_KIT;
         }
 
-        // Check inventory space
-        int emptySlots = 0;
-        for (ItemStack slot : player.getInventory().getStorageContents()) {
-            if (slot == null || slot.getType() == Material.AIR) {
-                emptySlots++;
-            }
-        }
-        if (emptySlots < items.length) {
+        if (countEmptySlots(player) < items.length) {
             return ClaimResult.INVENTORY_FULL;
         }
 
-        // Deduct price
+        deliverKit(player, kit, items);
+        return ClaimResult.SUCCESS;
+    }
+
+    /**
+     * Validates player eligibility to claim a kit.
+     * Returns null if all checks pass, or the failure result.
+     */
+    @Nullable
+    ClaimResult validateClaim(Player player, KitDefinition kit) {
+        if (kit.hasPermission() && !player.hasPermission(kit.getPermission())) {
+            return ClaimResult.NO_PERMISSION;
+        }
+        if (kit.hasLevelRequirement() && player.getLevel() < kit.getLevelRequired()) {
+            return ClaimResult.INSUFFICIENT_LEVEL;
+        }
+        if (!kit.isFree() && (!EconomyUtils.isAvailable() || !EconomyUtils.has(player, kit.getPrice()))) {
+            return ClaimResult.INSUFFICIENT_FUNDS;
+        }
+        KitClaimData claim = getClaimData(player.getUniqueId(), kit.getName());
+        if (claim != null) {
+            if (kit.isOneTime()) {
+                return ClaimResult.ALREADY_CLAIMED;
+            }
+            if (getRemainingCooldown(player, kit) > 0) {
+                return ClaimResult.ON_COOLDOWN;
+            }
+        }
+        if (!kit.hasItems()) {
+            return ClaimResult.EMPTY_KIT;
+        }
+        return null;
+    }
+
+    private int countEmptySlots(Player player) {
+        int count = 0;
+        for (ItemStack slot : player.getInventory().getStorageContents()) {
+            if (slot == null || slot.getType() == Material.AIR) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void deliverKit(Player player, KitDefinition kit, ItemStack[] items) {
         if (!kit.isFree() && EconomyUtils.isAvailable()) {
             EconomyUtils.withdraw(player, kit.getPrice());
         }
-
-        // Give items
         for (ItemStack item : items) {
             player.getInventory().addItem(item.clone());
         }
-
-        // Execute player commands
         executePlayerCommands(player, kit.getPlayerCommands());
-
-        // Execute console commands
         executeConsoleCommands(player, kit.getConsoleCommands());
-
-        // Update claim record
         updateClaimData(player.getUniqueId(), kit.getName());
-
-        return ClaimResult.SUCCESS;
     }
 
     @Override
