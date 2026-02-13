@@ -5,7 +5,7 @@ import com.ultikits.plugins.trade.config.TradeConfig;
 import com.ultikits.plugins.trade.entity.PlayerTradeSettings;
 import com.ultikits.plugins.trade.entity.TradeLogData;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.query.QueryBuilder;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
@@ -27,7 +27,7 @@ class TradeLogServiceTest {
     @SuppressWarnings("unchecked")
     private DataOperator<PlayerTradeSettings> settingsOperator = mock(DataOperator.class);
     @SuppressWarnings("unchecked")
-    private QueryBuilder<PlayerTradeSettings> queryBuilder = mock(QueryBuilder.class);
+    private Query<PlayerTradeSettings> queryBuilder = mock(Query.class);
 
     private Player player;
     private UUID playerUuid;

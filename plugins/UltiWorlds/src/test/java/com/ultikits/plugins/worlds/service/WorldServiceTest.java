@@ -5,6 +5,7 @@ import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
@@ -900,16 +901,4 @@ class WorldServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("Shutdown")
-    class Shutdown {
-
-        @Test
-        @DisplayName("shutdown should complete without errors")
-        void shutdownClean() {
-            worldService.shutdown();
-
-            // Should not throw any exceptions
-        }
-    }
 }

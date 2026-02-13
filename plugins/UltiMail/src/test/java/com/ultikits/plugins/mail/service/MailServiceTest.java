@@ -6,7 +6,7 @@ import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.utils.TestHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.interfaces.QueryBuilder;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -46,7 +46,7 @@ class MailServiceTest {
     private DataOperator<MailData> mockDataOperator;
 
     @Mock
-    private QueryBuilder<MailData> mockQueryBuilder;
+    private Query<MailData> mockQueryBuilder;
 
     private MailConfig config;
 
