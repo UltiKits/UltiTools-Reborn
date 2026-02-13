@@ -76,14 +76,8 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.motd.enabled", comment = "启用 MOTD 自定义")
     private boolean motdEnabled = true;
 
-    @ConfigEntry(path = "features.join-welcome.enabled", comment = "启用入服欢迎消息")
-    private boolean joinWelcomeEnabled = true;
-
     @ConfigEntry(path = "features.tab-bar.enabled", comment = "启用 Tab 栏自定义")
     private boolean tabBarEnabled = true;
-
-    @ConfigEntry(path = "features.auto-reply.enabled", comment = "启用自动回复")
-    private boolean autoReplyEnabled = true;
 
     // ============ Home 系统功能 ============
     @ConfigEntry(path = "features.home.enabled", comment = "启用 /home 家系统")
@@ -160,100 +154,6 @@ public class EssentialsConfig extends AbstractConfigEntity {
         "&6等级: &e%player_level%",
         "&7",
         "&ewww.example.com"
-    );
-
-    // ============ Chat 聊天格式 ============
-    @ConfigEntry(path = "features.chat.format-enabled", comment = "启用聊天格式化")
-    private boolean chatFormatEnabled = true;
-
-    @NotEmpty
-    @ConfigEntry(path = "features.chat.format", comment = "聊天格式 (支持PlaceholderAPI)")
-    private String chatFormat = "&7[&f%player_world%&7] &f{player}&7: &f{message}";
-
-    // ============ 进入/离开消息 ============
-    @ConfigEntry(path = "features.join-quit.join-message-enabled", comment = "启用自定义进入消息")
-    private boolean joinMessageEnabled = true;
-
-    @ConfigEntry(path = "features.join-quit.join-message-format", comment = "进入消息格式")
-    private String joinMessageFormat = "&a[+] &e%player_name% &7加入了服务器";
-
-    @ConfigEntry(path = "features.join-quit.quit-message-enabled", comment = "启用自定义离开消息")
-    private boolean quitMessageEnabled = true;
-
-    @ConfigEntry(path = "features.join-quit.quit-message-format", comment = "离开消息格式")
-    private String quitMessageFormat = "&c[-] &e%player_name% &7离开了服务器";
-
-    @ConfigEntry(path = "features.join-quit.welcome-message-lines", comment = "欢迎消息内容")
-    private java.util.List<String> welcomeMessageLines = java.util.Arrays.asList(
-        "&7========================================",
-        "&6欢迎来到服务器, &e%player_name%&6!",
-        "&7当前在线: &f%online_players%&7/&f%max_players%",
-        "&7输入 &e/help &7查看帮助",
-        "&7========================================"
-    );
-
-    // ============ Announcement 公告系统 ============
-    @ConfigEntry(path = "features.announcement.chat.enabled", comment = "启用聊天公告")
-    private boolean announcementChatEnabled = true;
-
-    @Range(min = 10, max = 3600)
-    @ConfigEntry(path = "features.announcement.chat.interval", comment = "聊天公告间隔(秒)")
-    private int announcementChatInterval = 300;
-
-    @NotEmpty
-    @ConfigEntry(path = "features.announcement.chat.prefix", comment = "聊天公告前缀")
-    private String announcementChatPrefix = "&6[公告] &f";
-
-    @ConfigEntry(path = "features.announcement.chat.messages", comment = "聊天公告内容列表")
-    private java.util.List<String> announcementChatMessages = java.util.Arrays.asList(
-        "欢迎来到服务器！输入 /help 查看帮助。",
-        "请遵守服务器规则，文明游戏！",
-        "有问题请联系管理员。"
-    );
-
-    @ConfigEntry(path = "features.announcement.bossbar.enabled", comment = "启用Boss栏公告")
-    private boolean announcementBossBarEnabled = false;
-
-    @Range(min = 10, max = 3600)
-    @ConfigEntry(path = "features.announcement.bossbar.interval", comment = "Boss栏公告间隔(秒)")
-    private int announcementBossBarInterval = 60;
-
-    @Range(min = 1, max = 60)
-    @ConfigEntry(path = "features.announcement.bossbar.duration", comment = "Boss栏显示时长(秒)")
-    private int announcementBossBarDuration = 10;
-
-    @ConfigEntry(path = "features.announcement.bossbar.color", comment = "Boss栏颜色 (BLUE, GREEN, PINK, PURPLE, RED, WHITE, YELLOW)")
-    private String announcementBossBarColor = "BLUE";
-
-    @ConfigEntry(path = "features.announcement.bossbar.messages", comment = "Boss栏公告内容列表")
-    private java.util.List<String> announcementBossBarMessages = java.util.Arrays.asList(
-        "&e欢迎来到服务器!",
-        "&a请遵守服务器规则"
-    );
-
-    @ConfigEntry(path = "features.announcement.title.enabled", comment = "启用标题公告")
-    private boolean announcementTitleEnabled = false;
-
-    @Range(min = 10, max = 3600)
-    @ConfigEntry(path = "features.announcement.title.interval", comment = "标题公告间隔(秒)")
-    private int announcementTitleInterval = 600;
-
-    @Range(min = 0, max = 100)
-    @ConfigEntry(path = "features.announcement.title.fade-in", comment = "标题淡入时间(tick)")
-    private int announcementTitleFadeIn = 10;
-
-    @Range(min = 1, max = 200)
-    @ConfigEntry(path = "features.announcement.title.stay", comment = "标题停留时间(tick)")
-    private int announcementTitleStay = 70;
-
-    @Range(min = 0, max = 100)
-    @ConfigEntry(path = "features.announcement.title.fade-out", comment = "标题淡出时间(tick)")
-    private int announcementTitleFadeOut = 20;
-
-    @ConfigEntry(path = "features.announcement.title.messages", comment = "标题公告内容列表 (用||分隔标题和副标题)")
-    private java.util.List<String> announcementTitleMessages = java.util.Arrays.asList(
-        "&6欢迎回来!||&7祝你游戏愉快",
-        "&c注意||&7请遵守服务器规则"
     );
 
     // ============ Scheduled Commands ============

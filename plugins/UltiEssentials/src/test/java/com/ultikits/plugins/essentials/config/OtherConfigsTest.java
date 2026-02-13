@@ -5,7 +5,7 @@ import org.junit.jupiter.api.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit tests for MotdConfig, TabBarConfig, WelcomeConfig, LobbyConfig, SpawnConfig.
+ * Unit tests for MotdConfig, TabBarConfig, LobbyConfig, SpawnConfig.
  * <p>
  * 测试其他配置类的默认值和设置器。
  *
@@ -103,72 +103,6 @@ class OtherConfigsTest {
         void shouldUpdateFooter() {
             config.setFooter("&7Custom Footer");
             assertThat(config.getFooter()).isEqualTo("&7Custom Footer");
-        }
-    }
-
-    @Nested
-    @DisplayName("WelcomeConfig")
-    class WelcomeConfigTests {
-
-        private WelcomeConfig config;
-
-        @BeforeEach
-        void setUp() {
-            config = new WelcomeConfig();
-        }
-
-        @Test
-        @DisplayName("Should have default message")
-        void shouldHaveDefaultMessage() {
-            assertThat(config.getMessage()).isNotNull();
-            assertThat(config.getMessage()).contains("%player%");
-        }
-
-        @Test
-        @DisplayName("Should have broadcast enabled by default")
-        void shouldHaveBroadcastEnabled() {
-            assertThat(config.isBroadcast()).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should have default first join message")
-        void shouldHaveDefaultFirstJoinMessage() {
-            assertThat(config.getFirstJoinMessage()).isNotNull();
-            assertThat(config.getFirstJoinMessage()).contains("%player%");
-        }
-
-        @Test
-        @DisplayName("Should have title enabled by default")
-        void shouldHaveTitleEnabled() {
-            assertThat(config.isTitleEnabled()).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should have default title texts")
-        void shouldHaveDefaultTitleTexts() {
-            assertThat(config.getTitleMain()).isNotNull();
-            assertThat(config.getTitleSub()).isNotNull();
-        }
-
-        @Test
-        @DisplayName("Should update message via setter")
-        void shouldUpdateMessage() {
-            config.setMessage("Custom welcome");
-            assertThat(config.getMessage()).isEqualTo("Custom welcome");
-        }
-
-        @Test
-        @DisplayName("Should update broadcast via setter")
-        void shouldUpdateBroadcast() {
-            config.setBroadcast(false);
-            assertThat(config.isBroadcast()).isFalse();
-        }
-
-        @Test
-        @DisplayName("Should update title enabled via setter")
-        void shouldUpdateTitleEnabled() {
-            config.setTitleEnabled(false);
-            assertThat(config.isTitleEnabled()).isFalse();
         }
     }
 

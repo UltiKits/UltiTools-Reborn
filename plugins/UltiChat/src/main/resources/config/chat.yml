@@ -1,0 +1,40 @@
+# UltiChat - Main Chat Configuration
+
+# Chat format
+chat:
+  format-enabled: true
+  format: "&7[&f%player_world%&7] &f{player}&7: &f{message}"
+
+# Join/quit messages
+join-quit:
+  join-message-enabled: true
+  join-message-format: "&a[+] &e%player_name% &7joined the server"
+  quit-message-enabled: true
+  quit-message-format: "&c[-] &e%player_name% &7left the server"
+  welcome-enabled: true
+  welcome-lines:
+    - "&7========================================"
+    - "&6Welcome, &e%player_name%&6!"
+    - "&7Online: &f%online_players%&7/&f%max_players%"
+    - "&7========================================"
+  title:
+    enabled: true
+    main: "&6Welcome Back"
+    sub: "&7%player_name%"
+  first-join-message: "&6Welcome new player &e%player_name%&6!"
+
+# Mentions
+mentions:
+  enabled: true
+  format: "&e@{player}&r"
+  sound: "ENTITY_EXPERIENCE_ORB_PICKUP"
+  self-mention: false
+
+# Anti-spam
+anti-spam:
+  enabled: true
+  cooldown: 2
+  max-duplicate: 3
+  duplicate-window: 60
+  mute-duration: 30
+  caps-limit: 70

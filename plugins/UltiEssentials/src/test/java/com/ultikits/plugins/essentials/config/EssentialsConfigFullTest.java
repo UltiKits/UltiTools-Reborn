@@ -383,77 +383,19 @@ class EssentialsConfigFullTest {
         }
 
         @Test
-        @DisplayName("Should have join welcome enabled by default")
-        void shouldHaveJoinWelcomeEnabled() {
-            assertThat(config.isJoinWelcomeEnabled()).isTrue();
-        }
-
-        @Test
         @DisplayName("Should have tab bar enabled by default")
         void shouldHaveTabBarEnabled() {
             assertThat(config.isTabBarEnabled()).isTrue();
         }
 
         @Test
-        @DisplayName("Should have auto reply enabled by default")
-        void shouldHaveAutoReplyEnabled() {
-            assertThat(config.isAutoReplyEnabled()).isTrue();
-        }
-
-        @Test
         @DisplayName("Should update listener settings")
         void shouldUpdateListenerSettings() {
             config.setMotdEnabled(false);
-            config.setJoinWelcomeEnabled(false);
             config.setTabBarEnabled(false);
-            config.setAutoReplyEnabled(false);
 
             assertThat(config.isMotdEnabled()).isFalse();
-            assertThat(config.isJoinWelcomeEnabled()).isFalse();
             assertThat(config.isTabBarEnabled()).isFalse();
-            assertThat(config.isAutoReplyEnabled()).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("Announcement Message Lists")
-    class AnnouncementMessageLists {
-
-        @Test
-        @DisplayName("Should have chat messages list")
-        void shouldHaveChatMessages() {
-            assertThat(config.getAnnouncementChatMessages()).isNotNull();
-            assertThat(config.getAnnouncementChatMessages()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should have bossbar messages list")
-        void shouldHaveBossBarMessages() {
-            assertThat(config.getAnnouncementBossBarMessages()).isNotNull();
-            assertThat(config.getAnnouncementBossBarMessages()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should have title messages list")
-        void shouldHaveTitleMessages() {
-            assertThat(config.getAnnouncementTitleMessages()).isNotNull();
-            assertThat(config.getAnnouncementTitleMessages()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should update announcement message lists")
-        void shouldUpdateAnnouncementMessages() {
-            List<String> chatMsgs = Arrays.asList("Custom1", "Custom2");
-            List<String> bossMsgs = Arrays.asList("Boss1");
-            List<String> titleMsgs = Arrays.asList("Title1||Sub1");
-
-            config.setAnnouncementChatMessages(chatMsgs);
-            config.setAnnouncementBossBarMessages(bossMsgs);
-            config.setAnnouncementTitleMessages(titleMsgs);
-
-            assertThat(config.getAnnouncementChatMessages()).containsExactly("Custom1", "Custom2");
-            assertThat(config.getAnnouncementBossBarMessages()).containsExactly("Boss1");
-            assertThat(config.getAnnouncementTitleMessages()).containsExactly("Title1||Sub1");
         }
     }
 }

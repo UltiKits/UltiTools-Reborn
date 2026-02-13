@@ -1,0 +1,25 @@
+# UltiChat - Announcement Configuration
+
+announcements:
+  chat:
+    enabled: true
+    interval: 300
+    prefix: "&6[Announcement] &f"
+    messages:
+      - "Welcome! Type /help for assistance."
+      - "Please follow server rules!"
+  bossbar:
+    enabled: false
+    interval: 60
+    duration: 10
+    color: BLUE
+    messages:
+      - "&eWelcome to the server!"
+  title:
+    enabled: false
+    interval: 600
+    fade-in: 10
+    stay: 70
+    fade-out: 20
+    messages:
+      - "&6Welcome!||&7Enjoy your stay"

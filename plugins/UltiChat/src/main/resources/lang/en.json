@@ -1,0 +1,20 @@
+{
+  "autoreply_added": "&aAuto-reply rule ''{0}'' added.",
+  "autoreply_removed": "&aAuto-reply rule ''{0}'' removed.",
+  "autoreply_not_found": "&cRule ''{0}'' not found.",
+  "autoreply_list_header": "&6===== Auto-Reply Rules =====",
+  "autoreply_list_entry": "&7- &f{0} &7-> &f{1} &7[{2}]",
+  "autoreply_list_empty": "&7No auto-reply rules configured.",
+  "channel_switched": "&aSwitched to channel: {0}",
+  "channel_no_permission": "&cYou don''t have permission for channel {0}.",
+  "channel_not_found": "&cChannel ''{0}'' not found.",
+  "channel_list_header": "&6===== Chat Channels =====",
+  "channel_list_entry": "&7- {0} &7({1})",
+  "channel_current": "&7Current channel: {0}",
+  "spam_cooldown": "&cPlease wait before sending another message.",
+  "spam_duplicate": "&cStop sending duplicate messages!",
+  "spam_muted": "&cYou have been muted for {0} seconds.",
+  "spam_caps": "&cPlease reduce the amount of uppercase letters.",
+  "config_reloaded": "&aUltiChat configuration reloaded.",
+  "no_permission": "&cYou don''t have permission to do that."
+}
