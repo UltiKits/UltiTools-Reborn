@@ -108,7 +108,7 @@ public class LoginConfig extends AbstractConfigEntity {
 
     @NotEmpty
     @ConfigEntry(path = "allowed-commands", comment = "未登录时允许执行的命令")
-    private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg", "panel");
+    private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg", "panel", "regs", "recover");
 
     @ConfigEntry(path = "blind-effect", comment = "未登录时给予失明效果")
     private boolean blindEffect = true;
