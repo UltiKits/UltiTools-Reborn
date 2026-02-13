@@ -1,0 +1,24 @@
+# UltiChat - Channel Configuration
+
+channels:
+  enabled: true
+  default-channel: global
+  channels:
+    global:
+      display-name: "&f[Global]"
+      format: "{display}&f: {message}"
+      permission: ""
+      range: -1
+      cross-world: true
+    local:
+      display-name: "&a[Local]"
+      format: "{display}&7: {message}"
+      permission: ""
+      range: 100
+      cross-world: false
+    staff:
+      display-name: "&c[Staff]"
+      format: "&c[Staff] &f{player}&7: {message}"
+      permission: "ultichat.channel.staff"
+      range: -1
+      cross-world: true

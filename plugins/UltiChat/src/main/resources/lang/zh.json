@@ -1,0 +1,20 @@
+{
+  "autoreply_added": "&a自动回复规则 ''{0}'' 已添加。",
+  "autoreply_removed": "&a自动回复规则 ''{0}'' 已移除。",
+  "autoreply_not_found": "&c未找到规则 ''{0}''。",
+  "autoreply_list_header": "&6===== 自动回复规则 =====",
+  "autoreply_list_entry": "&7- &f{0} &7-> &f{1} &7[{2}]",
+  "autoreply_list_empty": "&7没有配置自动回复规则。",
+  "channel_switched": "&a已切换到频道: {0}",
+  "channel_no_permission": "&c你没有频道 {0} 的权限。",
+  "channel_not_found": "&c频道 ''{0}'' 不存在。",
+  "channel_list_header": "&6===== 聊天频道 =====",
+  "channel_list_entry": "&7- {0} &7({1})",
+  "channel_current": "&7当前频道: {0}",
+  "spam_cooldown": "&c请稍等再发送消息。",
+  "spam_duplicate": "&c请勿重复发送消息！",
+  "spam_muted": "&c你已被禁言 {0} 秒。",
+  "spam_caps": "&c请减少大写字母的使用。",
+  "config_reloaded": "&aUltiChat 配置已重新加载。",
+  "no_permission": "&c你没有权限执行此操作。"
+}

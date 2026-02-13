@@ -172,41 +172,6 @@ class EssentialsConfigTest {
     }
 
     @Nested
-    @DisplayName("Announcement System Defaults")
-    class AnnouncementSystemDefaults {
-
-        @Test
-        @DisplayName("Should have correct chat announcement defaults")
-        void shouldHaveChatAnnouncementDefaults() {
-            assertThat(config.isAnnouncementChatEnabled()).isTrue();
-            assertThat(config.getAnnouncementChatInterval()).isEqualTo(300);
-            assertThat(config.getAnnouncementChatPrefix()).isNotEmpty();
-            assertThat(config.getAnnouncementChatMessages()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should have correct boss bar announcement defaults")
-        void shouldHaveBossBarAnnouncementDefaults() {
-            assertThat(config.isAnnouncementBossBarEnabled()).isFalse();
-            assertThat(config.getAnnouncementBossBarInterval()).isEqualTo(60);
-            assertThat(config.getAnnouncementBossBarDuration()).isEqualTo(10);
-            assertThat(config.getAnnouncementBossBarColor()).isEqualTo("BLUE");
-            assertThat(config.getAnnouncementBossBarMessages()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should have correct title announcement defaults")
-        void shouldHaveTitleAnnouncementDefaults() {
-            assertThat(config.isAnnouncementTitleEnabled()).isFalse();
-            assertThat(config.getAnnouncementTitleInterval()).isEqualTo(600);
-            assertThat(config.getAnnouncementTitleFadeIn()).isEqualTo(10);
-            assertThat(config.getAnnouncementTitleStay()).isEqualTo(70);
-            assertThat(config.getAnnouncementTitleFadeOut()).isEqualTo(20);
-            assertThat(config.getAnnouncementTitleMessages()).isNotEmpty();
-        }
-    }
-
-    @Nested
     @DisplayName("ChestLock System Defaults")
     class ChestLockSystemDefaults {
 

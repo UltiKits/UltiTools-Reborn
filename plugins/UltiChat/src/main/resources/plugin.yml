@@ -1,0 +1,7 @@
+name: UltiTools-Chat
+version: '${project.version}'
+main: com.ultikits.plugins.chat.UltiChat
+base-package: com.ultikits.plugins.chat
+api-version: 620
+authors: [ wisdomme ]
+softdepend: [ PlaceholderAPI, Vault ]
