@@ -400,18 +400,11 @@ public class PluginInitiationUtils {
      * 处理命令执行结果
      */
     private static void handleCommandResult(JsonObject data) {
+        // command_result messages are echoed back from DO — already logged by
+        // CommandExecutionManager, so we only log at FINE (debug) level here.
         if (data != null) {
-            String commandId = safeGetString(data, "commandId");
-            boolean success = safeGetBoolean(data, "success", false);
-            String output = safeGetString(data, "output");
-            long executionTime = safeGetLong(data, "executionTime", 0);
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[命令执行结果] ID: %s, 成功: %s, 执行时间: %dms",
-                    commandId, success, executionTime));
-            if (output != null && !output.trim().isEmpty()) {
-                UltiTools.getInstance().getLogger().log(Level.INFO,
-                    String.format("[命令输出] %s", output));
-            }
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("[命令执行结果] %s", data));
         }
     }
     
