@@ -133,10 +133,6 @@ public class EssentialsConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "features.ban.broadcast-unban", comment = "广播解禁消息")
     private boolean unbanBroadcast = true;
 
-    // ============ Kit 礼包系统 ============
-    @ConfigEntry(path = "features.kit.enabled", comment = "启用礼包系统")
-    private boolean kitEnabled = true;
-
     // ============ Scoreboard 计分板 ============
     @ConfigEntry(path = "features.scoreboard.enabled", comment = "启用计分板功能")
     private boolean scoreboardEnabled = true;

@@ -155,96 +155,6 @@ class EntityEqualsHashCodeTest {
         }
     }
 
-    // ---- KitData ----
-
-    @Nested
-    @DisplayName("KitData Lombok Methods")
-    class KitDataLombokTests {
-
-        @Test
-        @DisplayName("Should equal with same fields")
-        void shouldEqualSameFields() {
-            UUID uuid = UUID.randomUUID();
-            KitData d1 = KitData.builder()
-                    .uuid(uuid).name("starter").permission("kit.starter")
-                    .cooldown(3600L).items("items_data").enabled(true)
-                    .build();
-            KitData d2 = KitData.builder()
-                    .uuid(uuid).name("starter").permission("kit.starter")
-                    .cooldown(3600L).items("items_data").enabled(true)
-                    .build();
-            assertThat(d1).isEqualTo(d2);
-            assertThat(d1.hashCode()).isEqualTo(d2.hashCode());
-        }
-
-        @Test
-        @DisplayName("Should not equal different fields")
-        void shouldNotEqualDifferentFields() {
-            KitData d1 = KitData.builder().name("starter").build();
-            KitData d2 = KitData.builder().name("vip").build();
-            assertThat(d1).isNotEqualTo(d2);
-        }
-
-        @Test
-        @DisplayName("Should produce toString")
-        void shouldProduceToString() {
-            KitData d = KitData.builder().name("starter").build();
-            assertThat(d.toString()).contains("starter");
-        }
-
-        @Test
-        @DisplayName("Should support canEqual")
-        void shouldSupportCanEqual() {
-            KitData d = KitData.builder().build();
-            assertThat(d.canEqual(KitData.builder().build())).isTrue();
-            assertThat(d.canEqual(42)).isFalse();
-        }
-    }
-
-    // ---- KitClaimData ----
-
-    @Nested
-    @DisplayName("KitClaimData Lombok Methods")
-    class KitClaimDataLombokTests {
-
-        @Test
-        @DisplayName("Should equal with same fields")
-        void shouldEqualSameFields() {
-            UUID uuid = UUID.randomUUID();
-            KitClaimData d1 = KitClaimData.builder()
-                    .uuid(uuid).playerUuid("p1").kitName("starter").lastClaim(1000L)
-                    .build();
-            KitClaimData d2 = KitClaimData.builder()
-                    .uuid(uuid).playerUuid("p1").kitName("starter").lastClaim(1000L)
-                    .build();
-            assertThat(d1).isEqualTo(d2);
-            assertThat(d1.hashCode()).isEqualTo(d2.hashCode());
-        }
-
-        @Test
-        @DisplayName("Should not equal different fields")
-        void shouldNotEqualDifferentFields() {
-            KitClaimData d1 = KitClaimData.builder().kitName("a").build();
-            KitClaimData d2 = KitClaimData.builder().kitName("b").build();
-            assertThat(d1).isNotEqualTo(d2);
-        }
-
-        @Test
-        @DisplayName("Should produce toString")
-        void shouldProduceToString() {
-            KitClaimData d = KitClaimData.builder().kitName("starter").build();
-            assertThat(d.toString()).contains("starter");
-        }
-
-        @Test
-        @DisplayName("Should support canEqual")
-        void shouldSupportCanEqual() {
-            KitClaimData d = KitClaimData.builder().build();
-            assertThat(d.canEqual(KitClaimData.builder().build())).isTrue();
-            assertThat(d.canEqual(3.14)).isFalse();
-        }
-    }
-
     // ---- HomeData ----
 
     @Nested
@@ -352,11 +262,8 @@ class EntityEqualsHashCodeTest {
         void differentTypesShouldNotBeEqual() {
             BanData ban = BanData.builder().build();
             ChestLockData lock = ChestLockData.builder().build();
-            KitData kit = KitData.builder().build();
 
             assertThat(ban).isNotEqualTo(lock);
-            assertThat(ban).isNotEqualTo(kit);
-            assertThat(lock).isNotEqualTo(kit);
         }
 
         @Test
