@@ -47,13 +47,15 @@ public final class EssentialsTestHelper {
     private static Server mockServer;
 
     /**
-     * Set up UltiEssentials singleton mock and Bukkit server.
+     * Set up UltiEssentials mock and Bukkit server.
+     * <p>
+     * Note: UltiEssentials v6.2.0+ uses constructor injection instead of singletons,
+     * so we just create a mock instance without setting a static field.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiEssentials singleton
+        // Mock UltiEssentials (no longer a singleton after v6.2.0 migration)
         mockPlugin = mock(UltiEssentials.class);
-        setStaticField(UltiEssentials.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -94,10 +96,13 @@ public final class EssentialsTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up test state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiEssentials.class, "instance", null);
+        // UltiEssentials v6.2.0+ doesn't use a singleton pattern
+        // Just null out our mock reference
+        mockPlugin = null;
+        mockLogger = null;
         // Don't null out Bukkit.server - other tests may need it
     }
 

@@ -5,7 +5,6 @@ import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
@@ -246,10 +245,15 @@ class WorldServiceTest {
                 WorldSettings settings3 = UltiWorldsTestHelper.createSampleWorldSettings("world3");
                 settings3.setHidden(false);
 
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings1))
-                        .thenReturn(Collections.singletonList(settings2))
-                        .thenReturn(Collections.singletonList(settings3));
+                @SuppressWarnings("unchecked")
+                Query<WorldSettings> mockQuery = mock(Query.class);
+                when(mockDataOperator.query()).thenReturn(mockQuery);
+                when(mockQuery.where(anyString())).thenReturn(mockQuery);
+                when(mockQuery.eq(any())).thenReturn(mockQuery);
+                when(mockQuery.first())
+                        .thenReturn(settings1)
+                        .thenReturn(settings2)
+                        .thenReturn(settings3);
 
                 List<World> result = worldService.getVisibleWorlds();
 
@@ -282,8 +286,7 @@ class WorldServiceTest {
                 WorldSettings settings1 = UltiWorldsTestHelper.createSampleWorldSettings("world1");
                 settings1.setHidden(true);
 
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings1));
+                mockQueryReturning(settings1);
 
                 List<World> result = worldService.getVisibleWorlds();
 
@@ -323,8 +326,7 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("blocked_world");
                 settings.setBlocked(true);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 boolean result = worldService.teleportToWorld(player, "blocked_world");
 
@@ -345,8 +347,7 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("locked_world");
                 settings.setLocked(true);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 boolean result = worldService.teleportToWorld(player, "locked_world");
 
@@ -368,8 +369,7 @@ class WorldServiceTest {
                 when(mockConfig.isPermissionPerWorld()).thenReturn(true);
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("special");
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 boolean result = worldService.teleportToWorld(player, "special");
 
@@ -388,8 +388,7 @@ class WorldServiceTest {
                 Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.getTpCooldown()).thenReturn(10);
 
@@ -418,8 +417,7 @@ class WorldServiceTest {
                 settings.setSpawnZ(-200.5);
                 settings.setSpawnYaw(90.0f);
                 settings.setSpawnPitch(45.0f);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.isUseSpawnLocation()).thenReturn(true);
                 when(mockConfig.getTpCooldown()).thenReturn(0);
@@ -450,8 +448,7 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
                 settings.setSpawnX(0); // no custom spawn
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.isUseSpawnLocation()).thenReturn(true);
                 when(mockConfig.getTpCooldown()).thenReturn(0);
@@ -475,8 +472,7 @@ class WorldServiceTest {
                 Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.isUseSpawnLocation()).thenReturn(false);
                 when(mockConfig.getTpCooldown()).thenReturn(0);
@@ -501,8 +497,7 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
                 settings.setDisplayName(null);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.isUseSpawnLocation()).thenReturn(false);
                 when(mockConfig.getTpCooldown()).thenReturn(0);
@@ -529,8 +524,7 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("blocked_world");
                 settings.setBlocked(true);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 when(mockConfig.isUseSpawnLocation()).thenReturn(false);
                 when(mockConfig.getTpCooldown()).thenReturn(0);
@@ -655,13 +649,12 @@ class WorldServiceTest {
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("deleted_world");
                 settings.setId(5);
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                Query<WorldSettings> mockQuery = mockQueryReturning(settings);
 
                 boolean result = worldService.deleteWorld("deleted_world");
 
                 assertThat(result).isTrue();
-                verify(mockDataOperator).delById(5);
+                verify(mockQuery).delete();
             }
         }
 
@@ -672,8 +665,7 @@ class WorldServiceTest {
                 bukkit.when(() -> Bukkit.getWorld("old_world")).thenReturn(null);
                 bukkit.when(() -> Bukkit.getWorldContainer()).thenReturn(new java.io.File(System.getProperty("java.io.tmpdir")));
 
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.emptyList());
+                mockQueryReturning(null);
 
                 boolean result = worldService.deleteWorld("old_world");
 
@@ -721,8 +713,7 @@ class WorldServiceTest {
                 bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 Location location = new Location(world, 100.5, 64.0, -200.5, 90f, 45f);
 
@@ -746,8 +737,7 @@ class WorldServiceTest {
                 bukkit.when(() -> Bukkit.getWorld("offline_world")).thenReturn(null);
 
                 WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("offline_world");
-                when(mockDataOperator.getAll(any(WhereCondition.class)))
-                        .thenReturn(Collections.singletonList(settings));
+                mockQueryReturning(settings);
 
                 Location location = mock(Location.class);
                 when(location.getX()).thenReturn(50.0);
@@ -856,8 +846,7 @@ class WorldServiceTest {
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("locked_world");
             settings.setLocked(true);
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "locked_world");
 
@@ -873,8 +862,7 @@ class WorldServiceTest {
             when(mockConfig.isPermissionPerWorld()).thenReturn(true);
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("special");
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "special");
 
@@ -891,8 +879,7 @@ class WorldServiceTest {
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
             settings.setBlocked(true);
             settings.setLocked(true);
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "world");
 
@@ -1038,6 +1025,156 @@ class WorldServiceTest {
                 worldService.getOrCreateSettings("world");
 
                 verify(world).setDifficulty(org.bukkit.Difficulty.HARD);
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should replace placeholders in description")
+        void teleportDescriptionReplacesPlaceholders() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDescription("Welcome {player} to {world}!");
+                settings.setDisplayName("MyWorld");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(true);
+
+                worldService.teleportToWorld(player, "world");
+
+                ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+                verify(player, atLeast(2)).sendMessage(captor.capture());
+                List<String> messages = captor.getAllValues();
+                assertThat(messages).anyMatch(m -> m.contains("Welcome TestPlayer to MyWorld!"));
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should handle color codes in description")
+        void teleportDescriptionHandlesColorCodes() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDescription("&aGreen text&r and &cRed text");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(true);
+
+                worldService.teleportToWorld(player, "world");
+
+                ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+                verify(player, atLeast(2)).sendMessage(captor.capture());
+                List<String> messages = captor.getAllValues();
+                // ChatColor codes should be translated (& -> §)
+                assertThat(messages).anyMatch(m -> m.contains("§a") || m.contains("§c"));
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should NOT execute commands when postTeleportCommands is empty string")
+        void teleportEmptyPostTeleportCommandsString() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setPostTeleportCommands("");  // Empty string, not null
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                worldService.teleportToWorld(player, "world");
+
+                bukkit.verify(() -> Bukkit.dispatchCommand(any(), anyString()), never());
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should apply description, commands, and difficulty together")
+        void teleportDescriptionAndCommandsAndDifficultyTogether() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                org.bukkit.command.ConsoleCommandSender consoleSender = mock(org.bukkit.command.ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDescription("Welcome to the challenge!");
+                settings.setPostTeleportCommands("give {player} iron_sword 1");
+                settings.setDifficulty("HARD");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(true);
+
+                worldService.teleportToWorld(player, "world");
+
+                // Verify description was sent
+                ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+                verify(player, atLeast(2)).sendMessage(captor.capture());
+                List<String> messages = captor.getAllValues();
+                assertThat(messages).anyMatch(m -> m.contains("Welcome to the challenge!"));
+
+                // Verify command was executed
+                bukkit.verify(() -> Bukkit.dispatchCommand(consoleSender, "give TestPlayer iron_sword 1"));
+
+                // Verify difficulty was set (happens in getOrCreateSettings)
+                verify(world).setDifficulty(org.bukkit.Difficulty.HARD);
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should ignore invalid difficulty string")
+        void teleportInvalidDifficultyStringIgnored() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDifficulty("SUPERHARD");  // Invalid difficulty
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                // Should not throw exception
+                worldService.getOrCreateSettings("world");
+
+                // Verify setDifficulty was NOT called
+                verify(world, never()).setDifficulty(any(org.bukkit.Difficulty.class));
             }
         }
     }

@@ -6,6 +6,7 @@ import org.bukkit.Server;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginManager;
+import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
@@ -173,6 +174,177 @@ class ScheduledCommandServiceTest {
             String entry = ":say Hello";
             int colonIndex = entry.indexOf(':');
             assertThat(colonIndex).isEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("Command Execution")
+    class CommandExecution {
+
+        @Test
+        @DisplayName("startTasks should create tasks for valid entries")
+        void startTasksCreatesTasksForValidEntries() throws Exception {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                // Mock plugin manager and plugin
+                PluginManager pluginManager = mock(PluginManager.class);
+                Plugin plugin = mock(Plugin.class);
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                when(pluginManager.getPlugin("UltiTools")).thenReturn(plugin);
+
+                // Mock scheduler
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                BukkitTask mockTask = mock(BukkitTask.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(BukkitRunnable.class), anyLong(), anyLong()))
+                        .thenReturn(mockTask);
+
+                // Mock console sender
+                ConsoleCommandSender consoleSender = mock(ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                // Configure with 2 valid entries
+                when(mockConfig.isScheduledCommandsEnabled()).thenReturn(true);
+                when(mockConfig.getScheduledCommands()).thenReturn(Arrays.asList(
+                        "300:say Hello World",
+                        "600:broadcast Server restart in 10 minutes"
+                ));
+
+                service.startTasks();
+
+                // Verify 2 tasks were created
+                List<BukkitTask> tasks = getTasks(service);
+                assertThat(tasks).hasSize(2);
+            }
+        }
+
+        @Test
+        @DisplayName("startTasks should skip invalid entries")
+        void startTasksSkipsInvalidEntries() throws Exception {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                PluginManager pluginManager = mock(PluginManager.class);
+                Plugin plugin = mock(Plugin.class);
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                when(pluginManager.getPlugin("UltiTools")).thenReturn(plugin);
+
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                BukkitTask mockTask = mock(BukkitTask.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(BukkitRunnable.class), anyLong(), anyLong()))
+                        .thenReturn(mockTask);
+
+                ConsoleCommandSender consoleSender = mock(ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                // Mix of valid and invalid entries
+                when(mockConfig.isScheduledCommandsEnabled()).thenReturn(true);
+                when(mockConfig.getScheduledCommands()).thenReturn(Arrays.asList(
+                        "300:say Valid Command",
+                        "invalid entry",
+                        "-5:say Negative",
+                        "abc:say NonNumeric",
+                        "600:say Another Valid"
+                ));
+
+                service.startTasks();
+
+                // Only 2 valid tasks should be created
+                List<BukkitTask> tasks = getTasks(service);
+                assertThat(tasks).hasSize(2);
+            }
+        }
+
+        @Test
+        @DisplayName("startTasks should skip empty command after colon")
+        void startTasksSkipsEmptyCommandAfterColon() throws Exception {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                PluginManager pluginManager = mock(PluginManager.class);
+                Plugin plugin = mock(Plugin.class);
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                when(pluginManager.getPlugin("UltiTools")).thenReturn(plugin);
+
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                BukkitTask mockTask = mock(BukkitTask.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(BukkitRunnable.class), anyLong(), anyLong()))
+                        .thenReturn(mockTask);
+
+                ConsoleCommandSender consoleSender = mock(ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                when(mockConfig.isScheduledCommandsEnabled()).thenReturn(true);
+                when(mockConfig.getScheduledCommands()).thenReturn(Arrays.asList(
+                        "300:",  // Empty command
+                        "600:   ",  // Whitespace-only command
+                        "900:say Valid Command"
+                ));
+
+                service.startTasks();
+
+                // Only 1 valid task
+                List<BukkitTask> tasks = getTasks(service);
+                assertThat(tasks).hasSize(1);
+            }
+        }
+
+        @Test
+        @DisplayName("shutdown should cancel running tasks")
+        void shutdownCancelsRunningTasks() throws Exception {
+            // Manually add mock tasks to the tasks list
+            BukkitTask task1 = mock(BukkitTask.class);
+            BukkitTask task2 = mock(BukkitTask.class);
+            List<BukkitTask> tasks = getTasks(service);
+            tasks.add(task1);
+            tasks.add(task2);
+
+            service.shutdown();
+
+            verify(task1).cancel();
+            verify(task2).cancel();
+            assertThat(tasks).isEmpty();
+        }
+
+        @Test
+        @DisplayName("reload should cancel old tasks and restart")
+        void reloadCancelsAndRestarts() throws Exception {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                // Add existing mock tasks
+                BukkitTask oldTask1 = mock(BukkitTask.class);
+                BukkitTask oldTask2 = mock(BukkitTask.class);
+                List<BukkitTask> tasks = getTasks(service);
+                tasks.add(oldTask1);
+                tasks.add(oldTask2);
+
+                // Mock plugin manager and plugin for restart
+                PluginManager pluginManager = mock(PluginManager.class);
+                Plugin plugin = mock(Plugin.class);
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                when(pluginManager.getPlugin("UltiTools")).thenReturn(plugin);
+
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                BukkitTask newTask = mock(BukkitTask.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(BukkitRunnable.class), anyLong(), anyLong()))
+                        .thenReturn(newTask);
+
+                ConsoleCommandSender consoleSender = mock(ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                // Configure with 1 valid entry for restart
+                when(mockConfig.isScheduledCommandsEnabled()).thenReturn(true);
+                when(mockConfig.getScheduledCommands()).thenReturn(Collections.singletonList(
+                        "300:say Reloaded Command"
+                ));
+
+                service.reload();
+
+                // Verify old tasks were cancelled
+                verify(oldTask1).cancel();
+                verify(oldTask2).cancel();
+
+                // Verify new tasks were created
+                List<BukkitTask> newTasks = getTasks(service);
+                assertThat(newTasks).hasSize(1);
+            }
         }
     }
 }
