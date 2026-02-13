@@ -30,6 +30,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("MailNotifyListener 测试")
 @ExtendWith(MockitoExtension.class)
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class MailNotifyListenerTest {
 
     private MailNotifyListener listener;

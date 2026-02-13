@@ -30,6 +30,7 @@ import static org.mockito.Mockito.*;
  * <p>
  * Call {@link #setUp()} in {@code @BeforeEach} and {@link #tearDown()} in {@code @AfterEach}.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 public final class UltiRecipeTestHelper {
 
     private UltiRecipeTestHelper() {}

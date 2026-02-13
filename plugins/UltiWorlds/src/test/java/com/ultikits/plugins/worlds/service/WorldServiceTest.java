@@ -36,12 +36,11 @@ class WorldServiceTest {
     private WorldService worldService;
     private WorldConfig mockConfig;
     private DataOperator<WorldSettings> mockDataOperator;
-    private UltiToolsPlugin mockPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
         UltiWorldsTestHelper.setUp();
-        mockPlugin = UltiWorldsTestHelper.getMockPlugin();
+        UltiToolsPlugin mockPlugin = UltiWorldsTestHelper.getMockPlugin();
 
         worldService = new WorldService();
         mockConfig = UltiWorldsTestHelper.createDefaultConfig();
@@ -81,7 +80,7 @@ class WorldServiceTest {
         @DisplayName("getOrCreateSettings should return cached settings")
         void getOrCreateSettingsCached() {
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-            Query<WorldSettings> mockQuery = mockQueryReturning(settings);
+            mockQueryReturning(settings);
 
             WorldSettings result1 = worldService.getOrCreateSettings("world");
             WorldSettings result2 = worldService.getOrCreateSettings("world");
@@ -94,7 +93,7 @@ class WorldServiceTest {
         @Test
         @DisplayName("getOrCreateSettings should create new settings when not exists")
         void getOrCreateSettingsNew() {
-            Query<WorldSettings> mockQuery = mockQueryReturning(null);
+            mockQueryReturning(null);
 
             WorldSettings result = worldService.getOrCreateSettings("new_world");
 

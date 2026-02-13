@@ -38,6 +38,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("RecallCommand 测试")
 @ExtendWith(MockitoExtension.class)
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class RecallCommandTest {
 
     private RecallCommand recallCommand;

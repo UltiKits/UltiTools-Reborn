@@ -21,6 +21,7 @@ import static org.mockito.Mockito.withSettings;
  * a mock UltiToolsPlugin that can be injected into services and commands
  * via reflection (simulating @Autowired injection).
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 public final class TestHelper {
 
     private TestHelper() {

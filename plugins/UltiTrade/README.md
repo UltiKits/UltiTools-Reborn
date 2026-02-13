@@ -186,6 +186,7 @@ private String guiTitle = "&6与 {PLAYER} 交易";
 ```
 
 #### 4. 基类迁移
+
 - `AbstractCommendExecutor` → `BaseCommandExecutor`
 - `AbstractDataEntity` → `BaseDataEntity<String>`
 

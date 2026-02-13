@@ -255,6 +255,7 @@ teleportService.teleport(player, targetPlayer.getLocation());
 ### v1.1.0 (当前版本) - 2026-02-12
 
 #### UltiTools-API v6.2.0 迁移
+
 - 🚀 **Query DSL**: 数据库查询全面升级到新的 Query DSL API
   - 替换所有 `WhereCondition.builder()` 为 `dataOperator.query().where().eq()`
   - 更流畅的链式调用，更易读的代码
