@@ -15,6 +15,7 @@
 ### Task 1: Add WorldSettings entity fields (difficulty, postTeleportCommands)
 
 **Files:**
+
 - Modify: `plugins/UltiWorlds/src/main/java/com/ultikits/plugins/worlds/entity/WorldSettings.java`
 - Test: `plugins/UltiWorlds/src/test/java/com/ultikits/plugins/worlds/entity/WorldSettingsTest.java`
 - Modify: `plugins/UltiWorlds/src/test/java/com/ultikits/plugins/worlds/UltiWorldsTestHelper.java`
@@ -132,6 +133,7 @@ git commit -m "feat(worlds): add difficulty and postTeleportCommands fields to W
 ### Task 2: Add WorldConfig option for showing description on teleport
 
 **Files:**
+
 - Modify: `plugins/UltiWorlds/src/main/java/com/ultikits/plugins/worlds/config/WorldConfig.java`
 - Test: `plugins/UltiWorlds/src/test/java/com/ultikits/plugins/worlds/config/WorldConfigTest.java`
 - Modify: `plugins/UltiWorlds/src/test/java/com/ultikits/plugins/worlds/UltiWorldsTestHelper.java`
@@ -176,6 +178,7 @@ git commit -m "feat(worlds): add showDescriptionOnTeleport config option"
 ### Task 3: Implement teleport enhancements in WorldService
 
 **Files:**
+
 - Modify: `plugins/UltiWorlds/src/main/java/com/ultikits/plugins/worlds/service/WorldService.java`
 - Test: `plugins/UltiWorlds/src/test/java/com/ultikits/plugins/worlds/service/WorldServiceTest.java`
 
@@ -400,6 +403,7 @@ git commit -m "feat(worlds): implement teleport descriptions, post-teleport comm
 ### Task 4: Add world commands for difficulty and post-teleport commands
 
 **Files:**
+
 - Modify: `plugins/UltiWorlds/src/main/java/com/ultikits/plugins/worlds/commands/WorldCommand.java`
 - Modify: `plugins/UltiWorlds/src/main/resources/lang/en.yml`
 - Modify: `plugins/UltiWorlds/src/main/resources/lang/zh.yml`
@@ -601,6 +605,7 @@ git commit -m "feat(worlds): add /world difficulty and /world postcmd commands w
 ### Task 5: Add ScheduledCommandService to UltiEssentials
 
 **Files:**
+
 - Modify: `plugins/UltiEssentials/src/main/java/com/ultikits/plugins/essentials/config/EssentialsConfig.java`
 - Create: `plugins/UltiEssentials/src/main/java/com/ultikits/plugins/essentials/service/ScheduledCommandService.java`
 - Create: `plugins/UltiEssentials/src/test/java/com/ultikits/plugins/essentials/service/ScheduledCommandServiceTest.java`
