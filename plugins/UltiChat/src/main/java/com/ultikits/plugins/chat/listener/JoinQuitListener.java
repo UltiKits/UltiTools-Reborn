@@ -108,13 +108,13 @@ public class JoinQuitListener implements Listener {
         }
 
         // Basic fallbacks when PlaceholderAPI is not installed
-        text = text.replace("%player_name%", player.getName());
-        text = text.replace("{player}", player.getName());
-        text = text.replace("{displayname}", player.getDisplayName());
-        text = text.replace("%online_players%", String.valueOf(Bukkit.getOnlinePlayers().size()));
-        text = text.replace("%max_players%", String.valueOf(Bukkit.getMaxPlayers()));
+        String result = text.replace("%player_name%", player.getName());
+        result = result.replace("{player}", player.getName());
+        result = result.replace("{displayname}", player.getDisplayName());
+        result = result.replace("%online_players%", String.valueOf(Bukkit.getOnlinePlayers().size()));
+        result = result.replace("%max_players%", String.valueOf(Bukkit.getMaxPlayers()));
 
-        return text;
+        return result;
     }
 
     String colorize(String text) {

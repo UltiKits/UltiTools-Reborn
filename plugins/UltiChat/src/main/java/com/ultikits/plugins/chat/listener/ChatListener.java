@@ -54,14 +54,8 @@ public class ChatListener implements Listener {
         String message = event.getMessage();
 
         // 1. Anti-spam check
-        if (chatConfig.isAntiSpamEnabled() && !player.hasPermission("ultichat.spam.bypass")) {
-            String spamReason = antiSpamService.checkSpam(player, message);
-            if (spamReason != null) {
-                event.setCancelled(true);
-                player.sendMessage(ChatColor.RED + spamReason);
-                return;
-            }
-            antiSpamService.recordMessage(player.getUniqueId(), message);
+        if (handleAntiSpam(player, message, event)) {
+            return;
         }
 
         // 2. Emoji replacement
@@ -78,32 +72,7 @@ public class ChatListener implements Listener {
 
         // 4. Chat format
         if (chatConfig.isChatFormatEnabled()) {
-            String format = chatConfig.getChatFormat();
-
-            // Prepend channel display name if channels enabled
-            if (channelConfig.isEnabled()) {
-                String channel = channelService.getPlayerChannel(player.getUniqueId());
-                String channelDisplay = channelService.getChannelDisplayName(channel);
-                format = channelDisplay + " " + format;
-            }
-
-            // Replace placeholders
-            format = format.replace("{player}", "%1$s");
-            format = format.replace("{displayname}", player.getDisplayName());
-            format = format.replace("{message}", "%2$s");
-
-            // Translate color codes in format
-            format = ChatColor.translateAlternateColorCodes('&', format);
-
-            // PlaceholderAPI
-            if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-                format = PlaceholderAPI.setPlaceholders(player, format);
-            }
-
-            // Escape stray % chars that aren't format specifiers
-            format = escapeFormatString(format);
-
-            event.setFormat(format);
+            applyChatFormat(player, event);
         }
 
         // Color codes in message if player has permission
@@ -117,6 +86,56 @@ public class ChatListener implements Listener {
         }
 
         event.setMessage(message);
+    }
+
+    /**
+     * Check anti-spam and cancel the event if the message is spam.
+     * @return true if the event was cancelled (caller should return)
+     */
+    private boolean handleAntiSpam(Player player, String message, AsyncPlayerChatEvent event) {
+        if (!chatConfig.isAntiSpamEnabled() || player.hasPermission("ultichat.spam.bypass")) {
+            return false;
+        }
+        String spamReason = antiSpamService.checkSpam(player, message);
+        if (spamReason != null) {
+            event.setCancelled(true);
+            player.sendMessage(ChatColor.RED + spamReason);
+            return true;
+        }
+        antiSpamService.recordMessage(player.getUniqueId(), message);
+        return false;
+    }
+
+    /**
+     * Build and apply the chat format string to the event.
+     */
+    private void applyChatFormat(Player player, AsyncPlayerChatEvent event) {
+        String format = chatConfig.getChatFormat();
+
+        // Prepend channel display name if channels enabled
+        if (channelConfig.isEnabled()) {
+            String channel = channelService.getPlayerChannel(player.getUniqueId());
+            String channelDisplay = channelService.getChannelDisplayName(channel);
+            format = channelDisplay + " " + format;
+        }
+
+        // Replace placeholders
+        format = format.replace("{player}", "%1$s");
+        format = format.replace("{displayname}", player.getDisplayName());
+        format = format.replace("{message}", "%2$s");
+
+        // Translate color codes in format
+        format = ChatColor.translateAlternateColorCodes('&', format);
+
+        // PlaceholderAPI
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
+            format = PlaceholderAPI.setPlaceholders(player, format);
+        }
+
+        // Escape stray % chars that aren't format specifiers
+        format = escapeFormatString(format);
+
+        event.setFormat(format);
     }
 
     /**

@@ -41,36 +41,49 @@ public class AntiSpamService {
         }
         UUID playerId = player.getUniqueId();
 
-        // Check mute
-        Long muteExpiry = mutedUntil.get(playerId);
-        if (muteExpiry != null && System.currentTimeMillis() < muteExpiry) {
-            return "你已被临时禁言！";
-        }
-        // Expired mute — clean up
-        if (muteExpiry != null) {
-            mutedUntil.remove(playerId);
+        String muteReason = checkMute(playerId);
+        if (muteReason != null) {
+            return muteReason;
         }
 
-        // Check cooldown
-        Long lastTime = lastMessageTime.get(playerId);
-        if (lastTime != null) {
-            long elapsed = System.currentTimeMillis() - lastTime;
-            long cooldownMs = config.getAntiSpamCooldown() * 1000L;
-            if (elapsed < cooldownMs) {
-                return "发送消息太快了！";
-            }
+        String cooldownReason = checkCooldown(playerId);
+        if (cooldownReason != null) {
+            return cooldownReason;
         }
 
-        // Check duplicate
         if (isDuplicate(playerId, message)) {
             return "请不要发送重复消息！";
         }
 
-        // Check excessive caps
         if (isExcessiveCaps(message)) {
             return "消息中大写字母过多！";
         }
 
+        return null;
+    }
+
+    private String checkMute(UUID playerId) {
+        Long muteExpiry = mutedUntil.get(playerId);
+        if (muteExpiry == null) {
+            return null;
+        }
+        if (System.currentTimeMillis() < muteExpiry) {
+            return "你已被临时禁言！";
+        }
+        mutedUntil.remove(playerId);
+        return null;
+    }
+
+    private String checkCooldown(UUID playerId) {
+        Long lastTime = lastMessageTime.get(playerId);
+        if (lastTime == null) {
+            return null;
+        }
+        long elapsed = System.currentTimeMillis() - lastTime;
+        long cooldownMs = config.getAntiSpamCooldown() * 1000L;
+        if (elapsed < cooldownMs) {
+            return "发送消息太快了！";
+        }
         return null;
     }
 
