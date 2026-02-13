@@ -30,7 +30,6 @@ import java.util.Set;
 @EventListener
 public class ChatListener implements Listener {
 
-    private final UltiToolsPlugin plugin;
     private final ChatConfig chatConfig;
     private final ChannelConfig channelConfig;
     private final AntiSpamService antiSpamService;
@@ -40,7 +39,6 @@ public class ChatListener implements Listener {
     public ChatListener(UltiToolsPlugin plugin, ChatConfig chatConfig, ChannelConfig channelConfig,
                         AntiSpamService antiSpamService, ChannelService channelService,
                         EmojiService emojiService) {
-        this.plugin = plugin;
         this.chatConfig = chatConfig;
         this.channelConfig = channelConfig;
         this.antiSpamService = antiSpamService;
