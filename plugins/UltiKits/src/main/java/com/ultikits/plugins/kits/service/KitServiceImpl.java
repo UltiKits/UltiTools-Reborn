@@ -209,28 +209,45 @@ public class KitServiceImpl implements KitService {
      */
     @Nullable
     ClaimResult validateClaim(Player player, KitDefinition kit) {
+        ClaimResult prereq = checkPrerequisites(player, kit);
+        if (prereq != null) {
+            return prereq;
+        }
+        ClaimResult cooldown = checkCooldown(player, kit);
+        if (cooldown != null) {
+            return cooldown;
+        }
+        return kit.hasItems() ? null : ClaimResult.EMPTY_KIT;
+    }
+
+    @Nullable
+    private ClaimResult checkPrerequisites(Player player, KitDefinition kit) {
         if (kit.hasPermission() && !player.hasPermission(kit.getPermission())) {
             return ClaimResult.NO_PERMISSION;
         }
         if (kit.hasLevelRequirement() && player.getLevel() < kit.getLevelRequired()) {
             return ClaimResult.INSUFFICIENT_LEVEL;
         }
-        if (!kit.isFree() && (!EconomyUtils.isAvailable() || !EconomyUtils.has(player, kit.getPrice()))) {
+        if (!kit.isFree() && !canAfford(player, kit.getPrice())) {
             return ClaimResult.INSUFFICIENT_FUNDS;
         }
-        KitClaimData claim = getClaimData(player.getUniqueId(), kit.getName());
-        if (claim != null) {
-            if (kit.isOneTime()) {
-                return ClaimResult.ALREADY_CLAIMED;
-            }
-            if (getRemainingCooldown(player, kit) > 0) {
-                return ClaimResult.ON_COOLDOWN;
-            }
-        }
-        if (!kit.hasItems()) {
-            return ClaimResult.EMPTY_KIT;
-        }
         return null;
+    }
+
+    private boolean canAfford(Player player, double price) {
+        return EconomyUtils.isAvailable() && EconomyUtils.has(player, price);
+    }
+
+    @Nullable
+    private ClaimResult checkCooldown(Player player, KitDefinition kit) {
+        KitClaimData claim = getClaimData(player.getUniqueId(), kit.getName());
+        if (claim == null) {
+            return null;
+        }
+        if (kit.isOneTime()) {
+            return ClaimResult.ALREADY_CLAIMED;
+        }
+        return getRemainingCooldown(player, kit) > 0 ? ClaimResult.ON_COOLDOWN : null;
     }
 
     private int countEmptySlots(Player player) {
