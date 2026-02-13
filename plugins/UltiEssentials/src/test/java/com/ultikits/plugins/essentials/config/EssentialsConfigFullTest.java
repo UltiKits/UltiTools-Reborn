@@ -297,24 +297,6 @@ class EssentialsConfigFullTest {
     }
 
     @Nested
-    @DisplayName("Kit System Defaults")
-    class KitDefaults {
-
-        @Test
-        @DisplayName("Should have kit enabled by default")
-        void shouldHaveKitEnabled() {
-            assertThat(config.isKitEnabled()).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should update kit enabled")
-        void shouldUpdateKitEnabled() {
-            config.setKitEnabled(false);
-            assertThat(config.isKitEnabled()).isFalse();
-        }
-    }
-
-    @Nested
     @DisplayName("Scoreboard Defaults")
     class ScoreboardDefaults {
 

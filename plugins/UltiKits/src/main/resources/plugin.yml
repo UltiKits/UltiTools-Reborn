@@ -1,0 +1,7 @@
+name: UltiTools-Kits
+version: '${project.version}'
+main: com.ultikits.plugins.kits.UltiKits
+base-package: com.ultikits.plugins.kits
+api-version: 620
+authors: [ wisdomme ]
+softdepend: [ PlaceholderAPI, Vault ]
