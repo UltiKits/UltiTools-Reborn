@@ -175,13 +175,13 @@ public final class UltiWorldsTestHelper {
     public static void setStaticField(Class<?> clazz, String fieldName, Object value)
             throws Exception {
         Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(null, value);
     }
 
     public static void setField(Object target, String fieldName, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(target, value);
     }
 }

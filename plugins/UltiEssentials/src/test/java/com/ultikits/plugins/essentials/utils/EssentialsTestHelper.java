@@ -175,7 +175,7 @@ public final class EssentialsTestHelper {
     public static void setStaticField(Class<?> clazz, String fieldName, Object value)
             throws Exception {
         Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(null, value);
     }
 
@@ -184,7 +184,7 @@ public final class EssentialsTestHelper {
         while (clazz != null) {
             try {
                 Field field = clazz.getDeclaredField(fieldName);
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD - test reflection
                 field.set(target, value);
                 return;
             } catch (NoSuchFieldException e) {
@@ -199,7 +199,7 @@ public final class EssentialsTestHelper {
         while (clazz != null) {
             try {
                 Field field = clazz.getDeclaredField(fieldName);
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD - test reflection
                 return field.get(target);
             } catch (NoSuchFieldException e) {
                 clazz = clazz.getSuperclass();
@@ -210,7 +210,7 @@ public final class EssentialsTestHelper {
 
     public static Object getStaticField(Class<?> clazz, String fieldName) throws Exception {
         Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         return field.get(null);
     }
 }
