@@ -11,6 +11,7 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.*;
 import org.bukkit.entity.Player;
+import org.bukkit.Difficulty;
 
 import java.io.File;
 import java.util.*;
@@ -121,6 +122,19 @@ public class WorldService {
         }
 
         settingsCache.put(worldName, settings);
+
+        // Apply difficulty if configured
+        if (settings.getDifficulty() != null) {
+            World world = Bukkit.getWorld(worldName);
+            if (world != null) {
+                try {
+                    world.setDifficulty(Difficulty.valueOf(settings.getDifficulty()));
+                } catch (IllegalArgumentException e) {
+                    plugin.getLogger().warn("Invalid difficulty for world " + worldName + ": " + settings.getDifficulty());
+                }
+            }
+        }
+
         return settings;
     }
     
@@ -245,7 +259,32 @@ public class WorldService {
         String displayName = settings.getDisplayName() != null ? settings.getDisplayName() : worldName;
         player.sendMessage(plugin.i18n("success.teleported")
             .replace("%world%", displayName));
-        
+
+        // Show description if configured
+        if (config.isShowDescriptionOnTeleport() && settings.getDescription() != null
+                && !settings.getDescription().isEmpty()) {
+            String[] lines = settings.getDescription().split("\\n");
+            for (String line : lines) {
+                String parsed = org.bukkit.ChatColor.translateAlternateColorCodes('&',
+                    line.replace("{player}", player.getName())
+                        .replace("{world}", displayName));
+                player.sendMessage(parsed);
+            }
+        }
+
+        // Execute post-teleport commands
+        if (settings.getPostTeleportCommands() != null && !settings.getPostTeleportCommands().isEmpty()) {
+            String[] commands = settings.getPostTeleportCommands().split("\\n");
+            for (String cmd : commands) {
+                String parsed = cmd.trim()
+                    .replace("{player}", player.getName())
+                    .replace("{world}", worldName);
+                if (!parsed.isEmpty()) {
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), parsed);
+                }
+            }
+        }
+
         return true;
     }
     

@@ -80,6 +80,7 @@ class WorldSettingsTest {
             WorldSettings settings = new WorldSettings(
                     "world", "World", "desc", "STONE",
                     true, true, true, true,
+                    null, null,
                     false, false, false, true,
                     true, true, true, true,
                     100.0, 64.0, -200.0, 90.0f, 45.0f,
@@ -94,6 +95,8 @@ class WorldSettingsTest {
             assertThat(settings.isMonstersEnabled()).isTrue();
             assertThat(settings.isAnimalsEnabled()).isTrue();
             assertThat(settings.isWeatherEnabled()).isTrue();
+            assertThat(settings.getDifficulty()).isNull();
+            assertThat(settings.getPostTeleportCommands()).isNull();
             assertThat(settings.isHidden()).isFalse();
             assertThat(settings.isLocked()).isFalse();
             assertThat(settings.isBlocked()).isFalse();
@@ -108,6 +111,20 @@ class WorldSettingsTest {
             assertThat(settings.getSpawnYaw()).isEqualTo(90.0f);
             assertThat(settings.getSpawnPitch()).isEqualTo(45.0f);
             assertThat(settings.getCreatedAt()).isEqualTo(1700000000000L);
+        }
+
+        @Test
+        @DisplayName("createDefault should have null difficulty")
+        void createDefaultNullDifficulty() {
+            WorldSettings settings = WorldSettings.createDefault("test_world");
+            assertThat(settings.getDifficulty()).isNull();
+        }
+
+        @Test
+        @DisplayName("createDefault should have null postTeleportCommands")
+        void createDefaultNullPostTeleportCommands() {
+            WorldSettings settings = WorldSettings.createDefault("test_world");
+            assertThat(settings.getPostTeleportCommands()).isNull();
         }
 
         @Test
@@ -611,6 +628,38 @@ class WorldSettingsTest {
 
             assertThat(settings.getDescription()).isNull();
         }
+
+        @Test
+        @DisplayName("Should update difficulty")
+        void difficulty() {
+            WorldSettings settings = WorldSettings.createDefault("world");
+            settings.setDifficulty("HARD");
+            assertThat(settings.getDifficulty()).isEqualTo("HARD");
+        }
+
+        @Test
+        @DisplayName("Should allow null difficulty")
+        void nullDifficulty() {
+            WorldSettings settings = WorldSettings.createDefault("world");
+            settings.setDifficulty(null);
+            assertThat(settings.getDifficulty()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should update postTeleportCommands")
+        void postTeleportCommands() {
+            WorldSettings settings = WorldSettings.createDefault("world");
+            settings.setPostTeleportCommands("say Hello\ngive {player} diamond 1");
+            assertThat(settings.getPostTeleportCommands()).isEqualTo("say Hello\ngive {player} diamond 1");
+        }
+
+        @Test
+        @DisplayName("Should allow null postTeleportCommands")
+        void nullPostTeleportCommands() {
+            WorldSettings settings = WorldSettings.createDefault("world");
+            settings.setPostTeleportCommands(null);
+            assertThat(settings.getPostTeleportCommands()).isNull();
+        }
     }
 
     @Nested
@@ -629,6 +678,8 @@ class WorldSettingsTest {
                     .monstersEnabled(true)
                     .animalsEnabled(true)
                     .weatherEnabled(true)
+                    .difficulty(null)
+                    .postTeleportCommands(null)
                     .hidden(false)
                     .locked(false)
                     .blocked(false)
@@ -651,6 +702,8 @@ class WorldSettingsTest {
                     .monstersEnabled(true)
                     .animalsEnabled(true)
                     .weatherEnabled(true)
+                    .difficulty(null)
+                    .postTeleportCommands(null)
                     .hidden(false)
                     .locked(false)
                     .blocked(false)

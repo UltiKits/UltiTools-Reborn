@@ -23,6 +23,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.never;
 
 /**
  * Tests for WorldService.
@@ -897,6 +898,147 @@ class WorldServiceTest {
 
             // Should be denied by blocked check even though locked bypass is available
             assertThat(result).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("Teleport Enhancements")
+    class TeleportEnhancements {
+
+        @Test
+        @DisplayName("teleportToWorld should show description when enabled and description is non-empty")
+        void teleportShowsDescription() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDescription("Line 1\nLine 2");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(true);
+
+                worldService.teleportToWorld(player, "world");
+
+                ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+                verify(player, atLeast(3)).sendMessage(captor.capture());
+                List<String> messages = captor.getAllValues();
+                assertThat(messages).anyMatch(m -> m.contains("Line 1"));
+                assertThat(messages).anyMatch(m -> m.contains("Line 2"));
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should NOT show description when disabled in config")
+        void teleportNoDescriptionWhenDisabled() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDescription("Should not appear");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                worldService.teleportToWorld(player, "world");
+
+                ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+                verify(player, atLeastOnce()).sendMessage(captor.capture());
+                List<String> messages = captor.getAllValues();
+                assertThat(messages).noneMatch(m -> m.contains("Should not appear"));
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should execute post-teleport commands")
+        void teleportExecutesPostCommands() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                org.bukkit.command.ConsoleCommandSender consoleSender = mock(org.bukkit.command.ConsoleCommandSender.class);
+                bukkit.when(Bukkit::getConsoleSender).thenReturn(consoleSender);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setPostTeleportCommands("say {player} entered {world}\ngive {player} diamond 1");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                worldService.teleportToWorld(player, "world");
+
+                bukkit.verify(() -> Bukkit.dispatchCommand(consoleSender, "say TestPlayer entered world"));
+                bukkit.verify(() -> Bukkit.dispatchCommand(consoleSender, "give TestPlayer diamond 1"));
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should NOT execute commands when postTeleportCommands is null")
+        void teleportNoCommandsWhenNull() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setPostTeleportCommands(null);
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                worldService.teleportToWorld(player, "world");
+
+                bukkit.verify(() -> Bukkit.dispatchCommand(any(), anyString()), never());
+            }
+        }
+
+        @Test
+        @DisplayName("teleportToWorld should apply world difficulty when set")
+        void teleportAppliesDifficulty() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                World world = mock(World.class);
+                Location spawnLocation = mock(Location.class);
+                when(world.getSpawnLocation()).thenReturn(spawnLocation);
+                bukkit.when(() -> Bukkit.getWorld("world")).thenReturn(world);
+
+                Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+
+                WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
+                settings.setDifficulty("HARD");
+                mockQueryReturning(settings);
+
+                when(mockConfig.isUseSpawnLocation()).thenReturn(false);
+                when(mockConfig.getTpCooldown()).thenReturn(0);
+                when(mockConfig.isShowDescriptionOnTeleport()).thenReturn(false);
+
+                worldService.getOrCreateSettings("world");
+
+                verify(world).setDifficulty(org.bukkit.Difficulty.HARD);
+            }
         }
     }
 

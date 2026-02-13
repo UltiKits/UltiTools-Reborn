@@ -75,7 +75,10 @@ public class WorldConfig extends AbstractConfigEntity {
     
     @ConfigEntry(path = "world_spawn.use_spawn_location", comment = "Teleport to world spawn instead of last location")
     private boolean useSpawnLocation = true;
-    
+
+    @ConfigEntry(path = "tp_to_world.show_description", comment = "Show world description to player on teleport")
+    private boolean showDescriptionOnTeleport = true;
+
     // ==================== Inventory Isolation Settings ====================
     
     @ConfigEntry(path = "world_isolation.enabled", comment = "Enable per-world inventory isolation")
