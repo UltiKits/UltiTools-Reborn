@@ -1,8 +1,8 @@
 package com.ultikits.plugins.login.gui;
 
-import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
@@ -32,31 +32,35 @@ import java.util.List;
  * @version 1.0.0
  */
 public class LoginGUIPage extends Gui {
-    
+
+    private final UltiToolsPlugin plugin;
     private final LoginService loginService;
     private final LoginConfig config;
     private final StringBuilder passwordInput = new StringBuilder();
     private final int passwordLength;
-    
+    private final org.bukkit.plugin.Plugin bukkitPlugin;
+
     // Number slots in 54-slot inventory (arranged as keypad)
     private static final int[] NUMBER_SLOTS = {
         10, 11, 12,  // 1, 2, 3
         19, 20, 21,  // 4, 5, 6
         28, 29, 30   // 7, 8, 9
     };
-    
+
     // Control button slots
     private static final int CONFIRM_SLOT = 24;
     private static final int CLEAR_SLOT = 33;
     private static final int EXIT_SLOT = 42;
     private static final int DISPLAY_SLOT = 4;
-    
-    public LoginGUIPage(Player player, LoginService loginService) {
-        super(player, "login-gui", ChatColor.translateAlternateColorCodes('&', 
+
+    public LoginGUIPage(Player player, UltiToolsPlugin plugin, LoginService loginService) {
+        super(player, "login-gui", ChatColor.translateAlternateColorCodes('&',
             loginService.getConfig().getGuiLoginTitle()), 6);
+        this.plugin = plugin;
         this.loginService = loginService;
         this.config = loginService.getConfig();
         this.passwordLength = config.getGuiPasswordLength();
+        this.bukkitPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("UltiTools");
     }
     
     @Override
@@ -88,10 +92,10 @@ public class LoginGUIPage extends Gui {
         // If not logged in, reopen GUI after a short delay
         if (!loginService.isLoggedIn(player.getUniqueId())) {
             org.bukkit.Bukkit.getScheduler().runTaskLater(
-                com.ultikits.ultitools.UltiTools.getInstance(),
+                bukkitPlugin,
                 () -> {
                     if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
-                        new LoginGUIPage(player, loginService).open();
+                        new LoginGUIPage(player, plugin, loginService).open();
                     }
                 },
                 10L
@@ -111,7 +115,7 @@ public class LoginGUIPage extends Gui {
             if (passwordInput.length() == passwordLength) {
                 // Small delay before auto-submit
                 org.bukkit.Bukkit.getScheduler().runTaskLater(
-                    com.ultikits.ultitools.UltiTools.getInstance(),
+                    bukkitPlugin,
                     this::attemptLogin,
                     5L
                 );
@@ -263,7 +267,7 @@ public class LoginGUIPage extends Gui {
     /**
      * Open the login GUI for a player.
      */
-    public static void open(Player player, LoginService loginService) {
-        new LoginGUIPage(player, loginService).open();
+    public static void open(Player player, UltiToolsPlugin plugin, LoginService loginService) {
+        new LoginGUIPage(player, plugin, loginService).open();
     }
 }

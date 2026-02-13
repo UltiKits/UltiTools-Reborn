@@ -1,12 +1,12 @@
 package com.ultikits.plugins.remotebag.gui;
 
-import com.ultikits.plugins.remotebag.UltiRemoteBag;
 import com.ultikits.plugins.remotebag.config.RemoteBagConfig;
 import com.ultikits.plugins.remotebag.entity.BagOpenResult;
 import com.ultikits.plugins.remotebag.enums.AccessMode;
 import com.ultikits.plugins.remotebag.service.BagLockService;
 import com.ultikits.plugins.remotebag.service.RemoteBagService;
 import com.ultikits.plugins.remotebag.util.SoundUtil;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BaseInventoryPage;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
@@ -45,7 +45,8 @@ import java.util.UUID;
  * @see BagLockService
  */
 public class RemoteBagContentGUI extends BaseInventoryPage {
-    
+
+    private final UltiToolsPlugin plugin;
     private final RemoteBagService bagService;
     private final BagLockService lockService;
     private final RemoteBagConfig config;
@@ -61,22 +62,25 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
     /**
      * 创建远程背包内容 GUI
      *
-     * @param viewer     查看者玩家
-     * @param ownerUuid  背包所有者 UUID
-     * @param pageNum    背包页码
-     * @param bagService 背包服务
+     * @param viewer      查看者玩家
+     * @param plugin      插件实例
+     * @param ownerUuid   背包所有者 UUID
+     * @param pageNum     背包页码
+     * @param bagService  背包服务
      * @param lockService 锁定服务
-     * @param config     配置
-     * @param accessMode 访问模式
+     * @param config      配置
+     * @param accessMode  访问模式
      */
     public RemoteBagContentGUI(@NotNull Player viewer,
+                               UltiToolsPlugin plugin,
                                UUID ownerUuid,
                                int pageNum,
                                RemoteBagService bagService,
                                BagLockService lockService,
                                RemoteBagConfig config,
                                AccessMode accessMode) {
-        super(viewer, "remotebag-content-" + pageNum, buildTitle(pageNum, accessMode), 6);
+        super(viewer, "remotebag-content-" + pageNum, buildTitle(plugin, pageNum, accessMode), 6);
+        this.plugin = plugin;
         this.ownerUuid = ownerUuid;
         this.pageNum = pageNum;
         this.bagService = bagService;
@@ -84,18 +88,19 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         this.config = config;
         this.accessMode = accessMode;
     }
-    
+
     /**
      * 构建 GUI 标题
      *
+     * @param plugin  插件实例
      * @param pageNum 页码
      * @param mode    访问模式
      * @return 格式化的标题
      */
-    private static String buildTitle(int pageNum, AccessMode mode) {
-        String base = i18n("bag_name").replace("{0}", String.valueOf(pageNum));
+    private static String buildTitle(UltiToolsPlugin plugin, int pageNum, AccessMode mode) {
+        String base = plugin.i18n("bag_name").replace("{0}", String.valueOf(pageNum));
         if (mode == AccessMode.READ_ONLY) {
-            return ChatColor.GRAY + "[" + i18n("read_only") + "] " + ChatColor.GOLD + base;
+            return ChatColor.GRAY + "[" + plugin.i18n("read_only") + "] " + ChatColor.GOLD + base;
         }
         return ChatColor.GOLD + base;
     }
@@ -188,12 +193,12 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
      * @return 返回按钮 Icon
      */
     private Icon createBackButton() {
-        Icon icon = createActionButton(Colors.YELLOW, ChatColor.YELLOW + i18n("btn_back"), e -> {
+        Icon icon = createActionButton(Colors.YELLOW, ChatColor.YELLOW + plugin.i18n("btn_back"), e -> {
             SoundUtil.playPageSound(player, config);
             // 先关闭当前 GUI（会触发 onClose 保存）
             player.closeInventory();
             // 返回主页
-            new RemoteBagMainGUI(player, bagService, lockService, config).open();
+            new RemoteBagMainGUI(player, plugin, bagService, lockService, config).open();
         });
         
         // 设置 lore
@@ -202,7 +207,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         if (meta != null) {
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_back_to_main"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_back_to_main"));
             meta.setLore(lore);
             item.setItemMeta(meta);
         }
@@ -219,12 +224,12 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         ItemStack item = new ItemStack(Material.SUNFLOWER);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GREEN + i18n("btn_refresh"));
+            meta.setDisplayName(ChatColor.GREEN + plugin.i18n("btn_refresh"));
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_refresh_hint1"));
-            lore.add(ChatColor.GRAY + i18n("lore_refresh_hint2"));
-            lore.add(ChatColor.GRAY + i18n("lore_refresh_hint3"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_refresh_hint1"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_refresh_hint2"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_refresh_hint3"));
             meta.setLore(lore);
             item.setItemMeta(meta);
         }
@@ -233,22 +238,22 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         icon.onClick(e -> {
             // 检查是否可以升级为编辑模式
             if (lockService.canUpgradeToEdit(ownerUuid, pageNum)) {
-                player.sendMessage(ChatColor.GREEN + i18n("msg_upgrading_to_edit"));
+                player.sendMessage(ChatColor.GREEN + plugin.i18n("msg_upgrading_to_edit"));
                 player.closeInventory();
                 
                 // 重新以编辑模式打开
                 BagOpenResult result = lockService.adminOpen(ownerUuid, pageNum, player);
                 if (result.isEditMode()) {
-                    new RemoteBagContentGUI(player, ownerUuid, pageNum,
+                    new RemoteBagContentGUI(player, plugin, ownerUuid, pageNum,
                             bagService, lockService, config, AccessMode.EDIT).open();
                 } else {
                     // 如果还是无法获取编辑权限，以只读模式重新打开
-                    new RemoteBagContentGUI(player, ownerUuid, pageNum,
+                    new RemoteBagContentGUI(player, plugin, ownerUuid, pageNum,
                             bagService, lockService, config, AccessMode.READ_ONLY).open();
                 }
             } else {
                 SoundUtil.playErrorSound(player, config);
-                player.sendMessage(ChatColor.YELLOW + i18n("msg_owner_still_using"));
+                player.sendMessage(ChatColor.YELLOW + plugin.i18n("msg_owner_still_using"));
                 // 刷新内容显示
                 loadBagContents();
             }
@@ -263,10 +268,10 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
      * @return 保存按钮 Icon
      */
     private Icon createSaveButton() {
-        Icon icon = createActionButton(Colors.GREEN, ChatColor.GREEN + i18n("btn_save"), e -> {
+        Icon icon = createActionButton(Colors.GREEN, ChatColor.GREEN + plugin.i18n("btn_save"), e -> {
             saveCurrentContents();
             SoundUtil.playCloseSound(player, config);
-            player.sendMessage(ChatColor.GREEN + i18n("msg_bag_saved"));
+            player.sendMessage(ChatColor.GREEN + plugin.i18n("msg_bag_saved"));
         });
         
         // 设置 lore
@@ -275,7 +280,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         if (meta != null) {
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_save_hint"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_save_hint"));
             meta.setLore(lore);
             item.setItemMeta(meta);
         }
@@ -292,14 +297,14 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         ItemStack item = XVersionUtils.getColoredPlaneGlass(Colors.RED);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.RED + i18n("btn_save_disabled"));
+            meta.setDisplayName(ChatColor.RED + plugin.i18n("btn_save_disabled"));
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_readonly_hint1"));
-            lore.add(ChatColor.GRAY + i18n("lore_readonly_hint2"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_readonly_hint1"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_readonly_hint2"));
             lore.add("");
-            lore.add(ChatColor.YELLOW + i18n("lore_readonly_hint3"));
-            lore.add(ChatColor.YELLOW + i18n("lore_readonly_hint4"));
+            lore.add(ChatColor.YELLOW + plugin.i18n("lore_readonly_hint3"));
+            lore.add(ChatColor.YELLOW + plugin.i18n("lore_readonly_hint4"));
             meta.setLore(lore);
             item.setItemMeta(meta);
         }
@@ -307,7 +312,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         Icon icon = new Icon(item);
         icon.onClick(e -> {
             SoundUtil.playErrorSound(player, config);
-            player.sendMessage(ChatColor.RED + i18n("msg_cannot_save_readonly"));
+            player.sendMessage(ChatColor.RED + plugin.i18n("msg_cannot_save_readonly"));
         });
         
         return icon;
@@ -325,15 +330,15 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         
         if (accessMode == AccessMode.EDIT) {
             color = Colors.GREEN;
-            name = ChatColor.GREEN + i18n("mode_edit");
+            name = ChatColor.GREEN + plugin.i18n("mode_edit");
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_edit_mode"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_edit_mode"));
         } else {
             color = Colors.YELLOW;
-            name = ChatColor.YELLOW + i18n("mode_readonly");
+            name = ChatColor.YELLOW + plugin.i18n("mode_readonly");
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_readonly_mode1"));
-            lore.add(ChatColor.GRAY + i18n("lore_readonly_mode2"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_readonly_mode1"));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_readonly_mode2"));
         }
         
         ItemStack item = XVersionUtils.getColoredPlaneGlass(color);
@@ -353,7 +358,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
      * @return 关闭按钮 Icon
      */
     private Icon createCloseButton() {
-        Icon icon = createActionButton(Colors.RED, ChatColor.RED + i18n("btn_close"), e -> {
+        Icon icon = createActionButton(Colors.RED, ChatColor.RED + plugin.i18n("btn_close"), e -> {
             player.closeInventory();
         });
         
@@ -364,9 +369,9 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
             List<String> lore = new ArrayList<>();
             lore.add("");
             if (accessMode == AccessMode.EDIT) {
-                lore.add(ChatColor.GRAY + i18n("lore_close_save"));
+                lore.add(ChatColor.GRAY + plugin.i18n("lore_close_save"));
             } else {
-                lore.add(ChatColor.GRAY + i18n("lore_close_discard"));
+                lore.add(ChatColor.GRAY + plugin.i18n("lore_close_discard"));
             }
             meta.setLore(lore);
             item.setItemMeta(meta);
@@ -395,7 +400,7 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
             // 只读模式 - 禁止所有物品操作
             if (event.getCurrentItem() != null || event.getCursor() != null) {
                 SoundUtil.playErrorSound(player, config);
-                player.sendMessage(ChatColor.RED + i18n("msg_readonly_no_move"));
+                player.sendMessage(ChatColor.RED + plugin.i18n("msg_readonly_no_move"));
             }
             return true; // 取消事件
         }
@@ -432,15 +437,5 @@ public class RemoteBagContentGUI extends BaseInventoryPage {
         }
         bagService.setBagPage(ownerUuid, pageNum, contents);
         bagService.saveBag(ownerUuid);
-    }
-
-    /**
-     * i18n 快捷方法
-     *
-     * @param key 翻译键
-     * @return 翻译后的文本
-     */
-    private static String i18n(String key) {
-        return UltiRemoteBag.getInstance().i18n(key);
     }
 }

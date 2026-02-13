@@ -2,7 +2,6 @@ package com.ultikits.plugins.remotebag.listener;
 
 import com.ultikits.plugins.remotebag.service.BagLockService;
 import com.ultikits.plugins.remotebag.service.RemoteBagService;
-import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
 import org.bukkit.entity.Player;
@@ -27,12 +26,14 @@ import org.bukkit.event.player.PlayerQuitEvent;
  */
 @EventListener
 public class BagListener implements Listener {
-    
-    @Autowired
-    private RemoteBagService bagService;
-    
-    @Autowired
-    private BagLockService lockService;
+
+    private final RemoteBagService bagService;
+    private final BagLockService lockService;
+
+    public BagListener(RemoteBagService bagService, BagLockService lockService) {
+        this.bagService = bagService;
+        this.lockService = lockService;
+    }
     
     /**
      * 处理玩家退出事件

@@ -22,7 +22,7 @@ class UltiTradeTest {
     }
 
     @Test
-    @DisplayName("registerSelf should set instance and return true")
+    @DisplayName("registerSelf should return true and log message")
     void registerSelf() throws Exception {
         UltiTrade plugin = mock(UltiTrade.class);
         PluginLogger logger = mock(PluginLogger.class);
@@ -32,17 +32,14 @@ class UltiTradeTest {
         when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        // Set instance field to null first
-        UltiTradeTestHelper.setStaticField(UltiTrade.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiTrade.getInstance()).isSameAs(plugin);
+        verify(logger).info("UltiTrade 已启用！");
     }
 
     @Test
-    @DisplayName("unregisterSelf should clear instance")
+    @DisplayName("unregisterSelf should log message")
     void unregisterSelf() throws Exception {
         UltiTrade plugin = mock(UltiTrade.class);
         PluginLogger logger = mock(PluginLogger.class);
@@ -52,12 +49,9 @@ class UltiTradeTest {
         when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         doCallRealMethod().when(plugin).unregisterSelf();
 
-        // Set instance first
-        UltiTradeTestHelper.setStaticField(UltiTrade.class, "instance", plugin);
-
         plugin.unregisterSelf();
 
-        assertThat(UltiTrade.getInstance()).isNull();
+        verify(logger).info("UltiTrade 已禁用！");
     }
 
     @Test
@@ -72,12 +66,5 @@ class UltiTradeTest {
         plugin.reloadSelf();
 
         verify(logger).info("UltiTrade 配置已重载！");
-    }
-
-    @Test
-    @DisplayName("getInstance should return null when not registered")
-    void getInstanceNull() throws Exception {
-        UltiTradeTestHelper.setStaticField(UltiTrade.class, "instance", null);
-        assertThat(UltiTrade.getInstance()).isNull();
     }
 }

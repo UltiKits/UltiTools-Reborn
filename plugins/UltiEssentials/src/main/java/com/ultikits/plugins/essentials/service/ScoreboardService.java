@@ -1,8 +1,6 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +8,7 @@ import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.*;
@@ -32,13 +31,15 @@ public class ScoreboardService {
     
     @Autowired
     private EssentialsConfig config;
-    
+
+    private Plugin bukkitPlugin;
+
     // Player UUIDs with active scoreboards
     private final Set<UUID> enabledPlayers = ConcurrentHashMap.newKeySet();
-    
+
     // Main update task
     private BukkitTask updateTask;
-    
+
     // Scoreboard manager
     private ScoreboardManager manager;
     
@@ -48,8 +49,9 @@ public class ScoreboardService {
      */
     @PostConstruct
     public void init() {
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
         this.manager = Bukkit.getScoreboardManager();
-        
+
         if (manager == null) {
             log.warn("Failed to get scoreboard manager, scoreboard feature disabled");
             return;
@@ -83,7 +85,7 @@ public class ScoreboardService {
                     }
                 }
             }
-        }.runTaskTimer(UltiTools.getInstance(), 20L, updateInterval * 20L);
+        }.runTaskTimer(bukkitPlugin, 20L, updateInterval * 20L);
     }
     
     /**

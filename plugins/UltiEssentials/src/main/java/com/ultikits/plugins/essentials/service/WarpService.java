@@ -1,12 +1,11 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.WarpData;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Location;
@@ -27,22 +26,25 @@ import java.util.*;
 @Slf4j
 @Service
 public class WarpService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private EssentialsConfig config;
-    
+
     @Autowired
     private TeleportService teleportService;
-    
+
     private DataOperator<WarpData> warpOperator;
-    
+
     /**
      * Initializes the service with the data operator.
      * Automatically called by the IoC container after construction.
      */
     @PostConstruct
     public void init() {
-        this.warpOperator = UltiEssentials.getInstance().getDataOperator(WarpData.class);
+        this.warpOperator = plugin.getDataOperator(WarpData.class);
     }
     
     /**
@@ -91,13 +93,9 @@ public class WarpService {
      */
     @Nullable
     public WarpData getWarp(String name) {
-        List<WarpData> warps = warpOperator.getAll(
-            WhereCondition.builder()
-                .column("name")
-                .value(name.toLowerCase())
-                .build()
-        );
-        return warps.isEmpty() ? null : warps.get(0);
+        return warpOperator.query()
+            .where("name").eq(name.toLowerCase())
+            .first();
     }
     
     /**

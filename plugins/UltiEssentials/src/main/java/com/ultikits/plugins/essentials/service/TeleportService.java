@@ -1,12 +1,15 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.enums.TeleportResult;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
 import lombok.extern.slf4j.Slf4j;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -28,7 +31,12 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 public class TeleportService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
+    private Plugin bukkitPlugin;
+
     /**
      * Players currently in a teleport warmup.
      * Key: Player UUID, Value: BukkitTask for the warmup
@@ -41,6 +49,11 @@ public class TeleportService {
      */
     private final Map<UUID, Location> teleportStartLocations = new ConcurrentHashMap<>();
     
+    @PostConstruct
+    public void init() {
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+    }
+
     /**
      * Teleports a player to a location with optional warmup.
      *
@@ -140,7 +153,7 @@ public class TeleportService {
                 player.sendMessage(i18n("teleport_warmup") + " " + countdown + "s");
                 countdown--;
             }
-        }.runTaskTimer(UltiTools.getInstance(), 0L, 20L);
+        }.runTaskTimer(bukkitPlugin, 0L, 20L);
         
         pendingTeleports.put(uuid, task);
         return TeleportResult.WARMUP_STARTED;
@@ -196,6 +209,6 @@ public class TeleportService {
      * Helper method to get i18n string.
      */
     private String i18n(String key) {
-        return UltiEssentials.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

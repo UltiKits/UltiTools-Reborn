@@ -1,12 +1,11 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.KitClaimData;
 import com.ultikits.plugins.essentials.entity.KitData;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Material;
@@ -36,21 +35,24 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class KitService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private EssentialsConfig config;
-    
+
     private DataOperator<KitData> kitOperator;
     private DataOperator<KitClaimData> claimOperator;
-    
+
     /**
      * Initializes the service with data operators.
      * Automatically called by the IoC container after construction.
      */
     @PostConstruct
     public void init() {
-        this.kitOperator = UltiEssentials.getInstance().getDataOperator(KitData.class);
-        this.claimOperator = UltiEssentials.getInstance().getDataOperator(KitClaimData.class);
+        this.kitOperator = plugin.getDataOperator(KitData.class);
+        this.claimOperator = plugin.getDataOperator(KitClaimData.class);
     }
     
     /**
@@ -76,13 +78,9 @@ public class KitService {
      */
     @Nullable
     public KitData getKit(String name) {
-        List<KitData> kits = kitOperator.getAll(
-            WhereCondition.builder()
-                .column("name")
-                .value(name.toLowerCase())
-                .build()
-        );
-        return kits.isEmpty() ? null : kits.get(0);
+        return kitOperator.query()
+            .where("name").eq(name.toLowerCase())
+            .first();
     }
     
     /**
@@ -257,13 +255,10 @@ public class KitService {
      */
     @Nullable
     private KitClaimData getClaimData(UUID playerUuid, String kitName) {
-        List<KitClaimData> claims = claimOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<KitClaimData> claims = claimOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
+
         return claims.stream()
             .filter(c -> c.getKitName().equalsIgnoreCase(kitName))
             .findFirst()

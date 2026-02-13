@@ -6,6 +6,9 @@ import java.util.List;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.NotEmpty;
+import com.ultikits.ultitools.annotations.config.Range;
+import com.ultikits.ultitools.annotations.config.Size;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -21,23 +24,26 @@ import lombok.Setter;
 @ConfigEntity("config/worlds.yml")
 public class WorldConfig extends AbstractConfigEntity {
 
+    @NotEmpty
     @ConfigEntry(path = "default_world", comment = "Default world name")
     private String defaultWorld = "world";
-    
+
     @ConfigEntry(path = "protected_worlds", comment = "Worlds that cannot be auto-unloaded or deleted")
     private List<String> protectedWorlds = Arrays.asList("world", "world_nether", "world_the_end");
-    
+
     @ConfigEntry(path = "load_worlds_on_start", comment = "Worlds to load automatically on server start")
     private List<String> loadWorldsOnStart = Arrays.asList();
-    
+
     // ==================== Auto-Unload Settings ====================
-    
+
     @ConfigEntry(path = "auto_unload.enabled", comment = "Enable auto-unloading of empty worlds")
     private boolean autoUnloadEmptyWorlds = false;
-    
+
+    @Range(min = 10, max = 3600)
     @ConfigEntry(path = "auto_unload.check_interval", comment = "Check interval in seconds")
     private int emptyWorldCheckInterval = 60;
-    
+
+    @Range(min = 60, max = 86400)
     @ConfigEntry(path = "auto_unload.unload_after", comment = "Unload world after being empty for this many seconds")
     private int emptyWorldUnloadAfter = 300;
     
@@ -49,18 +55,21 @@ public class WorldConfig extends AbstractConfigEntity {
     private int unloadDelay = 300;
     
     // ==================== GUI Settings ====================
-    
+
+    @NotEmpty
+    @Size(min = 1, max = 32)
     @ConfigEntry(path = "gui_title", comment = "World list GUI title")
     private String guiTitle = "&6世界列表";
-    
+
     // ==================== Teleport Settings ====================
-    
+
     @ConfigEntry(path = "tp_to_world.enabled", comment = "Allow players to teleport between worlds")
     private boolean tpToWorldEnabled = true;
-    
+
     @ConfigEntry(path = "tp_to_world.permission_per_world", comment = "Require permission for each world")
     private boolean permissionPerWorld = false;
-    
+
+    @Range(min = 0, max = 300)
     @ConfigEntry(path = "tp_to_world.cooldown", comment = "World teleport cooldown in seconds")
     private int tpCooldown = 10;
     

@@ -1,12 +1,12 @@
 package com.ultikits.plugins.remotebag.gui;
 
-import com.ultikits.plugins.remotebag.UltiRemoteBag;
 import com.ultikits.plugins.remotebag.config.RemoteBagConfig;
 import com.ultikits.plugins.remotebag.entity.BagOpenResult;
 import com.ultikits.plugins.remotebag.enums.AccessMode;
 import com.ultikits.plugins.remotebag.service.BagLockService;
 import com.ultikits.plugins.remotebag.service.RemoteBagService;
 import com.ultikits.plugins.remotebag.util.SoundUtil;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BasePaginationPage;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.EconomyUtils;
@@ -43,25 +43,28 @@ import java.util.List;
  * @see RemoteBagService
  */
 public class RemoteBagMainGUI extends BasePaginationPage {
-    
+
+    private final UltiToolsPlugin plugin;
     private final RemoteBagService bagService;
     private final BagLockService lockService;
     private final RemoteBagConfig config;
     private final List<Integer> bagPages;
-    
+
     /**
      * 创建远程背包主页 GUI
      *
      * @param player      玩家
+     * @param plugin      插件实例
      * @param bagService  背包服务
      * @param lockService 锁定服务
      * @param config      背包配置
      */
-    public RemoteBagMainGUI(@NotNull Player player, RemoteBagService bagService, 
+    public RemoteBagMainGUI(@NotNull Player player, UltiToolsPlugin plugin, RemoteBagService bagService,
                             BagLockService lockService, RemoteBagConfig config) {
-        super(player, "remotebag-main", 
-              ChatColor.GOLD + player.getName() + " " + i18n("gui_main_title"), 
+        super(player, "remotebag-main",
+              ChatColor.GOLD + player.getName() + " " + plugin.i18n("gui_main_title"),
               6);
+        this.plugin = plugin;
         this.bagService = bagService;
         this.lockService = lockService;
         this.config = config;
@@ -122,14 +125,14 @@ public class RemoteBagMainGUI extends BasePaginationPage {
             int stackCount = bagService.getStackCount(player.getUniqueId(), pageNum);
             int maxSlots = config.getRowsPerPage() * 9;
             
-            meta.setDisplayName(ChatColor.YELLOW + i18n("bag_name").replace("{0}", String.valueOf(pageNum)));
-            
+            meta.setDisplayName(ChatColor.YELLOW + plugin.i18n("bag_name").replace("{0}", String.valueOf(pageNum)));
+
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_item_count").replace("{0}", String.valueOf(itemCount)));
-            lore.add(ChatColor.GRAY + i18n("lore_slot_usage").replace("{0}", String.valueOf(stackCount)).replace("{1}", String.valueOf(maxSlots)));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_item_count").replace("{0}", String.valueOf(itemCount)));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_slot_usage").replace("{0}", String.valueOf(stackCount)).replace("{1}", String.valueOf(maxSlots)));
             lore.add("");
-            lore.add(ChatColor.GREEN + "▶ " + i18n("lore_click_open"));
+            lore.add(ChatColor.GREEN + "▶ " + plugin.i18n("lore_click_open"));
             
             meta.setLore(lore);
             item.setItemMeta(meta);
@@ -145,7 +148,7 @@ public class RemoteBagMainGUI extends BasePaginationPage {
             
             if (result.isSuccess()) {
                 // 打开背包内容 GUI
-                new RemoteBagContentGUI(player, player.getUniqueId(), targetPage,
+                new RemoteBagContentGUI(player, plugin, player.getUniqueId(), targetPage,
                         bagService, lockService, config, result.getAccessMode()).open();
             } else {
                 // 被阻止
@@ -177,19 +180,19 @@ public class RemoteBagMainGUI extends BasePaginationPage {
         ItemMeta meta = item.getItemMeta();
         
         if (meta != null) {
-            meta.setDisplayName(canAfford ? 
-                ChatColor.GREEN + i18n("purchase_button") : 
-                ChatColor.RED + i18n("purchase_button"));
-            
+            meta.setDisplayName(canAfford ?
+                ChatColor.GREEN + plugin.i18n("purchase_button") :
+                ChatColor.RED + plugin.i18n("purchase_button"));
+
             List<String> lore = new ArrayList<>();
             lore.add("");
-            lore.add(ChatColor.GRAY + i18n("lore_price").replace("{0}", EconomyUtils.format(price)));
-            lore.add(ChatColor.GRAY + i18n("lore_balance").replace("{0}", EconomyUtils.format(balance)));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_price").replace("{0}", EconomyUtils.format(price)));
+            lore.add(ChatColor.GRAY + plugin.i18n("lore_balance").replace("{0}", EconomyUtils.format(balance)));
             lore.add("");
             if (canAfford) {
-                lore.add(ChatColor.GREEN + "▶ " + i18n("lore_click_purchase"));
+                lore.add(ChatColor.GREEN + "▶ " + plugin.i18n("lore_click_purchase"));
             } else {
-                lore.add(ChatColor.RED + "✖ " + i18n("lore_insufficient_balance"));
+                lore.add(ChatColor.RED + "✖ " + plugin.i18n("lore_insufficient_balance"));
             }
             
             meta.setLore(lore);
@@ -201,12 +204,12 @@ public class RemoteBagMainGUI extends BasePaginationPage {
         icon.onClick(e -> {
             if (bagService.purchaseBag(player)) {
                 SoundUtil.playPurchaseSound(player, config);
-                player.sendMessage(ChatColor.GREEN + i18n("purchase_success").replace("{0}", String.valueOf(nextBagNum)));
+                player.sendMessage(ChatColor.GREEN + plugin.i18n("purchase_success").replace("{0}", String.valueOf(nextBagNum)));
                 // 刷新 GUI
-                new RemoteBagMainGUI(player, bagService, lockService, config).open();
+                new RemoteBagMainGUI(player, plugin, bagService, lockService, config).open();
             } else {
                 SoundUtil.playErrorSound(player, config);
-                player.sendMessage(ChatColor.RED + i18n("purchase_failed").replace("{0}", EconomyUtils.format(finalPrice)));
+                player.sendMessage(ChatColor.RED + plugin.i18n("purchase_failed").replace("{0}", EconomyUtils.format(finalPrice)));
             }
         });
         
@@ -225,21 +228,11 @@ public class RemoteBagMainGUI extends BasePaginationPage {
         // 添加关闭按钮到中间位置
         Icon closeButton = createActionButton(
             Colors.RED,
-            ChatColor.RED + i18n("gui_close"),
+            ChatColor.RED + plugin.i18n("gui_close"),
             e -> {
                 player.closeInventory();
             }
         );
         addToBottomRow(4, closeButton);
-    }
-    
-    /**
-     * i18n 快捷方法
-     *
-     * @param key 翻译键
-     * @return 翻译后的文本
-     */
-    private static String i18n(String key) {
-        return UltiRemoteBag.getInstance().i18n(key);
     }
 }

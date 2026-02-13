@@ -1,6 +1,6 @@
 package com.ultikits.plugins.worlds.service;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldInventory;
@@ -31,7 +31,7 @@ class InventoryIsolationServiceTest {
     private InventoryIsolationService service;
     private WorldConfig mockConfig;
     private DataOperator<WorldInventory> mockDataOperator;
-    private UltiWorlds mockPlugin;
+    private UltiToolsPlugin mockPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -44,6 +44,7 @@ class InventoryIsolationServiceTest {
 
         UltiWorldsTestHelper.setField(service, "config", mockConfig);
         UltiWorldsTestHelper.setField(service, "dataOperator", mockDataOperator);
+        UltiWorldsTestHelper.setField(service, "plugin", mockPlugin);
 
         when(mockPlugin.getDataOperator(WorldInventory.class)).thenReturn(mockDataOperator);
     }

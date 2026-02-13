@@ -33,7 +33,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Test helper for mocking UltiTools framework singletons.
+ * Test helper for mocking UltiTools framework dependencies.
  * <p>
  * UltiTools is a {@code final class extends JavaPlugin} — it cannot be mocked.
  * This helper mocks only UltiTrade (extends abstract UltiToolsPlugin) and
@@ -49,16 +49,15 @@ public final class UltiTradeTestHelper {
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiTrade singleton mock. Must be called before each test.
+     * Set up UltiTrade mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
         // Set up Bukkit server mock
         setupBukkitServer();
 
-        // Mock UltiTrade singleton (abstract UltiToolsPlugin — mockable)
+        // Mock UltiTrade (abstract UltiToolsPlugin — mockable)
         mockPlugin = mock(UltiTrade.class);
-        setStaticField(UltiTrade.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -113,10 +112,9 @@ public final class UltiTradeTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiTrade.class, "instance", null);
         setStaticField(Bukkit.class, "server", null);
     }
 

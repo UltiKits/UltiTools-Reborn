@@ -1,8 +1,8 @@
 package com.ultikits.plugins.mail.gui;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BasePaginationPage;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
@@ -34,12 +34,14 @@ import java.util.List;
 public class MailboxGUI extends BasePaginationPage {
     
     private final MailService mailService;
+    private final UltiToolsPlugin plugin;
     private final List<MailData> mails;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
-    
-    public MailboxGUI(@NotNull Player player, MailService mailService) {
-        super(player, "mailbox-gui", i18n("inbox_gui_title").replace("{0}", player.getName()), 6);
+
+    public MailboxGUI(@NotNull Player player, MailService mailService, UltiToolsPlugin plugin) {
+        super(player, "mailbox-gui", plugin.i18n("inbox_gui_title").replace("{0}", player.getName()), 6);
         this.mailService = mailService;
+        this.plugin = plugin;
         this.mails = mailService.getInbox(player.getUniqueId());
     }
     
@@ -163,8 +165,8 @@ public class MailboxGUI extends BasePaginationPage {
     /**
      * Shortcut for i18n.
      */
-    private static String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+    private String i18n(String key) {
+        return plugin.i18n(key);
     }
     
     @Override

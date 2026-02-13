@@ -1,11 +1,9 @@
 package com.ultikits.plugins.backup.entity;
 
-import com.ultikits.plugins.backup.UltiBackup;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
-import com.ultikits.ultitools.utils.FileUtils;
+import org.bukkit.Bukkit;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -77,11 +75,7 @@ public class BackupMetadata extends BaseDataEntity<String> {
     public void onDelete() {
         File backupFile = getBackupFile();
         if (backupFile != null && backupFile.exists()) {
-            if (backupFile.delete()) {
-                UltiBackup.getInstance().getLogger().info("Deleted backup file: " + filePath);
-            } else {
-                UltiBackup.getInstance().getLogger().warn("Failed to delete backup file: " + filePath);
-            }
+            backupFile.delete();
         }
     }
     
@@ -96,7 +90,7 @@ public class BackupMetadata extends BaseDataEntity<String> {
         if (filePath == null || filePath.isEmpty()) {
             return null;
         }
-        return new File(UltiTools.getInstance().getDataFolder(), filePath);
+        return new File(Bukkit.getPluginManager().getPlugin("UltiTools").getDataFolder(), filePath);
     }
     
     /**
@@ -125,22 +119,15 @@ public class BackupMetadata extends BaseDataEntity<String> {
     }
     
     /**
-     * Get backup reason display text with i18n support.
+     * Get backup reason display text.
+     * Returns the raw reason string (DEATH, QUIT, AUTO, MANUAL, ADMIN).
      * <p>
-     * 获取备份原因显示文本（支持 i18n）。
+     * 获取备份原因显示文本。
      *
      * @return reason display text
      */
     public String getReasonDisplay() {
-        UltiBackup plugin = UltiBackup.getInstance();
-        switch (backupReason) {
-            case "DEATH": return plugin.i18n("backup.reason.death");
-            case "QUIT": return plugin.i18n("backup.reason.quit");
-            case "AUTO": return plugin.i18n("backup.reason.auto");
-            case "MANUAL": return plugin.i18n("backup.reason.manual");
-            case "ADMIN": return plugin.i18n("backup.reason.admin");
-            default: return plugin.i18n("backup.reason.unknown");
-        }
+        return backupReason != null ? backupReason : "UNKNOWN";
     }
     
     /**

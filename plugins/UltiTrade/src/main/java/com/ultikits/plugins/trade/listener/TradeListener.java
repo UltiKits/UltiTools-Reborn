@@ -5,7 +5,6 @@ import com.ultikits.plugins.trade.entity.TradeSession;
 import com.ultikits.plugins.trade.gui.TradeConfirmPage;
 import com.ultikits.plugins.trade.gui.TradeGUI;
 import com.ultikits.plugins.trade.service.TradeService;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
@@ -15,6 +14,7 @@ import org.bukkit.Material;
 import org.bukkit.Sound;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -50,6 +50,14 @@ public class TradeListener implements Listener {
     
     private enum InputType {
         MONEY, EXPERIENCE
+    }
+
+    /**
+     * Get Bukkit plugin instance for scheduler tasks.
+     * Uses lazy lookup to avoid initialization ordering issues.
+     */
+    private Plugin getBukkitPlugin() {
+        return Bukkit.getPluginManager().getPlugin("UltiTools");
     }
     
     /**
@@ -149,7 +157,7 @@ public class TradeListener implements Listener {
             waitingForInput.put(player.getUniqueId(), InputType.MONEY);
             
             // Reopen GUI after a delay if no input
-            Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskLater(getBukkitPlugin(), () -> {
                 if (waitingForInput.remove(player.getUniqueId()) != null) {
                     if (tradeService.isTrading(player.getUniqueId())) {
                         TradeGUI newGui = new TradeGUI(tradeService, session, player);
@@ -175,7 +183,7 @@ public class TradeListener implements Listener {
             waitingForInput.put(player.getUniqueId(), InputType.EXPERIENCE);
             
             // Reopen GUI after a delay if no input
-            Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskLater(getBukkitPlugin(), () -> {
                 if (waitingForInput.remove(player.getUniqueId()) != null) {
                     if (tradeService.isTrading(player.getUniqueId())) {
                         TradeGUI newGui = new TradeGUI(tradeService, session, player);
@@ -264,7 +272,7 @@ public class TradeListener implements Listener {
         // Check for cancel
         if (message.equalsIgnoreCase("cancel")) {
             player.sendMessage(ChatColor.YELLOW + "已取消输入");
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTask(getBukkitPlugin(), () -> {
                 TradeSession session = tradeService.getSession(player.getUniqueId());
                 if (session != null && tradeService.isTrading(player.getUniqueId())) {
                     TradeGUI gui = new TradeGUI(tradeService, session, player);
@@ -323,7 +331,7 @@ public class TradeListener implements Listener {
      * Reopen trade GUI for player.
      */
     private void reopenGUI(Player player) {
-        Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTask(getBukkitPlugin(), () -> {
             TradeSession session = tradeService.getSession(player.getUniqueId());
             if (session != null && tradeService.isTrading(player.getUniqueId())) {
                 TradeGUI gui = new TradeGUI(tradeService, session, player);
@@ -364,7 +372,7 @@ public class TradeListener implements Listener {
         if (session != null && session.getState() == TradeSession.TradeState.TRADING) {
             // Cancel trade when closing GUI
             Bukkit.getScheduler().runTaskLater(
-                UltiTools.getInstance(),
+                getBukkitPlugin(),
                 () -> {
                     if (tradeService.isTrading(player.getUniqueId()) && 
                         !waitingForInput.containsKey(player.getUniqueId())) {

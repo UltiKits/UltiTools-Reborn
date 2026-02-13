@@ -15,13 +15,8 @@ import static org.mockito.Mockito.*;
 @DisplayName("UltiSideBar Main Class Tests")
 class UltiSideBarTest {
 
-    @AfterEach
-    void tearDown() throws Exception {
-        UltiSideBarTestHelper.tearDown();
-    }
-
     @Test
-    @DisplayName("registerSelf should set instance and return true")
+    @DisplayName("registerSelf should return true and init service")
     void registerSelf() throws Exception {
         UltiSideBar plugin = mock(UltiSideBar.class);
         PluginLogger logger = mock(PluginLogger.class);
@@ -34,13 +29,9 @@ class UltiSideBarTest {
         when(plugin.i18n("sidebar_enabled")).thenReturn("sidebar_enabled");
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        // Set instance field to null first
-        UltiSideBarTestHelper.setStaticField(UltiSideBar.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiSideBar.getInstance()).isSameAs(plugin);
         verify(service).init();
         verify(logger).info("sidebar_enabled");
     }
@@ -59,14 +50,10 @@ class UltiSideBarTest {
         when(plugin.i18n("sidebar_disabled")).thenReturn("sidebar_disabled");
         doCallRealMethod().when(plugin).unregisterSelf();
 
-        // Set instance before unregister
-        UltiSideBarTestHelper.setStaticField(UltiSideBar.class, "instance", plugin);
-
         plugin.unregisterSelf();
 
         verify(service).shutdown();
         verify(logger).info("sidebar_disabled");
-        assertThat(UltiSideBar.getInstance()).isNull();
     }
 
     @Test
@@ -97,13 +84,6 @@ class UltiSideBarTest {
     }
 
     @Test
-    @DisplayName("getInstance should return null when not registered")
-    void getInstanceNull() throws Exception {
-        UltiSideBarTestHelper.setStaticField(UltiSideBar.class, "instance", null);
-        assertThat(UltiSideBar.getInstance()).isNull();
-    }
-
-    @Test
     @DisplayName("registerSelf should handle null service gracefully")
     void registerSelfNullService() throws Exception {
         UltiSideBar plugin = mock(UltiSideBar.class);
@@ -116,12 +96,9 @@ class UltiSideBarTest {
         when(plugin.i18n("sidebar_enabled")).thenReturn("sidebar_enabled");
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        UltiSideBarTestHelper.setStaticField(UltiSideBar.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiSideBar.getInstance()).isSameAs(plugin);
         verify(logger).info("sidebar_enabled");
     }
 
@@ -138,12 +115,9 @@ class UltiSideBarTest {
         when(plugin.i18n("sidebar_disabled")).thenReturn("sidebar_disabled");
         doCallRealMethod().when(plugin).unregisterSelf();
 
-        UltiSideBarTestHelper.setStaticField(UltiSideBar.class, "instance", plugin);
-
         plugin.unregisterSelf();
 
         verify(logger).info("sidebar_disabled");
-        assertThat(UltiSideBar.getInstance()).isNull();
     }
 
     @Test

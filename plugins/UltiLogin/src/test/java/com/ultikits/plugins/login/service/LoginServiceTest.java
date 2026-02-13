@@ -3,8 +3,8 @@ package com.ultikits.plugins.login.service;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
@@ -25,6 +25,8 @@ class LoginServiceTest {
     private LoginConfig config;
     @SuppressWarnings("unchecked")
     private DataOperator<AccountData> dataOperator = mock(DataOperator.class);
+    @SuppressWarnings("unchecked")
+    private Query<AccountData> mockQuery = mock(Query.class);
 
     private Player player;
     private UUID playerUuid;
@@ -35,26 +37,52 @@ class LoginServiceTest {
 
         config = UltiLoginTestHelper.createDefaultConfig();
 
-        service = new LoginService();
-
-        // Inject dependencies via reflection
-        UltiLoginTestHelper.setField(service, "config", config);
-        UltiLoginTestHelper.setField(service, "dataOperator", dataOperator);
-
-        playerUuid = UUID.randomUUID();
-        player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
-
-        // Set up Bukkit.server for methods that call Bukkit.getPlayer()
+        // Set up Bukkit.server before LoginService constructor (it calls Bukkit.getPluginManager())
         try {
             Field serverField = Bukkit.class.getDeclaredField("server");
             serverField.setAccessible(true);
             if (serverField.get(null) == null) {
                 Server mockServer = mock(Server.class);
+                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
+                when(mockServer.getPluginManager()).thenReturn(mockPm);
+                when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
                 serverField.set(null, mockServer);
             }
         } catch (Exception ignored) {
             // Server may already be set
         }
+
+        // Mock plugin.getDataOperator to return our mock
+        when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
+
+        // Set up Query DSL mock: dataOperator.query() returns a fluent mock Query
+        // that returns itself for all chaining methods
+        when(dataOperator.query()).thenReturn(mockQuery);
+        when(mockQuery.where(anyString())).thenReturn(mockQuery);
+        when(mockQuery.and(anyString())).thenReturn(mockQuery);
+        when(mockQuery.eq(any())).thenReturn(mockQuery);
+        when(mockQuery.ne(any())).thenReturn(mockQuery);
+        when(mockQuery.gt(any())).thenReturn(mockQuery);
+        when(mockQuery.lt(any())).thenReturn(mockQuery);
+        when(mockQuery.gte(any())).thenReturn(mockQuery);
+        when(mockQuery.lte(any())).thenReturn(mockQuery);
+        when(mockQuery.like(anyString())).thenReturn(mockQuery);
+        when(mockQuery.in(any())).thenReturn(mockQuery);
+        when(mockQuery.orderBy(anyString())).thenReturn(mockQuery);
+        when(mockQuery.orderByDesc(anyString())).thenReturn(mockQuery);
+        when(mockQuery.limit(anyInt())).thenReturn(mockQuery);
+        when(mockQuery.offset(anyInt())).thenReturn(mockQuery);
+        // Default terminal operations return empty/zero
+        when(mockQuery.list()).thenReturn(Collections.emptyList());
+        when(mockQuery.first()).thenReturn(null);
+        when(mockQuery.exists()).thenReturn(false);
+        when(mockQuery.count()).thenReturn(0L);
+        when(mockQuery.delete()).thenReturn(0);
+
+        service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
+
+        playerUuid = UUID.randomUUID();
+        player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
     }
 
     @AfterEach
@@ -72,7 +100,7 @@ class LoginServiceTest {
         @DisplayName("Should return true when account exists")
         void accountExists() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             assertThat(service.isRegistered(playerUuid)).isTrue();
@@ -81,7 +109,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when no account")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.isRegistered(playerUuid)).isFalse();
@@ -148,7 +176,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when already registered")
         void alreadyRegistered() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(new AccountData()));
 
             assertThat(service.register(player, "password123")).isFalse();
@@ -157,7 +185,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should create account when not registered")
         void createAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.register(player, "password123");
@@ -174,7 +202,7 @@ class LoginServiceTest {
 
             // First call: check if player registered (no)
             // Second call: count registrations by IP (2 found)
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList())
                     .thenReturn(Arrays.asList(new AccountData(), new AccountData()));
 
@@ -194,7 +222,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return NOT_REGISTERED when account doesn't exist")
         void notRegistered() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             LoginService.LoginResult result = service.login(player, "password");
@@ -212,7 +240,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(password, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             LoginService.LoginResult result = service.login(player, password);
@@ -226,7 +254,7 @@ class LoginServiceTest {
         @DisplayName("Should return failure when password wrong")
         void wrongPassword() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "wrongHash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             LoginService.LoginResult result = service.login(player, "wrongPassword");
@@ -241,7 +269,7 @@ class LoginServiceTest {
             when(config.getMaxLoginAttempts()).thenReturn(3);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             // First failed attempt
@@ -261,7 +289,7 @@ class LoginServiceTest {
             when(config.getLockoutType()).thenReturn("IP");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong1");
@@ -280,7 +308,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when account doesn't exist")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.changePassword(playerUuid, "old", "new")).isFalse();
@@ -290,7 +318,7 @@ class LoginServiceTest {
         @DisplayName("Should return false when old password wrong")
         void wrongOldPassword() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             assertThat(service.changePassword(playerUuid, "wrongOld", "newPass")).isFalse();
@@ -304,7 +332,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(oldPassword, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             boolean result = service.changePassword(playerUuid, oldPassword, "newPass123");
@@ -323,7 +351,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return null when account doesn't exist")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.resetPassword(playerUuid)).isNull();
@@ -333,7 +361,7 @@ class LoginServiceTest {
         @DisplayName("Should generate random password")
         void generateRandomPassword() throws Exception {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             String newPassword = service.resetPassword(playerUuid);
@@ -347,7 +375,7 @@ class LoginServiceTest {
         @DisplayName("Should set specific password")
         void setSpecificPassword() throws Exception {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             boolean result = service.resetPassword(playerUuid, "newPassword123");
@@ -366,7 +394,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when account doesn't exist")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.unregister(playerUuid)).isFalse();
@@ -376,13 +404,13 @@ class LoginServiceTest {
         @DisplayName("Should delete account when exists")
         void deleteAccount() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             boolean result = service.unregister(playerUuid);
 
             assertThat(result).isTrue();
-            verify(dataOperator).delById(anyString());
+            verify(dataOperator).delById(any());
         }
     }
 
@@ -395,7 +423,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when not registered")
         void notRegistered() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.forceLogin(player)).isFalse();
@@ -405,7 +433,7 @@ class LoginServiceTest {
         @DisplayName("Should return false when already logged in")
         void alreadyLoggedIn() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.completeLogin(player);
@@ -417,7 +445,7 @@ class LoginServiceTest {
         @DisplayName("Should login when registered and not logged in")
         void successfulForceLogin() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             boolean result = service.forceLogin(player);
@@ -443,7 +471,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(password, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, password);
@@ -461,7 +489,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(password, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, password);
@@ -508,7 +536,7 @@ class LoginServiceTest {
         @DisplayName("Should return account when exists")
         void accountExists() {
             AccountData expected = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(expected));
 
             AccountData result = service.getAccount(playerUuid);
@@ -519,7 +547,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return null when doesn't exist")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.getAccount(playerUuid)).isNull();
@@ -536,7 +564,7 @@ class LoginServiceTest {
         @DisplayName("Should return account when exists")
         void accountExists() {
             AccountData expected = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(expected));
 
             AccountData result = service.getAccountByName("TestPlayer");
@@ -547,7 +575,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return null when doesn't exist")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.getAccountByName("Unknown")).isNull();
@@ -588,7 +616,7 @@ class LoginServiceTest {
         @DisplayName("Should return true when account exists by name")
         void accountExists() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             assertThat(service.isRegisteredByName("TestPlayer")).isTrue();
@@ -597,7 +625,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when no account by name")
         void noAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             assertThat(service.isRegisteredByName("Unknown")).isFalse();
@@ -625,7 +653,7 @@ class LoginServiceTest {
             when(config.getLockoutType()).thenReturn("UUID");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong1");
@@ -642,7 +670,7 @@ class LoginServiceTest {
             when(config.getLockoutType()).thenReturn("BOTH");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong1");
@@ -659,7 +687,7 @@ class LoginServiceTest {
             when(config.getLockoutType()).thenReturn("IP");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong");
@@ -682,7 +710,7 @@ class LoginServiceTest {
             when(config.getLockoutType()).thenReturn("UUID");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong");
@@ -937,7 +965,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(password, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
             doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
 
@@ -962,7 +990,7 @@ class LoginServiceTest {
             String hash = hashPasswordForTest(oldPassword, salt);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
             doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
 
@@ -982,7 +1010,7 @@ class LoginServiceTest {
         @DisplayName("Random reset should return null when update throws")
         void randomResetUpdateThrows() throws Exception {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
             doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
 
@@ -995,7 +1023,7 @@ class LoginServiceTest {
         @DisplayName("Specific reset should return false when update throws")
         void specificResetUpdateThrows() throws Exception {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
             doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
 
@@ -1007,7 +1035,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return false when account not found for specific reset")
         void specificResetNoAccount() {
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.resetPassword(playerUuid, "newPass");
@@ -1029,7 +1057,7 @@ class LoginServiceTest {
             when(config.getGuiPasswordLength()).thenReturn(4);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             String newPassword = service.resetPassword(playerUuid);
@@ -1050,7 +1078,7 @@ class LoginServiceTest {
         @DisplayName("Should skip IP check when maxRegisterPerIp is 0")
         void ipLimitDisabled() {
             when(config.getMaxRegisterPerIp()).thenReturn(0);
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.register(player, "password123");
@@ -1072,7 +1100,7 @@ class LoginServiceTest {
             when(config.getMaxLoginAttempts()).thenReturn(0);
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             service.login(player, "wrong");
@@ -1097,7 +1125,7 @@ class LoginServiceTest {
             when(config.getAccountLocked()).thenReturn("Locked for {TIME}s");
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(dataOperator.getAll(any(WhereCondition.class)))
+            when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
             // This single failed attempt should lock and return lock message

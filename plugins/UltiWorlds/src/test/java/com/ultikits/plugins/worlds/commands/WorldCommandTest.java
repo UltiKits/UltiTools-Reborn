@@ -1,6 +1,6 @@
 package com.ultikits.plugins.worlds.commands;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
@@ -30,7 +30,7 @@ class WorldCommandTest {
     private WorldCommand command;
     private WorldService mockWorldService;
     private WorldConfig mockConfig;
-    private UltiWorlds mockPlugin;
+    private UltiToolsPlugin mockPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -42,6 +42,7 @@ class WorldCommandTest {
         mockConfig = UltiWorldsTestHelper.createDefaultConfig();
 
         UltiWorldsTestHelper.setField(command, "worldService", mockWorldService);
+        UltiWorldsTestHelper.setField(command, "plugin", mockPlugin);
 
         when(mockWorldService.getConfig()).thenReturn(mockConfig);
     }

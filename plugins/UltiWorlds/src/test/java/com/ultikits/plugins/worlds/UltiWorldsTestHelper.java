@@ -3,6 +3,7 @@ package com.ultikits.plugins.worlds;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldInventory;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 
@@ -21,12 +22,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
- * Test helper for mocking UltiTools framework singletons.
+ * Test helper for mocking UltiTools framework dependencies.
  * <p>
- * UltiTools is a {@code final class extends JavaPlugin} — it cannot be mocked.
- * This helper mocks only UltiWorlds (extends abstract UltiToolsPlugin) and
- * avoids any code paths that call {@code UltiTools.getInstance()}.
- * Tests that need file I/O use temp directories directly.
+ * Since UltiWorlds no longer uses a static singleton, this helper creates
+ * a mock UltiToolsPlugin that can be injected into services and commands
+ * via reflection (simulating @Autowired injection).
  * <p>
  * Call {@link #setUp()} in {@code @BeforeEach} and {@link #tearDown()} in {@code @AfterEach}.
  */
@@ -34,17 +34,16 @@ public final class UltiWorldsTestHelper {
 
     private UltiWorldsTestHelper() {}
 
-    private static UltiWorlds mockPlugin;
+    private static UltiToolsPlugin mockPlugin;
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiWorlds singleton mock. Must be called before each test.
+     * Set up mock dependencies. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiWorlds singleton (abstract UltiToolsPlugin — mockable)
-        mockPlugin = mock(UltiWorlds.class);
-        setStaticField(UltiWorlds.class, "instance", mockPlugin);
+        // Mock UltiToolsPlugin (not UltiWorlds -- no more singleton)
+        mockPlugin = mock(UltiToolsPlugin.class);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -60,13 +59,13 @@ public final class UltiWorldsTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiWorlds.class, "instance", null);
+        mockPlugin = null;
     }
 
-    public static UltiWorlds getMockPlugin() {
+    public static UltiToolsPlugin getMockPlugin() {
         return mockPlugin;
     }
 

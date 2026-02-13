@@ -1,8 +1,6 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +11,7 @@ import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -33,7 +32,9 @@ public class AnnouncementService {
     
     @Autowired
     private EssentialsConfig config;
-    
+
+    private Plugin bukkitPlugin;
+
     // Tasks
     private BukkitTask chatTask;
     private BukkitTask bossBarTask;
@@ -53,6 +54,7 @@ public class AnnouncementService {
      */
     @PostConstruct
     public void init() {
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
         startTasks();
     }
     
@@ -67,7 +69,7 @@ public class AnnouncementService {
                 public void run() {
                     broadcastChatAnnouncement();
                 }
-            }.runTaskTimer(UltiTools.getInstance(), 
+            }.runTaskTimer(bukkitPlugin, 
                 config.getAnnouncementChatInterval() * 20L, 
                 config.getAnnouncementChatInterval() * 20L);
         }
@@ -79,7 +81,7 @@ public class AnnouncementService {
                 public void run() {
                     showBossBarAnnouncement();
                 }
-            }.runTaskTimer(UltiTools.getInstance(), 
+            }.runTaskTimer(bukkitPlugin, 
                 config.getAnnouncementBossBarInterval() * 20L, 
                 config.getAnnouncementBossBarInterval() * 20L);
         }
@@ -91,7 +93,7 @@ public class AnnouncementService {
                 public void run() {
                     showTitleAnnouncement();
                 }
-            }.runTaskTimer(UltiTools.getInstance(), 
+            }.runTaskTimer(bukkitPlugin, 
                 config.getAnnouncementTitleInterval() * 20L, 
                 config.getAnnouncementTitleInterval() * 20L);
         }
@@ -146,7 +148,7 @@ public class AnnouncementService {
             public void run() {
                 removeAllBossBars();
             }
-        }.runTaskLater(UltiTools.getInstance(), config.getAnnouncementBossBarDuration() * 20L);
+        }.runTaskLater(bukkitPlugin, config.getAnnouncementBossBarDuration() * 20L);
     }
     
     /**

@@ -1,9 +1,10 @@
 package com.ultikits.plugins.recipe.commands;
 
-import com.ultikits.plugins.recipe.UltiRecipe;
 import com.ultikits.plugins.recipe.service.RecipeService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.command.*;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -20,6 +21,10 @@ import java.util.stream.Collectors;
  * - /recipe list - List all registered recipes
  * - /recipe reload - Reload recipes from configuration
  * - /recipe count - Show the number of registered recipes
+ * <p>
+ * Only registered when recipes are enabled in configuration.
+ * <p>
+ * 仅在配置中启用配方功能时注册。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -30,7 +35,11 @@ import java.util.stream.Collectors;
     permission = "ultirecipe.admin",
     description = "管理自定义配方"
 )
+@ConditionalOnConfig(value = "config/recipes.yml", path = "enabled")
 public class RecipeCommand extends BaseCommandExecutor {
+
+    @Autowired
+    private UltiToolsPlugin plugin;
 
     @Autowired
     private RecipeService recipeService;
@@ -39,7 +48,7 @@ public class RecipeCommand extends BaseCommandExecutor {
      * Gets the localized string from the plugin's language file.
      */
     private String i18n(String key) {
-        return UltiRecipe.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 
     /**

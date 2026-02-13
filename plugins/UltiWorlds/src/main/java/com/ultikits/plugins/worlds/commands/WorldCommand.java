@@ -1,10 +1,10 @@
 package com.ultikits.plugins.worlds.commands;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.conversation.WorldCreateConversation;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.plugins.worlds.gui.WorldListPage;
 import com.ultikits.plugins.worlds.service.WorldService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
@@ -35,13 +35,16 @@ import java.util.stream.Collectors;
 public class WorldCommand extends BaseCommandExecutor {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private WorldService worldService;
     
     // ==================== Basic Commands ====================
     
     @CmdMapping(format = "")
     public void openWorldList(@CmdSender Player player) {
-        new WorldListPage(player, worldService).open();
+        new WorldListPage(player, worldService, plugin).open();
     }
     
     @CmdMapping(format = "list")
@@ -78,7 +81,7 @@ public class WorldCommand extends BaseCommandExecutor {
             return;
         }
         
-        WorldCreateConversation.start(player, worldService);
+        WorldCreateConversation.start(player, worldService, plugin);
     }
     
     @CmdMapping(format = "create <name>")
@@ -455,6 +458,6 @@ public class WorldCommand extends BaseCommandExecutor {
      * Get i18n message from plugin.
      */
     private String i18n(String key) {
-        return UltiWorlds.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

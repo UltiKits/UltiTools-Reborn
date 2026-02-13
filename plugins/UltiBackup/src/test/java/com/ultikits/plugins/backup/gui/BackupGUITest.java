@@ -3,6 +3,7 @@ package com.ultikits.plugins.backup.gui;
 import com.ultikits.plugins.backup.UltiBackupTestHelper;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
@@ -27,6 +28,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("BackupGUI Tests")
 class BackupGUITest {
 
+    private UltiToolsPlugin plugin;
     private BackupService backupService;
     private Player viewer;
     private UUID targetUuid;
@@ -36,6 +38,7 @@ class BackupGUITest {
     @BeforeEach
     void setUp() throws Exception {
         UltiBackupTestHelper.setUp();
+        plugin = UltiBackupTestHelper.getMockPlugin();
 
         backupService = mock(BackupService.class);
         targetUuid = UUID.randomUUID();
@@ -80,7 +83,7 @@ class BackupGUITest {
         void startsAtPageZero() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(5));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getBackupAtSlot(0)).isNotNull();
         }
@@ -90,7 +93,7 @@ class BackupGUITest {
         void noPreviousOnFirst() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(5));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
             gui.previousPage();
 
             assertThat(gui.getBackupAtSlot(0)).isNotNull();
@@ -101,7 +104,7 @@ class BackupGUITest {
         void noPastLastPage() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(10));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
             gui.nextPage();
 
             // Still on page 0
@@ -113,7 +116,7 @@ class BackupGUITest {
         void navigateForward() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(50));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
             gui.nextPage();
 
             BackupMetadata slotItem = gui.getBackupAtSlot(0);
@@ -126,7 +129,7 @@ class BackupGUITest {
         void navigateBack() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(50));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
             gui.nextPage();
             gui.previousPage();
 
@@ -145,7 +148,7 @@ class BackupGUITest {
         @DisplayName("Should return null for negative slot")
         void negativeSlot() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(5));
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getBackupAtSlot(-1)).isNull();
         }
@@ -154,7 +157,7 @@ class BackupGUITest {
         @DisplayName("Should return null for slot >= 45")
         void slotBeyondItemArea() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(5));
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getBackupAtSlot(45)).isNull();
         }
@@ -163,7 +166,7 @@ class BackupGUITest {
         @DisplayName("Should return null for slot beyond backup count")
         void slotBeyondCount() {
             when(backupService.getBackups(targetUuid)).thenReturn(createBackupList(3));
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getBackupAtSlot(3)).isNull();
             assertThat(gui.getBackupAtSlot(10)).isNull();
@@ -174,7 +177,7 @@ class BackupGUITest {
         void validSlot() {
             List<BackupMetadata> backups = createBackupList(5);
             when(backupService.getBackups(targetUuid)).thenReturn(backups);
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getBackupAtSlot(2)).isSameAs(backups.get(2));
         }
@@ -193,7 +196,7 @@ class BackupGUITest {
                     .thenReturn(createBackupList(3))
                     .thenReturn(createBackupList(5));
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
             assertThat(gui.getBackupAtSlot(4)).isNull();
 
             gui.refresh();
@@ -212,7 +215,7 @@ class BackupGUITest {
         void properties() {
             when(backupService.getBackups(targetUuid)).thenReturn(Collections.emptyList());
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "TargetName");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "TargetName");
 
             assertThat(gui.getViewer()).isSameAs(viewer);
             assertThat(gui.getTargetUuid()).isEqualTo(targetUuid);
@@ -225,7 +228,7 @@ class BackupGUITest {
         void inventoryHolder() {
             when(backupService.getBackups(targetUuid)).thenReturn(Collections.emptyList());
 
-            BackupGUI gui = new BackupGUI(backupService, viewer, targetUuid, "Target");
+            BackupGUI gui = new BackupGUI(plugin, backupService, viewer, targetUuid, "Target");
 
             assertThat(gui.getInventory()).isNotNull();
         }

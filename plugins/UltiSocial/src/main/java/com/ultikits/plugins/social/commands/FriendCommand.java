@@ -6,7 +6,7 @@ import com.ultikits.plugins.social.entity.FriendshipData;
 import com.ultikits.plugins.social.gui.BlockListGUI;
 import com.ultikits.plugins.social.gui.FriendListGUI;
 import com.ultikits.plugins.social.service.FriendService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 import com.ultikits.ultitools.services.TeleportService;
 
@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
     permission = "ultisocial.use",
     description = "好友系统"
 )
-public class FriendCommand extends AbstractCommandExecutor {
+public class FriendCommand extends BaseCommandExecutor {
     
     private final FriendService friendService;
     private final TeleportService teleportService;

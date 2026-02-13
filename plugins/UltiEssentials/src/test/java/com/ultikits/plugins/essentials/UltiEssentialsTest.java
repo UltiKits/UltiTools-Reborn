@@ -57,7 +57,6 @@ class UltiEssentialsTest {
             boolean result = plugin.registerSelf();
 
             assertThat(result).isTrue();
-            assertThat(UltiEssentials.getInstance()).isEqualTo(plugin);
         }
 
         @Test
@@ -66,9 +65,7 @@ class UltiEssentialsTest {
             plugin = new UltiEssentials();
             plugin.registerSelf();
 
-            plugin.unregisterSelf();
-
-            assertThat(UltiEssentials.getInstance()).isNull();
+            Assertions.assertDoesNotThrow(() -> plugin.unregisterSelf());
         }
 
         @Test
@@ -78,37 +75,6 @@ class UltiEssentialsTest {
             plugin.registerSelf();
 
             Assertions.assertDoesNotThrow(() -> plugin.reloadSelf());
-        }
-    }
-
-    @Nested
-    @DisplayName("Singleton Pattern Tests")
-    class SingletonPatternTests {
-
-        @Test
-        @DisplayName("Should return null before initialization")
-        void shouldReturnNullBeforeInit() {
-            assertThat(UltiEssentials.getInstance()).isNull();
-        }
-
-        @Test
-        @DisplayName("Should return instance after registration")
-        void shouldReturnInstanceAfterRegistration() {
-            plugin = new UltiEssentials();
-            plugin.registerSelf();
-
-            assertThat(UltiEssentials.getInstance()).isNotNull();
-            assertThat(UltiEssentials.getInstance()).isSameAs(plugin);
-        }
-
-        @Test
-        @DisplayName("Should clear instance after unregistration")
-        void shouldClearInstanceAfterUnregistration() {
-            plugin = new UltiEssentials();
-            plugin.registerSelf();
-            plugin.unregisterSelf();
-
-            assertThat(UltiEssentials.getInstance()).isNull();
         }
     }
 }

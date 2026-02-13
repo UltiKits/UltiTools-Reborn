@@ -3,6 +3,7 @@ package com.ultikits.plugins.remotebag.service;
 import com.ultikits.plugins.remotebag.UltiRemoteBagTestHelper;
 import com.ultikits.plugins.remotebag.config.RemoteBagConfig;
 import com.ultikits.plugins.remotebag.entity.RemoteBagData;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
@@ -12,6 +13,8 @@ import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.*;
 
 import java.util.*;
+
+import static org.mockito.Mockito.*;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -34,10 +37,12 @@ class RemoteBagServiceTest {
 
         config = UltiRemoteBagTestHelper.createDefaultConfig();
 
-        service = new RemoteBagService();
+        UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
+        when(mockPlugin.getDataOperator(RemoteBagData.class)).thenReturn(dataOperator);
 
-        // Inject dependencies via reflection
-        UltiRemoteBagTestHelper.setField(service, "config", config);
+        service = new RemoteBagService(mockPlugin, config);
+
+        // Inject dataOperator via reflection (set by init())
         UltiRemoteBagTestHelper.setField(service, "dataOperator", dataOperator);
 
         playerUuid = UUID.randomUUID();

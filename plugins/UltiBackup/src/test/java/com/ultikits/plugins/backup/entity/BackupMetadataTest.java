@@ -168,29 +168,29 @@ class BackupMetadataTest {
 
         @ParameterizedTest
         @CsvSource({
-                "DEATH,  backup.reason.death",
-                "QUIT,   backup.reason.quit",
-                "AUTO,   backup.reason.auto",
-                "MANUAL, backup.reason.manual",
-                "ADMIN,  backup.reason.admin"
+                "DEATH,  DEATH",
+                "QUIT,   QUIT",
+                "AUTO,   AUTO",
+                "MANUAL, MANUAL",
+                "ADMIN,  ADMIN"
         })
-        @DisplayName("Should map known reasons to i18n keys")
-        void knownReasons(String reason, String expectedKey) {
+        @DisplayName("Should return raw reason string")
+        void knownReasons(String reason, String expectedDisplay) {
             BackupMetadata metadata = BackupMetadata.builder()
                     .backupReason(reason)
                     .build();
 
-            assertThat(metadata.getReasonDisplay()).isEqualTo(expectedKey);
+            assertThat(metadata.getReasonDisplay()).isEqualTo(expectedDisplay);
         }
 
         @Test
-        @DisplayName("Should return unknown key for unrecognized reason")
+        @DisplayName("Should return raw reason for unrecognized reason")
         void unknownReason() {
             BackupMetadata metadata = BackupMetadata.builder()
                     .backupReason("SOMETHING_ELSE")
                     .build();
 
-            assertThat(metadata.getReasonDisplay()).isEqualTo("backup.reason.unknown");
+            assertThat(metadata.getReasonDisplay()).isEqualTo("SOMETHING_ELSE");
         }
     }
 

@@ -1,6 +1,6 @@
 package com.ultikits.plugins.worlds.listener;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
 import com.ultikits.plugins.worlds.service.InventoryIsolationService;
@@ -40,7 +40,7 @@ class WorldListenerTest {
     private WorldListener listener;
     private WorldService mockWorldService;
     private InventoryIsolationService mockInventoryService;
-    private UltiWorlds mockPlugin;
+    private UltiToolsPlugin mockPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -53,6 +53,7 @@ class WorldListenerTest {
 
         UltiWorldsTestHelper.setField(listener, "worldService", mockWorldService);
         UltiWorldsTestHelper.setField(listener, "inventoryService", mockInventoryService);
+        UltiWorldsTestHelper.setField(listener, "plugin", mockPlugin);
     }
 
     @AfterEach

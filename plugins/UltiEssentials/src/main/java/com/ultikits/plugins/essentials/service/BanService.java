@@ -1,11 +1,10 @@
 package com.ultikits.plugins.essentials.service;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.BanData;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.bukkit.Bukkit;
@@ -30,19 +29,22 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class BanService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private EssentialsConfig config;
-    
+
     private DataOperator<BanData> banOperator;
-    
+
     /**
      * Initializes the service with the data operator.
      * Automatically called by the IoC container after construction.
      */
     @PostConstruct
     public void init() {
-        this.banOperator = UltiEssentials.getInstance().getDataOperator(BanData.class);
+        this.banOperator = plugin.getDataOperator(BanData.class);
     }
     
     /**
@@ -119,19 +121,17 @@ public class BanService {
      * @return true if unbanned, false if not banned
      */
     public boolean unbanPlayer(UUID targetUuid) {
-        List<BanData> activeBans = banOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(targetUuid.toString())
-                .build()
-        ).stream()
+        List<BanData> activeBans = banOperator.query()
+            .where("player_uuid").eq(targetUuid.toString())
+            .list()
+            .stream()
             .filter(b -> b.isActive() && !b.hasExpired())
             .collect(Collectors.toList());
-        
+
         if (activeBans.isEmpty()) {
             return false;
         }
-        
+
         for (BanData ban : activeBans) {
             ban.setActive(false);
             try {
@@ -140,7 +140,7 @@ public class BanService {
                 log.error("Failed to update ban record", e);
             }
         }
-        
+
         return true;
     }
     
@@ -151,19 +151,17 @@ public class BanService {
      * @return true if unbanned, false if not banned
      */
     public boolean unbanPlayerByName(String playerName) {
-        List<BanData> activeBans = banOperator.getAll(
-            WhereCondition.builder()
-                .column("player_name")
-                .value(playerName)
-                .build()
-        ).stream()
+        List<BanData> activeBans = banOperator.query()
+            .where("player_name").eq(playerName)
+            .list()
+            .stream()
             .filter(b -> b.isActive() && !b.hasExpired())
             .collect(Collectors.toList());
-        
+
         if (activeBans.isEmpty()) {
             return false;
         }
-        
+
         for (BanData ban : activeBans) {
             ban.setActive(false);
             try {
@@ -172,7 +170,7 @@ public class BanService {
                 log.error("Failed to update ban record", e);
             }
         }
-        
+
         return true;
     }
     
@@ -183,19 +181,17 @@ public class BanService {
      * @return true if unbanned, false if not banned
      */
     public boolean unbanIp(String ipAddress) {
-        List<BanData> ipBans = banOperator.getAll(
-            WhereCondition.builder()
-                .column("ip_address")
-                .value(ipAddress)
-                .build()
-        ).stream()
+        List<BanData> ipBans = banOperator.query()
+            .where("ip_address").eq(ipAddress)
+            .list()
+            .stream()
             .filter(b -> b.isActive() && !b.hasExpired())
             .collect(Collectors.toList());
-        
+
         if (ipBans.isEmpty()) {
             return false;
         }
-        
+
         for (BanData ban : ipBans) {
             ban.setActive(false);
             try {
@@ -204,7 +200,7 @@ public class BanService {
                 log.error("Failed to update ban record", e);
             }
         }
-        
+
         return true;
     }
     
@@ -213,13 +209,10 @@ public class BanService {
      */
     @Nullable
     public BanData getActiveBan(UUID playerUuid) {
-        List<BanData> bans = banOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<BanData> bans = banOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
+
         return bans.stream()
             .filter(b -> b.isActive() && !b.hasExpired())
             .findFirst()
@@ -234,14 +227,11 @@ public class BanService {
         if (ipAddress == null || ipAddress.isEmpty()) {
             return null;
         }
-        
-        List<BanData> bans = banOperator.getAll(
-            WhereCondition.builder()
-                .column("ip_address")
-                .value(ipAddress)
-                .build()
-        );
-        
+
+        List<BanData> bans = banOperator.query()
+            .where("ip_address").eq(ipAddress)
+            .list();
+
         return bans.stream()
             .filter(b -> b.isActive() && !b.hasExpired())
             .findFirst()
@@ -261,12 +251,9 @@ public class BanService {
      * Gets ban history for a player.
      */
     public List<BanData> getBanHistory(UUID playerUuid) {
-        return banOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+        return banOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
     }
     
     /**

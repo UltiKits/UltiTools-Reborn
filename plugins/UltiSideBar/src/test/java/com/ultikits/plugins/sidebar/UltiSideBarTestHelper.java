@@ -17,14 +17,14 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
- * Test helper for mocking UltiTools framework singletons.
+ * Test helper for mocking UltiTools framework dependencies.
  * <p>
- * UltiTools is a {@code final class extends JavaPlugin} — it cannot be mocked.
- * This helper mocks only UltiSideBar (extends abstract UltiToolsPlugin) and
- * avoids any code paths that call {@code UltiTools.getInstance()}.
+ * Since the singleton pattern has been removed, this helper creates mock
+ * UltiToolsPlugin instances for injection into services and commands.
  * <p>
  * Call {@link #setUp()} in {@code @BeforeEach} and {@link #tearDown()} in {@code @AfterEach}.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 public final class UltiSideBarTestHelper {
 
     private UltiSideBarTestHelper() {}
@@ -33,13 +33,12 @@ public final class UltiSideBarTestHelper {
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiSideBar singleton mock. Must be called before each test.
+     * Set up UltiSideBar mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiSideBar singleton (abstract UltiToolsPlugin — mockable)
+        // Mock UltiSideBar (abstract UltiToolsPlugin — mockable)
         mockPlugin = mock(UltiSideBar.class);
-        setStaticField(UltiSideBar.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -55,10 +54,11 @@ public final class UltiSideBarTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiSideBar.class, "instance", null);
+        mockPlugin = null;
+        mockLogger = null;
     }
 
     public static UltiSideBar getMockPlugin() {
@@ -101,16 +101,21 @@ public final class UltiSideBarTestHelper {
 
     // --- Reflection ---
 
-    public static void setStaticField(Class<?> clazz, String fieldName, Object value)
-            throws Exception {
-        Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(null, value);
-    }
-
     public static void setField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
+        Class<?> clazz = target.getClass();
+        Field field = null;
+        while (clazz != null) {
+            try {
+                field = clazz.getDeclaredField(fieldName);
+                break;
+            } catch (NoSuchFieldException e) {
+                clazz = clazz.getSuperclass();
+            }
+        }
+        if (field == null) {
+            throw new NoSuchFieldException(fieldName);
+        }
+        field.setAccessible(true); // NOPMD - intentional reflection for test mock injection
         field.set(target, value);
     }
 }

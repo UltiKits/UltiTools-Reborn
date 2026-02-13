@@ -31,29 +31,30 @@ class LoginProtectionListenerTest {
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
         loginService = mock(LoginService.class);
-        listener = new LoginProtectionListener();
-
-        // Inject loginService via reflection
-        UltiLoginTestHelper.setField(listener, "loginService", loginService);
 
         // Mock config on loginService
         config = UltiLoginTestHelper.createDefaultConfig();
         lenient().when(loginService.getConfig()).thenReturn(config);
 
-        playerUuid = UUID.randomUUID();
-        player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
-
-        // Mock Bukkit.server for PlayerCommandPreprocessEvent
+        // Mock Bukkit.server before LoginProtectionListener constructor (it calls Bukkit.getPluginManager())
         try {
             java.lang.reflect.Field serverField = org.bukkit.Bukkit.class.getDeclaredField("server");
             serverField.setAccessible(true);
             if (serverField.get(null) == null) {
                 Server mockServer = mock(Server.class);
+                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
+                lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
+                lenient().when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
                 serverField.set(null, mockServer);
             }
         } catch (Exception ignored) {
             // Server may already be set
         }
+
+        listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
+
+        playerUuid = UUID.randomUUID();
+        player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
 
         // Mock player.getServer() for PlayerCommandPreprocessEvent
         Server playerServer = mock(Server.class);

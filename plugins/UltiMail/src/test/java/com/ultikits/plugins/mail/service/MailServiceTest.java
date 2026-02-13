@@ -1,12 +1,12 @@
 package com.ultikits.plugins.mail.service;
 
-import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.utils.TestHelper;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -45,6 +45,9 @@ class MailServiceTest {
     @Mock
     private DataOperator<MailData> mockDataOperator;
 
+    @Mock
+    private Query<MailData> mockQueryBuilder;
+
     private MailConfig config;
 
     @Mock
@@ -66,9 +69,14 @@ class MailServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Setup UltiMail mock
-        UltiMail mockPlugin = TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        UltiToolsPlugin mockPlugin = TestHelper.mockUltiToolsPlugin();
         when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mockDataOperator);
+
+        // Setup Query DSL chain
+        when(mockDataOperator.query()).thenReturn(mockQueryBuilder);
+        when(mockQueryBuilder.where(anyString())).thenReturn(mockQueryBuilder);
+        when(mockQueryBuilder.eq(any())).thenReturn(mockQueryBuilder);
 
         // Use real MailConfig with default values
         config = new MailConfig();
@@ -98,6 +106,7 @@ class MailServiceTest {
         mailService = new MailService();
         injectField(mailService, "config", config);
         injectField(mailService, "dataOperator", mockDataOperator);
+        injectField(mailService, "plugin", mockPlugin);
     }
 
     @AfterEach
@@ -396,7 +405,7 @@ class MailServiceTest {
             List<MailData> mails = new ArrayList<>();
             mails.add(createTestMail("s1", "sender1", receiverUuid.toString(), "ReceiverPlayer"));
             mails.add(createTestMail("s2", "sender2", receiverUuid.toString(), "ReceiverPlayer"));
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getInbox(receiverUuid);
 
@@ -412,7 +421,7 @@ class MailServiceTest {
             mail2.setDeletedByReceiver(true);
             mails.add(mail1);
             mails.add(mail2);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getInbox(receiverUuid);
 
@@ -429,7 +438,7 @@ class MailServiceTest {
             mail2.setSentTime(2000L);
             mails.add(mail1);
             mails.add(mail2);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getInbox(receiverUuid);
 
@@ -439,7 +448,7 @@ class MailServiceTest {
         @Test
         @DisplayName("空收件箱应该返回空列表")
         void shouldReturnEmptyForEmptyInbox() {
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(new ArrayList<>());
+            when(mockQueryBuilder.list()).thenReturn(new ArrayList<>());
 
             List<MailData> result = mailService.getInbox(receiverUuid);
 
@@ -453,7 +462,7 @@ class MailServiceTest {
             MailData mail = createTestMail("s1", "sender1", receiverUuid.toString(), "ReceiverPlayer");
             mail.setDeletedByReceiver(true);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getInbox(receiverUuid);
 
@@ -472,7 +481,7 @@ class MailServiceTest {
         void shouldReturnSentMails() {
             List<MailData> mails = new ArrayList<>();
             mails.add(createTestMail(senderUuid.toString(), "SenderPlayer", "r1", "receiver1"));
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getSentMails(senderUuid);
 
@@ -486,7 +495,7 @@ class MailServiceTest {
             MailData mail = createTestMail(senderUuid.toString(), "SenderPlayer", "r1", "receiver1");
             mail.setDeletedBySender(true);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getSentMails(senderUuid);
 
@@ -503,7 +512,7 @@ class MailServiceTest {
             mail2.setSentTime(3000L);
             mails.add(mail1);
             mails.add(mail2);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             List<MailData> result = mailService.getSentMails(senderUuid);
 
@@ -530,7 +539,7 @@ class MailServiceTest {
             mails.add(mail1);
             mails.add(mail2);
             mails.add(mail3);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.getUnreadCount(receiverUuid);
 
@@ -544,7 +553,7 @@ class MailServiceTest {
             MailData mail = createTestMail("s1", "sender1", receiverUuid.toString(), "ReceiverPlayer");
             mail.setRead(true);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.getUnreadCount(receiverUuid);
 
@@ -554,7 +563,7 @@ class MailServiceTest {
         @Test
         @DisplayName("空收件箱应返回 0")
         void shouldReturnZeroForEmptyInbox() {
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(new ArrayList<>());
+            when(mockQueryBuilder.list()).thenReturn(new ArrayList<>());
 
             int count = mailService.getUnreadCount(receiverUuid);
 
@@ -816,11 +825,11 @@ class MailServiceTest {
             MailData mail = createTestMail(senderUuid.toString(), "SenderPlayer",
                 receiverUuid.toString(), "ReceiverPlayer");
             mail.setDeletedBySender(true);
-            mail.setId(123);
+            mail.setId("123");
 
             mailService.deleteMail(mail, receiverUuid);
 
-            verify(mockDataOperator).delById(123);
+            verify(mockDataOperator).delById("123");
         }
 
         @Test
@@ -851,7 +860,7 @@ class MailServiceTest {
             MailData mail2 = createTestMail("s2", "sender2", receiverUuid.toString(), "ReceiverPlayer");
             mails.add(mail1);
             mails.add(mail2);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteAllByReceiver(receiverUuid);
 
@@ -866,7 +875,7 @@ class MailServiceTest {
             mail.setItems("someItems");
             mail.setClaimed(false);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteAllByReceiver(receiverUuid);
 
@@ -881,7 +890,7 @@ class MailServiceTest {
             mail.setItems("someItems");
             mail.setClaimed(true);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteAllByReceiver(receiverUuid);
 
@@ -905,7 +914,7 @@ class MailServiceTest {
             mail2.setRead(false);
             mails.add(mail1);
             mails.add(mail2);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteReadByReceiver(receiverUuid);
 
@@ -921,7 +930,7 @@ class MailServiceTest {
             mail.setItems("someItems");
             mail.setClaimed(false);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteReadByReceiver(receiverUuid);
 
@@ -937,7 +946,7 @@ class MailServiceTest {
             mail.setItems("someItems");
             mail.setClaimed(true);
             mails.add(mail);
-            when(mockDataOperator.getAll(any(WhereCondition.class))).thenReturn(mails);
+            when(mockQueryBuilder.list()).thenReturn(mails);
 
             int count = mailService.deleteReadByReceiver(receiverUuid);
 

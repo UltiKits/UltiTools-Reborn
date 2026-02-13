@@ -12,7 +12,6 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
-import java.io.File;
 import java.lang.reflect.Field;
 import java.util.UUID;
 
@@ -21,15 +20,14 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
- * Test helper for mocking UltiTools framework singletons.
+ * Test helper for mocking UltiTools framework dependencies.
  * <p>
- * UltiTools is a {@code final class extends JavaPlugin} — it cannot be mocked.
- * This helper mocks only UltiBackup (extends abstract UltiToolsPlugin) and
- * avoids any code paths that call {@code UltiTools.getInstance()}.
- * Tests that need file I/O use temp directories directly.
+ * Since the singleton pattern has been removed, this helper creates mock
+ * UltiToolsPlugin instances for injection into services and commands.
  * <p>
  * Call {@link #setUp()} in {@code @BeforeEach} and {@link #tearDown()} in {@code @AfterEach}.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 public final class UltiBackupTestHelper {
 
     private UltiBackupTestHelper() {}
@@ -38,13 +36,12 @@ public final class UltiBackupTestHelper {
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiBackup singleton mock. Must be called before each test.
+     * Set up UltiBackup mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiBackup singleton (abstract UltiToolsPlugin — mockable)
+        // Mock UltiBackup (abstract UltiToolsPlugin — mockable)
         mockPlugin = mock(UltiBackup.class);
-        setStaticField(UltiBackup.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -60,10 +57,11 @@ public final class UltiBackupTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiBackup.class, "instance", null);
+        mockPlugin = null;
+        mockLogger = null;
     }
 
     public static UltiBackup getMockPlugin() {
@@ -143,16 +141,21 @@ public final class UltiBackupTestHelper {
 
     // --- Reflection ---
 
-    public static void setStaticField(Class<?> clazz, String fieldName, Object value)
-            throws Exception {
-        Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(null, value);
-    }
-
     public static void setField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
+        Class<?> clazz = target.getClass();
+        Field field = null;
+        while (clazz != null) {
+            try {
+                field = clazz.getDeclaredField(fieldName);
+                break;
+            } catch (NoSuchFieldException e) {
+                clazz = clazz.getSuperclass();
+            }
+        }
+        if (field == null) {
+            throw new NoSuchFieldException(fieldName);
+        }
+        field.setAccessible(true); // NOPMD - intentional reflection for test mock injection
         field.set(target, value);
     }
 }

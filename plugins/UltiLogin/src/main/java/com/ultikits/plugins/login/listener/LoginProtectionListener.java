@@ -3,14 +3,14 @@ package com.ultikits.plugins.login.listener;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -31,9 +31,16 @@ import org.bukkit.event.player.*;
  */
 @EventListener
 public class LoginProtectionListener implements Listener {
-    
-    @Autowired
-    private LoginService loginService;
+
+    private final UltiToolsPlugin plugin;
+    private final LoginService loginService;
+    private final Plugin bukkitPlugin;
+
+    public LoginProtectionListener(UltiToolsPlugin plugin, LoginService loginService) {
+        this.plugin = plugin;
+        this.loginService = loginService;
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+    }
     
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerJoin(PlayerJoinEvent event) {
@@ -42,7 +49,7 @@ public class LoginProtectionListener implements Listener {
         
         // Open GUI if enabled (with delay for proper loading)
         if (loginService.getConfig().isGuiModeEnabled()) {
-            Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     // Check if already has valid session (handled in onPlayerJoin)
                     if (loginService.hasValidSession(player)) {
@@ -50,9 +57,9 @@ public class LoginProtectionListener implements Listener {
                     }
                     
                     if (loginService.isRegistered(player.getUniqueId())) {
-                        LoginGUIPage.open(player, loginService);
+                        LoginGUIPage.open(player, plugin, loginService);
                     } else {
-                        RegisterGUIPage.open(player, loginService);
+                        RegisterGUIPage.open(player, plugin, loginService);
                     }
                 }
             }, 20L); // 1 second delay for compatibility with skin plugins
@@ -194,12 +201,12 @@ public class LoginProtectionListener implements Listener {
     private void sendLoginPrompt(Player player) {
         if (loginService.getConfig().isGuiModeEnabled()) {
             // Reopen GUI
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     if (loginService.isRegistered(player.getUniqueId())) {
-                        LoginGUIPage.open(player, loginService);
+                        LoginGUIPage.open(player, plugin, loginService);
                     } else {
-                        RegisterGUIPage.open(player, loginService);
+                        RegisterGUIPage.open(player, plugin, loginService);
                     }
                 }
             });

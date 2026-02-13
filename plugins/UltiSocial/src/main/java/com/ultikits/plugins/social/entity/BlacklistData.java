@@ -2,7 +2,7 @@ package com.ultikits.plugins.social.entity;
 
 import java.util.UUID;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -25,7 +25,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Builder
 @Table("blacklist")
-public class BlacklistData extends AbstractDataEntity {
+public class BlacklistData extends BaseDataEntity<String> {
     
     /**
      * The UUID of the player who blocked

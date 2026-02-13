@@ -1,6 +1,6 @@
 package com.ultikits.plugins.remotebag.entity;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -25,7 +25,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 @Table("remote_bags")
-public class RemoteBagData extends AbstractDataEntity {
+public class RemoteBagData extends BaseDataEntity<Integer> {
     
     @Column("player_uuid")
     private String playerUuid;

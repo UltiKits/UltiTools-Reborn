@@ -28,11 +28,7 @@ class BagListenerTest {
         bagService = mock(RemoteBagService.class);
         lockService = mock(BagLockService.class);
 
-        listener = new BagListener();
-
-        // Inject dependencies via reflection
-        UltiRemoteBagTestHelper.setField(listener, "bagService", bagService);
-        UltiRemoteBagTestHelper.setField(listener, "lockService", lockService);
+        listener = new BagListener(bagService, lockService);
 
         playerUuid = UUID.randomUUID();
         player = UltiRemoteBagTestHelper.createMockPlayer("TestPlayer", playerUuid);

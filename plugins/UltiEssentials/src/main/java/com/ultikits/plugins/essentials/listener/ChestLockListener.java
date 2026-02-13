@@ -1,9 +1,9 @@
 package com.ultikits.plugins.essentials.listener;
 
-import com.ultikits.plugins.essentials.UltiEssentials;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.ChestLockData;
 import com.ultikits.plugins.essentials.service.ChestLockService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import org.bukkit.block.Block;
@@ -30,8 +30,11 @@ import org.bukkit.inventory.InventoryHolder;
 public class ChestLockListener implements Listener {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private EssentialsConfig config;
-    
+
     @Autowired
     private ChestLockService chestLockService;
     
@@ -57,8 +60,8 @@ public class ChestLockListener implements Listener {
             
             ChestLockData lock = chestLockService.getLock(block.getLocation());
             if (lock != null) {
-                player.sendMessage(UltiEssentials.getInstance().i18n("§c该容器被 §f") + 
-                    lock.getOwnerName() + UltiEssentials.getInstance().i18n(" §c锁定"));
+                player.sendMessage(plugin.i18n("§c该容器被 §f") + 
+                    lock.getOwnerName() + plugin.i18n(" §c锁定"));
             }
         }
     }
@@ -88,8 +91,8 @@ public class ChestLockListener implements Listener {
         
         if (!isOwner && !isAdmin) {
             event.setCancelled(true);
-            player.sendMessage(UltiEssentials.getInstance().i18n("§c该容器被 §f") + 
-                lock.getOwnerName() + UltiEssentials.getInstance().i18n(" §c锁定，无法破坏"));
+            player.sendMessage(plugin.i18n("§c该容器被 §f") + 
+                lock.getOwnerName() + plugin.i18n(" §c锁定，无法破坏"));
             return;
         }
         

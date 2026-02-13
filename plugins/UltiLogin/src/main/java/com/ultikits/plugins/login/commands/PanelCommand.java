@@ -1,9 +1,8 @@
 package com.ultikits.plugins.login.commands;
 
-import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import net.md_5.bungee.api.chat.ClickEvent;
@@ -15,6 +14,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 /**
  * Panel command — opens the UltiCloud web panel with magic link authentication.
@@ -29,32 +29,36 @@ import org.bukkit.entity.Player;
     alias = {"panel"},
     description = "Open UltiCloud web panel"
 )
-public class PanelCommand extends AbstractCommendExecutor {
+public class PanelCommand extends BaseCommandExecutor {
 
+    private final UltiToolsPlugin plugin;
     private final LoginService loginService;
+    private final Plugin bukkitPlugin;
 
-    public PanelCommand(LoginService loginService) {
+    public PanelCommand(UltiToolsPlugin plugin, LoginService loginService) {
+        this.plugin = plugin;
         this.loginService = loginService;
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     }
 
     @CmdMapping(format = "")
     public void openPanel(@CmdSender Player player) {
         if (!loginService.isPanelEnabled()) {
             player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                UltiLogin.getInstance().i18n("panel_not_enabled")));
+                plugin.i18n("panel_not_enabled")));
             return;
         }
 
         // Send generating message
         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-            UltiLogin.getInstance().i18n("panel_generating")));
+            plugin.i18n("panel_generating")));
 
         // Run async to avoid blocking the main thread (HTTP call)
-        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             LoginService.PanelLinkResult result = loginService.requestPanelLink(player);
 
             // Send result back on main thread
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
                 if (!player.isOnline()) {
                     return;
                 }
@@ -64,7 +68,7 @@ public class PanelCommand extends AbstractCommendExecutor {
                     // Send clickable link using Bungee chat API
                     TextComponent message = new TextComponent(
                         ChatColor.translateAlternateColorCodes('&',
-                            UltiLogin.getInstance().i18n("panel_link_sent")
+                            plugin.i18n("panel_link_sent")
                                 .replace("{URL}", url)));
                     message.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url));
                     message.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
@@ -75,7 +79,7 @@ public class PanelCommand extends AbstractCommendExecutor {
                     loginService.startAuthPolling(player.getUniqueId().toString(), player);
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        UltiLogin.getInstance().i18n("panel_error")));
+                        plugin.i18n("panel_error")));
                 }
             });
         });

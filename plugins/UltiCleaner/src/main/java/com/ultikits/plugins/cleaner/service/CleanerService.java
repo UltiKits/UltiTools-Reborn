@@ -1,12 +1,12 @@
 package com.ultikits.plugins.cleaner.service;
 
-import com.ultikits.plugins.cleaner.UltiCleaner;
 import com.ultikits.plugins.cleaner.config.CleanerConfig;
 import com.ultikits.plugins.cleaner.events.CleanCompleteEvent;
 import com.ultikits.plugins.cleaner.events.PreEntityCleanEvent;
 import com.ultikits.plugins.cleaner.events.PreItemCleanEvent;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -17,7 +17,7 @@ import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Tameable;
-import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.plugin.Plugin;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,61 +32,53 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Service
 public class CleanerService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private CleanerConfig config;
-    
+
     @Autowired
     private TpsAwareScheduler tpsScheduler;
-    
-    private BukkitTask itemCleanTask;
-    private BukkitTask entityCleanTask;
-    private BukkitTask smartCleanTask;
+
+    private final Plugin bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+
     private Set<String> itemWhitelistCache;
     private Set<EntityType> entityTypesCache;
     private Set<String> worldBlacklistCache;
-    
+
     // Track countdown state
     private int itemCountdown;
     private int entityCountdown;
-    
+
     // Smart clean tracking
     private long lastSmartCleanTime = 0;
-    
+
     // Batch processing state
     private boolean isCleaningInProgress = false;
     
     /**
      * Initialize the cleaner service.
+     * Note: Tasks are now automatically scheduled via @Scheduled annotations.
      */
     public void init() {
         loadCaches();
-        startTasks();
-        
-        // Initialize TPS scheduler
-        if (tpsScheduler != null) {
-            tpsScheduler.init();
-        }
     }
-    
+
     /**
      * Shutdown the cleaner service.
+     * Note: Tasks are now automatically cancelled by the framework.
      */
     public void shutdown() {
-        stopTasks();
-        
-        if (tpsScheduler != null) {
-            tpsScheduler.shutdown();
-        }
+        // No manual task cancellation needed - framework handles @Scheduled tasks
     }
-    
+
     /**
      * Reload configuration.
      */
     public void reload() {
-        stopTasks();
         loadCaches();
-        startTasks();
     }
     
     /**
@@ -106,7 +98,7 @@ public class CleanerService {
                 try {
                     entityTypesCache.add(EntityType.valueOf(type.toUpperCase()));
                 } catch (IllegalArgumentException e) {
-                    UltiCleaner.getInstance().getLogger().warn("Unknown entity type: " + type);
+                    plugin.getLogger().warn("Unknown entity type: " + type);
                 }
             }
         }
@@ -122,62 +114,13 @@ public class CleanerService {
         entityCountdown = config.getEntityCleanInterval();
     }
     
-    /**
-     * Start cleanup tasks.
-     */
-    private void startTasks() {
-        // Item cleanup task - runs every second for countdown
-        if (config.isItemCleanEnabled()) {
-            itemCountdown = config.getItemCleanInterval();
-            itemCleanTask = Bukkit.getScheduler().runTaskTimer(
-                UltiTools.getInstance(),
-                this::tickItemClean,
-                20L, 20L // Every second
-            );
-        }
-        
-        // Entity cleanup task - runs at interval directly
-        if (config.isEntityCleanEnabled()) {
-            entityCountdown = config.getEntityCleanInterval();
-            entityCleanTask = Bukkit.getScheduler().runTaskTimer(
-                UltiTools.getInstance(),
-                this::tickEntityClean,
-                20L, 20L // Every second
-            );
-        }
-        
-        // Smart cleanup task - checks thresholds every 5 seconds
-        if (config.isSmartCleanEnabled()) {
-            smartCleanTask = Bukkit.getScheduler().runTaskTimer(
-                UltiTools.getInstance(),
-                this::checkSmartClean,
-                100L, 100L // Every 5 seconds
-            );
-        }
-    }
-    
-    /**
-     * Stop cleanup tasks.
-     */
-    private void stopTasks() {
-        if (itemCleanTask != null) {
-            itemCleanTask.cancel();
-            itemCleanTask = null;
-        }
-        if (entityCleanTask != null) {
-            entityCleanTask.cancel();
-            entityCleanTask = null;
-        }
-        if (smartCleanTask != null) {
-            smartCleanTask.cancel();
-            smartCleanTask = null;
-        }
-    }
     
     /**
      * Check if smart cleanup should be triggered.
+     * Runs every 5 seconds (100 ticks).
      */
-    private void checkSmartClean() {
+    @Scheduled(period = 100, async = false)
+    public void checkSmartClean() {
         if (!config.isSmartCleanEnabled() || isCleaningInProgress) {
             return;
         }
@@ -232,8 +175,13 @@ public class CleanerService {
     
     /**
      * Item cleanup tick.
+     * Runs every second (20 ticks) to countdown and trigger cleanup.
      */
-    private void tickItemClean() {
+    @Scheduled(period = 20, async = false)
+    public void tickItemClean() {
+        if (!config.isItemCleanEnabled()) {
+            return;
+        }
         itemCountdown--;
         
         // Check if we need to warn
@@ -250,8 +198,13 @@ public class CleanerService {
     
     /**
      * Entity cleanup tick.
+     * Runs every second (20 ticks) to countdown and trigger cleanup.
      */
-    private void tickEntityClean() {
+    @Scheduled(period = 20, async = false)
+    public void tickEntityClean() {
+        if (!config.isEntityCleanEnabled()) {
+            return;
+        }
         entityCountdown--;
         
         // Check if we need to warn for entities
@@ -299,7 +252,7 @@ public class CleanerService {
             broadcastItemCleaned(count);
             
             // Fire complete event (async)
-            Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
                 CleanCompleteEvent completeEvent = new CleanCompleteEvent(
                     CleanCompleteEvent.CleanType.ITEMS,
                     count,
@@ -345,7 +298,7 @@ public class CleanerService {
             broadcastEntityCleaned(count);
             
             // Fire complete event (async)
-            Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
                 CleanCompleteEvent completeEvent = new CleanCompleteEvent(
                     CleanCompleteEvent.CleanType.ENTITIES,
                     count,
@@ -464,7 +417,7 @@ public class CleanerService {
         AtomicInteger currentIndex = new AtomicInteger(0);
         int totalCount = uuids.size();
         
-        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), task -> {
+        Bukkit.getScheduler().runTaskTimer(bukkitPlugin, task -> {
             int processed = 0;
             
             while (processed < batchSize && currentIndex.get() < uuids.size()) {

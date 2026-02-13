@@ -142,10 +142,56 @@ enableClickableButtons: true # 启用聊天可点击按钮
 
 ## 🔧 技术架构
 
-- **框架**: UltiTools-API 6.x
-- **注解驱动**: `@Service`, `@Autowired`, `@CmdMapping`, `@Table`
-- **数据持久化**: DataOperator ORM
+- **框架**: UltiTools-API 6.2.0+
+- **注解驱动**: `@Service`, `@Autowired`, `@CmdMapping`, `@Table`, `@Scheduled`
+- **数据持久化**: Query DSL + DataOperator ORM
 - **依赖注入**: UltiTools IoC 容器
+- **配置验证**: `@Range`, `@NotEmpty` validation annotations
+
+### UltiTools-API 6.2.0 新特性应用
+
+本插件已完全迁移到 UltiTools-API 6.2.0 的现代化模式：
+
+#### 1. Query DSL (查询构建器)
+
+```java
+// 旧模式
+List<PlayerTradeSettings> settings = settingsOperator.getAll(
+    WhereCondition.builder().column("player_uuid").value(uuid).build()
+);
+
+// 新模式 - 流式 API
+List<PlayerTradeSettings> settings = settingsOperator.query()
+    .where("player_uuid").eq(uuid)
+    .list();
+```
+
+#### 2. @Scheduled 任务系统
+
+```java
+// 自动注册的定时任务
+@Scheduled(period = 200, async = false)
+public void cleanupExpiredRequests() {
+    // 每10秒执行一次，自动管理生命周期
+}
+```
+
+#### 3. 配置验证
+
+```java
+@Range(min = 5, max = 600)
+@ConfigEntry(path = "request-timeout")
+private int requestTimeout = 30;
+
+@NotEmpty
+@ConfigEntry(path = "gui-title")
+private String guiTitle = "&6与 {PLAYER} 交易";
+```
+
+#### 4. 基类迁移
+
+- `AbstractCommendExecutor` → `BaseCommandExecutor`
+- `AbstractDataEntity` → `BaseDataEntity<String>`
 
 ### 主要类说明
 

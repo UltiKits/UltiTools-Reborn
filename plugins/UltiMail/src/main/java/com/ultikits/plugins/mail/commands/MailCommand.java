@@ -1,12 +1,13 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.gui.AttachmentSelectorPage;
 import com.ultikits.plugins.mail.gui.MailboxGUI;
 import com.ultikits.plugins.mail.gui.SentboxGUI;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
@@ -37,11 +38,14 @@ import java.util.List;
     permission = "ultimail.use",
     description = "邮件系统"
 )
-public class MailCommand extends AbstractCommandExecutor {
+public class MailCommand extends BaseCommandExecutor {
     
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     private final MailService mailService;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
-    
+
     public MailCommand(MailService mailService) {
         this.mailService = mailService;
     }
@@ -53,7 +57,7 @@ public class MailCommand extends AbstractCommandExecutor {
      */
     @CmdMapping(format = "read")
     public void openInboxGUI(@CmdSender Player player) {
-        new MailboxGUI(player, mailService).open();
+        new MailboxGUI(player, mailService, plugin).open();
     }
     
     /**
@@ -61,7 +65,7 @@ public class MailCommand extends AbstractCommandExecutor {
      */
     @CmdMapping(format = "sentgui")
     public void openSentboxGUI(@CmdSender Player player) {
-        new SentboxGUI(player, mailService).open();
+        new SentboxGUI(player, mailService, plugin).open();
     }
     
     // ==================== Text Commands ====================
@@ -251,7 +255,7 @@ public class MailCommand extends AbstractCommandExecutor {
     public void sendAllWithItems(@CmdSender Player player, @CmdParam("content") String content) {
         int maxItems = mailService.getConfig().getMaxItems();
         
-        new AttachmentSelectorPage(player, maxItems,
+        new AttachmentSelectorPage(player, maxItems, plugin,
             items -> {
                 if (items != null && items.length > 0) {
                     mailService.sendToAll(player, content, items);
@@ -303,6 +307,6 @@ public class MailCommand extends AbstractCommandExecutor {
     }
     
     private String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

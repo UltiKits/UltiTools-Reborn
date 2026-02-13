@@ -1,11 +1,12 @@
 package com.ultikits.plugins.worlds.service;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -35,12 +36,11 @@ class WorldServiceTest {
     private WorldService worldService;
     private WorldConfig mockConfig;
     private DataOperator<WorldSettings> mockDataOperator;
-    private UltiWorlds mockPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
         UltiWorldsTestHelper.setUp();
-        mockPlugin = UltiWorldsTestHelper.getMockPlugin();
+        UltiToolsPlugin mockPlugin = UltiWorldsTestHelper.getMockPlugin();
 
         worldService = new WorldService();
         mockConfig = UltiWorldsTestHelper.createDefaultConfig();
@@ -48,6 +48,7 @@ class WorldServiceTest {
 
         UltiWorldsTestHelper.setField(worldService, "config", mockConfig);
         UltiWorldsTestHelper.setField(worldService, "dataOperator", mockDataOperator);
+        UltiWorldsTestHelper.setField(worldService, "plugin", mockPlugin);
 
         when(mockPlugin.getDataOperator(WorldSettings.class)).thenReturn(mockDataOperator);
     }
@@ -55,6 +56,20 @@ class WorldServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiWorldsTestHelper.tearDown();
+    }
+
+    /**
+     * Helper to mock a query chain that returns a specific result.
+     */
+    @SuppressWarnings("unchecked")
+    private Query<WorldSettings> mockQueryReturning(WorldSettings result) {
+        Query<WorldSettings> mockQuery = mock(Query.class);
+        when(mockDataOperator.query()).thenReturn(mockQuery);
+        when(mockQuery.where(anyString())).thenReturn(mockQuery);
+        when(mockQuery.eq(any())).thenReturn(mockQuery);
+        when(mockQuery.first()).thenReturn(result);
+        when(mockQuery.delete()).thenReturn(result != null ? 1 : 0);
+        return mockQuery;
     }
 
     @Nested
@@ -65,22 +80,20 @@ class WorldServiceTest {
         @DisplayName("getOrCreateSettings should return cached settings")
         void getOrCreateSettingsCached() {
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             WorldSettings result1 = worldService.getOrCreateSettings("world");
             WorldSettings result2 = worldService.getOrCreateSettings("world");
 
             assertThat(result1).isSameAs(result2);
             assertThat(result1).isSameAs(settings);
-            verify(mockDataOperator, times(1)).getAll(any(WhereCondition.class));
+            verify(mockDataOperator, times(1)).query();
         }
 
         @Test
         @DisplayName("getOrCreateSettings should create new settings when not exists")
         void getOrCreateSettingsNew() {
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.emptyList());
+            mockQueryReturning(null);
 
             WorldSettings result = worldService.getOrCreateSettings("new_world");
 
@@ -108,8 +121,7 @@ class WorldServiceTest {
         void canEnterWorldNormal() {
             Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("world");
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "world");
 
@@ -124,8 +136,7 @@ class WorldServiceTest {
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("blocked_world");
             settings.setBlocked(true);
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "blocked_world");
 
@@ -140,8 +151,7 @@ class WorldServiceTest {
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("blocked_world");
             settings.setBlocked(true);
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "blocked_world");
 
@@ -156,8 +166,7 @@ class WorldServiceTest {
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("locked_world");
             settings.setLocked(true);
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "locked_world");
 
@@ -173,8 +182,7 @@ class WorldServiceTest {
             when(mockConfig.isPermissionPerWorld()).thenReturn(true);
 
             WorldSettings settings = UltiWorldsTestHelper.createSampleWorldSettings("special");
-            when(mockDataOperator.getAll(any(WhereCondition.class)))
-                    .thenReturn(Collections.singletonList(settings));
+            mockQueryReturning(settings);
 
             boolean result = worldService.canEnterWorld(player, "special");
 
@@ -892,16 +900,4 @@ class WorldServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("Shutdown")
-    class Shutdown {
-
-        @Test
-        @DisplayName("shutdown should complete without errors")
-        void shutdownClean() {
-            worldService.shutdown();
-
-            // Should not throw any exceptions
-        }
-    }
 }

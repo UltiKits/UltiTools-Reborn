@@ -1,8 +1,8 @@
 package com.ultikits.plugins.backup.gui;
 
-import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
@@ -30,7 +30,8 @@ import java.util.UUID;
  * @version 2.0.0
  */
 public class BackupGUI implements InventoryHolder {
-    
+
+    private final UltiToolsPlugin plugin;
     private final BackupService backupService;
     private final Player viewer;
     private final UUID targetUuid;
@@ -38,10 +39,11 @@ public class BackupGUI implements InventoryHolder {
     private final Inventory inventory;
     private final List<BackupMetadata> backups;
     private int currentPage = 0;
-    
+
     private static final int ITEMS_PER_PAGE = 45;
-    
-    public BackupGUI(BackupService backupService, Player viewer, UUID targetUuid, String targetName) {
+
+    public BackupGUI(UltiToolsPlugin plugin, BackupService backupService, Player viewer, UUID targetUuid, String targetName) {
+        this.plugin = plugin;
         this.backupService = backupService;
         this.viewer = viewer;
         this.targetUuid = targetUuid;
@@ -247,6 +249,6 @@ public class BackupGUI implements InventoryHolder {
      * Get i18n message.
      */
     private String i18n(String key) {
-        return UltiBackup.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

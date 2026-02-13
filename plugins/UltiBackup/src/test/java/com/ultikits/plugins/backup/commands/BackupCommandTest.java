@@ -3,6 +3,7 @@ package com.ultikits.plugins.backup.commands;
 import com.ultikits.plugins.backup.UltiBackupTestHelper;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
@@ -19,6 +20,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("BackupCommand Tests")
 class BackupCommandTest {
 
+    private UltiToolsPlugin plugin;
     private BackupService backupService;
     private BackupCommand command;
     private Player player;
@@ -27,8 +29,11 @@ class BackupCommandTest {
     @BeforeEach
     void setUp() throws Exception {
         UltiBackupTestHelper.setUp();
+        plugin = UltiBackupTestHelper.getMockPlugin();
         backupService = mock(BackupService.class);
-        command = new BackupCommand(backupService);
+        command = new BackupCommand();
+        UltiBackupTestHelper.setField(command, "plugin", plugin);
+        UltiBackupTestHelper.setField(command, "backupService", backupService);
 
         playerUuid = UUID.randomUUID();
         player = UltiBackupTestHelper.createMockPlayer("TestPlayer", playerUuid);

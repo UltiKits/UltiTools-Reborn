@@ -1,18 +1,18 @@
 package com.ultikits.plugins.cleaner.service;
 
-import com.ultikits.plugins.cleaner.UltiCleaner;
 import com.ultikits.plugins.cleaner.config.CleanerConfig;
 import com.ultikits.plugins.cleaner.events.PreChunkUnloadEvent;
 import com.ultikits.plugins.cleaner.utils.ServerTypeUtil;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,53 +29,46 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Service
 public class ChunkUnloadService {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private CleanerConfig config;
-    
+
     @Autowired
     private TpsAwareScheduler tpsScheduler;
-    
-    private BukkitTask unloadTask;
-    private long lastUnloadTime = 0;
+
+    private final Plugin bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     
     /**
      * Initialize the chunk unload service.
+     * Note: Task is now automatically scheduled via @Scheduled annotation.
      */
     public void init() {
-        if (!config.isChunkUnloadEnabled()) {
-            return;
+        if (config.isChunkUnloadEnabled()) {
+            plugin.getLogger().info("Chunk unload service initialized.");
         }
-        
-        // Run check every 30 seconds
-        unloadTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTools.getInstance(),
-            this::checkAndUnloadChunks,
-            600L, // 30 seconds delay
-            600L  // 30 seconds interval
-        );
-        
-        UltiCleaner.getInstance().getLogger().info("Chunk unload service initialized.");
     }
-    
+
     /**
      * Shutdown the chunk unload service.
+     * Note: @Scheduled tasks are automatically cancelled by the framework.
      */
     public void shutdown() {
-        if (unloadTask != null) {
-            unloadTask.cancel();
-            unloadTask = null;
-        }
+        // No manual task cancellation needed
     }
     
     /**
      * Check and unload far chunks.
+     * Runs every 30 seconds (600 ticks).
      */
-    private void checkAndUnloadChunks() {
+    @Scheduled(period = 600, async = false)
+    public void checkAndUnloadChunks() {
         if (!config.isChunkUnloadEnabled()) {
             return;
         }
-        
+
         List<Chunk> chunksToUnload = collectChunksToUnload();
         
         if (!chunksToUnload.isEmpty()) {
@@ -186,7 +179,7 @@ public class ChunkUnloadService {
         AtomicInteger index = new AtomicInteger(0);
         int timeoutSeconds = config.getChunkUnloadTimeout();
         
-        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), task -> {
+        Bukkit.getScheduler().runTaskTimer(bukkitPlugin, task -> {
             int processed = 0;
             
             while (processed < batchSize && index.get() < chunks.size()) {
@@ -243,7 +236,7 @@ public class ChunkUnloadService {
         
         try {
             // Schedule unload on main thread
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
                 boolean success = chunk.unload(true);
                 future.complete(success);
             });
@@ -251,7 +244,7 @@ public class ChunkUnloadService {
             // Apply timeout
             return future.orTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .exceptionally(ex -> {
-                    UltiCleaner.getInstance().getLogger().warn(
+                    plugin.getLogger().warn(
                         "Chunk unload timeout at " + chunk.getX() + ", " + chunk.getZ()
                     );
                     return false;

@@ -1,15 +1,14 @@
 package com.ultikits.plugins.social.service;
 
-import com.ultikits.plugins.social.UltiSocial;
 import com.ultikits.plugins.social.config.SocialConfig;
 import com.ultikits.plugins.social.entity.BlacklistData;
 import com.ultikits.plugins.social.entity.FriendRequest;
 import com.ultikits.plugins.social.entity.FriendshipData;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.PostConstruct;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
 
 import org.bukkit.Bukkit;
@@ -28,8 +27,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FriendService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private SocialConfig config;
-    
+
     private DataOperator<FriendshipData> dataOperator;
     private DataOperator<BlacklistData> blacklistDataOperator;
     
@@ -50,16 +52,19 @@ public class FriendService {
      */
     @PostConstruct
     public void init() {
-        this.dataOperator = UltiSocial.getInstance().getDataOperator(FriendshipData.class);
-        this.blacklistDataOperator = UltiSocial.getInstance().getDataOperator(BlacklistData.class);
-        
-        // Start cleanup task for expired requests
-        Bukkit.getScheduler().runTaskTimerAsynchronously(
-            UltiTools.getInstance(),
-            this::cleanupExpiredRequests,
-            20 * 60L,  // Every minute
-            20 * 60L
-        );
+        this.dataOperator = plugin.getDataOperator(FriendshipData.class);
+        this.blacklistDataOperator = plugin.getDataOperator(BlacklistData.class);
+    }
+
+    /**
+     * Scheduled cleanup task for expired friend requests.
+     * 定时清理过期好友请求任务
+     */
+    @Scheduled(period = 1200, async = true)  // Every minute (60 seconds * 20 ticks)
+    public void cleanupExpiredRequests() {
+        for (List<FriendRequest> requests : pendingRequests.values()) {
+            requests.removeIf(req -> req.isExpired(config.getRequestTimeout()));
+        }
     }
     
     /**
@@ -249,13 +254,10 @@ public class FriendService {
         dataOperator.delById(toRemove.getId());
         
         // Remove reverse friendship
-        List<FriendshipData> reverseFriends = dataOperator.getAll(
-            WhereCondition.builder().column("player_uuid").value(toRemove.getFriendUuid()).build(),
-            WhereCondition.builder().column("friend_uuid").value(playerUuid.toString()).build()
-        );
-        for (FriendshipData reverse : reverseFriends) {
-            dataOperator.delById(reverse.getId());
-        }
+        dataOperator.query()
+            .where("player_uuid").eq(toRemove.getFriendUuid())
+            .where("friend_uuid").eq(playerUuid.toString())
+            .delete();
         
         // Clear cache
         friendCache.remove(playerUuid);
@@ -275,14 +277,11 @@ public class FriendService {
         if (friendCache.containsKey(playerUuid)) {
             return friendCache.get(playerUuid);
         }
-        
-        List<FriendshipData> friends = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+
+        List<FriendshipData> friends = dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
+
         // Sort by favorite, then by name
         friends.sort((a, b) -> {
             if (a.isFavorite() != b.isFavorite()) {
@@ -290,7 +289,7 @@ public class FriendService {
             }
             return a.getFriendName().compareToIgnoreCase(b.getFriendName());
         });
-        
+
         friendCache.put(playerUuid, friends);
         return friends;
     }
@@ -340,7 +339,7 @@ public class FriendService {
                 try {
                     dataOperator.update(friend);
                 } catch (IllegalAccessException e) {
-                    UltiSocial.getInstance().getLogger().error("Failed to update friend data", e);
+                    plugin.getLogger().error("Failed to update friend data", e);
                 }
                 friendCache.remove(playerUuid);
                 break;
@@ -359,7 +358,7 @@ public class FriendService {
                 try {
                     dataOperator.update(friend);
                 } catch (IllegalAccessException e) {
-                    UltiSocial.getInstance().getLogger().error("Failed to update friend data", e);
+                    plugin.getLogger().error("Failed to update friend data", e);
                 }
                 friendCache.remove(playerUuid);
                 break;
@@ -395,15 +394,6 @@ public class FriendService {
         }
         long remaining = (config.getTpCooldown() * 1000L) - (System.currentTimeMillis() - lastTp);
         return Math.max(0, (int) (remaining / 1000));
-    }
-    
-    /**
-     * Cleanup expired requests.
-     */
-    private void cleanupExpiredRequests() {
-        for (List<FriendRequest> requests : pendingRequests.values()) {
-            requests.removeIf(req -> req.isExpired(config.getRequestTimeout()));
-        }
     }
     
     /**
@@ -494,19 +484,20 @@ public class FriendService {
      * @return true if successfully unblocked
      */
     public boolean removeFromBlacklist(UUID blockerUuid, UUID blockedUuid) {
-        List<BlacklistData> entries = blacklistDataOperator.getAll(
-            WhereCondition.builder().column("player_uuid").value(blockerUuid.toString()).build(),
-            WhereCondition.builder().column("blocked_uuid").value(blockedUuid.toString()).build()
-        );
-        
-        if (entries.isEmpty()) {
+        boolean exists = blacklistDataOperator.query()
+            .where("player_uuid").eq(blockerUuid.toString())
+            .where("blocked_uuid").eq(blockedUuid.toString())
+            .exists();
+
+        if (!exists) {
             return false;
         }
-        
-        for (BlacklistData entry : entries) {
-            blacklistDataOperator.delById(entry.getId());
-        }
-        
+
+        blacklistDataOperator.query()
+            .where("player_uuid").eq(blockerUuid.toString())
+            .where("blocked_uuid").eq(blockedUuid.toString())
+            .delete();
+
         blacklistCache.remove(blockerUuid);
         return true;
     }
@@ -550,17 +541,14 @@ public class FriendService {
         if (blacklistCache.containsKey(playerUuid)) {
             return blacklistCache.get(playerUuid);
         }
-        
-        List<BlacklistData> blacklist = blacklistDataOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+
+        List<BlacklistData> blacklist = blacklistDataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
+
         // Sort by time descending
         blacklist.sort((a, b) -> Long.compare(b.getCreatedTime(), a.getCreatedTime()));
-        
+
         blacklistCache.put(playerUuid, blacklist);
         return blacklist;
     }
@@ -580,23 +568,17 @@ public class FriendService {
      */
     private void removeFriendByUuid(UUID playerUuid, UUID friendUuid) {
         // Remove from player's list
-        List<FriendshipData> playerFriends = dataOperator.getAll(
-            WhereCondition.builder().column("player_uuid").value(playerUuid.toString()).build(),
-            WhereCondition.builder().column("friend_uuid").value(friendUuid.toString()).build()
-        );
-        for (FriendshipData f : playerFriends) {
-            dataOperator.delById(f.getId());
-        }
-        
+        dataOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .where("friend_uuid").eq(friendUuid.toString())
+            .delete();
+
         // Remove from friend's list (reverse)
-        List<FriendshipData> reverseFriends = dataOperator.getAll(
-            WhereCondition.builder().column("player_uuid").value(friendUuid.toString()).build(),
-            WhereCondition.builder().column("friend_uuid").value(playerUuid.toString()).build()
-        );
-        for (FriendshipData f : reverseFriends) {
-            dataOperator.delById(f.getId());
-        }
-        
+        dataOperator.query()
+            .where("player_uuid").eq(friendUuid.toString())
+            .where("friend_uuid").eq(playerUuid.toString())
+            .delete();
+
         // Clear caches
         friendCache.remove(playerUuid);
         friendCache.remove(friendUuid);

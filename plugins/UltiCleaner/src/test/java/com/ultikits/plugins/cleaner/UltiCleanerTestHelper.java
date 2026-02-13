@@ -49,13 +49,12 @@ public final class UltiCleanerTestHelper {
     private static List<World> mockWorlds;
 
     /**
-     * Set up UltiCleaner singleton mock. Must be called before each test.
+     * Set up UltiCleaner mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiCleaner singleton
+        // Mock UltiCleaner (no singleton — plugin instance is injected via @Autowired)
         mockPlugin = mock(UltiCleaner.class);
-        setStaticField(UltiCleaner.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -107,10 +106,10 @@ public final class UltiCleanerTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up state.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiCleaner.class, "instance", null);
+        mockPlugin = null;
         setStaticField(Bukkit.class, "server", null);
         if (mockWorlds != null) {
             mockWorlds.clear();

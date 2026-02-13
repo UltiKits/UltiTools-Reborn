@@ -5,7 +5,7 @@ import com.ultikits.plugins.trade.config.TradeConfig;
 import com.ultikits.plugins.trade.entity.PlayerTradeSettings;
 import com.ultikits.plugins.trade.entity.TradeLogData;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
@@ -26,6 +26,8 @@ class TradeLogServiceTest {
     private DataOperator<TradeLogData> logOperator = mock(DataOperator.class);
     @SuppressWarnings("unchecked")
     private DataOperator<PlayerTradeSettings> settingsOperator = mock(DataOperator.class);
+    @SuppressWarnings("unchecked")
+    private Query<PlayerTradeSettings> queryBuilder = mock(Query.class);
 
     private Player player;
     private UUID playerUuid;
@@ -60,7 +62,10 @@ class TradeLogServiceTest {
         @DisplayName("getOrCreateSettings should return existing settings")
         void getExistingSettings() {
             PlayerTradeSettings existing = new PlayerTradeSettings(playerUuid, "TestPlayer");
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(existing));
 
             PlayerTradeSettings result = service.getOrCreateSettings(playerUuid, "TestPlayer");
@@ -72,7 +77,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("getOrCreateSettings should create new settings if not found")
         void createNewSettings() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             PlayerTradeSettings result = service.getOrCreateSettings(playerUuid, "TestPlayer");
@@ -101,7 +109,10 @@ class TradeLogServiceTest {
         @DisplayName("getOrCreateSettings should update name if changed")
         void updateNameIfChanged() {
             PlayerTradeSettings existing = new PlayerTradeSettings(playerUuid, "OldName");
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(existing));
 
             PlayerTradeSettings result = service.getOrCreateSettings(playerUuid, "NewName");
@@ -113,7 +124,10 @@ class TradeLogServiceTest {
         @DisplayName("getOrCreateSettings should not update name if same")
         void dontUpdateNameIfSame() {
             PlayerTradeSettings existing = new PlayerTradeSettings(playerUuid, "TestPlayer");
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(existing));
 
             service.getOrCreateSettings(playerUuid, "TestPlayer");
@@ -125,7 +139,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("getOrCreateSettings should handle null result from getAll")
         void handleNullResult() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(null);
 
             PlayerTradeSettings result = service.getOrCreateSettings(playerUuid, "TestPlayer");
@@ -137,7 +154,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("getSettings should return null if not found")
         void getSettingsNotFound() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             PlayerTradeSettings result = service.getSettings(playerUuid);
@@ -149,7 +169,10 @@ class TradeLogServiceTest {
         @DisplayName("getSettings should return existing settings")
         void getSettingsFound() {
             PlayerTradeSettings existing = new PlayerTradeSettings(playerUuid, "TestPlayer");
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(existing));
 
             PlayerTradeSettings result = service.getSettings(playerUuid);
@@ -174,7 +197,10 @@ class TradeLogServiceTest {
         @DisplayName("getSettings should cache results from DB")
         void getSettingsCachesResult() throws Exception {
             PlayerTradeSettings existing = new PlayerTradeSettings(playerUuid, "TestPlayer");
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(existing));
 
             service.getSettings(playerUuid);
@@ -186,7 +212,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("getSettings should handle null result from getAll")
         void getSettingsNullResult() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(null);
 
             PlayerTradeSettings result = service.getSettings(playerUuid);
@@ -202,7 +231,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("isTradeEnabled should return true for non-existent settings")
         void isTradeEnabledDefault() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.isTradeEnabled(playerUuid);
@@ -215,7 +247,10 @@ class TradeLogServiceTest {
         void isTradeEnabledFromSettings() {
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.setTradeEnabled(false);
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             boolean result = service.isTradeEnabled(playerUuid);
@@ -226,7 +261,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("toggleTrade should toggle and return new state")
         void toggleTrade() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.toggleTrade(player);
@@ -239,7 +277,10 @@ class TradeLogServiceTest {
         void toggleTradeBack() {
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.setTradeEnabled(false);
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             boolean result = service.toggleTrade(player);
@@ -256,7 +297,10 @@ class TradeLogServiceTest {
         @DisplayName("isBlocked should return false for non-existent settings")
         void isBlockedDefault() {
             UUID targetUuid = UUID.randomUUID();
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.isBlocked(playerUuid, targetUuid);
@@ -270,7 +314,10 @@ class TradeLogServiceTest {
             UUID targetUuid = UUID.randomUUID();
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.blockPlayer(targetUuid.toString());
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             boolean result = service.isBlocked(playerUuid, targetUuid);
@@ -282,7 +329,10 @@ class TradeLogServiceTest {
         @DisplayName("blockPlayer should add to blocked list")
         void blockPlayer() {
             UUID targetUuid = UUID.randomUUID();
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.blockPlayer(player, targetUuid);
@@ -296,7 +346,10 @@ class TradeLogServiceTest {
             UUID targetUuid = UUID.randomUUID();
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.blockPlayer(targetUuid.toString());
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             Map<UUID, PlayerTradeSettings> cache = UltiTradeTestHelper.getField(service, "settingsCache");
@@ -328,7 +381,10 @@ class TradeLogServiceTest {
             UUID targetUuid = UUID.randomUUID();
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.blockPlayer(targetUuid.toString());
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             Map<UUID, PlayerTradeSettings> cache = UltiTradeTestHelper.getField(service, "settingsCache");
@@ -342,7 +398,10 @@ class TradeLogServiceTest {
         @DisplayName("unblockPlayer should return false for non-blocked")
         void unblockPlayerNotBlocked() {
             UUID targetUuid = UUID.randomUUID();
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             boolean result = service.unblockPlayer(player, targetUuid);
@@ -360,7 +419,10 @@ class TradeLogServiceTest {
         void getPlayerStatsFound() {
             PlayerTradeSettings settings = new PlayerTradeSettings(playerUuid, "TestPlayer");
             settings.setTotalTrades(10);
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.singletonList(settings));
 
             PlayerTradeSettings result = service.getPlayerStats(playerUuid);
@@ -372,7 +434,10 @@ class TradeLogServiceTest {
         @Test
         @DisplayName("getPlayerStats should return default if not found")
         void getPlayerStatsNotFound() {
-            when(settingsOperator.getAll(any(WhereCondition.class)))
+            when(settingsOperator.query()).thenReturn(queryBuilder);
+        when(queryBuilder.where(anyString())).thenReturn(queryBuilder);
+        when(queryBuilder.eq(any())).thenReturn(queryBuilder);
+        when(queryBuilder.list())
                     .thenReturn(Collections.emptyList());
 
             PlayerTradeSettings result = service.getPlayerStats(playerUuid);

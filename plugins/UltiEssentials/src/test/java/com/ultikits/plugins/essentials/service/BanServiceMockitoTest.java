@@ -3,8 +3,8 @@ package com.ultikits.plugins.essentials.service;
 import com.ultikits.plugins.essentials.config.EssentialsConfig;
 import com.ultikits.plugins.essentials.entity.BanData;
 import com.ultikits.plugins.essentials.utils.EssentialsTestHelper;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.*;
 
@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -37,6 +38,9 @@ class BanServiceMockitoTest {
     @SuppressWarnings("unchecked")
     private DataOperator<BanData> banOperator = mock(DataOperator.class);
 
+    @SuppressWarnings("unchecked")
+    private Query<BanData> query = mock(Query.class);
+
     private UUID playerUuid;
     private UUID operatorUuid;
 
@@ -54,7 +58,13 @@ class BanServiceMockitoTest {
         playerUuid = UUID.randomUUID();
         operatorUuid = UUID.randomUUID();
 
-        reset(banOperator);
+        reset(banOperator, query);
+
+        // Setup default query chaining behavior
+        when(banOperator.query()).thenReturn(query);
+        when(query.where(anyString())).thenReturn(query);
+        when(query.eq(any())).thenReturn(query);
+        when(query.and(anyString())).thenReturn(query);
     }
 
     @AfterEach
@@ -71,7 +81,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should ban player permanently")
         void shouldBanPlayerPermanently() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             BanService.BanResult result = banService.banPlayer(
                 playerUuid, "TestPlayer", "Testing ban",
@@ -85,7 +95,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should ban player temporarily")
         void shouldBanPlayerTemporarily() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             BanService.BanResult result = banService.banPlayer(
                 playerUuid, "TestPlayer", "Temp ban",
@@ -111,7 +121,7 @@ class BanServiceMockitoTest {
                 .active(true)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(Collections.singletonList(existingBan));
 
             BanService.BanResult result = banService.banPlayer(
@@ -126,7 +136,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should ban with IP address")
         void shouldBanWithIpAddress() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             BanService.BanResult result = banService.banPlayer(
                 playerUuid, "TestPlayer", "IP ban",
@@ -149,14 +159,14 @@ class BanServiceMockitoTest {
             );
 
             assertThat(result).isEqualTo(BanService.BanResult.DISABLED);
-            verify(banOperator, never()).getAll(any(WhereCondition[].class));
+            verify(banOperator, never()).query();
             verify(banOperator, never()).insert(any());
         }
 
         @Test
         @DisplayName("Should set default reason when null")
         void shouldSetDefaultReasonWhenNull() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             banService.banPlayer(
                 playerUuid, "TestPlayer", null,
@@ -171,7 +181,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should set correct expire time for temporary ban")
         void shouldSetCorrectExpireTimeForTempBan() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
             long duration = TimeUnit.HOURS.toMillis(12);
 
             banService.banPlayer(
@@ -189,7 +199,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should set permanent expire time as -1")
         void shouldSetPermanentExpireTime() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             banService.banPlayer(
                 playerUuid, "TestPlayer", "Permanent",
@@ -205,7 +215,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should allow console ban with null operator UUID")
         void shouldAllowConsoleBanWithNullOperatorUuid() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             BanService.BanResult result = banService.banPlayer(
                 playerUuid, "TestPlayer", "Console ban",
@@ -221,7 +231,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should kick online player after ban")
         void shouldKickOnlinePlayerAfterBan() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             // Mock Bukkit.getPlayer to return an online player
             Player onlinePlayer = EssentialsTestHelper.createMockPlayer("TestPlayer", playerUuid);
@@ -238,7 +248,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should not throw when player is offline during ban")
         void shouldNotThrowWhenPlayerIsOffline() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
             when(EssentialsTestHelper.getMockServer().getPlayer(playerUuid)).thenReturn(null);
 
             BanService.BanResult result = banService.banPlayer(
@@ -264,7 +274,7 @@ class BanServiceMockitoTest {
                 .active(true)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(Collections.singletonList(expiredBan));
 
             BanService.BanResult result = banService.banPlayer(
@@ -296,7 +306,7 @@ class BanServiceMockitoTest {
                 .active(true)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(new ArrayList<>(Collections.singletonList(activeBan)));
 
             boolean result = banService.unbanPlayer(playerUuid);
@@ -308,7 +318,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should return false when player not banned")
         void shouldReturnFalseWhenPlayerNotBanned() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             boolean result = banService.unbanPlayer(playerUuid);
 
@@ -341,7 +351,7 @@ class BanServiceMockitoTest {
                 .active(true)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(new ArrayList<>(Arrays.asList(ban1, ban2)));
 
             boolean result = banService.unbanPlayer(playerUuid);
@@ -364,7 +374,7 @@ class BanServiceMockitoTest {
                 .active(false)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(new ArrayList<>(Collections.singletonList(inactiveBan)));
 
             boolean result = banService.unbanPlayer(playerUuid);
@@ -393,7 +403,7 @@ class BanServiceMockitoTest {
                 .active(true)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(new ArrayList<>(Collections.singletonList(ban)));
 
             boolean result = banService.unbanPlayerByName("TestPlayer");
@@ -405,7 +415,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should return false when name not found")
         void shouldReturnFalseWhenNameNotFound() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             boolean result = banService.unbanPlayerByName("Unknown");
 
@@ -434,7 +444,7 @@ class BanServiceMockitoTest {
                 .ipAddress("192.168.1.1")
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(Collections.singletonList(ipBan));
 
             BanData result = banService.getActiveIpBan("192.168.1.1");
@@ -472,7 +482,7 @@ class BanServiceMockitoTest {
                 .ipAddress("10.0.0.1")
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(new ArrayList<>(Collections.singletonList(ipBan)));
 
             boolean result = banService.unbanIp("10.0.0.1");
@@ -484,7 +494,7 @@ class BanServiceMockitoTest {
         @Test
         @DisplayName("Should return false when unbanning non-banned IP")
         void shouldReturnFalseWhenIpNotBanned() throws Exception {
-            when(banOperator.getAll(any(WhereCondition[].class))).thenReturn(new ArrayList<>());
+            when(query.list()).thenReturn(new ArrayList<>());
 
             boolean result = banService.unbanIp("10.0.0.1");
 
@@ -584,7 +594,7 @@ class BanServiceMockitoTest {
                 .active(false)
                 .build();
 
-            when(banOperator.getAll(any(WhereCondition[].class)))
+            when(query.list())
                 .thenReturn(Collections.singletonList(ban));
 
             List<BanData> history = banService.getBanHistory(playerUuid);

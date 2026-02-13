@@ -1,9 +1,9 @@
 package com.ultikits.plugins.recipe.service;
 
-import com.ultikits.plugins.recipe.UltiRecipe;
 import com.ultikits.plugins.recipe.config.RecipeConfig;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import org.bukkit.Bukkit;
@@ -22,12 +22,19 @@ import java.util.stream.Collectors;
  * Service for managing custom recipes.
  * <p>
  * Handles recipe registration, removal, and reloading.
+ * Only active when enabled in recipes.yml configuration.
+ * <p>
+ * 仅在 recipes.yml 配置中启用时激活。
  *
  * @author wisdomme
  * @version 1.0.0
  */
 @Service
+@ConditionalOnConfig(value = "config/recipes.yml", path = "enabled")
 public class RecipeService {
+
+    @Autowired
+    private UltiToolsPlugin plugin;
 
     @Autowired
     private RecipeConfig config;
@@ -44,31 +51,29 @@ public class RecipeService {
     Plugin pluginInstance;
 
     private PluginLogger getLogger() {
-        return UltiRecipe.getInstance().getLogger();
+        return plugin.getLogger();
     }
 
     /**
      * Get the plugin instance for NamespacedKey creation.
-     * Uses UltiTools.getInstance() in production, can be overridden in tests.
+     * Uses Bukkit plugin manager lookup in production, can be overridden in tests.
      */
     Plugin getPluginInstance() {
         if (pluginInstance == null) {
-            pluginInstance = (Plugin) UltiTools.getInstance();
+            pluginInstance = Bukkit.getPluginManager().getPlugin("UltiTools");
         }
         return pluginInstance;
     }
 
     /**
      * Initializes all recipes from configuration.
+     * Only called when the service is active (enabled in config).
+     * <p>
+     * 仅在服务激活时调用（配置中启用）。
      *
      * @return the number of recipes registered
      */
     public int initRecipes() {
-        if (!config.isEnabled()) {
-            getLogger().info("Custom recipes are disabled");
-            return 0;
-        }
-
         Map<String, RecipeConfig.RecipeDefinition> recipes = config.getRecipes();
         
         if (recipes == null || recipes.isEmpty()) {

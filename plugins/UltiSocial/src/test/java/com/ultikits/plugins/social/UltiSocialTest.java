@@ -12,26 +12,18 @@ import static org.mockito.Mockito.*;
 @DisplayName("UltiSocial Main Class Tests")
 class UltiSocialTest {
 
-    @AfterEach
-    void tearDown() throws Exception {
-        UltiSocialTestHelper.tearDown();
-    }
-
     @Test
-    @DisplayName("registerSelf should set instance and return true")
+    @DisplayName("registerSelf should return true")
     void registerSelf() throws Exception {
         UltiSocial plugin = mock(UltiSocial.class);
         PluginLogger logger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(logger);
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        // Set instance field to null first
-        UltiSocialTestHelper.setStaticField(UltiSocial.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiSocial.getInstance()).isSameAs(plugin);
+        verify(logger).info("UltiSocial v1.1.0 has been enabled!");
     }
 
     @Test
@@ -71,10 +63,27 @@ class UltiSocialTest {
         assertThat(langs).containsExactly("zh", "en");
     }
 
-    @Test
-    @DisplayName("getInstance should return null when not registered")
-    void getInstanceNull() throws Exception {
-        UltiSocialTestHelper.setStaticField(UltiSocial.class, "instance", null);
-        assertThat(UltiSocial.getInstance()).isNull();
+    @Nested
+    @DisplayName("Annotation Tests")
+    class AnnotationTests {
+
+        @Test
+        @DisplayName("should have @UltiToolsModule annotation")
+        void shouldHaveModuleAnnotation() {
+            assertThat(UltiSocial.class.isAnnotationPresent(
+                com.ultikits.ultitools.annotations.UltiToolsModule.class
+            )).isTrue();
+        }
+
+        @Test
+        @DisplayName("should scan correct packages")
+        void shouldScanCorrectPackages() {
+            com.ultikits.ultitools.annotations.UltiToolsModule annotation =
+                UltiSocial.class.getAnnotation(
+                    com.ultikits.ultitools.annotations.UltiToolsModule.class
+                );
+
+            assertThat(annotation.scanBasePackages()).contains("com.ultikits.plugins.social");
+        }
     }
 }

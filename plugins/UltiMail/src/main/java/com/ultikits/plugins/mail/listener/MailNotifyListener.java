@@ -1,9 +1,8 @@
 package com.ultikits.plugins.mail.listener;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
@@ -18,6 +17,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.plugin.Plugin;
 
 /**
  * Listener for mail notifications with clickable messages.
@@ -27,10 +27,15 @@ import org.bukkit.event.player.PlayerJoinEvent;
  */
 @EventListener
 public class MailNotifyListener implements Listener {
-    
+
+    private Plugin bukkitPlugin;
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private MailService mailService;
-    
+
     @Autowired
     private MailConfig config;
     
@@ -42,8 +47,13 @@ public class MailNotifyListener implements Listener {
         
         Player player = event.getPlayer();
         
+        // Lazy init bukkitPlugin
+        if (bukkitPlugin == null) {
+            bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+        }
+
         // Delay notification
-        Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
             if (!player.isOnline()) {
                 return;
             }
@@ -86,6 +96,6 @@ public class MailNotifyListener implements Listener {
     }
     
     private String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

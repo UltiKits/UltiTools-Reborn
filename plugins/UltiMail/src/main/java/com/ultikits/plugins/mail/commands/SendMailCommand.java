@@ -1,9 +1,10 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.gui.AttachmentSelectorPage;
 import com.ultikits.plugins.mail.service.MailService;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.ChatColor;
@@ -27,13 +28,16 @@ import java.util.Arrays;
     permission = "ultimail.send",
     description = "发送邮件"
 )
-public class SendMailCommand extends AbstractCommandExecutor {
+public class SendMailCommand extends BaseCommandExecutor {
     
     private static final String ADMIN_PERMISSION = "ultimail.admin.multiattach";
-    
+
+    @Autowired
+    private UltiToolsPlugin ultiPlugin;
+
     private final MailService mailService;
     private final Plugin plugin;
-    
+
     public SendMailCommand(MailService mailService, Plugin plugin) {
         this.mailService = mailService;
         this.plugin = plugin;
@@ -55,6 +59,7 @@ public class SendMailCommand extends AbstractCommandExecutor {
         
         Conversation conversation = factory.buildConversation(sender);
         conversation.getContext().setSessionData("mailService", mailService);
+        conversation.getContext().setSessionData("ultiPlugin", ultiPlugin);
         conversation.begin();
     }
     
@@ -66,7 +71,7 @@ public class SendMailCommand extends AbstractCommandExecutor {
             sender.sendMessage(ChatColor.GREEN + i18n("attachment_gui_hint"));
             
             int maxItems = 45; // Default max items for GUI
-            AttachmentSelectorPage gui = new AttachmentSelectorPage(sender, maxItems,
+            AttachmentSelectorPage gui = new AttachmentSelectorPage(sender, maxItems, ultiPlugin,
                 items -> {
                     // Filter out null items
                     if (items == null) {
@@ -131,6 +136,7 @@ public class SendMailCommand extends AbstractCommandExecutor {
         
         Conversation conversation = factory.buildConversation(sender);
         conversation.getContext().setSessionData("mailService", mailService);
+        conversation.getContext().setSessionData("ultiPlugin", ultiPlugin);
         conversation.getContext().setSessionData("attachItems", items);
         conversation.begin();
     }
@@ -151,44 +157,46 @@ public class SendMailCommand extends AbstractCommandExecutor {
     }
     
     private String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+        return ultiPlugin.i18n(key);
     }
-    
+
     /**
      * Content input prompt.
      */
     private static class ContentPrompt extends StringPrompt {
         private final String receiver;
         private final String subject;
-        
+
         public ContentPrompt(String receiver, String subject) {
             this.receiver = receiver;
             this.subject = subject;
         }
-        
+
         @Override
         public String getPromptText(ConversationContext context) {
-            return ChatColor.YELLOW + UltiMail.getInstance().i18n("input_content_prompt");
+            UltiToolsPlugin p = (UltiToolsPlugin) context.getSessionData("ultiPlugin");
+            return ChatColor.YELLOW + p.i18n("input_content_prompt");
         }
-        
+
         @Override
         public Prompt acceptInput(ConversationContext context, String input) {
             if (input == null || input.equalsIgnoreCase("cancel")) {
                 return Prompt.END_OF_CONVERSATION;
             }
-            
+
             Player sender = (Player) context.getForWhom();
             MailService service = (MailService) context.getSessionData("mailService");
             ItemStack[] items = (ItemStack[]) context.getSessionData("attachItems");
-            
+            UltiToolsPlugin p = (UltiToolsPlugin) context.getSessionData("ultiPlugin");
+
             boolean success = service.sendMail(sender, receiver, subject, input, items);
-            
+
             if (success) {
-                String msg = UltiMail.getInstance().i18n("mail_sent_success")
+                String msg = p.i18n("mail_sent_success")
                     .replace("{RECEIVER}", receiver);
                 sender.sendMessage(ChatColor.GREEN + msg);
             }
-            
+
             return Prompt.END_OF_CONVERSATION;
         }
     }

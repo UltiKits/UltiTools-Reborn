@@ -1,10 +1,9 @@
 package com.ultikits.plugins.worlds.listener;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.entity.WorldSettings;
-import com.ultikits.plugins.worlds.gui.WorldListPage;
 import com.ultikits.plugins.worlds.service.InventoryIsolationService;
 import com.ultikits.plugins.worlds.service.WorldService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 
@@ -31,11 +30,14 @@ import org.bukkit.event.weather.WeatherChangeEvent;
  */
 @EventListener
 public class WorldListener implements Listener {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private WorldService worldService;
-    
-    @Autowired
+
+    @Autowired(required = false)
     private InventoryIsolationService inventoryService;
     
     // ==================== Protection Events ====================
@@ -51,7 +53,7 @@ public class WorldListener implements Listener {
         
         if (settings.isProtectBreak() && !player.hasPermission("ultiworlds.bypass.protection")) {
             event.setCancelled(true);
-            player.sendMessage(UltiWorlds.getInstance().i18n("protection.break_denied"));
+            player.sendMessage(plugin.i18n("protection.break_denied"));
         }
     }
     
@@ -66,7 +68,7 @@ public class WorldListener implements Listener {
         
         if (settings.isProtectPlace() && !player.hasPermission("ultiworlds.bypass.protection")) {
             event.setCancelled(true);
-            player.sendMessage(UltiWorlds.getInstance().i18n("protection.place_denied"));
+            player.sendMessage(plugin.i18n("protection.place_denied"));
         }
     }
     
@@ -83,7 +85,7 @@ public class WorldListener implements Listener {
         
         if (settings.isProtectInteract() && !player.hasPermission("ultiworlds.bypass.protection")) {
             event.setCancelled(true);
-            player.sendMessage(UltiWorlds.getInstance().i18n("protection.interact_denied"));
+            player.sendMessage(plugin.i18n("protection.interact_denied"));
         }
     }
     
@@ -116,7 +118,7 @@ public class WorldListener implements Listener {
         if (!settings.isPvpEnabled()) {
             event.setCancelled(true);
             ((Player) event.getDamager()).sendMessage(
-                UltiWorlds.getInstance().i18n("protection.pvp_disabled")
+                plugin.i18n("protection.pvp_disabled")
             );
         }
     }
@@ -140,11 +142,11 @@ public class WorldListener implements Listener {
             
             WorldSettings settings = worldService.getOrCreateSettings(toWorld.getName());
             if (settings.isBlocked()) {
-                player.sendMessage(UltiWorlds.getInstance().i18n("error.world_blocked"));
+                player.sendMessage(plugin.i18n("error.world_blocked"));
             } else if (settings.isLocked()) {
-                player.sendMessage(UltiWorlds.getInstance().i18n("error.world_locked"));
+                player.sendMessage(plugin.i18n("error.world_locked"));
             } else {
-                player.sendMessage(UltiWorlds.getInstance().i18n("error.no_permission"));
+                player.sendMessage(plugin.i18n("error.no_permission"));
             }
         }
     }

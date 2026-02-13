@@ -31,7 +31,8 @@ class SideBarCommandTest {
         service = mock(SideBarService.class);
         command = new SideBarCommand();
 
-        // Inject service via reflection
+        // Inject dependencies via reflection
+        UltiSideBarTestHelper.setField(command, "plugin", UltiSideBarTestHelper.getMockPlugin());
         UltiSideBarTestHelper.setField(command, "sideBarService", service);
 
         player = UltiSideBarTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());

@@ -20,20 +20,8 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.essentials"})
 public class UltiEssentials extends UltiToolsPlugin {
 
-    private static UltiEssentials instance;
-
-    /**
-     * Gets the plugin instance.
-     *
-     * @return the UltiEssentials instance
-     */
-    public static UltiEssentials getInstance() {
-        return instance;
-    }
-
     @Override
     public boolean registerSelf() {
-        instance = this;
         // All services are automatically initialized by IoC container via @PostConstruct
         getLogger().info(i18n("UltiEssentials 已启用！"));
         return true;
@@ -42,7 +30,6 @@ public class UltiEssentials extends UltiToolsPlugin {
     @Override
     public void unregisterSelf() {
         getLogger().info(i18n("UltiEssentials 已禁用！"));
-        instance = null;
     }
 
     @Override

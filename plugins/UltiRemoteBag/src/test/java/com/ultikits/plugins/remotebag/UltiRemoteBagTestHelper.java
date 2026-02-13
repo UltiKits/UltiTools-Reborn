@@ -35,13 +35,12 @@ public final class UltiRemoteBagTestHelper {
     private static PluginLogger mockLogger;
 
     /**
-     * Set up UltiRemoteBag singleton mock. Must be called before each test.
+     * Set up UltiRemoteBag mock. Must be called before each test.
      */
     @SuppressWarnings("unchecked")
     public static void setUp() throws Exception {
-        // Mock UltiRemoteBag singleton (abstract UltiToolsPlugin — mockable)
+        // Mock UltiRemoteBag (abstract UltiToolsPlugin — mockable)
         mockPlugin = mock(UltiRemoteBag.class);
-        setStaticField(UltiRemoteBag.class, "instance", mockPlugin);
 
         // Mock logger
         mockLogger = mock(PluginLogger.class);
@@ -57,10 +56,10 @@ public final class UltiRemoteBagTestHelper {
     }
 
     /**
-     * Clean up singleton state.
+     * Clean up resources.
      */
     public static void tearDown() throws Exception {
-        setStaticField(UltiRemoteBag.class, "instance", null);
+        // No cleanup needed since we removed the singleton pattern
     }
 
     public static UltiRemoteBag getMockPlugin() {

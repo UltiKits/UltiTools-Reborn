@@ -184,7 +184,7 @@ mailService.executeMailCommands(mail, player);
 ### MailData 实体
 
 ```java
-public class MailData extends AbstractDataEntity {
+public class MailData extends BaseDataEntity<String> {
     private UUID sender;        // 发送者 UUID
     private UUID receiver;      // 接收者 UUID
     private String senderName;  // 发送者名称

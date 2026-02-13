@@ -1,9 +1,7 @@
 package com.ultikits.plugins.worlds.conversation;
 
-import com.ultikits.plugins.worlds.UltiWorlds;
 import com.ultikits.plugins.worlds.service.WorldService;
-import com.ultikits.ultitools.UltiTools;
-
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.WorldType;
@@ -36,24 +34,24 @@ public class WorldCreateConversation implements ConversationAbandonedListener {
     private static final String KEY_SEED = "seed";
     
     private final WorldService worldService;
+    private final UltiToolsPlugin ultiPlugin;
     private final Plugin plugin;
-    
-    public WorldCreateConversation(WorldService worldService, Plugin plugin) {
+
+    public WorldCreateConversation(WorldService worldService, UltiToolsPlugin ultiPlugin) {
         this.worldService = worldService;
-        this.plugin = plugin;
+        this.ultiPlugin = ultiPlugin;
+        this.plugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     }
-    
+
     /**
      * Start the world creation wizard for a player.
      *
      * @param player The player to start the wizard for
      * @param worldService The world service
+     * @param ultiPlugin The plugin instance for i18n
      */
-    public static void start(Player player, WorldService worldService) {
-        WorldCreateConversation wizard = new WorldCreateConversation(
-            worldService, 
-            UltiTools.getInstance()
-        );
+    public static void start(Player player, WorldService worldService, UltiToolsPlugin ultiPlugin) {
+        WorldCreateConversation wizard = new WorldCreateConversation(worldService, ultiPlugin);
         wizard.beginConversation(player);
     }
     
@@ -377,7 +375,7 @@ public class WorldCreateConversation implements ConversationAbandonedListener {
         }
     }
     
-    private static String i18n(String key) {
-        return UltiWorlds.getInstance().i18n(key);
+    private String i18n(String key) {
+        return ultiPlugin.i18n(key);
     }
 }

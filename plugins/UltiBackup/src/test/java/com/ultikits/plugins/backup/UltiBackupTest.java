@@ -12,26 +12,18 @@ import static org.mockito.Mockito.*;
 @DisplayName("UltiBackup Main Class Tests")
 class UltiBackupTest {
 
-    @AfterEach
-    void tearDown() throws Exception {
-        UltiBackupTestHelper.tearDown();
-    }
-
     @Test
-    @DisplayName("registerSelf should set instance and return true")
+    @DisplayName("registerSelf should return true")
     void registerSelf() throws Exception {
         UltiBackup plugin = mock(UltiBackup.class);
         PluginLogger logger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(logger);
         when(plugin.registerSelf()).thenCallRealMethod();
 
-        // Set instance field to null first
-        UltiBackupTestHelper.setStaticField(UltiBackup.class, "instance", null);
-
         boolean result = plugin.registerSelf();
 
         assertThat(result).isTrue();
-        assertThat(UltiBackup.getInstance()).isSameAs(plugin);
+        verify(logger).info("UltiBackup has been enabled!");
     }
 
     @Test
@@ -69,12 +61,5 @@ class UltiBackupTest {
         List<String> langs = plugin.supported();
 
         assertThat(langs).containsExactly("zh", "en");
-    }
-
-    @Test
-    @DisplayName("getInstance should return null when not registered")
-    void getInstanceNull() throws Exception {
-        UltiBackupTestHelper.setStaticField(UltiBackup.class, "instance", null);
-        assertThat(UltiBackup.getInstance()).isNull();
     }
 }

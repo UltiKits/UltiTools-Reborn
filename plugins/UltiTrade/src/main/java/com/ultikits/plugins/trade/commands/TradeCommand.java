@@ -2,7 +2,7 @@ package com.ultikits.plugins.trade.commands;
 
 import com.ultikits.plugins.trade.service.TradeLogService;
 import com.ultikits.plugins.trade.service.TradeService;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
@@ -22,7 +22,7 @@ import org.bukkit.entity.Player;
     permission = "ultitrade.use",
     description = "玩家交易系统"
 )
-public class TradeCommand extends AbstractCommendExecutor {
+public class TradeCommand extends BaseCommandExecutor {
     
     private final TradeService tradeService;
     private final TradeLogService logService;

@@ -2,14 +2,13 @@ package com.ultikits.plugins.mail.service;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-import com.ultikits.plugins.mail.UltiMail;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -17,6 +16,7 @@ import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.io.BukkitObjectInputStream;
 import org.bukkit.util.io.BukkitObjectOutputStream;
@@ -41,21 +41,27 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MailService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private MailConfig config;
-    
+
+    private Plugin bukkitPlugin;
     private DataOperator<MailData> dataOperator;
-    
+
     // Cooldown tracking
     private final Map<UUID, Long> sendCooldowns = new ConcurrentHashMap<>();
-    
+
     private static final Gson GSON = new Gson();
     private static final Type STRING_LIST_TYPE = new TypeToken<List<String>>(){}.getType();
-    
+
     /**
      * Initialize the mail service.
      */
+    @PostConstruct
     public void init() {
-        dataOperator = UltiMail.getInstance().getDataOperator(MailData.class);
+        dataOperator = plugin.getDataOperator(MailData.class);
+        bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
     }
     
     /**
@@ -193,7 +199,7 @@ public class MailService {
                                     .replace("{0}", String.valueOf(currentSent))
                                     .replace("{1}", String.valueOf(total)));
                             }
-                        }.runTask(UltiTools.getInstance());
+                        }.runTask(bukkitPlugin);
                     }
                 }
                 
@@ -203,9 +209,9 @@ public class MailService {
                     public void run() {
                         sender.sendMessage(ChatColor.GREEN + i18n("sendall_success"));
                     }
-                }.runTask(UltiTools.getInstance());
+                }.runTask(bukkitPlugin);
             }
-        }.runTaskAsynchronously(UltiTools.getInstance());
+        }.runTaskAsynchronously(bukkitPlugin);
     }
     
     /**
@@ -261,18 +267,15 @@ public class MailService {
     
     /**
      * Get inbox mails for a player.
-     * 
+     *
      * @param playerUuid Player UUID
      * @return List of received mails
      */
     public List<MailData> getInbox(UUID playerUuid) {
-        List<MailData> mails = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("receiver_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<MailData> mails = dataOperator.query()
+            .where("receiver_uuid").eq(playerUuid.toString())
+            .list();
+
         // Filter out deleted
         List<MailData> result = new ArrayList<>();
         for (MailData mail : mails) {
@@ -280,7 +283,7 @@ public class MailService {
                 result.add(mail);
             }
         }
-        
+
         // Sort by time descending
         result.sort((a, b) -> Long.compare(b.getSentTime(), a.getSentTime()));
         return result;
@@ -288,18 +291,15 @@ public class MailService {
     
     /**
      * Get sent mails for a player.
-     * 
+     *
      * @param playerUuid Player UUID
      * @return List of sent mails
      */
     public List<MailData> getSentMails(UUID playerUuid) {
-        List<MailData> mails = dataOperator.getAll(
-            WhereCondition.builder()
-                .column("sender_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
-        
+        List<MailData> mails = dataOperator.query()
+            .where("sender_uuid").eq(playerUuid.toString())
+            .list();
+
         // Filter out deleted
         List<MailData> result = new ArrayList<>();
         for (MailData mail : mails) {
@@ -307,7 +307,7 @@ public class MailService {
                 result.add(mail);
             }
         }
-        
+
         result.sort((a, b) -> Long.compare(b.getSentTime(), a.getSentTime()));
         return result;
     }
@@ -334,7 +334,7 @@ public class MailService {
         try {
             dataOperator.update(mail);
         } catch (IllegalAccessException e) {
-            UltiMail.getInstance().getLogger().error("Failed to mark mail as read: " + e.getMessage());
+            plugin.getLogger().error("Failed to mark mail as read: " + e.getMessage());
         }
     }
     
@@ -378,7 +378,7 @@ public class MailService {
         try {
             dataOperator.update(mail);
         } catch (IllegalAccessException e) {
-            UltiMail.getInstance().getLogger().error("Failed to claim items: " + e.getMessage());
+            plugin.getLogger().error("Failed to claim items: " + e.getMessage());
         }
         
         return items;
@@ -418,7 +418,7 @@ public class MailService {
             dataOperator.update(mail);
             
         } catch (Exception e) {
-            UltiMail.getInstance().getLogger().error("Failed to execute mail commands: " + e.getMessage());
+            plugin.getLogger().error("Failed to execute mail commands: " + e.getMessage());
         }
     }
     
@@ -440,7 +440,7 @@ public class MailService {
             try {
                 dataOperator.update(mail);
             } catch (IllegalAccessException e) {
-                UltiMail.getInstance().getLogger().error("Failed to update mail: " + e.getMessage());
+                plugin.getLogger().error("Failed to update mail: " + e.getMessage());
             }
         }
     }
@@ -589,7 +589,7 @@ public class MailService {
             
             return Base64Coder.encodeLines(outputStream.toByteArray());
         } catch (Exception e) {
-            UltiMail.getInstance().getLogger().warn("Failed to serialize items: " + e.getMessage());
+            plugin.getLogger().warn("Failed to serialize items: " + e.getMessage());
             return null;
         }
     }
@@ -611,7 +611,7 @@ public class MailService {
             
             return items;
         } catch (Exception e) {
-            UltiMail.getInstance().getLogger().warn("Failed to deserialize items: " + e.getMessage());
+            plugin.getLogger().warn("Failed to deserialize items: " + e.getMessage());
             return new ItemStack[0];
         }
     }
@@ -620,6 +620,6 @@ public class MailService {
      * Shortcut for i18n.
      */
     private String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

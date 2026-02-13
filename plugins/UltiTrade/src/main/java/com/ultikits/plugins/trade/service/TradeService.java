@@ -1,13 +1,13 @@
 package com.ultikits.plugins.trade.service;
 
-import com.ultikits.plugins.trade.UltiTrade;
 import com.ultikits.plugins.trade.config.TradeConfig;
 import com.ultikits.plugins.trade.entity.TradeRequest;
 import com.ultikits.plugins.trade.entity.TradeSession;
 import com.ultikits.plugins.trade.gui.TradeConfirmPage;
 import com.ultikits.plugins.trade.gui.TradeGUI;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
 
 import net.md_5.bungee.api.chat.ClickEvent;
@@ -21,6 +21,7 @@ import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -38,8 +39,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TradeService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private TradeConfig config;
-    
+
     @Autowired
     private TradeLogService logService;
     
@@ -56,37 +60,29 @@ public class TradeService {
     private final Map<UUID, BossBar> requestBossBars = new ConcurrentHashMap<>();
     private final Map<UUID, BukkitTask> bossBarTasks = new ConcurrentHashMap<>();
     
+    // Bukkit plugin instance for scheduler tasks
+    private Plugin bukkitPlugin;
+
     // Economy integration
     private Economy economy;
-    
-    // Cleanup task
-    private BukkitTask cleanupTask;
     
     /**
      * Initialize the trade service.
      */
     public void init() {
+        // Initialize Bukkit plugin reference for scheduler tasks
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+
         // Setup economy
         if (config.isEnableMoneyTrade()) {
             setupEconomy();
         }
-        
-        // Start cleanup task
-        cleanupTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTools.getInstance(),
-            this::cleanupExpiredRequests,
-            20L * 10, 20L * 10 // Every 10 seconds
-        );
     }
     
     /**
      * Shutdown the service.
      */
     public void shutdown() {
-        if (cleanupTask != null) {
-            cleanupTask.cancel();
-        }
-        
         // Cancel all active sessions
         for (TradeSession session : activeSessions.values()) {
             cancelTrade(session, "插件关闭");
@@ -112,7 +108,7 @@ public class TradeService {
      */
     private void setupEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            UltiTrade.getInstance().getLogger().warn("Vault not found! Money trading disabled.");
+            plugin.getLogger().warn("Vault not found! Money trading disabled.");
             return;
         }
         
@@ -283,7 +279,7 @@ public class TradeService {
         
         // Start countdown task
         final int[] remaining = {config.getRequestTimeout()};
-        BukkitTask task = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), () -> {
+        BukkitTask task = Bukkit.getScheduler().runTaskTimer(bukkitPlugin, () -> {
             remaining[0]--;
             if (remaining[0] <= 0) {
                 removeBossBar(target.getUniqueId());
@@ -432,7 +428,7 @@ public class TradeService {
             (totalMoney >= threshold || totalExp >= threshold)) {
             // Show confirmation page
             player.closeInventory();
-            Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+            Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
                 TradeConfirmPage confirmPage = new TradeConfirmPage(
                     this, session, player,
                     () -> {
@@ -441,7 +437,7 @@ public class TradeService {
                         notifyConfirmation(session, player);
                         
                         // Reopen trade GUI
-                        Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+                        Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
                             if (isTrading(player.getUniqueId())) {
                                 TradeGUI gui = new TradeGUI(this, session, player);
                                 player.openInventory(gui.getInventory());
@@ -450,7 +446,7 @@ public class TradeService {
                     },
                     () -> {
                         // On cancel - reopen trade GUI
-                        Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+                        Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
                             if (isTrading(player.getUniqueId())) {
                                 TradeGUI gui = new TradeGUI(this, session, player);
                                 player.openInventory(gui.getInventory());
@@ -690,9 +686,11 @@ public class TradeService {
     }
     
     /**
-     * Cleanup expired requests.
+     * Cleanup expired requests every 10 seconds.
+     * Scheduled task using @Scheduled annotation.
      */
-    private void cleanupExpiredRequests() {
+    @Scheduled(period = 200, async = false)
+    public void cleanupExpiredRequests() {
         int timeout = config.getRequestTimeout();
         Iterator<Map.Entry<UUID, TradeRequest>> it = pendingRequests.entrySet().iterator();
         while (it.hasNext()) {

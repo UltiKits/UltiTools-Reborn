@@ -3,7 +3,7 @@ package com.ultikits.plugins.mail.gui;
 import be.seeseemelk.mockbukkit.MockBukkit;
 import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.entity.PlayerMock;
-import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
 import com.ultikits.plugins.mail.utils.MockBukkitHelper;
@@ -46,8 +46,8 @@ class SentboxGUITest {
         ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
 
-        // Setup mock UltiMail
-        TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        TestHelper.mockUltiToolsPlugin();
 
         player = server.addPlayer("testplayer");
     }

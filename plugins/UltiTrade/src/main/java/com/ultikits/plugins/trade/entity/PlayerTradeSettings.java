@@ -7,7 +7,7 @@ import java.util.UUID;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 
@@ -26,7 +26,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("trade_player_settings")
-public class PlayerTradeSettings extends AbstractDataEntity {
+public class PlayerTradeSettings extends BaseDataEntity<String> {
     
     private static final Gson GSON = new Gson();
     

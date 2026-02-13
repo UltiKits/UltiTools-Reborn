@@ -1,9 +1,9 @@
 package com.ultikits.plugins.backup.gui;
 
-import com.ultikits.plugins.backup.UltiBackup;
 import com.ultikits.plugins.backup.entity.BackupContent;
 import com.ultikits.plugins.backup.entity.BackupMetadata;
 import com.ultikits.plugins.backup.service.BackupService;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
@@ -28,14 +28,16 @@ import java.util.List;
  * @version 2.0.0
  */
 public class BackupPreviewGUI implements InventoryHolder {
-    
+
+    private final UltiToolsPlugin plugin;
     private final Player viewer;
     private final BackupMetadata metadata;
     private final BackupContent content;
     private final Inventory inventory;
     private int currentView = 0; // 0: inventory, 1: armor, 2: enderchest
-    
-    public BackupPreviewGUI(Player viewer, BackupMetadata metadata, BackupContent content) {
+
+    public BackupPreviewGUI(UltiToolsPlugin plugin, Player viewer, BackupMetadata metadata, BackupContent content) {
+        this.plugin = plugin;
         this.viewer = viewer;
         this.metadata = metadata;
         this.content = content;
@@ -52,14 +54,14 @@ public class BackupPreviewGUI implements InventoryHolder {
      * <p>
      * 打开备份的预览 GUI。
      */
-    public static void open(Player viewer, BackupMetadata metadata, BackupService backupService) {
+    public static void open(UltiToolsPlugin plugin, Player viewer, BackupMetadata metadata, BackupService backupService) {
         BackupContent content = backupService.loadBackupContent(metadata);
         if (content == null) {
-            viewer.sendMessage(UltiBackup.getInstance().i18n("backup.message.load_failed"));
+            viewer.sendMessage(plugin.i18n("backup.message.load_failed"));
             return;
         }
-        
-        BackupPreviewGUI gui = new BackupPreviewGUI(viewer, metadata, content);
+
+        BackupPreviewGUI gui = new BackupPreviewGUI(plugin, viewer, metadata, content);
         viewer.openInventory(gui.getInventory());
     }
     
@@ -220,6 +222,6 @@ public class BackupPreviewGUI implements InventoryHolder {
      * Get i18n message.
      */
     private String i18n(String key) {
-        return UltiBackup.getInstance().i18n(key);
+        return plugin.i18n(key);
     }
 }

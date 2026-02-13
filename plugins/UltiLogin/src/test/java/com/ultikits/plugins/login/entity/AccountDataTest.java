@@ -183,8 +183,8 @@ class AccountDataTest {
         @DisplayName("Should get and set id from parent class")
         void id() {
             AccountData account = new AccountData();
-            account.setId("my-id-123");
-            assertThat(account.getId()).isEqualTo("my-id-123");
+            account.setId(123);
+            assertThat(account.getId()).isEqualTo(123);
         }
 
         @Test

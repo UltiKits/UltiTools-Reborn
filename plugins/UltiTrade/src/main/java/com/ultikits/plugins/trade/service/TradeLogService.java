@@ -1,19 +1,18 @@
 package com.ultikits.plugins.trade.service;
 
-import com.ultikits.plugins.trade.UltiTrade;
 import com.ultikits.plugins.trade.config.TradeConfig;
 import com.ultikits.plugins.trade.entity.PlayerTradeSettings;
 import com.ultikits.plugins.trade.entity.TradeLogData;
 import com.ultikits.plugins.trade.entity.TradeSession;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import com.ultikits.ultitools.entities.WhereCondition;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
@@ -29,6 +28,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TradeLogService {
     
     @Autowired
+    private UltiToolsPlugin plugin;
+
+    @Autowired
     private TradeConfig config;
     
     // Player settings cache
@@ -38,6 +40,9 @@ public class TradeLogService {
     private DataOperator<TradeLogData> logOperator;
     private DataOperator<PlayerTradeSettings> settingsOperator;
     
+    // Bukkit plugin instance for scheduler tasks
+    private Plugin bukkitPlugin;
+
     // Cleanup task
     private BukkitTask cleanupTask;
     
@@ -45,15 +50,18 @@ public class TradeLogService {
      * Initialize the log service.
      */
     public void init() {
+        // Initialize Bukkit plugin reference for scheduler tasks
+        this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+
         // Initialize data operators
-        logOperator = UltiTrade.getInstance().getDataOperator(TradeLogData.class);
-        settingsOperator = UltiTrade.getInstance().getDataOperator(PlayerTradeSettings.class);
-        
+        logOperator = plugin.getDataOperator(TradeLogData.class);
+        settingsOperator = plugin.getDataOperator(PlayerTradeSettings.class);
+
         // Start cleanup task
         if (config.isEnableTradeLog()) {
             long cleanupInterval = config.getCleanupIntervalHours() * 60L * 60L * 20L; // Convert hours to ticks
             cleanupTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
-                UltiTools.getInstance(),
+                bukkitPlugin,
                 this::cleanupOldLogs,
                 cleanupInterval, // Initial delay
                 cleanupInterval  // Repeat interval
@@ -75,7 +83,7 @@ public class TradeLogService {
             try {
                 settingsOperator.update(settings);
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().warn(e,
+                plugin.getLogger().warn(e,
                     "Failed to save player settings: " + settings.getPlayerUuid());
             }
         }
@@ -97,7 +105,7 @@ public class TradeLogService {
             return;
         }
         
-        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             try {
                 TradeLogData log = new TradeLogData(
                     session.getSessionId(),
@@ -136,7 +144,7 @@ public class TradeLogService {
                     session.getPlayerExp(session.getPlayer2()));
                 
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().warn(e,
+                plugin.getLogger().warn(e,
                     "Failed to log trade");
             }
         });
@@ -153,7 +161,7 @@ public class TradeLogService {
             return;
         }
         
-        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             try {
                 Player player1 = Bukkit.getPlayer(session.getPlayer1());
                 Player player2 = Bukkit.getPlayer(session.getPlayer2());
@@ -183,7 +191,7 @@ public class TradeLogService {
                 logOperator.insert(log);
                 
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().warn(e,
+                plugin.getLogger().warn(e,
                     "Failed to log cancelled trade");
             }
         });
@@ -219,11 +227,11 @@ public class TradeLogService {
             }
             
             if (deleted > 0) {
-                UltiTrade.getInstance().getLogger().info(
+                plugin.getLogger().info(
                     "Cleaned up " + deleted + " expired trade logs (older than " + retentionDays + " days)");
             }
         } catch (Exception e) {
-            UltiTrade.getInstance().getLogger().warn(e,
+            plugin.getLogger().warn(e,
                 "Failed to cleanup old logs");
         }
     }
@@ -245,12 +253,9 @@ public class TradeLogService {
         }
         
         // Try to load from database
-        List<PlayerTradeSettings> existing = settingsOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+        List<PlayerTradeSettings> existing = settingsOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
         
         PlayerTradeSettings settings;
         if (existing != null && !existing.isEmpty()) {
@@ -281,13 +286,10 @@ public class TradeLogService {
         if (cached != null) {
             return cached;
         }
-        
-        List<PlayerTradeSettings> existing = settingsOperator.getAll(
-            WhereCondition.builder()
-                .column("player_uuid")
-                .value(playerUuid.toString())
-                .build()
-        );
+
+        List<PlayerTradeSettings> existing = settingsOperator.query()
+            .where("player_uuid").eq(playerUuid.toString())
+            .list();
         
         if (existing != null && !existing.isEmpty()) {
             PlayerTradeSettings settings = existing.get(0);
@@ -304,11 +306,11 @@ public class TradeLogService {
      * @param settings Settings to save
      */
     public void saveSettings(PlayerTradeSettings settings) {
-        Bukkit.getScheduler().runTaskAsynchronously(UltiTools.getInstance(), () -> {
+        Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             try {
                 settingsOperator.update(settings);
             } catch (Exception e) {
-                UltiTrade.getInstance().getLogger().warn(e,
+                plugin.getLogger().warn(e,
                     "Failed to save player settings");
             }
         });
@@ -426,7 +428,7 @@ public class TradeLogService {
             return playerLogs;
             
         } catch (Exception e) {
-            UltiTrade.getInstance().getLogger().warn(e,
+            plugin.getLogger().warn(e,
                 "Failed to get player logs");
             return new ArrayList<>();
         }

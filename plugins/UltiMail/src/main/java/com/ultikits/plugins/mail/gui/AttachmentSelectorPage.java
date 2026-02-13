@@ -1,6 +1,6 @@
 package com.ultikits.plugins.mail.gui;
 
-import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage;
 import com.ultikits.ultitools.entities.Colors;
 import mc.obliviate.inventory.Icon;
@@ -33,25 +33,28 @@ public class AttachmentSelectorPage extends BaseConfirmationPage {
     private static final int CONTENT_SIZE = 45;
     
     private final int maxItems;
+    private final UltiToolsPlugin plugin;
     private final Consumer<ItemStack[]> onConfirmCallback;
     private final Runnable onCancelCallback;
     private boolean confirmed = false;
-    
+
     /**
      * Creates a new attachment selector page.
      *
      * @param player            The player opening the GUI
      * @param maxItems          Maximum number of items allowed
+     * @param plugin            The plugin instance for i18n
      * @param onConfirmCallback Called when confirm button is clicked, receives the selected items
      * @param onCancelCallback  Called when cancel button is clicked or GUI is closed
      */
-    public AttachmentSelectorPage(@NotNull Player player, int maxItems,
+    public AttachmentSelectorPage(@NotNull Player player, int maxItems, UltiToolsPlugin plugin,
                                    Consumer<ItemStack[]> onConfirmCallback,
                                    Runnable onCancelCallback) {
-        super(player, "attachment-selector", 
-              ChatColor.GOLD + i18n("send_select_attachments").replace("{0}", String.valueOf(maxItems)), 
+        super(player, "attachment-selector",
+              ChatColor.GOLD + plugin.i18n("send_select_attachments").replace("{0}", String.valueOf(maxItems)),
               6);
         this.maxItems = maxItems;
+        this.plugin = plugin;
         this.onConfirmCallback = onConfirmCallback;
         this.onCancelCallback = onCancelCallback;
         this.setShowBottomToolbar(true);
@@ -156,7 +159,7 @@ public class AttachmentSelectorPage extends BaseConfirmationPage {
         return CONTENT_SIZE;
     }
     
-    private static String i18n(String key) {
-        return UltiMail.getInstance().i18n(key);
+    private String i18n(String key) {
+        return plugin.i18n(key);
     }
 }

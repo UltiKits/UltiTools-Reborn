@@ -1,6 +1,6 @@
 package com.ultikits.plugins.mail.commands;
 
-import com.ultikits.plugins.mail.UltiMail;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.mail.config.MailConfig;
 import com.ultikits.plugins.mail.entity.MailData;
 import com.ultikits.plugins.mail.service.MailService;
@@ -54,16 +54,17 @@ class MailCommandTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Setup mock UltiMail
-        TestHelper.mockUltiMailInstance();
+        // Setup mock UltiToolsPlugin
+        UltiToolsPlugin mockPlugin = TestHelper.mockUltiToolsPlugin();
 
         playerUuid = UUID.randomUUID();
         lenient().when(player.getUniqueId()).thenReturn(playerUuid);
         lenient().when(player.getName()).thenReturn("TestPlayer");
         lenient().when(player.getInventory()).thenReturn(playerInventory);
 
-        // Create command with mock mailService
+        // Create command with mock mailService and inject plugin
         mailCommand = new MailCommand(mockMailService);
+        TestHelper.injectField(mailCommand, "plugin", mockPlugin);
     }
 
     @AfterEach

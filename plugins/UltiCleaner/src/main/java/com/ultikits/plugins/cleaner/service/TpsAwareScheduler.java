@@ -1,13 +1,11 @@
 package com.ultikits.plugins.cleaner.service;
 
-import com.ultikits.plugins.cleaner.UltiCleaner;
 import com.ultikits.plugins.cleaner.config.CleanerConfig;
 import com.ultikits.plugins.cleaner.utils.ServerTypeUtil;
-import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
-import org.bukkit.Bukkit;
-import org.bukkit.scheduler.BukkitTask;
 
 /**
  * TPS-aware scheduler for adaptive cleanup thresholds.
@@ -18,7 +16,10 @@ import org.bukkit.scheduler.BukkitTask;
  */
 @Service
 public class TpsAwareScheduler {
-    
+
+    @Autowired
+    private UltiToolsPlugin plugin;
+
     @Autowired
     private CleanerConfig config;
     
@@ -28,47 +29,38 @@ public class TpsAwareScheduler {
     private final double[] tpsHistory5m = new double[300];
     private final double[] tpsHistory15m = new double[900];
     private int historyIndex = 0;
-    
-    private BukkitTask tpsMonitorTask;
-    private double currentTps = 20.0;
+    private boolean fallbackMonitorEnabled = false;
     
     /**
      * Initialize the TPS monitor.
      */
     public void init() {
-        // Start TPS monitoring if native TPS is not available
-        if (!ServerTypeUtil.hasTpsMethod()) {
-            startFallbackMonitor();
+        // Enable fallback monitoring if native TPS is not available
+        fallbackMonitorEnabled = !ServerTypeUtil.hasTpsMethod();
+        if (fallbackMonitorEnabled) {
+            lastTickTime = System.currentTimeMillis();
         }
-        UltiCleaner.getInstance().getLogger().info("TPS monitor initialized. Server: " + ServerTypeUtil.getServerSoftware());
+        plugin.getLogger().info("TPS monitor initialized. Server: " + ServerTypeUtil.getServerSoftware());
     }
-    
+
     /**
      * Shutdown the TPS monitor.
+     * Note: @Scheduled tasks are automatically cancelled by the framework.
      */
     public void shutdown() {
-        if (tpsMonitorTask != null) {
-            tpsMonitorTask.cancel();
-            tpsMonitorTask = null;
-        }
-    }
-    
-    /**
-     * Start fallback TPS monitor for servers without native TPS API.
-     */
-    private void startFallbackMonitor() {
-        lastTickTime = System.currentTimeMillis();
-        tpsMonitorTask = Bukkit.getScheduler().runTaskTimer(
-            UltiTools.getInstance(),
-            this::updateFallbackTps,
-            20L, 20L // Every second
-        );
+        // No manual task cancellation needed
     }
     
     /**
      * Update fallback TPS calculation.
+     * Runs every second (20 ticks) for servers without native TPS API.
      */
-    private void updateFallbackTps() {
+    @Scheduled(period = 20, async = false)
+    public void updateFallbackTps() {
+        if (!fallbackMonitorEnabled) {
+            return;
+        }
+
         long now = System.currentTimeMillis();
         long diff = now - lastTickTime;
         lastTickTime = now;
