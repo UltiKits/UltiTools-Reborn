@@ -80,7 +80,6 @@ public class EmailVerificationService {
      * @return BindResult with outcome
      */
     public BindResult requestEmailBind(Player player, String email) {
-        // Check EmailService is enabled
         EmailService svc = getEmailService();
         if (svc == null || !svc.isEnabled()) {
             return new BindResult(false, "email_not_enabled");
@@ -88,26 +87,43 @@ public class EmailVerificationService {
 
         UUID uuid = player.getUniqueId();
 
-        // Check if already has verified email
+        BindResult validationError = validateEmailBind(uuid, email);
+        if (validationError != null) {
+            return validationError;
+        }
+
+        BindResult cooldownError = checkCooldown(uuid);
+        if (cooldownError != null) {
+            return cooldownError;
+        }
+
+        // Send verification email
+        String emailLower = email.toLowerCase();
+        String code = svc.generateVerificationCode(emailConfig.getCodeLength());
+        int expiryMinutes = emailConfig.getCodeExpirySeconds() / 60;
+        String serverName = Bukkit.getServer().getName();
+        boolean sent = svc.sendVerificationCodeEmail(emailLower, code, serverName, expiryMinutes);
+        if (!sent) {
+            return new BindResult(false, "email_send_failed");
+        }
+
+        pendingBinds.put(uuid, new PendingVerification(emailLower, code, System.currentTimeMillis()));
+        lastSendTime.put(uuid, System.currentTimeMillis());
+
+        return new BindResult(true, "email_bind_prompt", "{EMAIL}", emailLower);
+    }
+
+    private BindResult validateEmailBind(UUID uuid, String email) {
         AccountData account = loginService.getAccount(uuid);
         if (account != null && account.isEmailVerified() && account.getEmail() != null && !account.getEmail().isEmpty()) {
             return new BindResult(false, "email_already_bound", "{EMAIL}", account.getEmail());
         }
-
-        // Validate email format
         if (!EMAIL_PATTERN.matcher(email).matches()) {
             return new BindResult(false, "email_invalid_format");
         }
-
-        // Check domain blacklist
-        String domain = email.substring(email.indexOf('@') + 1).toLowerCase();
-        for (String blocked : emailConfig.getDomainBlacklist()) {
-            if (domain.equalsIgnoreCase(blocked)) {
-                return new BindResult(false, "email_domain_blocked");
-            }
+        if (isDomainBlocked(email)) {
+            return new BindResult(false, "email_domain_blocked");
         }
-
-        // Check max-accounts-per-email
         String emailLower = email.toLowerCase();
         List<AccountData> existingAccounts = dataOperator.query()
                 .where("email").eq(emailLower)
@@ -117,8 +133,20 @@ public class EmailVerificationService {
             return new BindResult(false, "email_max_accounts",
                     "{MAX}", String.valueOf(emailConfig.getMaxAccountsPerEmail()));
         }
+        return null;
+    }
 
-        // Check cooldown
+    private boolean isDomainBlocked(String email) {
+        String domain = email.substring(email.indexOf('@') + 1).toLowerCase();
+        for (String blocked : emailConfig.getDomainBlacklist()) {
+            if (domain.equalsIgnoreCase(blocked)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private BindResult checkCooldown(UUID uuid) {
         Long lastSend = lastSendTime.get(uuid);
         if (lastSend != null) {
             long elapsed = (System.currentTimeMillis() - lastSend) / 1000;
@@ -127,23 +155,7 @@ public class EmailVerificationService {
                 return new BindResult(false, "email_cooldown", "{TIME}", String.valueOf(remaining));
             }
         }
-
-        // Generate code
-        String code = svc.generateVerificationCode(emailConfig.getCodeLength());
-
-        // Send email
-        int expiryMinutes = emailConfig.getCodeExpirySeconds() / 60;
-        String serverName = Bukkit.getServer().getName();
-        boolean sent = svc.sendVerificationCodeEmail(emailLower, code, serverName, expiryMinutes);
-        if (!sent) {
-            return new BindResult(false, "email_send_failed");
-        }
-
-        // Store pending verification
-        pendingBinds.put(uuid, new PendingVerification(emailLower, code, System.currentTimeMillis()));
-        lastSendTime.put(uuid, System.currentTimeMillis());
-
-        return new BindResult(true, "email_bind_prompt", "{EMAIL}", emailLower);
+        return null;
     }
 
     /**
