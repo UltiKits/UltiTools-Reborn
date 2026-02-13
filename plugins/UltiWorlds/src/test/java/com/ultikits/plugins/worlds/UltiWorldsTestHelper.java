@@ -86,6 +86,7 @@ public final class UltiWorldsTestHelper {
         lenient().when(config.isPermissionPerWorld()).thenReturn(false);
         lenient().when(config.getTpCooldown()).thenReturn(10);
         lenient().when(config.isUseSpawnLocation()).thenReturn(true);
+        lenient().when(config.isShowDescriptionOnTeleport()).thenReturn(true);
         lenient().when(config.isInventoryIsolation()).thenReturn(false);
         lenient().when(config.isSeparateInventory()).thenReturn(true);
         lenient().when(config.isSeparateEnderChest()).thenReturn(true);
@@ -143,6 +144,8 @@ public final class UltiWorldsTestHelper {
                 .monstersEnabled(true)
                 .animalsEnabled(true)
                 .weatherEnabled(true)
+                .difficulty(null)
+                .postTeleportCommands(null)
                 .hidden(false)
                 .locked(false)
                 .blocked(false)
@@ -172,13 +175,13 @@ public final class UltiWorldsTestHelper {
     public static void setStaticField(Class<?> clazz, String fieldName, Object value)
             throws Exception {
         Field field = clazz.getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(null, value);
     }
 
     public static void setField(Object target, String fieldName, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test reflection
         field.set(target, value);
     }
 }

@@ -483,7 +483,7 @@ public class SimpleContainer {
      * 刷新容器。
      */
     public void refresh() {
-        // No-op for now - in Spring this would trigger initialization
+        preInstantiateSingletons();
     }
 
     /**

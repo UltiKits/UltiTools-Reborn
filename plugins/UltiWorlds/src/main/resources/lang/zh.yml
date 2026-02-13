@@ -28,6 +28,7 @@ error:
   invalid_option: "§c无效的选项！可用选项: %options%"
   invalid_value: "§c无效的值！"
   not_player: "§c此命令只能由玩家执行！"
+  invalid_difficulty: "§c无效的难度！可用: PEACEFUL, EASY, NORMAL, HARD"
 
 # ==================== 成功消息 ====================
 success:
@@ -42,6 +43,12 @@ success:
   protection_disabled: "§e已禁用世界保护"
   world_blocked: "§c已禁止进入世界 %world%"
   world_unblocked: "§a已允许进入世界 %world%"
+  difficulty_set: "§a已设置世界 %world% 的难度为 %value%"
+  post_cmd_added: "§a已为世界 %world% 添加传送后命令"
+  post_cmd_cleared: "§a已清除世界 %world% 的所有传送后命令"
+  post_cmd_list_header: "§6世界 %world% 的传送后命令:"
+  post_cmd_list_item: "§7- §f%command%"
+  post_cmd_empty: "§7未配置传送后命令"
 
 # ==================== 保护消息 ====================
 protection:
@@ -150,7 +157,9 @@ command:
     block: "§e/world block <世界> §7- 禁止进入世界"
     unblock: "§e/world unblock <世界> §7- 允许进入世界"
     wizard: "§e/world wizard §7- 启动世界创建向导"
-  
+    difficulty: "§e/world difficulty <世界> <难度> §7- 设置世界难度"
+    postcmd: "§e/world postcmd <世界> <add|list|clear> §7- 管理传送后命令"
+
   # 设置选项
   set_options: "pvp, monsters, animals, weather, hidden, locked, displayname, description, icon"
   

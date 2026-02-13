@@ -260,6 +260,17 @@ public class EssentialsConfig extends AbstractConfigEntity {
         "&c注意||&7请遵守服务器规则"
     );
 
+    // ============ Scheduled Commands ============
+    @ConfigEntry(path = "features.scheduled-commands.enabled", comment = "Enable scheduled command execution / 启用定时命令执行")
+    private boolean scheduledCommandsEnabled = false;
+
+    @ConfigEntry(path = "features.scheduled-commands.commands",
+        comment = "Scheduled commands, format: interval_seconds:command / 定时命令列表，格式: 间隔秒数:命令")
+    private java.util.List<String> scheduledCommands = java.util.Arrays.asList(
+        "300:say Server is online!",
+        "600:broadcast &cReminder: follow server rules!"
+    );
+
     // ============ ChestLock 箱子锁 ============
     @ConfigEntry(path = "features.chestlock.enabled", comment = "启用箱子锁功能")
     private boolean chestLockEnabled = true;

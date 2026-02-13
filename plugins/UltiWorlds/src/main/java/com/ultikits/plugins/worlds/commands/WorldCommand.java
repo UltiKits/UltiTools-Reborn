@@ -10,6 +10,7 @@ import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.command.*;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Difficulty;
 import org.bukkit.World;
 import org.bukkit.WorldType;
 import org.bukkit.command.CommandSender;
@@ -244,6 +245,19 @@ public class WorldCommand extends BaseCommandExecutor {
             case "icon":
                 settings.setIcon(value.toUpperCase());
                 break;
+            case "difficulty":
+                try {
+                    Difficulty diff = Difficulty.valueOf(value.toUpperCase());
+                    settings.setDifficulty(diff.name());
+                    World w = Bukkit.getWorld(worldName);
+                    if (w != null) {
+                        w.setDifficulty(diff);
+                    }
+                } catch (IllegalArgumentException e) {
+                    player.sendMessage(i18n("error.invalid_difficulty"));
+                    return;
+                }
+                break;
             default:
                 player.sendMessage(i18n("world.set.invalid_option"));
                 return;
@@ -364,6 +378,97 @@ public class WorldCommand extends BaseCommandExecutor {
         player.sendMessage(i18n("world.setspawn.success").replace("{WORLD}", player.getWorld().getName()));
     }
     
+    // ==================== Difficulty Command ====================
+
+    @CmdMapping(format = "difficulty <world> <level>")
+    public void setDifficulty(@CmdSender Player player,
+                              @CmdParam(value = "world", suggest = "suggestWorlds") String worldName,
+                              @CmdParam(value = "level", suggest = "suggestDifficulties") String level) {
+        if (!player.hasPermission("ultiworlds.admin.settings")) {
+            player.sendMessage(i18n("error.no_permission"));
+            return;
+        }
+
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            player.sendMessage(i18n("error.world_not_found").replace("%world%", worldName));
+            return;
+        }
+
+        Difficulty difficulty;
+        try {
+            difficulty = Difficulty.valueOf(level.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(i18n("error.invalid_difficulty"));
+            return;
+        }
+
+        WorldSettings settings = worldService.getOrCreateSettings(worldName);
+        settings.setDifficulty(difficulty.name());
+        worldService.updateSettings(settings);
+        world.setDifficulty(difficulty);
+
+        player.sendMessage(i18n("success.difficulty_set")
+            .replace("%value%", difficulty.name())
+            .replace("%world%", worldName));
+    }
+
+    // ==================== Post-Teleport Command Management ====================
+
+    @CmdMapping(format = "postcmd <world> add <command>")
+    public void addPostCmd(@CmdSender Player player,
+                           @CmdParam(value = "world", suggest = "suggestWorlds") String worldName,
+                           @CmdParam("command") String command) {
+        if (!player.hasPermission("ultiworlds.admin.settings")) {
+            player.sendMessage(i18n("error.no_permission"));
+            return;
+        }
+
+        WorldSettings settings = worldService.getOrCreateSettings(worldName);
+        String existing = settings.getPostTeleportCommands();
+        if (existing == null || existing.isEmpty()) {
+            settings.setPostTeleportCommands(command);
+        } else {
+            settings.setPostTeleportCommands(existing + "\n" + command);
+        }
+        worldService.updateSettings(settings);
+
+        player.sendMessage(i18n("success.post_cmd_added").replace("%world%", worldName));
+    }
+
+    @CmdMapping(format = "postcmd <world> list")
+    public void listPostCmd(@CmdSender Player player,
+                            @CmdParam(value = "world", suggest = "suggestWorlds") String worldName) {
+        WorldSettings settings = worldService.getOrCreateSettings(worldName);
+        String commands = settings.getPostTeleportCommands();
+
+        player.sendMessage(i18n("success.post_cmd_list_header").replace("%world%", worldName));
+        if (commands == null || commands.isEmpty()) {
+            player.sendMessage(i18n("success.post_cmd_empty"));
+        } else {
+            for (String cmd : commands.split("\\n")) {
+                player.sendMessage(i18n("success.post_cmd_list_item").replace("%command%", cmd.trim()));
+            }
+        }
+    }
+
+    @CmdMapping(format = "postcmd <world> clear")
+    public void clearPostCmd(@CmdSender Player player,
+                             @CmdParam(value = "world", suggest = "suggestWorlds") String worldName) {
+        if (!player.hasPermission("ultiworlds.admin.settings")) {
+            player.sendMessage(i18n("error.no_permission"));
+            return;
+        }
+
+        WorldSettings settings = worldService.getOrCreateSettings(worldName);
+        settings.setPostTeleportCommands(null);
+        worldService.updateSettings(settings);
+
+        player.sendMessage(i18n("success.post_cmd_cleared").replace("%world%", worldName));
+    }
+
+    // ==================== Info Command ====================
+
     @CmdMapping(format = "info")
     public void worldInfo(@CmdSender Player player) {
         World world = player.getWorld();
@@ -404,6 +509,8 @@ public class WorldCommand extends BaseCommandExecutor {
             player.sendMessage(i18n("help.set"));
             player.sendMessage(i18n("help.protect"));
             player.sendMessage(i18n("help.block"));
+            player.sendMessage(i18n("command.help.difficulty"));
+            player.sendMessage(i18n("command.help.postcmd"));
         }
     }
     
@@ -439,8 +546,8 @@ public class WorldCommand extends BaseCommandExecutor {
      * Suggest setting options for tab completion.
      */
     public List<String> suggestOptions(Player player, String input) {
-        return Arrays.asList("pvp", "monsters", "animals", "weather", "hidden", 
-            "locked", "blocked", "displayname", "description", "icon").stream()
+        return Arrays.asList("pvp", "monsters", "animals", "weather", "hidden",
+            "locked", "blocked", "displayname", "description", "icon", "difficulty").stream()
             .filter(opt -> opt.toLowerCase().startsWith(input.toLowerCase()))
             .collect(Collectors.toList());
     }
@@ -451,6 +558,15 @@ public class WorldCommand extends BaseCommandExecutor {
     public List<String> suggestBooleans(Player player, String input) {
         return Arrays.asList("true", "false", "on", "off").stream()
             .filter(val -> val.startsWith(input.toLowerCase()))
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Suggest difficulty levels for tab completion.
+     */
+    public List<String> suggestDifficulties(Player player, String input) {
+        return Arrays.asList("PEACEFUL", "EASY", "NORMAL", "HARD").stream()
+            .filter(d -> d.toLowerCase().startsWith(input.toLowerCase()))
             .collect(Collectors.toList());
     }
     

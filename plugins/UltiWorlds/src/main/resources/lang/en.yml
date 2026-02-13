@@ -28,6 +28,7 @@ error:
   invalid_option: "§cInvalid option! Available options: %options%"
   invalid_value: "§cInvalid value!"
   not_player: "§cThis command can only be executed by players!"
+  invalid_difficulty: "§cInvalid difficulty! Use: PEACEFUL, EASY, NORMAL, HARD"
 
 # ==================== Success Messages ====================
 success:
@@ -42,6 +43,12 @@ success:
   protection_disabled: "§eWorld protection disabled"
   world_blocked: "§cWorld %world% has been blocked"
   world_unblocked: "§aWorld %world% has been unblocked"
+  difficulty_set: "§aDifficulty set to %value% for world %world%"
+  post_cmd_added: "§aPost-teleport command added for world %world%"
+  post_cmd_cleared: "§aAll post-teleport commands cleared for world %world%"
+  post_cmd_list_header: "§6Post-teleport commands for %world%:"
+  post_cmd_list_item: "§7- §f%command%"
+  post_cmd_empty: "§7No post-teleport commands configured"
 
 # ==================== Protection Messages ====================
 protection:
@@ -150,7 +157,9 @@ command:
     block: "§e/world block <world> §7- Block world access"
     unblock: "§e/world unblock <world> §7- Unblock world access"
     wizard: "§e/world wizard §7- Start world creation wizard"
-  
+    difficulty: "§e/world difficulty <world> <level> §7- Set world difficulty"
+    postcmd: "§e/world postcmd <world> <add|list|clear> §7- Manage post-TP commands"
+
   # Setting options
   set_options: "pvp, monsters, animals, weather, hidden, locked, displayname, description, icon"
   

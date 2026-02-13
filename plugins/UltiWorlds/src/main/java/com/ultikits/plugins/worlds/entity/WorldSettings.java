@@ -53,7 +53,17 @@ public class WorldSettings extends BaseDataEntity<Integer> {
     
     @Column("weather_enabled")
     private boolean weatherEnabled;
-    
+
+    // === World Difficulty ===
+
+    @Column("difficulty")
+    private String difficulty;  // PEACEFUL, EASY, NORMAL, HARD, or null (use Bukkit default)
+
+    // === Post-Teleport Commands ===
+
+    @Column("post_teleport_commands")
+    private String postTeleportCommands;  // Newline-separated commands, or null
+
     // === Access Control ===
     
     @Column("hidden")
@@ -121,6 +131,8 @@ public class WorldSettings extends BaseDataEntity<Integer> {
             .monstersEnabled(true)
             .animalsEnabled(true)
             .weatherEnabled(true)
+            .difficulty(null)
+            .postTeleportCommands(null)
             .hidden(false)
             .locked(false)
             .blocked(false)

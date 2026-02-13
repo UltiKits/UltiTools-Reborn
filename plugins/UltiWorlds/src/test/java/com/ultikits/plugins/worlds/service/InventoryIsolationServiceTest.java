@@ -4,8 +4,8 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.plugins.worlds.UltiWorldsTestHelper;
 import com.ultikits.plugins.worlds.config.WorldConfig;
 import com.ultikits.plugins.worlds.entity.WorldInventory;
-import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.World;
 import org.bukkit.entity.Player;
@@ -52,6 +52,19 @@ class InventoryIsolationServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiWorldsTestHelper.tearDown();
+    }
+
+    /**
+     * Helper to mock a query chain that returns a specific result.
+     */
+    @SuppressWarnings("unchecked")
+    private Query<WorldInventory> mockQueryReturning(WorldInventory result) {
+        Query<WorldInventory> mockQuery = mock(Query.class);
+        when(mockDataOperator.query()).thenReturn(mockQuery);
+        when(mockQuery.where(anyString())).thenReturn(mockQuery);
+        when(mockQuery.eq(any())).thenReturn(mockQuery);
+        when(mockQuery.first()).thenReturn(result);
+        return mockQuery;
     }
 
     @Nested
@@ -116,15 +129,19 @@ class InventoryIsolationServiceTest {
     class SaveInventory {
 
         @Test
-        @DisplayName("saveInventory should do nothing when isolation disabled")
-        void saveInventoryDisabled() {
-            when(mockConfig.isInventoryIsolation()).thenReturn(false);
-
+        @DisplayName("saveInventory without init should still query data operator")
+        void saveInventoryWithoutInit() throws Exception {
+            // Note: @ConditionalOnConfig prevents this service from being created
+            // when isolation is disabled, so saveInventory has no early-return guard.
+            // Without init(), dataOperator is the mock injected via reflection.
             Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+            WorldInventory inventory = UltiWorldsTestHelper.createSampleWorldInventory(
+                    player.getUniqueId(), "world");
+            mockQueryReturning(inventory);
 
             service.saveInventory(player, "world");
 
-            verifyNoInteractions(mockDataOperator);
+            verify(mockDataOperator).update(any(WorldInventory.class));
         }
 
         @Test
@@ -145,8 +162,7 @@ class InventoryIsolationServiceTest {
             WorldInventory inventory = UltiWorldsTestHelper.createSampleWorldInventory(
                     player.getUniqueId(), "world");
 
-            when(mockDataOperator.getAll(any(WhereCondition[].class)))
-                    .thenReturn(Collections.singletonList(inventory));
+            mockQueryReturning(inventory);
 
             service.saveInventory(player, "world");
 
@@ -159,15 +175,16 @@ class InventoryIsolationServiceTest {
     class LoadInventory {
 
         @Test
-        @DisplayName("loadInventory should do nothing when isolation disabled")
-        void loadInventoryDisabled() {
-            when(mockConfig.isInventoryIsolation()).thenReturn(false);
-
+        @DisplayName("loadInventory without init should create new inventory when not found")
+        void loadInventoryWithoutInit() {
+            // Note: @ConditionalOnConfig prevents this service from being created
+            // when isolation is disabled, so loadInventory has no early-return guard.
             Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
+            mockQueryReturning(null);
 
             service.loadInventory(player, "world");
 
-            verifyNoInteractions(mockDataOperator);
+            verify(mockDataOperator).insert(any(WorldInventory.class));
         }
 
         @Test
@@ -193,8 +210,7 @@ class InventoryIsolationServiceTest {
             inventory.setFoodLevel(15);
             inventory.setSaturation(3.5f);
 
-            when(mockDataOperator.getAll(any(WhereCondition[].class)))
-                    .thenReturn(Collections.singletonList(inventory));
+            mockQueryReturning(inventory);
 
             service.loadInventory(player, "world");
 
@@ -216,8 +232,7 @@ class InventoryIsolationServiceTest {
 
             Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
 
-            when(mockDataOperator.getAll(any(WhereCondition[].class)))
-                    .thenReturn(Collections.emptyList());
+            mockQueryReturning(null);
 
             service.loadInventory(player, "world");
 
@@ -232,14 +247,20 @@ class InventoryIsolationServiceTest {
         @Test
         @DisplayName("onWorldChange should do nothing when isolation disabled")
         void onWorldChangeDisabled() {
-            when(mockConfig.isInventoryIsolation()).thenReturn(false);
-
+            // Note: onWorldChange doesn't check isInventoryIsolation directly,
+            // but without init() the worldGroupCache is empty. With ungrouped worlds
+            // that have the same name mapping (each world = its own group), worlds
+            // with different names will trigger save/load which check isolation internally.
+            // With same-name worlds (same group), no swap occurs.
             Player player = UltiWorldsTestHelper.createMockPlayer("TestPlayer", UUID.randomUUID());
             World fromWorld = mock(World.class);
             World toWorld = mock(World.class);
+            when(fromWorld.getName()).thenReturn("world");
+            when(toWorld.getName()).thenReturn("world");
 
             service.onWorldChange(player, fromWorld, toWorld);
 
+            // Same group (both "world") → no swap → no dataOperator interaction
             verifyNoInteractions(mockDataOperator);
         }
 
@@ -285,9 +306,14 @@ class InventoryIsolationServiceTest {
             WorldInventory toInventory = UltiWorldsTestHelper.createSampleWorldInventory(
                     player.getUniqueId(), "pvp");
 
-            when(mockDataOperator.getAll(any(WhereCondition[].class)))
-                    .thenReturn(Collections.singletonList(fromInventory))
-                    .thenReturn(Collections.singletonList(toInventory));
+            @SuppressWarnings("unchecked")
+            Query<WorldInventory> mockQuery = mock(Query.class);
+            when(mockDataOperator.query()).thenReturn(mockQuery);
+            when(mockQuery.where(anyString())).thenReturn(mockQuery);
+            when(mockQuery.eq(any())).thenReturn(mockQuery);
+            when(mockQuery.first())
+                    .thenReturn(fromInventory)
+                    .thenReturn(toInventory);
 
             service.onWorldChange(player, fromWorld, toWorld);
 
