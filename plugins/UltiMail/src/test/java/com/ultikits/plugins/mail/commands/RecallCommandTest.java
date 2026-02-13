@@ -266,7 +266,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "AdminPlayer", null);
 
@@ -287,7 +287,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "Admin", "自定义召回消息");
 
@@ -306,7 +306,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "Admin", null);
 
@@ -326,7 +326,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "TheAdmin", null);
 
@@ -346,7 +346,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "Admin", null);
 
@@ -365,7 +365,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendGameMail", String.class, String.class, String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             method.invoke(recallCommand, "uuid-123", "TestPlayer", "Admin", null);
 
@@ -398,7 +398,7 @@ class RecallCommandTest {
             when(mockPlugin.getDataOperator(MailData.class)).thenReturn(mailOp);
 
             Method method = RecallCommand.class.getDeclaredMethod("getAllRegisteredPlayers");
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             @SuppressWarnings("unchecked")
             List<?> players = (List<?>) method.invoke(recallCommand);
@@ -433,7 +433,7 @@ class RecallCommandTest {
             mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[0]);
 
             Method method = RecallCommand.class.getDeclaredMethod("getAllRegisteredPlayers");
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             @SuppressWarnings("unchecked")
             List<?> players = (List<?>) method.invoke(recallCommand);
@@ -459,7 +459,7 @@ class RecallCommandTest {
             mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[0]);
 
             Method method = RecallCommand.class.getDeclaredMethod("getAllRegisteredPlayers");
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             @SuppressWarnings("unchecked")
             List<?> players = (List<?>) method.invoke(recallCommand);
@@ -490,7 +490,7 @@ class RecallCommandTest {
             mockedBukkit.when(Bukkit::getOfflinePlayers).thenReturn(new OfflinePlayer[]{offlinePlayer});
 
             Method method = RecallCommand.class.getDeclaredMethod("getAllRegisteredPlayers");
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             @SuppressWarnings("unchecked")
             List<?> players = (List<?>) method.invoke(recallCommand);
@@ -527,7 +527,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendRecallNotifications", String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             int[] results = (int[]) method.invoke(recallCommand, "Admin", null);
 
@@ -548,7 +548,7 @@ class RecallCommandTest {
 
             Method method = RecallCommand.class.getDeclaredMethod(
                 "sendRecallNotifications", String.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD
 
             int[] results = (int[]) method.invoke(recallCommand, "Admin", null);
 
@@ -574,7 +574,7 @@ class RecallCommandTest {
             // handleHelp is protected - invoke via reflection
             try {
                 Method helpMethod = RecallCommand.class.getDeclaredMethod("handleHelp", CommandSender.class);
-                helpMethod.setAccessible(true);
+                helpMethod.setAccessible(true); // NOPMD
                 helpMethod.invoke(recallCommand, sender);
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -590,7 +590,7 @@ class RecallCommandTest {
 
             try {
                 Method helpMethod = RecallCommand.class.getDeclaredMethod("handleHelp", CommandSender.class);
-                helpMethod.setAccessible(true);
+                helpMethod.setAccessible(true); // NOPMD
                 helpMethod.invoke(recallCommand, sender);
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -715,11 +715,11 @@ class RecallCommandTest {
                 .newInstance("uuid-123", "TestPlayer", "test@example.com");
 
             Field uuidField = playerInfoClass.getDeclaredField("uuid");
-            uuidField.setAccessible(true);
+            uuidField.setAccessible(true); // NOPMD
             Field nameField = playerInfoClass.getDeclaredField("name");
-            nameField.setAccessible(true);
+            nameField.setAccessible(true); // NOPMD
             Field emailField = playerInfoClass.getDeclaredField("email");
-            emailField.setAccessible(true);
+            emailField.setAccessible(true); // NOPMD
 
             assertThat(uuidField.get(playerInfo)).isEqualTo("uuid-123");
             assertThat(nameField.get(playerInfo)).isEqualTo("TestPlayer");
@@ -736,7 +736,7 @@ class RecallCommandTest {
                 .newInstance("uuid-123", "TestPlayer", null);
 
             Field emailField = playerInfoClass.getDeclaredField("email");
-            emailField.setAccessible(true);
+            emailField.setAccessible(true); // NOPMD
 
             assertThat(emailField.get(playerInfo)).isNull();
         }

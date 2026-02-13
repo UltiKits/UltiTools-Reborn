@@ -274,6 +274,7 @@ teleportService.teleport(player, targetPlayer.getLocation());
 - 📝 **代码质量**: 移除过时导入，优化代码结构
 
 #### 功能特性
+
 - ✨ 新增黑名单系统
   - 双向屏蔽功能
   - 独立黑名单 GUI

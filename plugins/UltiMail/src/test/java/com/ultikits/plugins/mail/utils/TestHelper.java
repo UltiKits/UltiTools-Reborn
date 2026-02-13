@@ -95,7 +95,7 @@ public final class TestHelper {
         while (clazz != null) {
             try {
                 Field field = clazz.getDeclaredField(fieldName);
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD - intentional reflection for test mock injection
                 field.set(target, value);
                 return;
             } catch (NoSuchFieldException e) {
@@ -114,7 +114,7 @@ public final class TestHelper {
         try {
             // Clean UltiTools instance if set
             Field ultiToolsField = UltiTools.class.getDeclaredField("ultiTools");
-            ultiToolsField.setAccessible(true);
+            ultiToolsField.setAccessible(true); // NOPMD - intentional reflection for cleanup
             ultiToolsField.set(null, null);
         } catch (Exception ignored) {
         }

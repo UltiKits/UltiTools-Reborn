@@ -115,7 +115,7 @@ public final class UltiSideBarTestHelper {
         if (field == null) {
             throw new NoSuchFieldException(fieldName);
         }
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - intentional reflection for test mock injection
         field.set(target, value);
     }
 }

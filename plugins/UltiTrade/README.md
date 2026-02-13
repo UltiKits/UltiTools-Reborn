@@ -153,6 +153,7 @@ enableClickableButtons: true # 启用聊天可点击按钮
 本插件已完全迁移到 UltiTools-API 6.2.0 的现代化模式：
 
 #### 1. Query DSL (查询构建器)
+
 ```java
 // 旧模式
 List<PlayerTradeSettings> settings = settingsOperator.getAll(
@@ -166,6 +167,7 @@ List<PlayerTradeSettings> settings = settingsOperator.query()
 ```
 
 #### 2. @Scheduled 任务系统
+
 ```java
 // 自动注册的定时任务
 @Scheduled(period = 200, async = false)
@@ -175,6 +177,7 @@ public void cleanupExpiredRequests() {
 ```
 
 #### 3. 配置验证
+
 ```java
 @Range(min = 5, max = 600)
 @ConfigEntry(path = "request-timeout")

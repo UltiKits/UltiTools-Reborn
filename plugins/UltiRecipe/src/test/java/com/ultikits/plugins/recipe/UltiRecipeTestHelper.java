@@ -181,7 +181,7 @@ public final class UltiRecipeTestHelper {
         if (field == null) {
             throw new NoSuchFieldException(fieldName);
         }
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - intentional reflection for test mock injection
         field.set(target, value);
     }
 
@@ -199,7 +199,7 @@ public final class UltiRecipeTestHelper {
         if (field == null) {
             throw new NoSuchFieldException(fieldName);
         }
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - intentional reflection for test field access
         return field.get(target);
     }
 }
