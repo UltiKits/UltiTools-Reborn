@@ -1,8 +1,0 @@
-name: UltiSideBar
-version: '${project.version}'
-main: com.ultikits.plugins.sidebar.UltiSideBar
-authors:
-  - wisdommen
-  - UltiKits Team
-api-version: 620
-loadAfter: []
