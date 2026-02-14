@@ -1,8 +1,0 @@
-name: UltiSocial
-version: '${project.version}'
-main: com.ultikits.plugins.social.UltiSocial
-authors:
-  - wisdommen
-  - UltiKits Team
-api-version: 620
-loadAfter: []

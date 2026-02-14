@@ -1,8 +1,0 @@
-name: UltiRecipe
-version: '${project.version}'
-main: com.ultikits.plugins.recipe.UltiRecipe
-authors:
-  - wisdommen
-  - UltiKits Team
-api-version: 620
-loadAfter: []
