@@ -13,8 +13,8 @@ import lombok.ToString;
  * Extends {@link AbstractDataEntity} to maintain compatibility with existing data operators.
  * <p>
  * Note: This class does NOT declare its own {@code id} field. It reuses the parent
- * {@link AbstractDataEntity#getId()} field (type Object) and provides typed accessors
- * via {@link #getId()} and {@link #setId(Serializable)}. This avoids Gson's
+ * {@link AbstractDataEntity} id field (type Object) and provides typed accessors
+ * via {@code getId()} and {@code setId(Serializable)}. This avoids Gson's
  * "declares multiple JSON fields named 'id'" error.
  * <p>
  * 带有泛型 ID 类型和生命周期钩子的增强型抽象数据实体。

@@ -341,21 +341,36 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
-        
+
         // 关闭日志流管理器
         if (logStreamManager != null) {
             logStreamManager.shutdown();
         }
-        
+
         CloudAuthManager.stopPolling();
-        dependenceManagers.closeAdventure();
+        if (dependenceManagers != null) {
+            dependenceManagers.closeAdventure();
+        }
         stopWebsocket();
-        pluginManager.close();
-        dependenceManagers.closeContext();
+        if (pluginManager != null) {
+            pluginManager.close();
+        }
+        if (dependenceManagers != null) {
+            dependenceManagers.closeContext();
+        }
         getCommandManager().close();
         DataStoreManager.close();
-        getConfigManager().saveAll();
+        if (configManager != null) {
+            configManager.saveAll();
+        }
         Bukkit.getServicesManager().unregisterAll(this);
+        if (ultiToolsClassLoader != null) {
+            try {
+                ultiToolsClassLoader.close();
+            } catch (IOException e) {
+                getLogger().log(Level.WARNING, "Failed to close module classloader", e);
+            }
+        }
     }
 
     /**

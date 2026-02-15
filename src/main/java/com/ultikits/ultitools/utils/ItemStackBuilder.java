@@ -132,7 +132,7 @@ public class ItemStackBuilder {
      * <p>
      * 设置物品的显示名称。
      *
-     * @param name the display name (supports color codes with &)
+     * @param name the display name (supports color codes with &amp;)
      * @return this builder
      */
     public ItemStackBuilder name(String name) {
@@ -160,7 +160,7 @@ public class ItemStackBuilder {
      * <p>
      * 设置物品的描述。
      *
-     * @param lore the lore lines (supports color codes with &)
+     * @param lore the lore lines (supports color codes with &amp;)
      * @return this builder
      */
     public ItemStackBuilder lore(String... lore) {
@@ -172,7 +172,7 @@ public class ItemStackBuilder {
      * <p>
      * 设置物品的描述。
      *
-     * @param lore the lore lines (supports color codes with &)
+     * @param lore the lore lines (supports color codes with &amp;)
      * @return this builder
      */
     public ItemStackBuilder lore(List<String> lore) {
