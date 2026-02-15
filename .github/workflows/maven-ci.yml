@@ -141,6 +141,7 @@ jobs:
         retention-days: 14
         
     - name: 📚 Deploy Java DOC
+      continue-on-error: true
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
         server: ${{ secrets.FTP_HOST }}
