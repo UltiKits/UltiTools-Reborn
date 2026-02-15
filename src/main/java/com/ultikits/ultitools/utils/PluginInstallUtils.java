@@ -359,6 +359,79 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Find the JAR file for a plugin by its identify-string.
+     * Scans all JARs in the given directory, reads plugin.yml from each.
+     * <br>
+     * 通过identify-string查找插件的JAR文件。
+     *
+     * @param pluginsFolder the folder to scan
+     * @param identifyString the identify-string to match
+     * @return the matching JAR file, or null if not found
+     */
+    public static File findPluginJar(File pluginsFolder, String identifyString) {
+        if (pluginsFolder == null || !pluginsFolder.isDirectory()) {
+            return null;
+        }
+        File[] jars = pluginsFolder.listFiles((f) -> f.getName().endsWith(".jar"));
+        if (jars == null) {
+            return null;
+        }
+        for (File jar : jars) {
+            try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
+                java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+                if (entry == null) {
+                    continue;
+                }
+                try (InputStream is = jarFile.getInputStream(entry);
+                     BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                    YamlConfiguration config = YamlConfiguration.loadConfiguration(reader);
+                    String id = config.getString("identify-string");
+                    if (identifyString.equals(id)) {
+                        return jar;
+                    }
+                }
+            } catch (IOException e) {
+                // Skip unreadable JARs
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Update a plugin module: download latest version and delete old JAR.
+     * <br>
+     * 更新插件模块：下载最新版本并删除旧JAR。
+     *
+     * @param identifyString the plugin identify string
+     * @return true if update succeeded
+     */
+    public static boolean updatePlugin(String identifyString) {
+        String downloadLink = getPluginLatestDownloadLink(identifyString);
+        if (downloadLink == null) {
+            return false;
+        }
+
+        String pluginsPath = UltiTools.getInstance().getDataFolder() + "/plugins";
+        File pluginsFolder = new File(pluginsPath);
+        File oldJar = findPluginJar(pluginsFolder, identifyString);
+
+        String fileName = downloadLink.substring(downloadLink.lastIndexOf("/") + 1);
+        try {
+            HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
+        } catch (IOException e) {
+            UltiTools.getInstance().getLogger().severe("Failed to download update: " + e.getMessage());
+            return false;
+        }
+
+        // Delete old JAR if it's a different file than the new download
+        if (oldJar != null && !oldJar.getName().equals(fileName)) {
+            oldJar.delete();
+        }
+
+        return true;
+    }
+
+    /**
      * Uninstall plugin.
      * <br>
      * 卸载插件。
