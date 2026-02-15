@@ -195,8 +195,30 @@ public class PluginInstallUtils {
             }
             String body = httpResponse.body();
             Type listType = new TypeToken<List<PluginEntity>>(){}.getType();
-            List<PluginEntity> result = unwrapData(body, listType);
-            return result != null ? result : pluginEntities;
+            // Backend returns paginated wrapper: {items:[...], total, page, pageSize}
+            // Extract items array from the wrapper, falling back to direct list for backwards compat
+            try {
+                JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+                String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+                if (!"200".equals(code)) {
+                    return pluginEntities;
+                }
+                JsonElement data = wrapper.get("data");
+                if (data == null || data.isJsonNull()) {
+                    return pluginEntities;
+                }
+                // Handle paginated wrapper format: {items: [...], total, page, pageSize}
+                if (data.isJsonObject() && data.getAsJsonObject().has("items")) {
+                    JsonElement items = data.getAsJsonObject().get("items");
+                    List<PluginEntity> result = GSON.fromJson(items, listType);
+                    return result != null ? result : pluginEntities;
+                }
+                // Fallback: direct list format
+                List<PluginEntity> result = GSON.fromJson(data, listType);
+                return result != null ? result : pluginEntities;
+            } catch (Exception e) {
+                return pluginEntities;
+            }
         }
     }
 
