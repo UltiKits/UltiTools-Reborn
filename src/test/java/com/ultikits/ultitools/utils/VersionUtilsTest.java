@@ -44,14 +44,5 @@ class VersionUtilsTest {
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
         }
 
-        @Test
-        @DisplayName("pluginHasUpdate方法应该存在")
-        void pluginHasUpdateMethodShouldExist() throws Exception {
-            Method method = VersionUtils.class.getDeclaredMethod("pluginHasUpdate", String.class, String.class);
-            assertThat(method).isNotNull();
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-        }
     }
 }

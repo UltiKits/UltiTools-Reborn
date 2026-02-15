@@ -2,7 +2,6 @@ package com.ultikits.ultitools;
 
 import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
 import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
-import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -52,6 +51,8 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.manager.UpdateManager;
+import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.utils.ApiRateLimiter;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
@@ -103,6 +104,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private LogStreamManager logStreamManager;
     @Getter
     private PlayerEventManager playerEventManager;
+    @Getter
+    private UpdateManager updateManager;
 
     /**
      * Returns the instance of the UltiTools.
@@ -320,20 +323,19 @@ public final class UltiTools extends JavaPlugin implements Localized {
             } catch (IOException e) {
                 getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
             }
-            checkForUpdates();
-        });
-    }
 
-    private void checkForUpdates() {
-        getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
-        String ultiToolsNewestVersion = getUltiToolsNewestVersion();
-        String currentVersion = getEnv().getString("version");
-        if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
-            getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
-            getLogger().log(Level.INFO, String.format(i18n("下载地址：%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
-        } else {
-            getLogger().log(Level.INFO, i18n("UltiTools-API已是最新版本！"));
-        }
+            // Start async update check
+            updateManager = new UpdateManager(getLogger());
+            new org.bukkit.scheduler.BukkitRunnable() {
+                @Override
+                public void run() {
+                    updateManager.checkUpdatesSync();
+                }
+            }.runTaskAsynchronously(UltiTools.this);
+
+            // Register join listener for OP notifications
+            Bukkit.getPluginManager().registerEvents(new UpdateJoinListener(updateManager), UltiTools.this);
+        });
     }
 
     @Override
