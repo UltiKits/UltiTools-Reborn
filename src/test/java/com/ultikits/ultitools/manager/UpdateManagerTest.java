@@ -19,12 +19,10 @@ import com.ultikits.ultitools.utils.VersionUtils;
 class UpdateManagerTest {
 
     private UpdateManager updateManager;
-    private Logger mockLogger;
 
     @BeforeEach
     void setUp() {
-        mockLogger = mock(Logger.class);
-        updateManager = new UpdateManager(mockLogger);
+        updateManager = new UpdateManager(mock(Logger.class));
     }
 
     @Nested
