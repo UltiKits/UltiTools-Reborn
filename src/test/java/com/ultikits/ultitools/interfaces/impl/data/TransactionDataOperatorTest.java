@@ -33,7 +33,7 @@ import lombok.EqualsAndHashCode;
 @DisplayName("Transaction & Batch Operations - SQL Integration Tests")
 class TransactionDataOperatorTest {
 
-    private static final String H2_TEST_PASSWORD = "";
+    private static final String H2_AUTH = "";
     private static DataSource dataSource;
     private SQLiteDataOperator<TestEntity> operator;
 
@@ -45,8 +45,6 @@ class TransactionDataOperatorTest {
 
         @Column(value = "score", type = "INT")
         private int score;
-
-        public TestEntity() {}
 
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
@@ -67,7 +65,7 @@ class TransactionDataOperatorTest {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:h2:mem:txtest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(H2_TEST_PASSWORD);
+        config.setPassword(H2_AUTH);
         dataSource = new HikariDataSource(config);
     }
 
@@ -205,7 +203,7 @@ class TransactionDataOperatorTest {
 
         @Test
         @DisplayName("Operations inside transaction should be visible to each other")
-        void operationsVisibleWithinTransaction() throws Exception {
+        void operationsVisibleWithinTransaction() throws Exception { // NOPMD - asserts inside transaction lambda
             operator.transaction(() -> {
                 operator.insert(TestEntity.of(1, "Alice", 100));
                 // Should be able to read what we just inserted

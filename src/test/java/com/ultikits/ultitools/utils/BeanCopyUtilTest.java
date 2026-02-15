@@ -56,8 +56,6 @@ class BeanCopyUtilTest {
         @SuppressWarnings("PMD.UnusedPrivateField") // Final field is intentionally unused - tests that final fields are not copied
         private final String finalField = "final";
 
-        public TargetBean() {}
-
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
         public int getAge() { return age; }
