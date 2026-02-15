@@ -10,7 +10,7 @@ import java.util.List;
  * 替代 hutool BeanUtil.copyProperties()
  * 
  * @author wisdomme
- * @since 7.0.0
+ * @since 6.2.0
  */
 public final class BeanCopyUtil {
     

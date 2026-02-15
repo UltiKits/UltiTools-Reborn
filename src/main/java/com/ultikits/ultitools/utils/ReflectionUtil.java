@@ -13,7 +13,7 @@ import java.util.List;
  * 替代 hutool ReflectUtil / AnnotationUtil
  *
  * @author wisdomme
- * @since 7.0.0
+ * @since 6.2.0
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Reflection utility requires setAccessible
 public final class ReflectionUtil {
