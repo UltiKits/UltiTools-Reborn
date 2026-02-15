@@ -64,6 +64,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Getter
     private final String mainClass;
     @Getter
+    private final String identifyString;
+    @Getter
     @Setter
     private String resourceFolderPath;
     @Setter
@@ -85,6 +87,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         loadAfter = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion = pluginConfig.getInt("api-version", 0);
         mainClass = pluginConfig.getString("main", "unknown");
+        identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
         language = initializeLanguage();
@@ -187,6 +190,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.loadAfter = loadAfter;
         this.minUltiToolsVersion = minUltiToolsVersion;
         this.mainClass = mainClass;
+        this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
         language = createLanguageFromPath(resourceFolderPath);
         saveResources();
