@@ -264,7 +264,7 @@ public @interface ExceptionCatch {
 | `"empty"` | 空集合/数组/字符串 |
 | `"42"` | 数值类型 |
 
-### 使用示例
+### @ExceptionCatch 使用示例
 
 **基本用法**:
 

@@ -431,7 +431,7 @@ class ChatCallbackManagerTest {
         void callbackExceptionShouldStillAllowRemove() throws Exception {
             // Arrange
             Runnable throwingCallback = () -> {
-                throw new RuntimeException("Test exception");
+                throw new IllegalStateException("Test exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
 
@@ -888,7 +888,7 @@ class ChatCallbackManagerTest {
         void executeWithThrowingCallbackShouldCatchException() throws Exception {
             // Arrange
             Runnable throwingCallback = () -> {
-                throw new RuntimeException("Callback exception");
+                throw new IllegalStateException("Callback exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
 

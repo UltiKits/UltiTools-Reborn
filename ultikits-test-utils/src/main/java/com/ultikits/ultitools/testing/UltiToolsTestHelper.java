@@ -127,7 +127,7 @@ public final class UltiToolsTestHelper {
             field.setAccessible(true); // NOPMD
             field.set(null, value);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to set static field: " + clazz.getName() + "." + fieldName, e);
+            throw new IllegalStateException("Failed to set static field: " + clazz.getName() + "." + fieldName, e);
         }
     }
 
@@ -146,7 +146,7 @@ public final class UltiToolsTestHelper {
             field.setAccessible(true); // NOPMD
             return (T) field.get(null);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to get static field: " + clazz.getName() + "." + fieldName, e);
+            throw new IllegalStateException("Failed to get static field: " + clazz.getName() + "." + fieldName, e);
         }
     }
 
@@ -164,7 +164,7 @@ public final class UltiToolsTestHelper {
             field.setAccessible(true); // NOPMD
             field.set(target, value);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to set field: " + fieldName, e);
+            throw new IllegalStateException("Failed to set field: " + fieldName, e);
         }
     }
 
@@ -184,7 +184,7 @@ public final class UltiToolsTestHelper {
             field.setAccessible(true); // NOPMD
             return (T) field.get(target);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to get field: " + fieldName, e);
+            throw new IllegalStateException("Failed to get field: " + fieldName, e);
         }
     }
 

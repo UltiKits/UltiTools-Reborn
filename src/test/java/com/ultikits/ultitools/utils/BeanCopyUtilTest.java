@@ -362,7 +362,7 @@ class BeanCopyUtilTest {
         @DisplayName("私有构造函数应该抛出 UnsupportedOperationException")
         void privateConstructorShouldThrowException() throws Exception {
             Constructor<BeanCopyUtil> constructor = BeanCopyUtil.class.getDeclaredConstructor();
-            constructor.setAccessible(true);
+            constructor.setAccessible(true); // NOPMD
             
             assertThatThrownBy(constructor::newInstance)
                 .isInstanceOf(InvocationTargetException.class)

@@ -203,7 +203,7 @@ class XVersionUtilsTest {
                     .thenReturn(Optional.of(mockXSound));
                 when(mockXSound.parseSound()).thenReturn(org.bukkit.Sound.ENTITY_PLAYER_LEVELUP);
                 
-                org.bukkit.Sound result = XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
+                XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
                 
                 // 结果可能为 null 或 Sound，取决于 XSound 的行为
             }
@@ -217,7 +217,7 @@ class XVersionUtilsTest {
                     .thenReturn(Optional.empty());
                 
                 org.bukkit.Sound result = XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
-                
+
                 assertThat(result).isNull();
             }
         }

@@ -535,13 +535,13 @@ class DependenceManagersTest {
 
     private sun.misc.Unsafe getUnsafe() throws Exception {
         Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
-        f.setAccessible(true);
+        f.setAccessible(true); // NOPMD
         return (sun.misc.Unsafe) f.get(null);
     }
 
     private void setField(Object obj, String fieldName, Object value) throws Exception {
         Field field = obj.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD
         field.set(obj, value);
     }
 }

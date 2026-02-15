@@ -33,6 +33,7 @@ import lombok.EqualsAndHashCode;
 @DisplayName("Transaction & Batch Operations - SQL Integration Tests")
 class TransactionDataOperatorTest {
 
+    private static final String H2_TEST_PASSWORD = "";
     private static DataSource dataSource;
     private SQLiteDataOperator<TestEntity> operator;
 
@@ -66,7 +67,7 @@ class TransactionDataOperatorTest {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:h2:mem:txtest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // nosemgrep: java.lang.security.audit.hardcoded-password - H2 in-memory test database
+        config.setPassword(H2_TEST_PASSWORD);
         dataSource = new HikariDataSource(config);
     }
 
@@ -163,7 +164,7 @@ class TransactionDataOperatorTest {
             assertThatThrownBy(() -> {
                 operator.transaction(() -> {
                     operator.insert(TestEntity.of(1, "Alice", 100));
-                    throw new RuntimeException("Simulated failure");
+                    throw new IllegalStateException("Simulated failure");
                 });
             }).isInstanceOf(RuntimeException.class)
               .hasMessage("Simulated failure");
@@ -180,9 +181,9 @@ class TransactionDataOperatorTest {
             assertThatThrownBy(() -> {
                 operator.transaction(() -> {
                     operator.insert(TestEntity.of(1, "Alice", 100));
-                    throw new Exception("Checked failure");
+                    throw new java.io.IOException("Checked failure");
                 });
-            }).isInstanceOf(Exception.class)
+            }).isInstanceOf(java.io.IOException.class)
               .hasMessage("Checked failure");
 
             assertThat(countRows()).isEqualTo(1);
@@ -401,7 +402,7 @@ class TransactionDataOperatorTest {
                 try {
                     operator.update(TestEntity.of(1, "Alice-Updated", 150));
                 } catch (IllegalAccessException e) {
-                    throw new RuntimeException(e);
+                    throw new IllegalStateException(e);
                 }
                 operator.delById(3);
             });
@@ -423,11 +424,11 @@ class TransactionDataOperatorTest {
                     try {
                         operator.update(TestEntity.of(1, "Modified", 999));
                     } catch (IllegalAccessException e) {
-                        throw new RuntimeException(e);
+                        throw new IllegalStateException(e);
                     }
-                    throw new RuntimeException("Abort!");
+                    throw new IllegalStateException("Abort!");
                 });
-            }).isInstanceOf(RuntimeException.class);
+            }).isInstanceOf(IllegalStateException.class);
 
             // Everything should be rolled back
             assertThat(countRows()).isEqualTo(1);

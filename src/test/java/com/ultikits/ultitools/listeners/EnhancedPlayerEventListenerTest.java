@@ -216,7 +216,7 @@ class EnhancedPlayerEventListenerTest {
         void shouldIncludeKillerInfo() {
             // Arrange
             when(mockMonitorManager.isMonitoring()).thenReturn(true);
-            PlayerMock victim = server.addPlayer("Victim");
+            server.addPlayer("Victim");
             PlayerMock killer = server.addPlayer("Killer");
             
             // Mock the killer

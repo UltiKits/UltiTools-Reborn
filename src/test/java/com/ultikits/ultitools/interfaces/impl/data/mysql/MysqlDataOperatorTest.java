@@ -32,6 +32,7 @@ import lombok.EqualsAndHashCode;
 @DisplayName("MysqlDataOperator 测试")
 class MysqlDataOperatorTest {
 
+    private static final String H2_TEST_PASSWORD = "";
     private static DataSource dataSource;
     private MysqlDataOperator<TestEntity> operator;
 
@@ -66,7 +67,7 @@ class MysqlDataOperatorTest {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:h2:mem:mysqltest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // nosemgrep: java.lang.security.audit.hardcoded-password - H2 in-memory test database
+        config.setPassword(H2_TEST_PASSWORD);
         dataSource = new HikariDataSource(config);
     }
 
