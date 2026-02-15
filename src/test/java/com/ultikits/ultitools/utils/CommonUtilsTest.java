@@ -234,7 +234,10 @@ class CommonUtilsTest {
             String generatedUUID = CommonUtils.getUltiToolsUUID();
             
             // 读取文件验证 UUID 已持久化
-            JsonObject savedJson; try (FileReader reader = new FileReader(dataFile)) { savedJson = new Gson().fromJson(reader, JsonObject.class); }
+            JsonObject savedJson;
+            try (FileReader reader = new FileReader(dataFile)) {
+                savedJson = new Gson().fromJson(reader, JsonObject.class);
+            }
             String savedUUID = savedJson.get("uuid").getAsString();
             
             assertThat(savedUUID).isEqualTo(generatedUUID);
@@ -249,7 +252,9 @@ class CommonUtilsTest {
             JsonObject json = new JsonObject();
             json.addProperty("uuid", existingUUID);
             json.addProperty("version", "6.0.0");
-            JsonObject settings = new JsonObject(); settings.addProperty("enabled", true); json.add("settings", settings);
+            JsonObject settings = new JsonObject();
+            settings.addProperty("enabled", true);
+            json.add("settings", settings);
             try (FileWriter writer = new FileWriter(dataFile)) {
                 writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
             }

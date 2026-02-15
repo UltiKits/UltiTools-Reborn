@@ -62,61 +62,61 @@ public final class BeanCopyUtil {
         if (source == null || target == null) {
             return;
         }
-        
-        java.util.Set<String> ignoreSet = ignoreFields == null ? 
-            java.util.Collections.emptySet() : 
+
+        java.util.Set<String> ignoreSet = ignoreFields == null ?
+            java.util.Collections.emptySet() :
             new java.util.HashSet<>(java.util.Arrays.asList(ignoreFields));
-        
+
         List<Field> sourceFields = ReflectionUtil.getAllFields(source.getClass());
-        
+
         for (Field sourceField : sourceFields) {
-            // 跳过要排除的字段
-            if (ignoreSet.contains(sourceField.getName())) {
+            if (shouldSkipField(sourceField, ignoreSet)) {
                 continue;
             }
-            
-            // 跳过 static 和 final 字段
-            if (Modifier.isStatic(sourceField.getModifiers()) || 
-                Modifier.isFinal(sourceField.getModifiers())) {
-                continue;
+            Field targetField = findWritableTargetField(target.getClass(), sourceField.getName());
+            if (targetField != null) {
+                copyFieldValue(source, target, sourceField, targetField, ignoreNullValue);
             }
-            
-            // 查找目标对象中同名字段
-            Field targetField = ReflectionUtil.getField(target.getClass(), sourceField.getName());
-            if (targetField == null) {
-                continue;
+        }
+    }
+
+    private static boolean shouldSkipField(Field field, java.util.Set<String> ignoreSet) {
+        return ignoreSet.contains(field.getName()) || isStaticOrFinal(field);
+    }
+
+    private static boolean isStaticOrFinal(Field field) {
+        return Modifier.isStatic(field.getModifiers()) || Modifier.isFinal(field.getModifiers());
+    }
+
+    private static Field findWritableTargetField(Class<?> targetClass, String fieldName) {
+        Field targetField = ReflectionUtil.getField(targetClass, fieldName);
+        if (targetField == null || isStaticOrFinal(targetField)) {
+            return null;
+        }
+        return targetField;
+    }
+
+    private static void copyFieldValue(Object source, Object target, Field sourceField, Field targetField, boolean ignoreNullValue) {
+        try {
+            sourceField.setAccessible(true);
+            targetField.setAccessible(true);
+
+            Object value = sourceField.get(source);
+
+            if (ignoreNullValue && value == null) {
+                return;
             }
-            
-            // 跳过 static 和 final 目标字段
-            if (Modifier.isStatic(targetField.getModifiers()) || 
-                Modifier.isFinal(targetField.getModifiers())) {
-                continue;
-            }
-            
-            try {
-                sourceField.setAccessible(true);
-                targetField.setAccessible(true);
-                
-                Object value = sourceField.get(source);
-                
-                // 忽略 null 值
-                if (ignoreNullValue && value == null) {
-                    continue;
+
+            if (value != null && !targetField.getType().isAssignableFrom(value.getClass())) {
+                value = convertValue(value, targetField.getType());
+                if (value == null) {
+                    return;
                 }
-                
-                // 类型兼容性检查
-                if (value != null && !targetField.getType().isAssignableFrom(value.getClass())) {
-                    // 尝试基本类型转换
-                    value = convertValue(value, targetField.getType());
-                    if (value == null) {
-                        continue;
-                    }
-                }
-                
-                targetField.set(target, value);
-            } catch (IllegalAccessException e) {
-                // 忽略无法访问的字段
             }
+
+            targetField.set(target, value);
+        } catch (IllegalAccessException e) {
+            // 忽略无法访问的字段
         }
     }
     
@@ -145,42 +145,41 @@ public final class BeanCopyUtil {
         if (value == null) {
             return null;
         }
-        
-        Class<?> sourceType = value.getClass();
-        
-        // 相同类型直接返回
-        if (targetType.isAssignableFrom(sourceType)) {
+
+        if (targetType.isAssignableFrom(value.getClass())) {
             return value;
         }
-        
-        // Number 类型互转
-        if (value instanceof Number) {
-            Number num = (Number) value;
-            if (targetType == Integer.class || targetType == int.class) {
-                return num.intValue();
-            }
-            if (targetType == Long.class || targetType == long.class) {
-                return num.longValue();
-            }
-            if (targetType == Double.class || targetType == double.class) {
-                return num.doubleValue();
-            }
-            if (targetType == Float.class || targetType == float.class) {
-                return num.floatValue();
-            }
-            if (targetType == Short.class || targetType == short.class) {
-                return num.shortValue();
-            }
-            if (targetType == Byte.class || targetType == byte.class) {
-                return num.byteValue();
-            }
-        }
-        
-        // String 转换
+
         if (targetType == String.class) {
             return value.toString();
         }
-        
+
+        if (value instanceof Number) {
+            return convertNumber((Number) value, targetType);
+        }
+
+        return null;
+    }
+
+    private static Object convertNumber(Number num, Class<?> targetType) {
+        if (targetType == Integer.class || targetType == int.class) {
+            return num.intValue();
+        }
+        if (targetType == Long.class || targetType == long.class) {
+            return num.longValue();
+        }
+        if (targetType == Double.class || targetType == double.class) {
+            return num.doubleValue();
+        }
+        if (targetType == Float.class || targetType == float.class) {
+            return num.floatValue();
+        }
+        if (targetType == Short.class || targetType == short.class) {
+            return num.shortValue();
+        }
+        if (targetType == Byte.class || targetType == byte.class) {
+            return num.byteValue();
+        }
         return null;
     }
 }

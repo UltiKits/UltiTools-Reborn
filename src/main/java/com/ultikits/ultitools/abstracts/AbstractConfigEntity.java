@@ -193,7 +193,6 @@ public abstract class AbstractConfigEntity {
      * 验证所有带验证注解的字段。无效值将重置为Java字段初始化默认值并记录警告。
      */
     protected void validateFields() {
-        // Create a fresh instance to get default values
         Object defaultInstance;
         try {
             defaultInstance = this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
@@ -209,73 +208,14 @@ public abstract class AbstractConfigEntity {
             }
             field.setAccessible(true);
             try {
-                Object value = field.get(this);
-                Object defaultValue = field.get(defaultInstance);
-
-                // @Range validation for numeric fields
-                Range range = field.getAnnotation(Range.class);
-                if (range != null && value instanceof Number) {
-                    double num = ((Number) value).doubleValue();
-                    if (num < range.min() || num > range.max()) {
-                        LOGGER.warning(String.format(
-                            "[UltiTools-API] Config '%s' field '%s' value %s out of range [%s, %s]. Reset to default: %s",
-                            configFilePath, field.getName(), value, range.min(), range.max(), defaultValue
-                        ));
-                        field.set(this, defaultValue);
-                        modified = true;
-                    }
-                }
-
-                // @NotEmpty validation for String fields
-                NotEmpty notEmpty = field.getAnnotation(NotEmpty.class);
-                if (notEmpty != null) {
-                    if (value == null || value.toString().trim().isEmpty()) {
-                        LOGGER.warning(String.format(
-                            "[UltiTools-API] Config '%s' field '%s' is empty. Reset to default: %s",
-                            configFilePath, field.getName(), defaultValue
-                        ));
-                        field.set(this, defaultValue);
-                        modified = true;
-                    }
-                }
-
-                // @Size validation for Collections and Strings
-                Size size = field.getAnnotation(Size.class);
-                if (size != null && value != null) {
-                    int len = -1;
-                    if (value instanceof java.util.Collection) {
-                        len = ((java.util.Collection<?>) value).size();
-                    } else if (value instanceof String) {
-                        len = ((String) value).length();
-                    }
-                    if (len >= 0 && (len < size.min() || len > size.max())) {
-                        LOGGER.warning(String.format(
-                            "[UltiTools-API] Config '%s' field '%s' size %d out of bounds [%d, %d]. Reset to default: %s",
-                            configFilePath, field.getName(), len, size.min(), size.max(), defaultValue
-                        ));
-                        field.set(this, defaultValue);
-                        modified = true;
-                    }
-                }
-
-                // @Pattern validation for String fields
-                Pattern pattern = field.getAnnotation(Pattern.class);
-                if (pattern != null && value instanceof String) {
-                    if (!((String) value).matches(pattern.regex())) {
-                        LOGGER.warning(String.format(
-                            "[UltiTools-API] Config '%s' field '%s' value '%s' does not match pattern '%s'. Reset to default: %s",
-                            configFilePath, field.getName(), value, pattern.regex(), defaultValue
-                        ));
-                        field.set(this, defaultValue);
-                        modified = true;
-                    }
+                if (validateSingleField(field, defaultInstance)) {
+                    modified = true;
                 }
             } catch (IllegalAccessException e) {
                 LOGGER.log(Level.WARNING, "Failed to validate field: " + field.getName(), e);
             }
         }
 
-        // Save corrected values back to disk
         if (modified && ultiToolsPlugin != null) {
             try {
                 save();
@@ -283,6 +223,73 @@ public abstract class AbstractConfigEntity {
                 LOGGER.log(Level.WARNING, "Failed to save corrected config: " + configFilePath, e);
             }
         }
+    }
+
+    private boolean validateSingleField(Field field, Object defaultInstance) throws IllegalAccessException {
+        Object value = field.get(this);
+        Object defaultValue = field.get(defaultInstance);
+        boolean reset = false;
+
+        if (isRangeViolation(field, value)) {
+            Range range = field.getAnnotation(Range.class);
+            logResetWarning("value %s out of range [%s, %s]", field, value, range.min(), range.max(), defaultValue);
+            reset = true;
+        } else if (isNotEmptyViolation(field, value)) {
+            logResetWarning("is empty", field, null, null, null, defaultValue);
+            reset = true;
+        } else if (isSizeViolation(field, value)) {
+            Size size = field.getAnnotation(Size.class);
+            int len = getValueLength(value);
+            logResetWarning("size %d out of bounds [%d, %d]", field, len, size.min(), size.max(), defaultValue);
+            reset = true;
+        } else if (isPatternViolation(field, value)) {
+            Pattern pattern = field.getAnnotation(Pattern.class);
+            logResetWarning("value '%s' does not match pattern '%s'", field, value, pattern.regex(), null, defaultValue);
+            reset = true;
+        }
+
+        if (reset) {
+            field.set(this, defaultValue);
+        }
+        return reset;
+    }
+
+    private boolean isRangeViolation(Field field, Object value) {
+        Range range = field.getAnnotation(Range.class);
+        if (range == null || !(value instanceof Number)) return false;
+        double num = ((Number) value).doubleValue();
+        return num < range.min() || num > range.max();
+    }
+
+    private boolean isNotEmptyViolation(Field field, Object value) {
+        return field.getAnnotation(NotEmpty.class) != null
+                && (value == null || value.toString().trim().isEmpty());
+    }
+
+    private boolean isSizeViolation(Field field, Object value) {
+        Size size = field.getAnnotation(Size.class);
+        if (size == null || value == null) return false;
+        int len = getValueLength(value);
+        return len >= 0 && (len < size.min() || len > size.max());
+    }
+
+    private boolean isPatternViolation(Field field, Object value) {
+        Pattern pattern = field.getAnnotation(Pattern.class);
+        return pattern != null && value instanceof String && !((String) value).matches(pattern.regex());
+    }
+
+    private int getValueLength(Object value) {
+        if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
+        if (value instanceof String) return ((String) value).length();
+        return -1;
+    }
+
+    private void logResetWarning(String reason, Field field, Object val1, Object val2, Object val3, Object defaultValue) {
+        String msg = String.format("[UltiTools-API] Config '%s' field '%s' " + reason + ". Reset to default: %s",
+                configFilePath, field.getName(), val1, val2, val3, defaultValue);
+        // Remove trailing null args from message
+        msg = msg.replace(", null", "").replace("null, ", "");
+        LOGGER.warning(msg);
     }
 
     // ==================== Configuration Change Listener Support ====================

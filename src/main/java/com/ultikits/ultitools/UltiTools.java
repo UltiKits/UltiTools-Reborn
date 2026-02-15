@@ -170,18 +170,38 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onEnable() {
-        // Create class loader that includes module plugin JARs
         ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
 
-        // External bukkit libraries initialization
+        if (!initDependencies()) return;
+        initLanguage();
+        this.versionWrapper = new DefaultVersionWrapper();
+        initDataStore();
+        initPluginModules();
+        initWebSocketManagers();
+        new Metrics(this, 8652);
+
+        boolean loginSuccess = attemptCloudLogin();
+        if (loginSuccess) {
+            initWebSocket();
+        }
+
+        registerCommands();
+        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        scheduleStartupMessages(loginSuccess);
+    }
+
+    private boolean initDependencies() {
         try {
             dependenceManagers = new DependenceManagers(this, ultiToolsClassLoader);
+            return true;
         } catch (Exception | NoClassDefFoundError error) {
             getLogger().log(Level.SEVERE, "Failed to initialize dependence managers", error);
             getServer().getPluginManager().disablePlugin(this);
-            return;
+            return false;
         }
-        // Language initialization
+    }
+
+    private void initLanguage() {
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
         InputStream in = getFileResource(lanPath);
         if (in == null) {
@@ -196,11 +216,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 this.language = new Language("{}");
             }
         }
+    }
 
-        // Adopt server version (now using XSeries, no dynamic loading needed)
-        this.versionWrapper = new DefaultVersionWrapper();
-
-        // Config initialization & DataStore initialization
+    private void initDataStore() {
         configManager = new ConfigManager();
         if (getConfig().getBoolean("mysql.enable")) {
             MysqlDataStore mysqlDataStore = new MysqlDataStore();
@@ -215,8 +233,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (dataStore == null) {
             dataStore = DataStoreManager.getDatastore("json");
         }
+    }
 
-        // initialize plugin modules
+    private void initPluginModules() {
         pluginManager = new PluginManager();
         File file = new File(getDataFolder() + File.separator + "plugins");
         if (!file.exists()) {
@@ -228,48 +247,44 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        
-        // 初始化WebSocket管理器
+    }
+
+    private void initWebSocketManagers() {
         serverMonitorManager = new ServerMonitorManager();
         commandExecutionManager = new CommandExecutionManager();
         fileOperationManager = new FileOperationManager();
         logStreamManager = LogStreamManager.getInstance();
         playerEventManager = new PlayerEventManager();
-        
-        // Initialize metrics
-        new Metrics(this, 8652);
+    }
 
-        // UltiCloud authentication — try saved token first, fall back to config password
-        boolean loginSuccess = false;
+    private boolean attemptCloudLogin() {
         try {
-            // 1. Try saved token from data.json (magic-link login)
             com.ultikits.ultitools.entities.TokenEntity savedToken = CloudAuthManager.loadSavedToken();
             if (savedToken != null) {
                 getLogger().log(Level.INFO, "Found saved UltiCloud token, authenticating...");
                 if (ApiRateLimiter.isAllowed("startup-login")) {
-                    loginSuccess = PluginInitiationUtils.loginWithToken(savedToken);
-                } else {
-                    getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
+                    return PluginInitiationUtils.loginWithToken(savedToken);
                 }
-            }
-
-            // If no saved token, user needs to run /ulticloud login
-            if (!loginSuccess) {
+                getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
+            } else {
                 getLogger().log(Level.FINE, "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
             }
         } catch (Exception e) {
             getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
         }
+        return false;
+    }
 
-        if (loginSuccess) {
-            getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
-            try {
-                PluginInitiationUtils.initWebsocket();
-            } catch (Exception e) {
-                getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！") + e.getMessage());
-            }
+    private void initWebSocket() {
+        getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
+        try {
+            PluginInitiationUtils.initWebsocket();
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！") + e.getMessage());
         }
+    }
 
+    private void registerCommands() {
         Bukkit.getServicesManager().register(
                 PluginManager.class,
                 this.pluginManager,
@@ -277,53 +292,48 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 ServicePriority.Normal
         );
 
-        // Register core UltiTools commands using the dedicated method
-        // 使用专用方法注册核心UltiTools命令
         CommandManager commandManager = getCommandManager();
         commandManager.registerCoreCommand(new UltiToolsCommands());
         commandManager.registerCoreCommand(new PluginInstallCommands());
         commandManager.registerCoreCommand(new CloudLoginCommand());
 
-        // Register log transmission test commands for development/testing
-        // 注册日志传输测试命令（用于开发/测试）
         try {
-            com.ultikits.ultitools.commands.LogTransmissionCommands logTestCommands = 
-                new com.ultikits.ultitools.commands.LogTransmissionCommands();
-            commandManager.registerCoreCommand(logTestCommands);
+            commandManager.registerCoreCommand(new com.ultikits.ultitools.commands.LogTransmissionCommands());
             getLogger().info("[UltiTools] 日志传输测试命令已注册: /logtest");
         } catch (Exception e) {
             getLogger().warning("[UltiTools] 注册日志传输测试命令失败: " + e.getMessage());
         }
+    }
 
-        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
-
-        boolean finalLoginSuccess = loginSuccess;
+    private void scheduleStartupMessages(boolean loginSuccess) {
         getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
-            if (finalLoginSuccess) {
+            if (loginSuccess) {
                 getLogger().log(Level.INFO, i18n("UltiCloud: Connected!"));
+                getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
             } else {
                 getLogger().log(Level.INFO, "UltiCloud: Not connected. Use /ulticloud login to authenticate.");
             }
-            if (finalLoginSuccess) {
-                getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
-            }
             getLogger().log(Level.INFO, String.format(i18n("数据存储方式：%s"), dataStore.getStoreType()));
-            String ultiToolsNewestVersion = getUltiToolsNewestVersion();
-            String currentVersion = getEnv().getString("version");
             getLogger().log(Level.INFO, String.format(i18n("UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
             try {
                 getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
             } catch (IOException e) {
                 getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
             }
-            getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
-            if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
-                getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
-                getLogger().log(Level.INFO, String.format(i18n("下载地址：%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
-                return;
-            }
-            getLogger().log(Level.INFO, i18n("UltiTools-API已是最新版本！"));
+            checkForUpdates();
         });
+    }
+
+    private void checkForUpdates() {
+        getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
+        String ultiToolsNewestVersion = getUltiToolsNewestVersion();
+        String currentVersion = getEnv().getString("version");
+        if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
+            getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
+            getLogger().log(Level.INFO, String.format(i18n("下载地址：%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+        } else {
+            getLogger().log(Level.INFO, i18n("UltiTools-API已是最新版本！"));
+        }
     }
 
     @Override

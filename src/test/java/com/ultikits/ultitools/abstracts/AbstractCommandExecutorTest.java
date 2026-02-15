@@ -588,7 +588,9 @@ class AbstractCommandExecutorTest {
         public void lockCommand(@CmdSender CommandSender sender) {
              try {
                 Thread.sleep(100);
-             } catch (InterruptedException e) {}
+             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+             }
              simpleCommandExecuted = true;
         }
 
@@ -598,7 +600,9 @@ class AbstractCommandExecutorTest {
         public void serverLockCommand(@CmdSender CommandSender sender) {
              try {
                 Thread.sleep(100);
-             } catch (InterruptedException e) {}
+             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+             }
              simpleCommandExecuted = true;
         }
 

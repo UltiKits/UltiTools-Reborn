@@ -380,7 +380,7 @@ public class ServerMonitorManager {
         double memoryUsage = ((double) usedMemory / maxMemory) * 100;
         serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
 
-        serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
+        serverPerformance.addProperty("diskUsage", 0.0);
 
         data.add("serverPerformance", serverPerformance);
 
