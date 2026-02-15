@@ -63,7 +63,10 @@ public class DataStoreManager {
      * @return Data store <br> 数据存储
      */
     public static DataStore getDatastore(String type) {
-        if (type.equals("json") && dataMap.get(type) == null) {
+        if (type == null) {
+            type = "json";
+        }
+        if ("json".equals(type) && dataMap.get(type) == null) {
             return new JsonStore(UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "data");
         }
         return dataMap.get(type) == null ? dataMap.get("json") : dataMap.get(type);
