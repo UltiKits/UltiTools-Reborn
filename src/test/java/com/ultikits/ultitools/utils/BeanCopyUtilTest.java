@@ -24,6 +24,7 @@ class BeanCopyUtilTest {
         private String ignored;
         @SuppressWarnings("PMD.UnusedPrivateField") // Static field is intentionally unused - tests that static fields are not copied
         private static String staticField = "static";
+        @SuppressWarnings("PMD.UnusedPrivateField") // Final field is intentionally unused - tests that final fields are not copied
         private final String finalField = "final";
 
         public SourceBean() {}

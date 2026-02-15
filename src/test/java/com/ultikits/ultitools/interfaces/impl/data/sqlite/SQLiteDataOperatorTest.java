@@ -70,7 +70,7 @@ class SQLiteDataOperatorTest {
         // Use H2 in MySQL compatibility mode for backtick support
         config.setJdbcUrl("jdbc:h2:mem:sqlitetest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(H2_AUTH);
+        config.setPassword(H2_AUTH); // nosemgrep: java.lang.security.audit.hardcoded-password
         dataSource = new HikariDataSource(config);
     }
 
