@@ -305,7 +305,7 @@ class ChatConfirmTest {
         
         @Test
         @DisplayName("show 方法应该注册两个回调")
-        void showShouldRegisterTwoCallbacks() {
+        void showShouldRegisterTwoCallbacks() { // NOPMD - uses Mockito verify()
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<MessageUtils> messageUtilsMock = mockStatic(MessageUtils.class);
                  MockedStatic<ChatCallbackManager> callbackMock = mockStatic(ChatCallbackManager.class)) {

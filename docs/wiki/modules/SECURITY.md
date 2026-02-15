@@ -25,6 +25,7 @@ UltiTools 框架实现了多层安全机制，防止恶意代码执行和资源�
 - **透明监控**: 所有违规都记录日志
 
 **核心组件**:
+
 - `SecurityPolicy` - 安全策略配置和验证
 - `ClassLoaderUtils` - 安全类加载工具
 - `PluginManager` - 插件加载安全集成
@@ -165,6 +166,7 @@ if (SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount)) {
 ```
 
 验证内容：
+
 - 有效的 Java 标识符语法
 - 正确的包命名规范
 - 防止通过无效字符注入

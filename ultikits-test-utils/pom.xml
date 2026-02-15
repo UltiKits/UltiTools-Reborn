@@ -50,7 +50,7 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.24.2</version>
+            <version>3.27.7</version>
             <scope>compile</scope>
         </dependency>
         <!-- JUnit engine for running our own tests -->

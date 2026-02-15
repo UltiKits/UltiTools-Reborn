@@ -158,7 +158,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该处理 null 目标对象")
-        void shouldHandleNullTarget() {
+        void shouldHandleNullTarget() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
 
             // Should not throw exception
@@ -376,7 +376,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该忽略 static 字段")
-        void shouldIgnoreStaticFields() {
+        void shouldIgnoreStaticFields() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
             TargetBean target = new TargetBean();
 
@@ -388,7 +388,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该忽略 final 字段")
-        void shouldIgnoreFinalFields() {
+        void shouldIgnoreFinalFields() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
             TargetBean target = new TargetBean();
 

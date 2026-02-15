@@ -196,7 +196,7 @@ class XVersionUtilsTest {
 
         @Test
         @DisplayName("应该返回声音对象")
-        void shouldReturnSoundObject() {
+        void shouldReturnSoundObject() { // NOPMD - uses Mockito verify()
             try (MockedStatic<XSound> mockedXSound = mockStatic(XSound.class)) {
                 XSound mockXSound = mock(XSound.class);
                 mockedXSound.when(() -> XSound.matchXSound(anyString()))

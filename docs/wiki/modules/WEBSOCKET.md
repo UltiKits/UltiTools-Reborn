@@ -301,6 +301,7 @@ public class ServerMonitorManager {
 ```
 
 **发送频率**:
+
 - 服务器状态: 每 30 秒
 - 插件列表: 每 60 秒
 - 性能数据: 每 120 秒
@@ -321,6 +322,7 @@ public class CommandExecutionManager {
 ```
 
 **安全限制**:
+
 - 需要有效的认证 Token
 - 命令白名单/黑名单机制
 - 执行日志记录
@@ -352,6 +354,7 @@ public class LogStreamManager {
 ```
 
 **特性**:
+
 - 日志级别过滤
 - 批量发送优化
 - 排除特定 Logger
@@ -378,6 +381,7 @@ public class FileOperationManager {
 ```
 
 **安全限制**:
+
 - 路径白名单
 - 文件大小限制
 - 敏感文件保护

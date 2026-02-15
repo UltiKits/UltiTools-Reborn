@@ -342,17 +342,6 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 获取当前插件列表数据（带wrapper，用于独立plugin_list消息）
-     */
-    private JsonObject getCurrentPluginList() {
-        JsonObject data = new JsonObject();
-        JsonArray plugins = getCurrentPluginArray();
-        data.add("plugins", plugins);
-        data.addProperty("totalCount", plugins.size());
-        return data;
-    }
-
-    /**
      * 获取当前性能统计数据
      */
     private JsonObject getCurrentMetricsData() {

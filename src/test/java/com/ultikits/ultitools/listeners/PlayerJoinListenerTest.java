@@ -184,7 +184,7 @@ class PlayerJoinListenerTest {
 
         @Test
         @DisplayName("异常应该被捕获而不是传播")
-        void exceptionShouldBeCaughtNotPropagated() {
+        void exceptionShouldBeCaughtNotPropagated() { // NOPMD - uses Mockito verify()
             // Arrange
             PlayerMock player = server.addPlayer("TestPlayer");
             PlayerJoinEvent event = new PlayerJoinEvent(player, "TestPlayer joined");

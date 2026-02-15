@@ -335,7 +335,7 @@ class DependenceManagersTest {
 
         @Test
         @DisplayName("closeContext 应该调用 context.close()")
-        void closeContextShouldCallClose() throws Exception {
+        void closeContextShouldCallClose() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
             SimpleContainer mockContext = mock(SimpleContainer.class);
@@ -355,7 +355,7 @@ class DependenceManagersTest {
 
         @Test
         @DisplayName("closeAdventure 应该调用 adventure.close()")
-        void closeAdventureShouldCallClose() throws Exception {
+        void closeAdventureShouldCallClose() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             DependenceManagers managers = createManagersWithMockedFields();
             BukkitAudiences mockAdventure = mock(BukkitAudiences.class);

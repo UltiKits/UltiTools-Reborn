@@ -66,7 +66,7 @@ class MysqlDataOperatorTest {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:h2:mem:mysqltest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // codacy:ignore - Empty password for H2 in-memory test database, not a security risk
+        config.setPassword(""); // nosemgrep: java.lang.security.audit.hardcoded-password - H2 in-memory test database
         dataSource = new HikariDataSource(config);
     }
 

@@ -66,7 +66,7 @@ class TransactionDataOperatorTest {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:h2:mem:txtest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // H2 in-memory test database
+        config.setPassword(""); // nosemgrep: java.lang.security.audit.hardcoded-password - H2 in-memory test database
         dataSource = new HikariDataSource(config);
     }
 

@@ -823,7 +823,7 @@ class ChatCallbackManagerTest {
 
         @Test
         @DisplayName("模拟命令执行 - 无效 UUID 字符串应该被忽略")
-        void executeWithInvalidUUIDShouldBeIgnored() throws Exception {
+        void executeWithInvalidUUIDShouldBeIgnored() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             String invalidUUID = "not-a-valid-uuid";
 

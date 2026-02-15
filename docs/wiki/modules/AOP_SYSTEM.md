@@ -21,6 +21,7 @@
 UltiTools 框架实现了类似 Spring 的面向切面编程（AOP）系统，支持声明式事务管理和异常处理。系统使用 CGLIB 运行时代理来拦截方法调用并应用横切关注点。
 
 **核心功能**:
+
 - 声明式事务管理（`@Transactional`）
 - 声明式异常处理（`@ExceptionCatch`）
 - 方法拦截器链
@@ -549,6 +550,7 @@ public class MyService {
 ```
 
 **解决方案**:
+
 1. 将方法移到不同的 Bean
 2. 通过容器获取代理对象调用
 
