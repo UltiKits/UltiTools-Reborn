@@ -63,5 +63,9 @@
   "正在初始化配置编辑Websocket服务...": "Initializing the configuration editing Websocket service...",
   "成功连接到UltiKits服务器！": "Connected to UltiKits server successfully!",
   "已与UltiKits服务器断开连接！": "Disconnected from UltiKits server!",
-  "无法连接到UltiKits服务器：": "Unable to connect to UltiKits server: "
+  "无法连接到UltiKits服务器：": "Unable to connect to UltiKits server: ",
+  "参数错误": "§cArgument Error: §7/%s %s§c§n%s§r §c<--§o[Error Here]",
+  "缺少参数": "§cMissing Parameters: §7/%s %s§c§n%s§r §c<--§o[Missing Part]",
+  "指令正确用法": "§eCorrect Usage: §7/%s %s",
+  "需要权限": "§7Executing this command requires §f%s §7permission"
 }

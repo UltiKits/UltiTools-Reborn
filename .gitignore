@@ -121,3 +121,8 @@ run/
 
 doc/
 .vscode/
+docs/plans/
+.mcp.json
+
+CLAUDE.md
+.worktrees/CLAUDE.md

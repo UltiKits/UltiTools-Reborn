@@ -1,31 +1,70 @@
 package com.ultikits.ultitools.utils;
 
-import cn.hutool.core.comparator.VersionComparator;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import cn.hutool.http.HttpUtil;
-import com.ultikits.ultitools.entities.PluginEntity;
-
 import static com.ultikits.ultitools.utils.PluginInstallUtils.getPlugin;
 import static com.ultikits.ultitools.utils.PluginInstallUtils.getPluginLatestVersion;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
+
+/**
+ * Utility class for version checking and comparison operations.
+ * Provides methods to check for plugin updates and compare semantic versions.
+ * <br>
+ * 版本检查和比较操作的实用工具类。
+ * 提供检查插件更新和比较语义版本的方法。
+ *
+ * @author wisdomme
+ * @since 6.0.0
+ * @see VersionComparatorUtil
+ */
 public class VersionUtils {
 
     /**
-     * @return UltiTools newest version <br> UltiTools最新版本
+     * Get the newest version of UltiTools from the remote API.
+     * <br>
+     * 从远程API获取UltiTools的最新版本。
+     *
+     * @return the newest UltiTools version string <br> UltiTools最新版本字符串
      */
     public static String getUltiToolsNewestVersion() {
-        HttpRequest get = HttpUtil.createGet("https://api.ultikits.com/plugin/ultitools/newest");
-        HttpResponse httpResponse = get.execute();
-        String version = httpResponse.body();
-        httpResponse.close();
-        return version;
+        try (Response httpResponse = SimpleHttpClient.get(PluginInstallUtils.getBaseUrl() + "/plugin/ultitools/newest")) {
+            if (!httpResponse.isOk()) {
+                return null;
+            }
+            String body = httpResponse.body();
+            try {
+                JsonObject wrapper = JsonParser.parseString(body).getAsJsonObject();
+                String code = wrapper.has("code") ? wrapper.get("code").getAsString() : null;
+                if (!"200".equals(code)) {
+                    return null;
+                }
+                JsonElement data = wrapper.get("data");
+                if (data == null || data.isJsonNull()) {
+                    return null;
+                }
+                if (data.isJsonPrimitive()) {
+                    return data.getAsString();
+                }
+                return data.toString();
+            } catch (Exception e) {
+                return null;
+            }
+        }
     }
 
     /**
-     * @param pluginIdString 插件ID
-     * @param currentVersion 当前版本
-     * @return 插件是否有更新
+     * Check if a plugin has an available update.
+     * Compares the current version with the latest version from the remote API.
+     * <br>
+     * 检查插件是否有可用更新。
+     * 将当前版本与远程API的最新版本进行比较。
+     *
+     * @param pluginIdString the plugin identify string <br> 插件ID
+     * @param currentVersion the current version of the plugin <br> 当前版本
+     * @return true if an update is available, false otherwise <br> 插件是否有更新
      */
     public static boolean pluginHasUpdate(String pluginIdString, String currentVersion) {
         PluginEntity plugin = getPlugin(pluginIdString);
@@ -33,6 +72,6 @@ public class VersionUtils {
             return false;
         }
         String pluginLatestVersion = getPluginLatestVersion(pluginIdString);
-        return new VersionComparator().compare(currentVersion, pluginLatestVersion) < 0;
+        return VersionComparatorUtil.compare(currentVersion, pluginLatestVersion) < 0;
     }
 }

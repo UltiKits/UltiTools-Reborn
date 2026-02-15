@@ -1,12 +1,13 @@
 package com.ultikits.ultitools.interfaces.impl.logger;
 
-import cn.hutool.log.Log;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class PluginLogger {
-    private final Log log;
+    private final Logger log;
     private final String pluginName;
 
-    public PluginLogger(String pluginName, Log log){
+    public PluginLogger(String pluginName, Logger log){
         this.log = log;
         this.pluginName = pluginName;
     }
@@ -16,98 +17,103 @@ public class PluginLogger {
     }
 
     public void warn(String message){
-        log.warn("[" + pluginName + "] " + message);
+        log.warning("[" + pluginName + "] " + message);
     }
 
     public void error(String message){
-        log.error("[" + pluginName + "] " + message);
+        log.severe("[" + pluginName + "] " + message);
     }
 
     public void debug(String message){
-        log.debug("[" + pluginName + "] " + message);
+        log.fine("[" + pluginName + "] " + message);
     }
 
     public void trace(String message){
-        log.trace("[" + pluginName + "] " + message);
+        log.finest("[" + pluginName + "] " + message);
     }
 
     public void info(String message, Object... params){
-        log.info("[" + pluginName + "] " + message, params);
+        log.log(Level.INFO, "[" + pluginName + "] " + message, params);
     }
 
     public void warn(String message, Object... params){
-        log.warn("[" + pluginName + "] " + message, params);
+        log.log(Level.WARNING, "[" + pluginName + "] " + message, params);
     }
 
     public void error(String message, Object... params){
-        log.error("[" + pluginName + "] " + message, params);
+        log.log(Level.SEVERE, "[" + pluginName + "] " + message, params);
     }
 
     public void debug(String message, Object... params){
-        log.debug("[" + pluginName + "] " + message, params);
+        log.log(Level.FINE, "[" + pluginName + "] " + message, params);
     }
 
     public void trace(String message, Object... params){
-        log.trace("[" + pluginName + "] " + message, params);
+        log.log(Level.FINEST, "[" + pluginName + "] " + message, params);
     }
 
     public void info(Throwable throwable){
-        log.info("[" + pluginName + "] ", throwable);
+        log.log(Level.INFO, "[" + pluginName + "] ", throwable);
     }
 
     public void warn(Throwable throwable){
-        log.warn("[" + pluginName + "] ", throwable);
+        log.log(Level.WARNING, "[" + pluginName + "] ", throwable);
     }
 
     public void error(Throwable throwable){
-        log.error("[" + pluginName + "] ", throwable);
+        log.log(Level.SEVERE, "[" + pluginName + "] ", throwable);
     }
 
     public void debug(Throwable throwable){
-        log.debug("[" + pluginName + "] ", throwable);
+        log.log(Level.FINE, "[" + pluginName + "] ", throwable);
     }
 
     public void trace(Throwable throwable){
-        log.trace("[" + pluginName + "] ", throwable);
+        log.log(Level.FINEST, "[" + pluginName + "] ", throwable);
     }
 
     public void info(Throwable throwable, String message){
-        log.info("[" + pluginName + "] " + message, throwable);
+        log.log(Level.INFO, "[" + pluginName + "] " + message, throwable);
     }
 
     public void warn(Throwable throwable, String message){
-        log.warn("[" + pluginName + "] " + message, throwable);
+        log.log(Level.WARNING, "[" + pluginName + "] " + message, throwable);
     }
 
     public void error(Throwable throwable, String message){
-        log.error("[" + pluginName + "] " + message, throwable);
+        log.log(Level.SEVERE, "[" + pluginName + "] " + message, throwable);
     }
 
     public void debug(Throwable throwable, String message){
-        log.debug("[" + pluginName + "] " + message, throwable);
+        log.log(Level.FINE, "[" + pluginName + "] " + message, throwable);
     }
 
     public void trace(Throwable throwable, String message){
-        log.trace("[" + pluginName + "] " + message, throwable);
+        log.log(Level.FINEST, "[" + pluginName + "] " + message, throwable);
     }
 
     public void info(Throwable throwable, String message, Object... params){
-        log.info("[" + pluginName + "] " + message, params, throwable);
+        log.log(Level.INFO, "[" + pluginName + "] " + message, params);
+        log.log(Level.INFO, "", throwable);
     }
 
     public void warn(Throwable throwable, String message, Object... params){
-        log.warn("[" + pluginName + "] " + message, params, throwable);
+        log.log(Level.WARNING, "[" + pluginName + "] " + message, params);
+        log.log(Level.WARNING, "", throwable);
     }
 
     public void error(Throwable throwable, String message, Object... params){
-        log.error("[" + pluginName + "] " + message, params, throwable);
+        log.log(Level.SEVERE, "[" + pluginName + "] " + message, params);
+        log.log(Level.SEVERE, "", throwable);
     }
 
     public void debug(Throwable throwable, String message, Object... params){
-        log.debug("[" + pluginName + "] " + message, params, throwable);
+        log.log(Level.FINE, "[" + pluginName + "] " + message, params);
+        log.log(Level.FINE, "", throwable);
     }
 
     public void trace(Throwable throwable, String message, Object... params){
-        log.trace("[" + pluginName + "] " + message, params, throwable);
+        log.log(Level.FINEST, "[" + pluginName + "] " + message, params);
+        log.log(Level.FINEST, "", throwable);
     }
 }

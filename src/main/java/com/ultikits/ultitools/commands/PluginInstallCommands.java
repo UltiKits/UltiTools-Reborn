@@ -1,27 +1,34 @@
 package com.ultikits.ultitools.commands;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.command.*;
-import com.ultikits.ultitools.entities.PluginEntity;
-import com.ultikits.ultitools.utils.MessageUtils;
-import com.ultikits.ultitools.utils.PluginInstallUtils;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
-import net.kyori.adventure.text.event.ClickEvent;
-import net.kyori.adventure.text.format.TextColor;
+import java.io.IOException;
+import java.util.List;
+
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import java.io.IOException;
-import java.util.List;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
+import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.annotations.command.RunAsync;
+import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.utils.MessageUtils;
+import com.ultikits.ultitools.utils.PluginInstallUtils;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.TextColor;
 
 @CmdExecutor(description = "UltiTools Plugin Management Commands", alias = "upm", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-public class PluginInstallCommands extends AbstractCommendExecutor {
+public class PluginInstallCommands extends AbstractCommandExecutor {
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
@@ -79,7 +86,7 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
             new BukkitRunnable() {
                 @Override
                 public void run() {
-                    MessageUtils.sendMessage((Player) sender, finalText);
+                    sendComponentMessage((Player) sender, finalText);
                 }
             }.runTask(UltiTools.getInstance());
         } else {
@@ -103,13 +110,36 @@ public class PluginInstallCommands extends AbstractCommendExecutor {
                 i++;
             }
             stringBuilder.append(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt));
+            String finalMessage = stringBuilder.toString();
             new BukkitRunnable() {
                 @Override
                 public void run() {
-                    sender.sendMessage(stringBuilder.toString());
+                    sendStringMessage(sender, finalMessage);
                 }
             }.runTask(UltiTools.getInstance());
         }
+    }
+
+    /**
+     * Send a TextComponent message to a player.
+     * This method is extracted from BukkitRunnable for testability.
+     *
+     * @param player the player to send the message to
+     * @param text   the text component to send
+     */
+    static void sendComponentMessage(Player player, TextComponent text) {
+        MessageUtils.sendMessage(player, text);
+    }
+
+    /**
+     * Send a string message to a command sender.
+     * This method is extracted from BukkitRunnable for testability.
+     *
+     * @param sender  the sender to send the message to
+     * @param message the message to send
+     */
+    static void sendStringMessage(CommandSender sender, String message) {
+        sender.sendMessage(message);
     }
 
     @CmdMapping(format = "list")

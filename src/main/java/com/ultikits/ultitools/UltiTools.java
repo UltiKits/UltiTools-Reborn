@@ -1,30 +1,15 @@
 package com.ultikits.ultitools;
 
-import com.ultikits.ultitools.commands.PluginInstallCommands;
-import com.ultikits.ultitools.commands.UltiToolsCommands;
-import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
-import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
-import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
-import com.ultikits.ultitools.listeners.PlayerJoinListener;
-import com.ultikits.ultitools.manager.*;
-import com.ultikits.ultitools.utils.HttpDownloadUtils;
-import com.ultikits.ultitools.utils.Metrics;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
+import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
+import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
 
-import lombok.Getter;
-import lombok.Setter;
-import net.milkbowl.vault.economy.Economy;
-import org.bukkit.Bukkit;
-import org.bukkit.configuration.InvalidConfigurationException;
-import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.RegisteredServiceProvider;
-import org.bukkit.plugin.ServicePriority;
-import org.bukkit.plugin.java.JavaPlugin;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -38,10 +23,43 @@ import java.util.Objects;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
-import static com.ultikits.ultitools.utils.PluginInitiationUtils.loginAccount;
-import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
-import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersion;
+import org.bukkit.Bukkit;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import com.ultikits.ultitools.commands.CloudLoginCommand;
+import com.ultikits.ultitools.commands.PluginInstallCommands;
+import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
+import com.ultikits.ultitools.manager.CommandExecutionManager;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.DataStoreManager;
+import com.ultikits.ultitools.manager.DependenceManagers;
+import com.ultikits.ultitools.manager.FileOperationManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.LogStreamManager;
+import com.ultikits.ultitools.manager.PlayerEventManager;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.utils.ApiRateLimiter;
+import com.ultikits.ultitools.utils.CloudAuthManager;
+import com.ultikits.ultitools.utils.Metrics;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
+
+import lombok.Getter;
+import lombok.Setter;
+import net.milkbowl.vault.economy.Economy;
 
 /**
  * UltiTools plugin main class.
@@ -52,7 +70,6 @@ import static com.ultikits.ultitools.utils.VersionUtils.getUltiToolsNewestVersio
  * @version 6.0.7
  */
 public final class UltiTools extends JavaPlugin implements Localized {
-    private boolean needLoadLib = false;
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
@@ -60,6 +77,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private final CommandManager commandManager = new CommandManager();
     @Getter
     private DependenceManagers dependenceManagers;
+    private URLClassLoader ultiToolsClassLoader;
+    /**
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     */
+    @Deprecated
     @Getter
     private VersionWrapper versionWrapper;
     @Getter
@@ -72,7 +94,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Setter
     private DataStore dataStore;
     @Getter
-    private URLClassLoader ultiToolsClassLoader;
+    private ServerMonitorManager serverMonitorManager;
+    @Getter
+    private CommandExecutionManager commandExecutionManager;
+    @Getter
+    private FileOperationManager fileOperationManager;
+    @Getter
+    private LogStreamManager logStreamManager;
+    @Getter
+    private PlayerEventManager playerEventManager;
 
     /**
      * Returns the instance of the UltiTools.
@@ -110,9 +140,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public static YamlConfiguration getEnv() {
         YamlConfiguration config = new YamlConfiguration();
         try {
-            config.load(Objects.requireNonNull(getInstance().getTextResource("env.yml")));
+            Reader envReader = getInstance().getTextResource("env.yml");
+            if (envReader == null) {
+                throw new RuntimeException("env.yml not found in resources!");
+            }
+            config.load(envReader);
         } catch (IOException | InvalidConfigurationException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Failed to load env.yml configuration", e);
         }
         return config;
     }
@@ -132,43 +166,59 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
         }
-        downloadRequiredDependencies();
     }
 
     @Override
     public void onEnable() {
-        // Load all lib
-        ultiToolsClassLoader = new URLClassLoader(getLibs(), getClassLoader());
-        // External bukkit libraries initialization
+        ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+
+        if (!initDependencies()) return;
+        initLanguage();
+        this.versionWrapper = new DefaultVersionWrapper();
+        initDataStore();
+        initPluginModules();
+        initWebSocketManagers();
+        new Metrics(this, 8652);
+
+        boolean loginSuccess = attemptCloudLogin();
+        if (loginSuccess) {
+            initWebSocket();
+        }
+
+        registerCommands();
+        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        scheduleStartupMessages(loginSuccess);
+    }
+
+    private boolean initDependencies() {
         try {
             dependenceManagers = new DependenceManagers(this, ultiToolsClassLoader);
+            return true;
         } catch (Exception | NoClassDefFoundError error) {
-            needLoadLib = true;
+            getLogger().log(Level.SEVERE, "Failed to initialize dependence managers", error);
+            getServer().getPluginManager().disablePlugin(this);
+            return false;
         }
-        if (needLoadLib) {
-            getServer().getScheduler().scheduleSyncRepeatingTask(this, () -> {
-                getLogger().log(Level.WARNING, "UltiTools初始化完成，但是还需重启加载依赖，请重启服务端！");
-            }, 0, 20 * 30);
-            return;
-        }
-        // Language initialization
+    }
+
+    private void initLanguage() {
         String lanPath = "lang/" + getConfig().getString("language") + ".json";
         InputStream in = getFileResource(lanPath);
-        @SuppressWarnings("DataFlowIssue")
-        String result = new BufferedReader(new InputStreamReader(in)).lines().collect(Collectors.joining(""));
-        this.language = new Language(result);
-
-        // Adopt server version
-        this.versionWrapper = new SpigotVersionManager().match();
-        if (this.versionWrapper == null) {
-            Bukkit.getLogger().log(
-                    Level.SEVERE,
-                    "[UltiTools-API] Your server version isn't supported in UltiTools-API!"
-            );
-            return;
+        if (in == null) {
+            getLogger().log(Level.WARNING, "Language file not found: " + lanPath + ", using default language");
+            this.language = new Language("{}");
+        } else {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
+                String result = reader.lines().collect(Collectors.joining(""));
+                this.language = new Language(result);
+            } catch (IOException e) {
+                getLogger().log(Level.WARNING, "Failed to read language file: " + lanPath, e);
+                this.language = new Language("{}");
+            }
         }
+    }
 
-        // Config initialization & DataStore initialization
+    private void initDataStore() {
         configManager = new ConfigManager();
         if (getConfig().getBoolean("mysql.enable")) {
             MysqlDataStore mysqlDataStore = new MysqlDataStore();
@@ -183,8 +233,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (dataStore == null) {
             dataStore = DataStoreManager.getDatastore("json");
         }
+    }
 
-        // initialize plugin modules
+    private void initPluginModules() {
         pluginManager = new PluginManager();
         File file = new File(getDataFolder() + File.separator + "plugins");
         if (!file.exists()) {
@@ -196,29 +247,44 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        Metrics metrics = new Metrics(this, 8652);
+    }
 
-        // Embed web server initialization & Account login
-        String username = UltiTools.getInstance().getConfig().getString("account.username");
-        String password = UltiTools.getInstance().getConfig().getString("account.password");
-        boolean loginRequired = username != null && password != null && !username.isEmpty() && !password.isEmpty();
-        boolean loginSuccess = false;
+    private void initWebSocketManagers() {
+        serverMonitorManager = new ServerMonitorManager();
+        commandExecutionManager = new CommandExecutionManager();
+        fileOperationManager = new FileOperationManager();
+        logStreamManager = LogStreamManager.getInstance();
+        playerEventManager = new PlayerEventManager();
+    }
+
+    private boolean attemptCloudLogin() {
         try {
-            if (loginRequired) {
-                loginSuccess = loginAccount(username, password);
+            com.ultikits.ultitools.entities.TokenEntity savedToken = CloudAuthManager.loadSavedToken();
+            if (savedToken != null) {
+                getLogger().log(Level.INFO, "Found saved UltiCloud token, authenticating...");
+                if (ApiRateLimiter.isAllowed("startup-login")) {
+                    return PluginInitiationUtils.loginWithToken(savedToken);
+                }
+                getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
+            } else {
+                getLogger().log(Level.FINE, "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
             }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
         }
-        if (loginSuccess && getConfig().getBoolean("web-editor.enable")) {
-            getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
-            try {
-                PluginInitiationUtils.initWebsocket();
-            } catch (URISyntaxException e) {
-                getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！"));
-            }
-        }
+        return false;
+    }
 
+    private void initWebSocket() {
+        getLogger().log(Level.INFO, i18n("正在初始化配置编辑Websocket服务..."));
+        try {
+            PluginInitiationUtils.initWebsocket();
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, i18n("配置编辑Websocket服务初始化失败！") + e.getMessage());
+        }
+    }
+
+    private void registerCommands() {
         Bukkit.getServicesManager().register(
                 PluginManager.class,
                 this.pluginManager,
@@ -226,50 +292,64 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 ServicePriority.Normal
         );
 
-        getCommandManager().register(new UltiToolsCommands());
-        getCommandManager().register(new PluginInstallCommands());
+        CommandManager commandManager = getCommandManager();
+        commandManager.registerCoreCommand(new UltiToolsCommands());
+        commandManager.registerCoreCommand(new PluginInstallCommands());
+        commandManager.registerCoreCommand(new CloudLoginCommand());
 
-        Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        try {
+            commandManager.registerCoreCommand(new com.ultikits.ultitools.commands.LogTransmissionCommands());
+            getLogger().info("[UltiTools] 日志传输测试命令已注册: /logtest");
+        } catch (Exception e) {
+            getLogger().warning("[UltiTools] 注册日志传输测试命令失败: " + e.getMessage());
+        }
+    }
 
-        boolean finalLoginSuccess = loginSuccess;
+    private void scheduleStartupMessages(boolean loginSuccess) {
         getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
-            if (loginRequired) {
-                if (finalLoginSuccess) {
-                    getLogger().log(Level.INFO, String.format(i18n("UltiKits账户 %s 登录成功！"), username));
-                } else {
-                    getLogger().log(Level.WARNING, String.format(i18n("UltiKits账户 %s 登录失败！云端相关功能将无法使用！"), username));
-                }
-            }
-            if (getConfig().getBoolean("web-editor.enable")) {
+            if (loginSuccess) {
+                getLogger().log(Level.INFO, i18n("UltiCloud: Connected!"));
                 getLogger().log(Level.INFO, i18n("网页编辑器已启动！访问地址：https://panel.ultikits.com/manger"));
             } else {
-                getLogger().log(Level.INFO, i18n("网页编辑器未启用！"));
+                getLogger().log(Level.INFO, "UltiCloud: Not connected. Use /ulticloud login to authenticate.");
             }
             getLogger().log(Level.INFO, String.format(i18n("数据存储方式：%s"), dataStore.getStoreType()));
-            String ultiToolsNewestVersion = getUltiToolsNewestVersion();
-            String currentVersion = getEnv().getString("version");
             getLogger().log(Level.INFO, String.format(i18n("UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
-            getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
-            getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
-            if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
-                getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
-                getLogger().log(Level.INFO, String.format(i18n("下载地址：%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
-                return;
+            try {
+                getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
+            } catch (IOException e) {
+                getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
             }
-            getLogger().log(Level.INFO, i18n("UltiTools-API已是最新版本！"));
+            checkForUpdates();
         });
+    }
+
+    private void checkForUpdates() {
+        getLogger().log(Level.INFO, i18n("正在检查版本更新..."));
+        String ultiToolsNewestVersion = getUltiToolsNewestVersion();
+        String currentVersion = getEnv().getString("version");
+        if (dependenceManagers.getVersionComparator().compare(currentVersion, ultiToolsNewestVersion) < 0) {
+            getLogger().log(Level.INFO, String.format(i18n("UltiTools-API有新版本 %s 可用，请及时更新！"), ultiToolsNewestVersion));
+            getLogger().log(Level.INFO, String.format(i18n("下载地址：%s"), "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+        } else {
+            getLogger().log(Level.INFO, i18n("UltiTools-API已是最新版本！"));
+        }
     }
 
     @Override
     public void onDisable() {
-        if (needLoadLib) {
-            return;
-        }
         // Plugin shutdown logic
+        
+        // 关闭日志流管理器
+        if (logStreamManager != null) {
+            logStreamManager.shutdown();
+        }
+        
+        CloudAuthManager.stopPolling();
         dependenceManagers.closeAdventure();
         stopWebsocket();
         pluginManager.close();
-        dependenceManagers.closeSpringContext();
+        dependenceManagers.closeContext();
         getCommandManager().close();
         DataStoreManager.close();
         getConfigManager().saveAll();
@@ -323,7 +403,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     private InputStream getFileResource(String filename) {
         try {
-            return Objects.requireNonNull(this.getClass().getClassLoader().getResource(filename)).openStream();
+            URL resource = this.getClass().getClassLoader().getResource(filename);
+            if (resource == null) {
+                return null;
+            }
+            return resource.openStream();
         } catch (IOException ex) {
             return null;
         }
@@ -363,102 +447,66 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (codeSource.getLocation().toString().startsWith("union:")) {
             String replace = codeSource.getLocation().toString().replace("union:", "file:").split("%")[0];
             try {
-                return new URL(replace);
-            } catch (MalformedURLException e) {
-                e.printStackTrace();
+                return new java.net.URI(replace).toURL();
+            } catch (MalformedURLException | URISyntaxException e) {
+                getLogger().log(Level.WARNING, "Failed to parse server JAR URL: " + replace, e);
             }
         }
         return codeSource.getLocation();
     }
 
-    private URL[] getLibs() {
-        File libDir = new File(getDataFolder(), "lib");
-        if (!libDir.exists()) {
-            libDir.mkdirs();
-        }
-        File[] libFiles = libDir.listFiles();
-        if (libFiles == null) {
-            return new URL[]{getServerJar()};
+    /**
+     * Get URLs for module plugin JARs in the UltiTools/plugins directory.
+     * <br>
+     * 获取 UltiTools/plugins 目录中模块插件JAR的URL。
+     *
+     * @return Array of URLs for module plugin JARs
+     */
+    private URL[] getModuleUrls() {
+        List<URL> urls = new ArrayList<>();
+
+        // Add server JAR
+        URL serverJar = getServerJar();
+        if (serverJar != null) {
+            urls.add(serverJar);
         }
 
-        List<File> files = new ArrayList<>(Arrays.asList(libFiles));
-        File pluginsFolder = getDataFolder().getParentFile();
-        for (File file : Objects.requireNonNull(pluginsFolder.listFiles())) {
-            if (file.getName().endsWith(".jar")) {
-                files.add(file);
-            }
-        }
-
+        // Add module plugin JARs from UltiTools/plugins/
         File pluginDir = new File(getDataFolder(), "plugins");
-        if (!pluginDir.exists()) {
-            pluginDir.mkdirs();
-        }
-        File[] pluginFiles = pluginDir.listFiles();
-        if (pluginFiles != null) {
-            files.addAll(Arrays.asList(pluginFiles));
-        }
-
-        URL[] urls = new URL[files.size() + 1];
-        for (int i = 0; i < files.size(); i++) {
-            try {
-                urls[i] = files.get(i).toURI().toURL();
-            } catch (MalformedURLException e) {
-                e.printStackTrace();
+        if (pluginDir.exists()) {
+            File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
+            if (pluginFiles != null) {
+                for (File f : pluginFiles) {
+                    try {
+                        urls.add(f.toURI().toURL());
+                    } catch (MalformedURLException e) {
+                        getLogger().log(Level.WARNING, "Failed to add module JAR to classpath: " + f.getName(), e);
+                    }
+                }
             }
         }
-        urls[files.size()] = getServerJar();
-        return urls;
+
+        return urls.toArray(new URL[0]);
     }
 
     /**
-     * Download required dependencies.
+     * Get the JavaPlugin class loader.
+     * This ensures all class loading operations use the correct parent class loader.
      * <br>
-     * 下载必要的依赖。
+     * 获取JavaPlugin类加载器。
+     * 这确保所有类加载操作都使用正确的父类加载器。
+     *
+     * @return JavaPlugin class loader <br> JavaPlugin类加载器
      */
-    private void downloadRequiredDependencies() {
-        String libFolder = new File(System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped").exists() ? 
-        System.getProperty("user.dir") + File.separator + "plugins" + File.separator + ".paper-remapped" + File.separator + "UltiTools" + File.separator + "lib" 
-        : UltiTools.getInstance().getDataFolder() + File.separator + "lib";
-        if (!new File(libFolder).exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            new File(libFolder).mkdirs();
+    public static ClassLoader getJavaPluginClassLoader() {
+        UltiTools instance = getInstance();
+        if (instance != null) {
+            if (instance.ultiToolsClassLoader != null) {
+                return instance.ultiToolsClassLoader;
+            }
+            return instance.getClass().getClassLoader();
         }
-        YamlConfiguration env = UltiTools.getEnv();
-        List<String> missingLib = env.getStringList("libraries")
-                .stream()
-                .map(lib -> new File(libFolder, lib))
-                .filter(file -> !file.exists()).map(File::getName)
-                .collect(Collectors.toList());
-        if (missingLib.isEmpty()) {
-            return;
-        }
-        getLogger().log(Level.INFO, "Missing required libraries，trying to download...");
-        getLogger().log(Level.INFO, "If have problems in downloading，you can download full version.");
-        for (int i = 0; i < missingLib.size(); i++) {
-            String name = missingLib.get(i);
-            String url = env.getString("oss-url") + env.getString("lib-path") + name;
-            double i1 = (double) i / missingLib.size();
-            int percentage = (int) (i1 * 100);
-            printLoadingBar(percentage);
-            HttpDownloadUtils.download(url, name, libFolder);
-            needLoadLib = true;
-        }
-        printLoadingBar(100);
-        getLogger().log(Level.INFO, "All required libraries have been downloaded.");
-    }
-
-    private void printLoadingBar(final int percentage) {
-        StringBuilder loadingBar = new StringBuilder("[");
-        int progress = percentage / 10;
-        for (int i = 0; i < progress; i++) {
-            loadingBar.append("*");
-        }
-        for (int i = progress; i < 10; i++) {
-            loadingBar.append("-");
-        }
-        loadingBar.append("] ");
-        loadingBar.append(percentage);
-        loadingBar.append("%");
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools]Downloading: " + loadingBar);
+        // Fallback for testing environments where plugin is not initialized
+        return Thread.currentThread().getContextClassLoader();
     }
 }

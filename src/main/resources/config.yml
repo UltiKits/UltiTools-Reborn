@@ -13,13 +13,6 @@ datasource:
 # en for English, zh 为中文
 language: "zh"
 
-web-editor:
-  enable: false
-
-account:
-  username: ""
-  password: ""
-
 mysql:
   enable: false
   host: localhost
@@ -35,3 +28,33 @@ mysql:
   cachePrepStmts: true
   prepStmtCacheSize: 250
   prepStmtCacheSqlLimit: 2048
+
+# 邮件服务配置 (Email Service Configuration)
+# 此服务为可选功能，仅在enable为true且配置正确时启用
+# 模块需调用 EmailService.isEnabled() 检查服务是否可用
+email:
+  enable: false
+  smtp:
+    # SMTP服务器地址 (如: smtp.gmail.com, smtp.qq.com, smtp.163.com)
+    host: "smtp.example.com"
+    # SMTP端口 (常用: 25, 465(SSL), 587(TLS))
+    port: 587
+    # SMTP认证用户名 (通常是邮箱地址)
+    username: ""
+    # SMTP认证密码 (部分服务商需要使用授权码而非密码)
+    password: ""
+    # 是否使用SSL加密 (端口465时通常为true)
+    ssl: false
+    # 是否使用STARTTLS加密 (端口587时通常为true)
+    starttls: true
+    # 连接超时时间 (毫秒)
+    connectionTimeout: 10000
+    # 读取超时时间 (毫秒)
+    readTimeout: 10000
+  from:
+    # 发件人邮箱地址 (需与username一致或为授权的别名)
+    address: "noreply@example.com"
+    # 发件人显示名称
+    name: "UltiTools Server"
+  # 调试模式 (开启后会在控制台输出详细的SMTP通信日志)
+  debug: false

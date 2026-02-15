@@ -1,11 +1,12 @@
 package com.ultikits.ultitools.abstracts;
 
-import com.ultikits.ultitools.UltiTools;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+
+import com.ultikits.ultitools.UltiTools;
 
 /**
  * Abstract class representing a console command executor.
@@ -25,6 +26,9 @@ public abstract class AbstractConsoleCommandExecutor extends AbstractCommand {
      */
     @Override
     public boolean onCommand(CommandSender commandSender, Command command, String s, String[] strings) {
+        if (strings == null) {
+            strings = new String[0];
+        }
         if (strings.length > 0 && "help".equals(strings[0])) {
             sendHelpMessage(commandSender);
             return true;

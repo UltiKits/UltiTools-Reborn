@@ -1,49 +1,64 @@
 package com.ultikits.ultitools.entities;
 
-import com.ultikits.ultitools.UltiTools;
+import java.util.function.Supplier;
+
 import org.bukkit.inventory.ItemStack;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.XVersionUtils;
 
 /**
  * The enum Buttons.
+ * <p>
+ * Uses lazy initialization to avoid calling UltiTools.getInstance() during class loading,
+ * which allows for proper testing and prevents NullPointerException when the plugin is not initialized.
  */
 public enum Buttons {
     /**
      * Previous buttons.
      */
-    PREVIOUS(UltiTools.getInstance().i18n("上一页"), UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED)),
+    PREVIOUS("上一页", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED)),
     /**
      * Next buttons.
      */
-    NEXT(UltiTools.getInstance().i18n("下一页"), UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED)),
+    NEXT("下一页", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED)),
     /**
      * Back buttons.
      */
-    BACK(UltiTools.getInstance().i18n("返回"), UltiTools.getInstance().getVersionWrapper().getSign()),
+    BACK("返回", XVersionUtils::getSign),
     /**
      * Quit buttons.
      */
-    QUIT(UltiTools.getInstance().i18n("退出"), UltiTools.getInstance().getVersionWrapper().getEndEye()),
+    QUIT("退出", XVersionUtils::getEndEye),
     /**
      * Ok buttons.
      */
-    OK(UltiTools.getInstance().i18n("确认"), UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN)),
+    OK("确认", () -> XVersionUtils.getColoredPlaneGlass(Colors.GREEN)),
     /**
      * Cancel buttons.
      */
-    CANCEL(UltiTools.getInstance().i18n("取消"), UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.RED));
+    CANCEL("取消", () -> XVersionUtils.getColoredPlaneGlass(Colors.RED));
 
     /**
-     * The Name.
+     * The i18n key for the button name.
      */
-    String name;
+    private final String nameKey;
     /**
-     * The Item stack.
+     * The supplier for lazy initialization of ItemStack.
      */
-    ItemStack itemStack;
+    private final Supplier<ItemStack> itemStackSupplier;
+    /**
+     * Cached translated name.
+     */
+    private String cachedName;
+    /**
+     * Cached ItemStack.
+     */
+    private ItemStack cachedItemStack;
 
-    Buttons(String name, ItemStack itemStack) {
-        this.name = name;
-        this.itemStack = itemStack;
+    Buttons(String nameKey, Supplier<ItemStack> itemStackSupplier) {
+        this.nameKey = nameKey;
+        this.itemStackSupplier = itemStackSupplier;
     }
 
     /**
@@ -52,7 +67,10 @@ public enum Buttons {
      * @return Button 's name 按钮名称
      */
     public String getName() {
-        return name;
+        if (cachedName == null) {
+            cachedName = UltiTools.getInstance().i18n(nameKey);
+        }
+        return cachedName;
     }
 
     /**
@@ -61,6 +79,9 @@ public enum Buttons {
      * @return Button 's material 按钮材质
      */
     public ItemStack getItemStack() {
-        return itemStack;
+        if (cachedItemStack == null) {
+            cachedItemStack = itemStackSupplier.get();
+        }
+        return cachedItemStack;
     }
 }

@@ -1,10 +1,16 @@
 package com.ultikits.ultitools.manager;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommendExecutor;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.command.CmdExecutor;
-import com.ultikits.ultitools.utils.PackageScanUtils;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -13,10 +19,12 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.SimplePluginManager;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.util.*;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
  * Command manager.
@@ -110,12 +118,12 @@ public class CommandManager {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
                 packageName,
-                UltiTools.getInstance().getUltiToolsClassLoader()
+                UltiTools.getJavaPluginClassLoader()
         );
         for (Class<?> clazz : classes) {
             try {
-                AbstractCommendExecutor commandExecutor =
-                        (AbstractCommendExecutor) clazz.getDeclaredConstructor().newInstance();
+                AbstractCommandExecutor commandExecutor =
+                        (AbstractCommandExecutor) clazz.getDeclaredConstructor().newInstance();
                 register(plugin, commandExecutor);
             } catch (InstantiationException |
                      InvocationTargetException |
@@ -134,7 +142,9 @@ public class CommandManager {
     public void registerAll(UltiToolsPlugin plugin) {
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
-            if (commandExecutor.getClass().getAnnotation(CmdExecutor.class).manualRegister()) continue;
+            if (commandExecutor == null) continue;
+            CmdExecutor annotation = AnnotationUtils.findAnnotation(commandExecutor.getClass(), CmdExecutor.class);
+            if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, commandExecutor);
         }
     }
@@ -225,6 +235,26 @@ public class CommandManager {
         }
     }
 
+    /**
+     * Register command for core UltiTools commands that don't belong to a specific plugin module.
+     * This method is specifically for commands that are part of the main UltiTools plugin.
+     * <p>
+     * 为不属于特定插件模块的核心UltiTools命令注册命令。
+     * 此方法专门用于主UltiTools插件的命令。
+     *
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     */
+    public void registerCoreCommand(CommandExecutor commandExecutor) {
+        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
+
+        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
+            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
+            register(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
+        } else {
+            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
+        }
+    }
+
     private PluginCommand getCommand(String name, Plugin plugin) {
         PluginCommand command = null;
 
@@ -234,7 +264,7 @@ public class CommandManager {
 
             command = c.newInstance(name, plugin);
         } catch (Exception | Error e) {
-            e.printStackTrace();
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to create PluginCommand: " + name, e);
         }
 
         return command;
@@ -251,7 +281,7 @@ public class CommandManager {
                 commandMap = (CommandMap) f.get(Bukkit.getPluginManager());
             }
         } catch (Exception | Error e) {
-            e.printStackTrace();
+            Bukkit.getLogger().log(Level.SEVERE, "Failed to get CommandMap", e);
         }
 
         return commandMap;

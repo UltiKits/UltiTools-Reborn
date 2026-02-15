@@ -1,24 +1,38 @@
 package com.ultikits.ultitools.manager;
 
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.ContextEntry;
-import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.interfaces.IPlugin;
-import com.ultikits.ultitools.utils.DependencyUtils;
-import lombok.Getter;
-import org.bukkit.Bukkit;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
-
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+
+import org.bukkit.Bukkit;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ComponentScan;
+import com.ultikits.ultitools.annotations.ContextEntry;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.IPlugin;
+import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
+import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
+import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.DependencyUtils;
+import com.ultikits.ultitools.utils.SecurityPolicy;
+
+import lombok.Getter;
 
 /**
  * UltiTools plugin manager.
@@ -31,6 +45,10 @@ public class PluginManager {
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
     private ClassLoader classLoader;
+    @Getter
+    private TaskManager taskManager;
+    @Getter
+    private PlayerCacheManager playerCacheManager;
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -41,6 +59,9 @@ public class PluginManager {
      */
     public void init(ClassLoader classLoader) throws IOException {
         this.classLoader = classLoader;
+        this.taskManager = new TaskManager(UltiTools.getInstance());
+        this.playerCacheManager = new PlayerCacheManager();
+        registerPlayerQuitListener();
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -64,7 +85,11 @@ public class PluginManager {
             return;
         }
         Bukkit.getLogger().log(Level.INFO, String.format("[UltiTools-API] %d UltiTools plugin(s) found.", pluginClassList.size()));
-        for (Class<? extends UltiToolsPlugin> pluginClass : pluginClassList) {
+        
+        // Sort plugins by dependencies using Kahn's algorithm
+        List<Class<? extends UltiToolsPlugin>> sortedPlugins = sortPluginsByDependencies(pluginClassList);
+        
+        for (Class<? extends UltiToolsPlugin> pluginClass : sortedPlugins) {
             if (register(pluginClass)) {
                 success++;
             }
@@ -72,7 +97,7 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin Loading completed.");
         Bukkit.getLogger().log(
                 Level.INFO,
-                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, pluginClassList.size() - success)
+                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
         );
     }
 
@@ -91,7 +116,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -133,7 +159,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", pluginClass.getName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -150,7 +177,7 @@ public class PluginManager {
      */
     public boolean register(UltiToolsPlugin plugin) {
         try {
-            AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+            SimpleContainer pluginContext = new SimpleContainer();
             plugin.setContext(pluginContext);
             pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
             pluginContext.registerShutdownHook();
@@ -160,7 +187,16 @@ public class PluginManager {
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
                 Class<?> clazz = contextEntry.value();
-                pluginContext.register(clazz);
+                // Register the context entry class as a bean
+                try {
+                    Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                    pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(
+                            Level.WARNING,
+                            String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                    );
+                }
                 pluginContext.refresh();
                 pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
             }
@@ -182,6 +218,16 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance <br> UltiTools模块实例
      */
     public void unregister(UltiToolsPlugin plugin) {
+        // Cancel all @Scheduled tasks before unregistering
+        if (taskManager != null) {
+            taskManager.cancelAll(plugin);
+        }
+        // Unregister @PlayerCache beans before context closes
+        if (playerCacheManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                playerCacheManager.unregisterBean(bean);
+            }
+        }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         plugin.getContext().close();
@@ -199,6 +245,22 @@ public class PluginManager {
         }
         pluginList.clear();
         pluginClassList.clear();
+    }
+
+    /**
+     * Register a Bukkit listener for PlayerQuitEvent to clean up @PlayerCache maps.
+     * <br>
+     * 注册 Bukkit 监听器，在玩家退出时清理 @PlayerCache 标注的 Map。
+     */
+    private void registerPlayerQuitListener() {
+        Bukkit.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onPlayerQuit(PlayerQuitEvent event) {
+                if (playerCacheManager != null) {
+                    playerCacheManager.onPlayerQuit(event.getPlayer().getUniqueId());
+                }
+            }
+        }, Bukkit.getPluginManager().getPlugin("UltiTools"));
     }
 
     /**
@@ -227,29 +289,103 @@ public class PluginManager {
      * @param pluginJar   Plugin jar file <br> 模块jar文件
      * @return Plugin main class <br> 模块主类
      */
-    private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) {
+    private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
+        // 验证jar文件安全性
+        if (!validateJarFile(pluginJar)) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
+            return null;
+        }
+        
         try (JarFile jarFile = new JarFile(pluginJar)) {
             Enumeration<JarEntry> entryEnumeration = jarFile.entries();
+            Set<String> scannedClasses = new HashSet<>();
+            
             while (entryEnumeration.hasMoreElements()) {
                 JarEntry entry = entryEnumeration.nextElement();
                 if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
                     continue;
                 }
+                
                 String className = entry
                         .getName()
                         .replace('/', '.')
                         .replace(".class", "");
+                
+                // 防止重复扫描同一个类
+                if (scannedClasses.contains(className)) {
+                    continue;
+                }
+                scannedClasses.add(className);
+                
+                // 限制扫描的类数量，防止拒绝服务攻击
+                if (scannedClasses.size() > 1000) {
+                    Bukkit.getLogger().log(Level.WARNING, 
+                        "[UltiTools-API] Too many classes in jar, scanning stopped: " + pluginJar.getName());
+                    break;
+                }
+                
                 try {
-                    Class<?> aClass = classLoader.loadClass(className);
+                    // Use security-validated class loading (checks dangerous classes/packages)
+                    // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
                     if (IPlugin.class.isAssignableFrom(aClass)) {
                         return aClass.asSubclass(UltiToolsPlugin.class);
                     }
-                } catch (ClassNotFoundException | NoClassDefFoundError ignored) {
+                } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                    // 记录但不中断，继续扫描其他类
+                    Bukkit.getLogger().log(Level.FINE,
+                        "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
+                } catch (SecurityException e) {
+                    // 安全异常需要记录 — only triggers for actually dangerous classes
+                    Bukkit.getLogger().log(Level.WARNING,
+                        "[UltiTools-API] Security violation while loading class: " + className + " - " + e.getMessage());
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
         }
         return null;
+    }
+    
+    /**
+     * Validate jar file security.
+     * <br>
+     * 验证jar文件安全性。
+     *
+     * @param jarFile jar file to validate <br> 要验证的jar文件
+     * @return true if valid, false otherwise <br> 如果有效则为true，否则为false
+     */
+    private boolean validateJarFile(File jarFile) {
+        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
+            return false;
+        }
+        
+        // 检查文件扩展名
+        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
+            return false;
+        }
+        
+        // 验证jar文件结构
+        try (JarFile jar = new JarFile(jarFile)) {
+            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
+
+            // 统计条目数量
+            Enumeration<JarEntry> entries = jar.entries();
+            int entryCount = 0;
+            while (entries.hasMoreElements()) {
+                entries.nextElement();
+                entryCount++;
+            }
+            
+            // 使用 SecurityPolicy 验证文件结构
+            return SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount);
+        } catch (IOException e) {
+            Bukkit.getLogger().log(Level.WARNING, 
+                "[UltiTools-API] Failed to validate jar file: " + jarFile.getName(), e);
+            return false;
+        }
     }
 
 
@@ -262,43 +398,51 @@ public class PluginManager {
      * @return Register result <br> 注册结果
      */
     private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
-        for (UltiToolsPlugin plugin1 : pluginList) {
-            if (!plugin1.getMainClass().equals(plugin.getMainClass())) {
+        if (hasNewerVersionLoaded(plugin)) {
+            return false;
+        }
+        if (!isUltiToolsVersionCompatible(plugin)) {
+            return false;
+        }
+        return attemptPluginRegistration(plugin);
+    }
+
+    private boolean hasNewerVersionLoaded(UltiToolsPlugin plugin) {
+        for (UltiToolsPlugin existing : pluginList) {
+            if (!existing.getMainClass().equals(plugin.getMainClass())) {
                 continue;
             }
-            if (plugin1.isNewerVersionThan(plugin)) {
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName())
-                );
+            if (existing.isNewerVersionThan(plugin)) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
                 plugin.getContext().close();
-                return false;
-            } else if (plugin.isNewerVersionThan(plugin1)) {
-                plugin1.unregisterSelf();
+                return true;
+            } else if (plugin.isNewerVersionThan(existing)) {
+                existing.unregisterSelf();
             }
         }
+        return false;
+    }
+
+    private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName())
-            );
+            Bukkit.getLogger().log(Level.WARNING,
+                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
             plugin.getContext().close();
             return false;
         }
+        return true;
+    }
+
+    private boolean attemptPluginRegistration(UltiToolsPlugin plugin) {
         try {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
-                pluginList.add(plugin);
-                Bukkit.getLogger().log(
-                        Level.INFO,
-                        String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion())
-                );
+                onPluginRegistered(plugin);
             } else {
                 plugin.getContext().close();
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion())
-                );
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
@@ -306,6 +450,22 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
             return false;
         }
+    }
+
+    private void onPluginRegistered(UltiToolsPlugin plugin) {
+        pluginList.add(plugin);
+        if (taskManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                taskManager.registerScheduledMethods(plugin, bean);
+            }
+        }
+        if (playerCacheManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                playerCacheManager.registerBean(bean);
+            }
+        }
+        Bukkit.getLogger().log(Level.INFO,
+                String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
     }
 
     /**
@@ -319,17 +479,121 @@ public class PluginManager {
      * @return UltiTools plugin instance <br> UltiTools模块实例
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
-        AnnotationConfigApplicationContext pluginContext = new AnnotationConfigApplicationContext();
+        // 验证构造器参数安全性
+        if (!validateConstructorArgs(constructorArgs)) {
+            throw new SecurityException("Invalid constructor arguments provided");
+        }
+        
+        SimpleContainer pluginContext = new SimpleContainer();
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(classLoader);
-        pluginContext.registerBean(pluginClass, constructorArgs);
-        pluginContext.refresh();
-        UltiToolsPlugin plugin = pluginContext.getBean(pluginClass);
-        pluginContext.setDisplayName(plugin.getPluginName());
-        pluginContext.setId(plugin.getPluginName());
-        plugin.setContext(pluginContext);
-        return plugin;
+        try {
+            UltiToolsPlugin plugin;
+            
+            if (constructorArgs.length == 0) {
+                // 使用默认构造器
+                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
+                plugin = constructor.newInstance();
+            } else {
+                // 验证构造器参数类型安全性
+                Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
+                for (int i = 0; i < constructorArgs.length; i++) {
+                    if (constructorArgs[i] == null) {
+                        throw new SecurityException("Null constructor argument not allowed at index: " + i);
+                    }
+                    paramTypes[i] = constructorArgs[i].getClass();
+                    
+                    // 验证参数类型是否安全
+                    if (!isSafeParameterType(paramTypes[i])) {
+                        throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
+                    }
+                }
+                
+                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
+                plugin = constructor.newInstance(constructorArgs);
+            }
+            
+            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+            // Register plugin as UltiToolsPlugin type so services can inject it via constructor
+            pluginContext.registerType(UltiToolsPlugin.class, plugin);
+
+            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+            String[] scanPackages = getPluginScanPackages(pluginClass);
+            if (scanPackages.length > 0) {
+                pluginContext.scanComponents(scanPackages);
+            }
+
+            // Register config entities as beans for @Autowired injection
+            java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
+                UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
+            if (configMap != null) {
+                for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
+                    String beanName = config.getClass().getSimpleName();
+                    beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                    pluginContext.registerSingleton(beanName, config);
+                }
+            }
+
+            // Set the static instance field before refresh() so @PostConstruct methods
+            // can call Xxx.getInstance().getDataOperator() etc.
+            setPluginStaticInstance(pluginClass, plugin);
+
+            pluginContext.refresh();
+            plugin.setContext(pluginContext);
+            return plugin;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+    }
+    
+    /**
+     * Validate constructor arguments for security.
+     * <br>
+     * 验证构造器参数的安全性。
+     *
+     * @param args constructor arguments <br> 构造器参数
+     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     */
+    private boolean validateConstructorArgs(Object... args) {
+        if (args == null) {
+            return true; // null args array is acceptable
+        }
+        
+        // 限制参数数量
+        if (args.length > 10) {
+            Bukkit.getLogger().log(Level.WARNING, 
+                "[UltiTools-API] Too many constructor arguments: " + args.length);
+            return false;
+        }
+        
+        for (Object arg : args) {
+            if (arg == null) {
+                continue; // null individual args will be checked later
+            }
+            
+            // 检查是否是危险类型
+            Class<?> argClass = arg.getClass();
+            if (!isSafeParameterType(argClass)) {
+                Bukkit.getLogger().log(Level.WARNING, 
+                    "[UltiTools-API] Unsafe constructor argument type: " + argClass.getName());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Check if parameter type is safe for constructor injection.
+     * <br>
+     * 检查参数类型是否对构造器注入安全。
+     *
+     * @param clazz parameter class <br> 参数类
+     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     */
+    private boolean isSafeParameterType(Class<?> clazz) {
+        return SecurityPolicy.isSafeParameterType(clazz);
     }
 
     /**
@@ -361,6 +625,85 @@ public class PluginManager {
                     UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
                 }
             }
+        }
+    }
+    
+    /**
+     * Set the static instance field on a plugin class before @PostConstruct runs.
+     * Most modules follow the pattern: private static XxxPlugin instance;
+     * This enables @PostConstruct methods to call Xxx.getInstance().getDataOperator() etc.
+     * <br>
+     * 在 @PostConstruct 运行之前设置插件类的静态 instance 字段。
+     *
+     * @param pluginClass the plugin class <br> 插件类
+     * @param plugin      the plugin instance <br> 插件实例
+     */
+    private void setPluginStaticInstance(Class<? extends UltiToolsPlugin> pluginClass, UltiToolsPlugin plugin) {
+        try {
+            java.lang.reflect.Field instanceField = pluginClass.getDeclaredField("instance");
+            if (java.lang.reflect.Modifier.isStatic(instanceField.getModifiers())) {
+                instanceField.setAccessible(true); // NOPMD - required for plugin instance injection
+                instanceField.set(null, plugin);
+            }
+        } catch (NoSuchFieldException ignored) {
+            // Not all plugins have a static instance field — this is fine
+        } catch (Exception e) {
+            Bukkit.getLogger().log(Level.FINE,
+                "[UltiTools-API] Could not pre-set static instance for " + pluginClass.getName());
+        }
+    }
+
+    /**
+     * Get scan packages for a plugin class.
+     * Reads from @UltiToolsModule or @ComponentScan annotations, defaults to plugin class package.
+     * <br>
+     * 获取插件类的扫描包。
+     *
+     * @param pluginClass plugin class <br> 插件类
+     * @return scan packages <br> 扫描包
+     */
+    private String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
+        UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
+        if (module != null && module.scanBasePackages().length > 0) {
+            return module.scanBasePackages();
+        }
+        ComponentScan componentScan = pluginClass.getAnnotation(ComponentScan.class);
+        if (componentScan != null) {
+            if (componentScan.value().length > 0) return componentScan.value();
+            if (componentScan.basePackages().length > 0) return componentScan.basePackages();
+        }
+        return new String[]{pluginClass.getPackage().getName()};
+    }
+
+    /**
+     * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
+     * <br>
+     * 使用 Kahn 算法（拓扑排序）按依赖关系对插件进行排序。
+     *
+     * @param plugins list of plugin classes to sort <br> 要排序的插件类列表
+     * @return sorted list of plugin classes <br> 排序后的插件类列表
+     */
+    private List<Class<? extends UltiToolsPlugin>> sortPluginsByDependencies(
+            List<Class<? extends UltiToolsPlugin>> plugins) {
+        
+        PluginDependencyResolver resolver = new PluginDependencyResolver(Bukkit.getLogger());
+        
+        try {
+            List<Class<? extends UltiToolsPlugin>> sorted = resolver.resolve(plugins);
+            Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin load order resolved successfully.");
+            return sorted;
+        } catch (CircularDependencyException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] " + e.getMessage());
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
+            return new ArrayList<>(plugins);
+        } catch (MissingDependencyException e) {
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] " + e.getMessage());
+            Bukkit.getLogger().log(Level.SEVERE, 
+                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
+            return new ArrayList<>(plugins);
         }
     }
 }

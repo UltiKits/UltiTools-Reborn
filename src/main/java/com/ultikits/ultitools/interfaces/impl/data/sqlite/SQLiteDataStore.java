@@ -12,8 +12,8 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
-
-import cn.hutool.db.ds.simple.SimpleDataSource;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class SQLiteDataStore implements DataStore {
     private static final Map<Class<?>, DataOperator<?>> dataOperatorMap = new ConcurrentHashMap<>();
@@ -34,8 +34,11 @@ public class SQLiteDataStore implements DataStore {
             if (!dataFolder.exists()) {
                 dataFolder.mkdirs();
             }
-            // username and password are meaningless
-            DataSource dataSource = new SimpleDataSource("jdbc:sqlite://" + dataFolder.getAbsolutePath() + "/" + plugin.getPluginName() + ".db", "root", "123456");
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:sqlite://" + dataFolder.getAbsolutePath() + "/" + plugin.getPluginName() + ".db");
+            config.setDriverClassName("org.sqlite.JDBC");
+            config.setMaximumPoolSize(10);
+            DataSource dataSource = new HikariDataSource(config);
             tSQLiteDataOperator = new SQLiteDataOperator<>(dataSource, dataEntity);
             dataOperatorMap.put(dataEntity, tSQLiteDataOperator);
         }

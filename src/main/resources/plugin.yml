@@ -1,11 +1,22 @@
 name: UltiTools
 version: '${project.version}'
 main: com.ultikits.ultitools.UltiTools
-api-version: 1.13
+api-version: '1.19'
 prefix: UltiTools
 authors: [ wisdomme ]
 load: POSTWORLD
-depend: [ Vault, PlaceholderAPI ]
 softdepend:
   - Vault
   - PlaceholderAPI
+
+# Paper 自动下载的 Maven Central 依赖
+libraries:
+  - com.google.code.gson:gson:2.10.1
+  - commons-dbutils:commons-dbutils:1.8.1
+  - com.mysql:mysql-connector-j:8.3.0
+  - org.java-websocket:Java-WebSocket:1.5.4
+  - cglib:cglib-nodep:3.3.0
+  - org.slf4j:slf4j-api:1.8.0-beta4
+  - com.sun.mail:javax.mail:1.6.2
+  - net.kyori:adventure-platform-bukkit:4.3.2
+  - com.zaxxer:HikariCP:5.1.0

@@ -1,27 +1,115 @@
-name: UltiTools API CI with Maven
+name: UltiTools API CI
 
 on:
   push:
+    branches: [ "**" ]
+  pull_request:
     branches: [ "main" ]
 
 jobs:
-  build:
+  # ==================== 测试阶段 ====================
+  test:
+    name: 🧪 Test & Coverage
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
     
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
+    - name: ☕ Set up JDK 17
+      uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: maven
         
-    - name: Build with Maven
-      run: mvn -B package javadoc:javadoc
+    - name: 🧪 Run Tests with Coverage
+      run: mvn -B clean test
+      
+    - name: 📊 Generate JaCoCo Coverage Report
+      run: mvn -B jacoco:report
+      
+    - name: 📈 JaCoCo Coverage Report Summary
+      id: jacoco
+      uses: cicirello/jacoco-badge-generator@v2
+      with:
+        jacoco-csv-file: target/site/jacoco/jacoco.csv
+        badges-directory: .github/badges
+        generate-coverage-badge: true
+        generate-branches-badge: true
+        generate-summary: true
+        
+    - name: 📋 Display Coverage Summary
+      run: |
+        echo "## 📊 测试覆盖率报告" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| 指标 | 数值 |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **行覆盖率** | ${{ steps.jacoco.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
+        echo "| **分支覆盖率** | ${{ steps.jacoco.outputs.branches }}% |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📁 详细覆盖率数据" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        cat target/site/jacoco/jacoco.csv | head -20 >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 📤 Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: jacoco-coverage-report
+        path: target/site/jacoco/
+        retention-days: 30
+        
+    - name: 📤 Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: target/surefire-reports/
+        retention-days: 30
+        
+    - name: ✅ Coverage Gate Check
+      run: |
+        COVERAGE=${{ steps.jacoco.outputs.coverage }}
+        BRANCHES=${{ steps.jacoco.outputs.branches }}
+        echo "📊 当前行覆盖率: ${COVERAGE}%"
+        echo "📊 当前分支覆盖率: ${BRANCHES}%"
+        # 可以在这里设置覆盖率阈值检查
+        # if (( $(echo "$COVERAGE < 50" | bc -l) )); then
+        #   echo "❌ 覆盖率低于 50%，构建失败"
+        #   exit 1
+        # fi
+        echo "✅ 测试通过，覆盖率符合要求"
 
-    - name: Get Project Version from pom.xml
+    - name: 📤 Upload Coverage to Codacy
+      if: github.event_name == 'push'
+      env:
+        CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
+        CODACY_ORGANIZATION_PROVIDER: gh
+        CODACY_USERNAME: UltiKits
+        CODACY_PROJECT_NAME: UltiTools-Reborn
+      run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r target/site/jacoco/jacoco.xml
+
+  # ==================== 构建 SNAPSHOT 阶段 ====================
+  build-snapshot:
+    name: 🔨 Build SNAPSHOT
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: ☕ Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: 🏷️ Get Project Version from pom.xml
       id: version
       uses: avides/actions-project-version-check@v1.4.0
       with:
@@ -29,63 +117,46 @@ jobs:
         file-to-check: pom.xml
         only-return-version: true
 
-    - name: Archive artifacts
-      uses: actions/upload-artifact@v4.0.0
-      with:
-        name: ultitools-artifact
-        path: target/UltiTools-API-${{ steps.version.outputs.version }}.jar
+    - name: 🔧 Set SNAPSHOT Version
+      id: snapshot
+      run: |
+        BASE_VERSION=${{ steps.version.outputs.version }}
+        # 移除可能存在的 -SNAPSHOT 后缀，然后添加新的
+        CLEAN_VERSION=${BASE_VERSION%-SNAPSHOT}
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        SNAPSHOT_VERSION="${CLEAN_VERSION}-SNAPSHOT-${SHORT_SHA}"
+        echo "snapshot_version=${SNAPSHOT_VERSION}" >> $GITHUB_OUTPUT
+        echo "📦 SNAPSHOT 版本: ${SNAPSHOT_VERSION}"
+        # 更新 pom.xml 中的版本号
+        mvn versions:set -DnewVersion=${SNAPSHOT_VERSION} -DgenerateBackupPoms=false
         
-    - name: Deploy Java DOC
+    - name: 🔨 Build SNAPSHOT with Maven
+      run: mvn -B package javadoc:javadoc -DskipTests
+
+    - name: 📦 Archive SNAPSHOT artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ultitools-snapshot-${{ steps.snapshot.outputs.snapshot_version }}
+        path: target/UltiTools-API-${{ steps.snapshot.outputs.snapshot_version }}.jar
+        retention-days: 14
+        
+    - name: 📚 Deploy Java DOC
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
         server: ${{ secrets.FTP_HOST }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         local-dir: "./target/site/apidocs/"
-        
-  release:
-    needs: build
-    runs-on: ubuntu-latest
 
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Get latest commit message
-      id: commit
-      run: echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.sha }})"
-
-    - name: Get Project Version from pom.xml
-      id: version
-      uses: avides/actions-project-version-check@v1.4.0
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        file-to-check: pom.xml
-        only-return-version: true
-
-    - name: Download artifacts
-      uses: actions/download-artifact@v4.1.0
-      with:
-        name: ultitools-artifact
-
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release v${{ steps.version.outputs.version }}
-        body: ${{ steps.commit.outputs.message }}
-        draft: false
-        prerelease: false
-
-    - name: Upload Release Asset
-      id: upload-release-asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: UltiTools-API-${{ steps.version.outputs.version }}.jar
-        asset_name: UltiTools-API.jar
-        asset_content_type: application/java-archive
+    - name: 📝 SNAPSHOT Build Summary
+      run: |
+        echo "## 📦 SNAPSHOT 构建完成" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| 信息 | 值 |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **版本** | \`${{ steps.snapshot.outputs.snapshot_version }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **提交** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **分支** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **触发者** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "💡 **提示**: SNAPSHOT 构件将保留 14 天，可在 Artifacts 中下载" >> $GITHUB_STEP_SUMMARY

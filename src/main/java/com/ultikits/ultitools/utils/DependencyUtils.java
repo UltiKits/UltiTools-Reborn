@@ -1,9 +1,23 @@
 package com.ultikits.ultitools.utils;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import org.springframework.context.annotation.ComponentScan;
 
+/**
+ * Utility class for handling plugin dependency and package scanning operations.
+ * This class helps determine which packages should be scanned for components
+ * based on annotations like {@link ComponentScan} and {@link EnableAutoRegister}.
+ * <br>
+ * 处理插件依赖和包扫描操作的实用工具类。
+ * 此类帮助根据 {@link ComponentScan} 和 {@link EnableAutoRegister} 等注解
+ * 确定应该扫描哪些包以查找组件。
+ *
+ * @author wisdomme
+ * @since 6.0.0
+ * @see ComponentScan
+ * @see EnableAutoRegister
+ */
 public class DependencyUtils {
 
 

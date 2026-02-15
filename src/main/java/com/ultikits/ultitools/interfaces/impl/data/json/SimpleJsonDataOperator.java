@@ -1,27 +1,37 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
-import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.io.file.FileNameUtil;
-import cn.hutool.db.sql.Condition;
-import cn.hutool.json.JSON;
-import cn.hutool.json.JSONUtil;
-import com.alibaba.fastjson.JSONObject;
+import java.io.File;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.Writer;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
-
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.Serializable;
-import java.nio.charset.Charset;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
+import com.ultikits.ultitools.utils.BeanCopyUtil;
+import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.JsonPathUtil;
 
 /**
  * Simple Json data operator.
@@ -33,6 +43,8 @@ import java.util.logging.Level;
  * @version 1.0.0
  */
 public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements DataOperator<T>, Cached {
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
     private final String storeLocation;
     private final Class<T> type;
     private final Map<Object, T> cache = new ConcurrentHashMap<>();
@@ -44,9 +56,9 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
         File[] files = file.listFiles();
         if (files != null) {
             Arrays.stream(files).parallel().forEach(dataFile -> {
-                try {
-                    JSON json = JSONUtil.readJSON(dataFile, Charset.defaultCharset());
-                    cache.put(FileNameUtil.mainName(dataFile), json.toBean(type));
+                try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
+                    T entity = GSON.fromJson(reader, type);
+                    cache.put(FileUtils.mainName(dataFile), entity);
                 } catch (Exception e) {
                     Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
                 }
@@ -77,6 +89,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
         List<T> results = new ArrayList<>();
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         for (WhereCondition condition : whereConditions) {
             if (condition.isEmpty()) {
                 return new ArrayList<>(cache.values());
@@ -86,13 +99,13 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
             }
             List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
-                JSON parse = JSONUtil.parse(each);
-                Object byPath = parse.getByPath(condition.getColumn());
+                Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
+                Object byPath = JsonPathUtil.getByPath(map, condition.getColumn());
                 if (byPath == null) {
                     continue;
                 }
-                String data = JSONObject.toJSONString(byPath);
-                String value = JSONObject.toJSONString(condition.getValue());
+                String data = GSON.toJson(byPath);
+                String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(each);
             }
             if (results.size() == 0) {
@@ -105,23 +118,27 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     }
 
     @Override
-    public List<T> getLike(String column, String value, Condition.LikeType likeType) {
+    public List<T> getLike(String column, String value, LikeType likeType) {
         List<T> res = new ArrayList<>();
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         for (T each : cache.values()) {
-            JSON parse = JSONUtil.parse(each);
-            String byPath = parse.getByPath(column, String.class);
+            Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
+            String byPath = JsonPathUtil.getStr(map, column);
+            if (byPath == null) {
+                continue;
+            }
             switch (likeType) {
-                case EndWith:
+                case END:
                     if (byPath.endsWith(value)) {
                         res.add(each);
                     }
                     break;
-                case StartWith:
+                case START:
                     if (byPath.startsWith(value)) {
                         res.add(each);
                     }
                     break;
-                case Contains:
+                case CONTAINS:
                     if (byPath.contains(value)) {
                         res.add(each);
                     }
@@ -155,6 +172,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
         Collection<Map.Entry<Object, T>> results = new ArrayList<>();
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         for (WhereCondition condition : whereConditions) {
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new RuntimeException("Query value is not serializable");
@@ -162,13 +180,13 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
             Collection<Map.Entry<Object, T>> collection = new ArrayList<>();
             Set<Map.Entry<Object, T>> values = cache.entrySet();
             for (Map.Entry<Object, T> next : values) {
-                JSON parse = JSONUtil.parse(next.getValue());
-                Object byPath = parse.getByPath(condition.getColumn());
+                Map<String, Object> map = GSON.fromJson(GSON.toJson(next.getValue()), mapType);
+                Object byPath = JsonPathUtil.getByPath(map, condition.getColumn());
                 if (byPath == null) {
                     continue;
                 }
-                String data = JSONObject.toJSONString(byPath);
-                String value = JSONObject.toJSONString(condition.getValue());
+                String data = GSON.toJson(byPath);
+                String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(next);
             }
             if (results.size() == 0) {
@@ -193,9 +211,10 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
             throw new RuntimeException("Query value is not serializable");
         }
         T obj = cache.get(id);
-        JSON parse = JSONUtil.parse(obj);
-        parse.putByPath(column, value);
-        T newObj = parse.toBean(type);
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+        Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
+        JsonPathUtil.putByPath(map, column, value);
+        T newObj = GSON.fromJson(GSON.toJson(map), type);
         cache.put(id, newObj);
     }
 
@@ -206,7 +225,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
         if (old == null) {
             old = cache.get(id.toString());
         }
-        BeanUtil.copyProperties(obj, old, "id");
+        BeanCopyUtil.copyProperties(obj, old, "id");
         cache.put(old.getId(), old);
     }
 
@@ -215,10 +234,10 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
         cache.forEach((key, value) -> {
             try {
                 File file = new File(storeLocation + File.separator + key + ".json");
-                FileUtil.touch(file);
-                FileWriter writer = new FileWriter(file);
-                writer.write(com.alibaba.fastjson.JSON.toJSONString(value));
-                writer.close();
+                FileUtils.touch(file);
+                try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
+                    writer.write(GSON.toJson(value));
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -234,7 +253,7 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
         }
         List<File> rubbishBin = new ArrayList<>();
         for (File file : files) {
-            String id = FileNameUtil.mainName(file);
+            String id = FileUtils.mainName(file);
             boolean recycle = true;
             for (Object key : cache.keySet()) {
                 if (key.toString().equals(id)) {
@@ -246,38 +265,126 @@ public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements Dat
             }
         }
         for (File file : rubbishBin) {
-            FileUtil.del(file);
+            FileUtils.del(file);
+        }
+    }
+
+    // ===== Transaction support (snapshot-based) =====
+
+    @Override
+    public synchronized <R> R transaction(Callable<R> action) throws Exception {
+        // Deep copy: serialize/deserialize to break references
+        // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
+        Map<Object, T> snapshot = new HashMap<>();
+        for (Map.Entry<Object, T> entry : cache.entrySet()) {
+            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
+        }
+        try {
+            return action.call();
+        } catch (Exception e) {
+            // Rollback: restore cache from deep copy
+            cache.clear();
+            cache.putAll(snapshot);
+            throw e;
+        }
+    }
+
+    @Override
+    public synchronized void transaction(Runnable action) {
+        try {
+            transaction((Callable<Void>) () -> {
+                action.run();
+                return null;
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Transaction failed", e);
+        }
+    }
+
+    @Override
+    public synchronized void insertAll(List<T> entities) {
+        transaction(() -> {
+            for (T entity : entities) {
+                insert(entity);
+            }
+        });
+    }
+
+    @Override
+    public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
+        try {
+            transaction((Callable<Void>) () -> {
+                for (T entity : entities) {
+                    update(entity);
+                }
+                return null;
+            });
+        } catch (IllegalAccessException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Batch update failed", e);
         }
     }
 
     private boolean conditionCal(String data, String value, WhereCondition condition) {
+        // Remove JSON quotes from strings for proper string comparison
+        String cleanData = stripJsonQuotes(data);
+        String cleanValue = stripJsonQuotes(value);
+        
         switch (condition.getComparison()) {
             case EQUAL:
-                return data.equals(value);
+                // First try string equality
+                if (cleanData.equals(cleanValue)) {
+                    return true;
+                }
+                // Then try numeric equality for cases like "20.0" vs "20"
+                try {
+                    double dataNum = Double.parseDouble(cleanData);
+                    double valueNum = Double.parseDouble(cleanValue);
+                    return dataNum == valueNum;
+                } catch (NumberFormatException e) {
+                    return false;
+                }
             case INCLUDE:
-                return data.contains(value);
+                return cleanData.contains(cleanValue);
             case STARTSWITH:
-                return (data.startsWith(value));
+                return cleanData.startsWith(cleanValue);
             case ENDSWITH:
-                return (data.endsWith(value));
+                return cleanData.endsWith(cleanValue);
             case LESS:
                 try {
-                    double dataDig = Double.parseDouble(data);
-                    double valueDig = Double.parseDouble(value);
+                    double dataDig = Double.parseDouble(cleanData);
+                    double valueDig = Double.parseDouble(cleanValue);
                     return (dataDig < valueDig);
                 } catch (Exception e) {
-                    return (data.compareTo(value) < 0);
+                    return (cleanData.compareTo(cleanValue) < 0);
                 }
             case GREATER:
                 try {
-                    double dataDig = Double.parseDouble(data);
-                    double valueDig = Double.parseDouble(value);
+                    double dataDig = Double.parseDouble(cleanData);
+                    double valueDig = Double.parseDouble(cleanValue);
                     return (dataDig > valueDig);
                 } catch (Exception e) {
-                    return (data.compareTo(value) > 0);
+                    return (cleanData.compareTo(cleanValue) > 0);
                 }
             default:
                 return false;
         }
+    }
+    
+    /**
+     * Remove JSON quotes from a serialized string value.
+     * e.g., "\"hello\"" becomes "hello"
+     */
+    private String stripJsonQuotes(String jsonValue) {
+        if (jsonValue != null && jsonValue.length() >= 2 
+            && jsonValue.startsWith("\"") && jsonValue.endsWith("\"")) {
+            return jsonValue.substring(1, jsonValue.length() - 1);
+        }
+        return jsonValue;
     }
 }

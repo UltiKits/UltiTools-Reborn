@@ -1,27 +1,11 @@
 package com.ultikits.ultitools.abstracts;
 
-import cn.hutool.core.comparator.VersionComparator;
-import cn.hutool.core.io.FileUtil;
-import cn.hutool.log.LogFactory;
-
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.entities.Language;
-import com.ultikits.ultitools.interfaces.*;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
-import com.ultikits.ultitools.manager.CommandManager;
-import com.ultikits.ultitools.manager.ConfigManager;
-import com.ultikits.ultitools.manager.ListenerManager;
-import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.DependencyUtils;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.SneakyThrows;
-import org.bukkit.configuration.file.YamlConfiguration;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
@@ -32,6 +16,30 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
+
+import org.bukkit.configuration.file.YamlConfiguration;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.interfaces.Configurable;
+import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.IPlugin;
+import com.ultikits.ultitools.interfaces.Localized;
+import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.utils.DependencyUtils;
+import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
+
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * Abstract class representing a plugin module.
@@ -60,7 +68,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private String resourceFolderPath;
     @Setter
     @Getter
-    private AnnotationConfigApplicationContext context;
+    private SimpleContainer context;
 
 
     /**
@@ -69,47 +77,75 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * UltiToolsPlugin的构造函数。仅用于模块开发。
      */
     protected UltiToolsPlugin() {
-        InputStream inputStream = null;
-        try {
-            inputStream = getInputStream();
-        }catch (IOException e){
-            getLogger().error(e);
-        }
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-        version = pluginConfig.getString("version");
-        pluginName = pluginConfig.getString("name");
+        YamlConfiguration pluginConfig = loadPluginConfiguration();
+        
+        version = pluginConfig.getString("version", "unknown");
+        pluginName = pluginConfig.getString("name", "unknown");
         authors = pluginConfig.getStringList("authors");
         loadAfter = pluginConfig.getStringList("loadAfter");
-        minUltiToolsVersion = pluginConfig.getInt("api-version");
-        mainClass = pluginConfig.getString("main");
-        try{
-            inputStream.close();
-            reader.close();
-        } catch (IOException e) {
-            getLogger().error(e);
-        }
+        minUltiToolsVersion = pluginConfig.getInt("api-version", 0);
+        mainClass = pluginConfig.getString("main", "unknown");
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
-        File file = new File(resourceFolderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
-        if (!file.exists()) {
-            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
-            InputStream in = getResource(lanPath);
-            if (in != null) {
-                String result = new BufferedReader(new InputStreamReader(in))
-                        .lines().collect(Collectors.joining(""));
-                language = new Language(result);
-            } else {
-                language = new Language("{}");
-            }
-        } else {
-            language = new Language(file);
-        }
+        language = initializeLanguage();
         saveResources();
         try{
             initConfig();
         } catch (IOException e) {
             getLogger().error(e);
+        }
+    }
+
+    /**
+     * Initializes the language object
+     * @return Language object
+     */
+    private Language initializeLanguage() {
+        return createLanguageFromPath(resourceFolderPath);
+    }
+
+    /**
+     * Creates a Language object from the given resource folder path
+     * @param folderPath the resource folder path
+     * @return Language object
+     */
+    private Language createLanguageFromPath(String folderPath) {
+        File file = new File(folderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
+        if (!file.exists()) {
+            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
+            InputStream in = getResource(lanPath);
+            if (in != null) {
+                try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(in))) {
+                    String result = bufferedReader.lines().collect(Collectors.joining(""));
+                    return new Language(result);
+                } catch (IOException e) {
+                    getLogger().error("Failed to read language file", e);
+                    return new Language("{}");
+                }
+            } else {
+                return new Language("{}");
+            }
+        } else {
+            return new Language(file);
+        }
+    }
+
+    /**
+     * Loads the plugin configuration from plugin.yml
+     * @return YamlConfiguration object with default values if loading fails
+     */
+    private YamlConfiguration loadPluginConfiguration() {
+        try (InputStream inputStream = getInputStream()) {
+            if (inputStream == null) {
+                getLogger().error("Cannot find plugin.yml in the plugin jar");
+                return new YamlConfiguration();
+            }
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+                return YamlConfiguration.loadConfiguration(reader);
+            }
+        } catch (IOException e) {
+            getLogger().error("Failed to load plugin configuration", e);
+            return new YamlConfiguration();
         }
     }
 
@@ -125,32 +161,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
      * @param mainClass           the main class of the plugin <br> 插件的主类
      */
-    @SneakyThrows
     @Deprecated
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
-        this.pluginName = pluginName;
-        this.version = version;
-        this.authors = authors;
-        this.loadAfter = loadAfter;
-        this.minUltiToolsVersion = minUltiToolsVersion;
-        this.mainClass = mainClass;
-        resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + this.getPluginName();
-        File file = new File(resourceFolderPath + "/lang/" + this.getLanguageCode() + ".json");
-        if (!file.exists()) {
-            String lanPath = "lang/" + this.getLanguageCode() + ".json";
-            InputStream in = getResource(lanPath);
-            if (in != null) {
-                String result = new BufferedReader(new InputStreamReader(in))
-                        .lines().collect(Collectors.joining(""));
-                language = new Language(result);
-            } else {
-                language = new Language("{}");
-            }
-        } else {
-            language = new Language(file);
-        }
-        saveResources();
-        initConfig();
+        this(pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass,
+             UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + pluginName);
     }
 
     /**
@@ -174,20 +188,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.minUltiToolsVersion = minUltiToolsVersion;
         this.mainClass = mainClass;
         this.resourceFolderPath = resourceFolderPath;
-        File file = new File(resourceFolderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
-        if (!file.exists()) {
-            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
-            InputStream in = getResource(lanPath);
-            if (in != null) {
-                String result = new BufferedReader(new InputStreamReader(in))
-                        .lines().collect(Collectors.joining(""));
-                language = new Language(result);
-            } else {
-                language = new Language("{}");
-            }
-        } else {
-            language = new Language(file);
-        }
+        language = createLanguageFromPath(resourceFolderPath);
         saveResources();
         try {
             initConfig();
@@ -226,7 +227,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * @return the version wrapper <br> 版本包装器
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
+    @Deprecated
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
     }
@@ -241,7 +244,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (annotation != null && annotation.config()) {
             for (String packageName : DependencyUtils.getPluginPackages(this)) {
                 UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, UltiTools.getInstance().getUltiToolsClassLoader()
+                        this, packageName, UltiTools.getJavaPluginClassLoader()
                 );
             }
             return;
@@ -256,9 +259,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
         String path = jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1);
-        URL url = new URL("jar:file:" + path + "!/plugin.yml");
-        JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-        return jarConnection.getInputStream();
+        try {
+            URL url = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
+            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
+            return jarConnection.getInputStream();
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("Invalid URL format", e);
+        }
     }
 
     protected final String getConfigFolder() {
@@ -285,42 +292,44 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
-    @SneakyThrows
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
-        JarFile jarFile = new JarFile(
+        try (JarFile jarFile = new JarFile(
                 jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
-        );
-        Enumeration<JarEntry> entries = jarFile.entries();
-        while (entries.hasMoreElements()) {
-            JarEntry jarEntry = entries.nextElement();
-            String fileName = jarEntry.getName();
-            if ((!fileName.startsWith("res") && !fileName.startsWith("lang")
-                    && !fileName.startsWith("config")) || !fileName.contains(".")) {
-                continue;
-            }
-            InputStream inputStream = jarFile.getInputStream(jarEntry);
-            if (inputStream == null) {
-                throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
-            }
-            File outFile = new File(resourceFolderPath, fileName);
-            try {
-                if (outFile.exists()) {
+        )) {
+            Enumeration<JarEntry> entries = jarFile.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry jarEntry = entries.nextElement();
+                String fileName = jarEntry.getName();
+                if ((!fileName.startsWith("res") && !fileName.startsWith("lang")
+                        && !fileName.startsWith("config")) || !fileName.contains(".")) {
                     continue;
                 }
-                FileUtil.touch(outFile);
-                OutputStream out = Files.newOutputStream(outFile.toPath());
-                byte[] buf = new byte[1024];
-                int len;
-                while ((len = inputStream.read(buf)) > 0) {
-                    out.write(buf, 0, len);
+                try (InputStream inputStream = jarFile.getInputStream(jarEntry)) {
+                    if (inputStream == null) {
+                        throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
+                    }
+                    File outFile = new File(resourceFolderPath, fileName);
+                    try {
+                        if (outFile.exists()) {
+                            continue;
+                        }
+                        FileUtils.touch(outFile);
+                        try (OutputStream out = Files.newOutputStream(outFile.toPath())) {
+                            byte[] buf = new byte[1024];
+                            int len;
+                            while ((len = inputStream.read(buf)) > 0) {
+                                out.write(buf, 0, len);
+                            }
+                        }
+                    } catch (IOException ex) {
+                        UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
+                    }
                 }
-                out.close();
-                inputStream.close();
-            } catch (IOException ex) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
             }
+        } catch (IOException e) {
+            getLogger().error("Failed to save resources from jar", e);
         }
     }
 
@@ -369,7 +378,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @return the localized string <br> 本地化后的字符串
      */
     public String i18n(String str) {
-        return this.i18n(UltiTools.getInstance().getConfig().getString("language"), str);
+        return this.getLanguage().getLocalizedText(str);
     }
 
     @Override
@@ -382,7 +391,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @return whether the plugin is newer than the given plugin <br> 插件是否比给定的插件新
      */
     public boolean isNewerVersionThan(UltiToolsPlugin plugin) {
-        return VersionComparator.INSTANCE.compare(this.getVersion(), plugin.getVersion()) > 0;
+        if (plugin == null || plugin.getVersion() == null || this.getVersion() == null) {
+            return false;
+        }
+        return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
     @Override
@@ -400,6 +412,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @return plugin logger <br> 插件日志发送器
      */
     public PluginLogger getLogger() {
-        return new PluginLogger(this.pluginName, LogFactory.get());
+        return new PluginLogger(this.pluginName, UltiTools.getInstance().getLogger());
     }
 }

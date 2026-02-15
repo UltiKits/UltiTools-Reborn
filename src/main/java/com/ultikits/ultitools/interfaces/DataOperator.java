@@ -1,10 +1,11 @@
 package com.ultikits.ultitools.interfaces;
 
-import cn.hutool.db.sql.Condition;
+import java.util.List;
+import java.util.concurrent.Callable;
+
 import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
-
-import java.util.List;
+import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
 /**
  * Data operation interface.
@@ -14,6 +15,10 @@ import java.util.List;
  * @param <T> 数据类型，继承自AbstractDataEntity
  */
 public interface DataOperator<T extends AbstractDataEntity> {
+
+    enum LikeType {
+        START, END, CONTAINS
+    }
 
     /**
      * Check if the data record exists.
@@ -71,10 +76,10 @@ public interface DataOperator<T extends AbstractDataEntity> {
      *
      * @param column   Column name <br> 列名
      * @param value    Query value <br> 查询值
-     * @param likeType Like type <br> 模糊查询类型 <br>{@link Condition.LikeType}
+     * @param likeType Like type <br> 模糊查询类型 <br>{@link LikeType}
      * @return Data record list <br> 数据记录列表
      */
-    List<T> getLike(String column, String value, Condition.LikeType likeType);
+    List<T> getLike(String column, String value, LikeType likeType);
 
     /**
      * Get data record by page.
@@ -135,4 +140,71 @@ public interface DataOperator<T extends AbstractDataEntity> {
      * @throws IllegalAccessException Please refer{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
+
+    /**
+     * Returns a new fluent query builder for this data operator.
+     * <p>
+     * 返回此数据操作器的新流式查询构建器。
+     *
+     * @return a new Query builder
+     */
+    default Query<T> query() {
+        return new QueryImpl<>(this);
+    }
+
+    /**
+     * Execute operations within a transaction. All operations commit together
+     * or roll back on exception. For SQL backends, uses database transactions.
+     * For JSON, uses snapshot-based rollback.
+     * <p>
+     * 在事务中执行操作。所有操作一起提交或在异常时回滚。
+     *
+     * @param action the operations to execute
+     * @param <R> the return type
+     * @return the result of the action
+     * @throws Exception if the action fails
+     */
+    default <R> R transaction(Callable<R> action) throws Exception {
+        return action.call();
+    }
+
+    /**
+     * Execute operations within a transaction (void variant).
+     * <p>
+     * 在事务中执行操作（无返回值）。
+     *
+     * @param action the operations to execute
+     */
+    default void transaction(Runnable action) {
+        action.run();
+    }
+
+    /**
+     * Insert multiple entities atomically. Uses JDBC batch for SQL backends.
+     * <p>
+     * 批量原子插入。SQL后端使用JDBC批处理。
+     *
+     * @param entities the entities to insert
+     */
+    default void insertAll(List<T> entities) {
+        transaction(() -> {
+            for (T entity : entities) {
+                insert(entity);
+            }
+        });
+    }
+
+    /**
+     * Update multiple entities atomically. Uses JDBC batch for SQL backends.
+     * <p>
+     * 批量原子更新。SQL后端使用JDBC批处理。
+     *
+     * @param entities the entities to update
+     * @throws IllegalAccessException if field access fails
+     */
+    default void updateAll(List<T> entities) throws IllegalAccessException {
+        for (T entity : entities) {
+            update(entity);
+        }
+    }
 }

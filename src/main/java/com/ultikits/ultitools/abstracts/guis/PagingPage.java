@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.guis;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Colors;
+import com.ultikits.ultitools.utils.XVersionUtils;
 import mc.obliviate.inventory.Gui;
 import mc.obliviate.inventory.Icon;
 import mc.obliviate.inventory.pagination.PaginationManager;
@@ -21,7 +22,16 @@ import static com.ultikits.ultitools.utils.MessageUtils.warning;
  * It extends the Gui class from mc.obliviate.inventory package.
  * <p>
  * 这个抽象类代表了一个带有分页的GUI页面。它继承了mc.obliviate.inventory包中的Gui类。
+ *
+ * @see com.ultikits.ultitools.abstracts.gui.BasePaginationPage
+ * @deprecated Use {@link com.ultikits.ultitools.abstracts.gui.BasePaginationPage} instead,
+ *             which provides better template method pattern and code organization.
+ *             <p>
+ *             请使用 {@link com.ultikits.ultitools.abstracts.gui.BasePaginationPage}，
+ *             它提供了更好的模板方法模式和代码组织。
+ * @since 6.2.0 deprecated
  */
+@Deprecated(since = "6.2.0", forRemoval = true)
 public abstract class PagingPage extends Gui {
     private final PaginationManager paginationManager = new PaginationManager(this);
 
@@ -115,13 +125,13 @@ public abstract class PagingPage extends Gui {
      */
     private void updateItems() {
         paginationManager.getItems().clear();
-        Icon lastRowBackground = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GRAY));
+        Icon lastRowBackground = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.GRAY));
         lastRowBackground.setName(" ");
         this.fillRow(lastRowBackground, getSize() / 9 - 1);
         for (Icon icon : setAllItems()) {
             paginationManager.addItem(icon);
         }
-        Icon next = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
+        Icon next = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.GREEN));
         next.setName(info(UltiTools.getInstance().i18n("下一页")));
         if (this.paginationManager.isLastPage()) {
             next.setLore(warning(UltiTools.getInstance().i18n("已经是最后一页了")));
@@ -133,7 +143,7 @@ public abstract class PagingPage extends Gui {
             this.paginationManager.goNextPage();
             updateItems();
         });
-        Icon last = new Icon(UltiTools.getInstance().getVersionWrapper().getColoredPlaneGlass(Colors.GREEN));
+        Icon last = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.GREEN));
         last.setName(info(UltiTools.getInstance().i18n("上一页")));
         if (this.paginationManager.isFirstPage()) {
             last.setLore(warning(UltiTools.getInstance().i18n("已经是第一页了")));

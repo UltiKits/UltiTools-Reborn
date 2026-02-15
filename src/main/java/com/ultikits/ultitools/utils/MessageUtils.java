@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.utils;
 
-import com.ultikits.ultitools.UltiTools;
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
-import net.kyori.adventure.text.TextComponent;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+
+import com.ultikits.ultitools.UltiTools;
+
+import net.kyori.adventure.platform.bukkit.BukkitAudiences;
+import net.kyori.adventure.text.TextComponent;
 
 /**
  * Message utils.
@@ -60,6 +62,9 @@ public class MessageUtils {
      * @param textComponent the text component <br> 文本组件
      */
     public static void sendMessage(Player player, TextComponent textComponent) {
+        System.out.println("DEBUG: Real MessageUtils.sendMessage called!");
+        System.out.println("DEBUG: Arg0 class: " + player.getClass().getName());
+        System.out.println("DEBUG: Arg1 class: " + textComponent.getClass().getName());
         BukkitAudiences audiences = BukkitAudiences.create(UltiTools.getInstance());
         audiences.player(player).sendMessage(textComponent);
         audiences.close();

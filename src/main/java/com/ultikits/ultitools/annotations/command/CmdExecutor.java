@@ -1,6 +1,6 @@
 package com.ultikits.ultitools.annotations.command;
 
-import org.springframework.stereotype.Component;
+import com.ultikits.ultitools.annotations.Component;
 
 import java.lang.annotation.*;
 
