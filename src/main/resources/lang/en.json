@@ -67,5 +67,18 @@
   "参数错误": "§cArgument Error: §7/%s %s§c§n%s§r §c<--§o[Error Here]",
   "缺少参数": "§cMissing Parameters: §7/%s %s§c§n%s§r §c<--§o[Missing Part]",
   "指令正确用法": "§eCorrect Usage: §7/%s %s",
-  "需要权限": "§7Executing this command requires §f%s §7permission"
+  "需要权限": "§7Executing this command requires §f%s §7permission",
+  "UltiTools-API有新版本 %s 可用（当前：%s）": "UltiTools-API update available: %s (current: %s)",
+  "模块更新可用（%d个）：": "Module updates available (%d):",
+  "所有插件已是最新版本！": "All plugins are up to date!",
+  "可用更新列表：": "Available updates:",
+  "没有可用的更新。": "No updates available.",
+  "正在更新 %s...": "Updating %s...",
+  "更新成功！请重启服务器以应用更新。": "Update successful! Please restart the server to apply.",
+  "更新失败！": "Update failed!",
+  "全部更新完成！%d个成功，%d个失败。请重启服务器。": "All updates complete! %d succeeded, %d failed. Please restart.",
+  "/upm check - 查看可用更新": "/upm check - View available updates",
+  "/upm update [插件] - 更新插件": "/upm update [plugin] - Update a plugin",
+  "/upm update all - 更新所有插件": "/upm update all - Update all plugins",
+  "有 %d 个更新可用！使用 /upm check 查看详情。": "%d update(s) available! Use /upm check for details."
 }
