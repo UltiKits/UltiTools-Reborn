@@ -13,6 +13,9 @@ import java.util.jar.JarFile;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -44,6 +47,8 @@ public class PluginManager {
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
+    @Getter
+    private PlayerCacheManager playerCacheManager;
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -55,6 +60,8 @@ public class PluginManager {
     public void init(ClassLoader classLoader) throws IOException {
         this.classLoader = classLoader;
         this.taskManager = new TaskManager(UltiTools.getInstance());
+        this.playerCacheManager = new PlayerCacheManager();
+        registerPlayerQuitListener();
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -215,6 +222,12 @@ public class PluginManager {
         if (taskManager != null) {
             taskManager.cancelAll(plugin);
         }
+        // Unregister @PlayerCache beans before context closes
+        if (playerCacheManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                playerCacheManager.unregisterBean(bean);
+            }
+        }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         plugin.getContext().close();
@@ -232,6 +245,22 @@ public class PluginManager {
         }
         pluginList.clear();
         pluginClassList.clear();
+    }
+
+    /**
+     * Register a Bukkit listener for PlayerQuitEvent to clean up @PlayerCache maps.
+     * <br>
+     * 注册 Bukkit 监听器，在玩家退出时清理 @PlayerCache 标注的 Map。
+     */
+    private void registerPlayerQuitListener() {
+        Bukkit.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onPlayerQuit(PlayerQuitEvent event) {
+                if (playerCacheManager != null) {
+                    playerCacheManager.onPlayerQuit(event.getPlayer().getUniqueId());
+                }
+            }
+        }, Bukkit.getPluginManager().getPlugin("UltiTools"));
     }
 
     /**
@@ -404,6 +433,12 @@ public class PluginManager {
                 if (taskManager != null && plugin.getContext() != null) {
                     for (Object bean : plugin.getContext().getSingletonValues()) {
                         taskManager.registerScheduledMethods(plugin, bean);
+                    }
+                }
+                // Register @PlayerCache fields from all beans
+                if (playerCacheManager != null && plugin.getContext() != null) {
+                    for (Object bean : plugin.getContext().getSingletonValues()) {
+                        playerCacheManager.registerBean(bean);
                     }
                 }
                 Bukkit.getLogger().log(
