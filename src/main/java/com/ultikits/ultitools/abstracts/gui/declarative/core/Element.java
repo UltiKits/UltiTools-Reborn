@@ -3,9 +3,7 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Element 是 Widget 的实例化表示，负责管理 Widget 的生命周期和更新。
@@ -194,7 +192,7 @@ public abstract class Element {
      */
     @NotNull
     public List<Element> getChildren() {
-        return _children != null ? _children : List.of();
+        return _children != null ? _children : Collections.emptyList();
     }
 
     /**
