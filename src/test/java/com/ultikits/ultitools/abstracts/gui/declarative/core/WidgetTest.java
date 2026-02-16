@@ -90,6 +90,7 @@ public class WidgetTest {
 
         @Override
         public void performRebuild() {
+            // super.performRebuild();
         }
     }
 
@@ -100,6 +101,7 @@ public class WidgetTest {
 
         @Override
         public void performRebuild() {
+            // super.performRebuild();
         }
     }
 }

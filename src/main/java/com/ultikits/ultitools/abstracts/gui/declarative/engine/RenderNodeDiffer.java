@@ -4,6 +4,8 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.DiffResult;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
 import mc.obliviate.inventory.Icon;
+import net.kyori.adventure.text.Component;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -14,18 +16,18 @@ import java.util.*;
  * <p>
  * 算法基于 key 的比较：
  * <ul>
- *   <li>如果旧节点和新节点有相同的 key，则认为是同一个节点（可能更新）</li>
- *   <li>如果没有 key，则使用 slotIndex 进行比较</li>
- *   <li>新增、删除、更新的节点都会被记录在 DiffResult 中</li>
+ * <li>如果旧节点和新节点有相同的 key，则认为是同一个节点（可能更新）</li>
+ * <li>如果没有 key，则使用 slotIndex 进行比较</li>
+ * <li>新增、删除、更新的节点都会被记录在 DiffResult 中</li>
  * </ul>
  *
  * <h3>算法步骤：</h3>
  * <ol>
- *   <li>构建旧节点的 key → node 映射</li>
- *   <li>遍历新节点列表，匹配旧节点</li>
- *   <li>记录匹配的节点（更新或移动）</li>
- *   <li>记录未匹配的节点（新增）</li>
- *   <li>记录未匹配的旧节点（删除）</li>
+ * <li>构建旧节点的 key → node 映射</li>
+ * <li>遍历新节点列表，匹配旧节点</li>
+ * <li>记录匹配的节点（更新或移动）</li>
+ * <li>记录未匹配的节点（新增）</li>
+ * <li>记录未匹配的旧节点（删除）</li>
  * </ol>
  *
  * @author UltiTools Team
@@ -44,61 +46,33 @@ public class RenderNodeDiffer {
     @NotNull
     public DiffResult diff(@NotNull List<RenderNode> oldNodes, @NotNull List<RenderNode> newNodes) {
         DiffResult.Builder builder = DiffResult.builder();
-
-        // 快速路径：都为空
-        if (oldNodes.isEmpty() && newNodes.isEmpty()) {
-            return builder.build();
-        }
-
-        // 快速路径：旧列表为空，全是新增
-        if (oldNodes.isEmpty()) {
-            for (RenderNode newNode : newNodes) {
-                if (newNode.getIcon() != null) {
-                    builder.addAdded(newNode);
-                }
-            }
-            return builder.build();
-        }
-
-        // 快速路径：新列表为空，全是删除
-        if (newNodes.isEmpty()) {
-            for (RenderNode oldNode : oldNodes) {
-                if (oldNode.getIcon() != null) {
-                    builder.addRemoved(oldNode);
-                }
-            }
-            return builder.build();
-        }
-
-        // 构建旧节点的 key → node 映射
         Map<NodeKey, RenderNode> oldNodeMap = new HashMap<>();
-        for (RenderNode oldNode : oldNodes) {
-            NodeKey key = NodeKey.from(oldNode);
-            oldNodeMap.put(key, oldNode);
+
+        // 构建旧节点的映射
+        for (RenderNode node : oldNodes) {
+            oldNodeMap.put(NodeKey.from(node), node);
         }
 
-        // 跟踪已使用的旧节点
-        Set<RenderNode> usedOldNodes = new HashSet<>();
+        // 跟踪已匹配的旧节点
+        Set<RenderNode> matchedOldNodes = new HashSet<>();
 
-        // 遍历新节点，匹配旧节点
+        // 遍历新节点
         for (RenderNode newNode : newNodes) {
-            NodeKey key = NodeKey.from(newNode);
-            RenderNode oldNode = oldNodeMap.get(key);
+            RenderNode oldNode = oldNodeMap.get(NodeKey.from(newNode));
 
             if (oldNode == null) {
-                // 没有找到匹配的旧节点，这是新增
+                // 新增节点
                 if (newNode.getIcon() != null) {
                     builder.addAdded(newNode);
                 }
             } else {
-                usedOldNodes.add(oldNode);
+                // 匹配到旧节点
+                matchedOldNodes.add(oldNode);
 
-                // 检查是否需要更新
                 if (hasChanged(oldNode, newNode)) {
                     builder.addUpdated(oldNode, newNode);
                 }
 
-                // 检查是否移动了位置
                 if (oldNode.getSlotIndex() != newNode.getSlotIndex()) {
                     builder.addMoved(newNode, oldNode.getSlotIndex(), newNode.getSlotIndex());
                 }
@@ -107,7 +81,7 @@ public class RenderNodeDiffer {
 
         // 找出被删除的节点
         for (RenderNode oldNode : oldNodes) {
-            if (!usedOldNodes.contains(oldNode) && oldNode.getIcon() != null) {
+            if (!matchedOldNodes.contains(oldNode) && oldNode.getIcon() != null) {
                 builder.addRemoved(oldNode);
             }
         }
@@ -139,9 +113,6 @@ public class RenderNodeDiffer {
             return true;
         }
 
-        // 比较点击处理器（通常不需要比较，因为引用会变化）
-        // 这里可以根据需要添加更多比较逻辑
-
         return false;
     }
 
@@ -161,10 +132,11 @@ public class RenderNodeDiffer {
         }
 
         // 比较显示名称
-        String aName = a.getItem().getItemMeta() != null && a.getItem().getItemMeta().hasDisplayName()
-                ? a.getItem().getItemMeta().getDisplayName() : null;
-        String bName = b.getItem().getItemMeta() != null && b.getItem().getItemMeta().hasDisplayName()
-                ? b.getItem().getItemMeta().getDisplayName() : null;
+        ItemMeta aMeta = a.getItem().getItemMeta();
+        Component aName = (aMeta != null && aMeta.hasDisplayName()) ? aMeta.displayName() : null;
+
+        ItemMeta bMeta = b.getItem().getItemMeta();
+        Component bName = (bMeta != null && bMeta.hasDisplayName()) ? bMeta.displayName() : null;
 
         return Objects.equals(aName, bName);
     }
@@ -189,8 +161,10 @@ public class RenderNodeDiffer {
 
         @Override
         public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof NodeKey)) return false;
+            if (this == o)
+                return true;
+            if (!(o instanceof NodeKey))
+                return false;
             NodeKey other = (NodeKey) o;
             // 优先使用 slotKey，如果没有则使用 slotIndex
             if (slotKey != null && other.slotKey != null) {
