@@ -97,23 +97,14 @@ public class RenderNodeDiffer {
      * @return 如果有变化返回 true
      */
     private boolean hasChanged(@NotNull RenderNode oldNode, @NotNull RenderNode newNode) {
-        // 比较 Icon
         Icon oldIcon = oldNode.getIcon();
         Icon newIcon = newNode.getIcon();
 
-        if (oldIcon == null && newIcon == null) {
-            return false;
-        }
         if (oldIcon == null || newIcon == null) {
-            return true;
+            return oldIcon != newIcon;
         }
 
-        // 比较 Icon 的核心属性
-        if (!iconsEqual(oldIcon, newIcon)) {
-            return true;
-        }
-
-        return false;
+        return !iconsEqual(oldIcon, newIcon);
     }
 
     /**
