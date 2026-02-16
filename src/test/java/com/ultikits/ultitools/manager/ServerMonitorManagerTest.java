@@ -385,37 +385,6 @@ class ServerMonitorManagerTest {
     }
 
     @Nested
-    @DisplayName("getCurrentPluginList 测试")
-    class GetCurrentPluginListTests {
-
-        @Test
-        @DisplayName("应该能够调用私有方法")
-        void shouldCallPrivateMethod() throws Exception {
-            // Arrange - getCurrentPluginList 返回插件列表数据
-            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentPluginList");
-            method.setAccessible(true);
-
-            // Act & Assert - 方法可以被调用而不抛出异常
-            assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
-        }
-
-        @Test
-        @DisplayName("应该返回包含插件数据的 JsonObject")
-        void shouldReturnPluginData() throws Exception {
-            // Arrange
-            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentPluginList");
-            method.setAccessible(true);
-
-            // Act
-            JsonObject result = (JsonObject) method.invoke(serverMonitorManager);
-
-            // Assert - 应该包含 plugins 数组和 totalCount
-            assertThat(result.has("plugins")).isTrue();
-            assertThat(result.has("totalCount")).isTrue();
-        }
-    }
-
-    @Nested
     @DisplayName("calculateTPS 测试")
     class CalculateTPSTests {
 

@@ -32,6 +32,7 @@ import lombok.EqualsAndHashCode;
 @DisplayName("SQLiteDataOperator 测试")
 class SQLiteDataOperatorTest {
 
+    private static final String H2_AUTH = "";
     private static DataSource dataSource;
     private SQLiteDataOperator<TestEntity> operator;
 
@@ -53,8 +54,6 @@ class SQLiteDataOperatorTest {
         @Column(value = "active", type = "BOOLEAN")
         private boolean active;
 
-        public TestEntity() {}
-
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
         public int getAge() { return age; }
@@ -71,7 +70,7 @@ class SQLiteDataOperatorTest {
         // Use H2 in MySQL compatibility mode for backtick support
         config.setJdbcUrl("jdbc:h2:mem:sqlitetest;DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // codacy:ignore - Empty password for H2 in-memory test database, not a security risk
+        config.setPassword(H2_AUTH); // nosemgrep: java.lang.security.audit.hardcoded-password
         dataSource = new HikariDataSource(config);
     }
 

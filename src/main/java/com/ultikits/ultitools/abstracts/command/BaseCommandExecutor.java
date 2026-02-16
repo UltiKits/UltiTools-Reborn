@@ -444,54 +444,63 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         if (parameters.length == 0) {
             return new Object[0];
         }
-        
+
         List<Object> paramList = new ArrayList<>();
-        
+
         for (Parameter parameter : parameters) {
-            Class<?> paramType = parameter.getType();
-            
-            // Handle @CmdSender annotation
-            if (parameter.isAnnotationPresent(CmdSender.class)) {
-                if (paramType.equals(Player.class) && context.isPlayer()) {
-                    paramList.add(context.getPlayer());
-                } else if (paramType.equals(CommandSender.class)) {
-                    paramList.add(context.getSender());
-                } else {
-                    paramList.add(null);
-                }
-                continue;
+            Object resolved = resolveParameter(context, parameter);
+            if (resolved == PARSE_FAILED_SENTINEL) {
+                return null;
             }
-            
-            // Handle sender injection without annotation
-            if ((paramType.equals(Player.class) || paramType.equals(CommandSender.class)) 
-                    && !parameter.isAnnotationPresent(CmdParam.class)) {
-                if (paramType.equals(Player.class) && context.isPlayer()) {
-                    paramList.add(context.getPlayer());
-                } else if (paramType.equals(CommandSender.class)) {
-                    paramList.add(context.getSender());
-                } else {
-                    paramList.add(null);
-                }
-                continue;
-            }
-            
-            // Handle @CmdParam annotation
-            if (parameter.isAnnotationPresent(CmdParam.class)) {
-                CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
-                String[] values = context.getParam(cmdParam.value());
-                
-                try {
-                    paramList.add(parseParameterValue(values, paramType));
-                } catch (TypeParseException e) {
-                    context.getSender().sendMessage(ChatColor.RED + e.getMessage());
-                    return null;
-                }
-            } else {
-                paramList.add(null);
-            }
+            paramList.add(resolved);
         }
-        
+
         return paramList.toArray();
+    }
+
+    private static final Object PARSE_FAILED_SENTINEL = new Object();
+
+    private Object resolveParameter(CommandContext context, Parameter parameter) {
+        Class<?> paramType = parameter.getType();
+
+        if (parameter.isAnnotationPresent(CmdSender.class)) {
+            return resolveSender(context, paramType);
+        }
+
+        if (isSenderType(paramType) && !parameter.isAnnotationPresent(CmdParam.class)) {
+            return resolveSender(context, paramType);
+        }
+
+        if (parameter.isAnnotationPresent(CmdParam.class)) {
+            return resolveCmdParam(context, parameter, paramType);
+        }
+
+        return null;
+    }
+
+    private static boolean isSenderType(Class<?> paramType) {
+        return paramType.equals(Player.class) || paramType.equals(CommandSender.class);
+    }
+
+    private Object resolveSender(CommandContext context, Class<?> paramType) {
+        if (paramType.equals(Player.class) && context.isPlayer()) {
+            return context.getPlayer();
+        }
+        if (paramType.equals(CommandSender.class)) {
+            return context.getSender();
+        }
+        return null;
+    }
+
+    private Object resolveCmdParam(CommandContext context, Parameter parameter, Class<?> paramType) {
+        CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+        String[] values = context.getParam(cmdParam.value());
+        try {
+            return parseParameterValue(values, paramType);
+        } catch (TypeParseException e) {
+            context.getSender().sendMessage(ChatColor.RED + e.getMessage());
+            return PARSE_FAILED_SENTINEL;
+        }
     }
     
     /**

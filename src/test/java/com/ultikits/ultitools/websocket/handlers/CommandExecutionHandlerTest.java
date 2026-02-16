@@ -138,7 +138,7 @@ class CommandExecutionHandlerTest {
 
         @Test
         @DisplayName("CommandManager 为 null 时不应抛出异常")
-        void shouldNotThrowWhenManagerIsNull() {
+        void shouldNotThrowWhenManagerIsNull() { // NOPMD - uses Mockito verify()
             CommandExecutionHandler nullHandler = new CommandExecutionHandler(null);
             JsonObject message = new JsonObject();
             message.addProperty("command", "test");

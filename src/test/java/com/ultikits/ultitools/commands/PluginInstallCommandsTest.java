@@ -12,7 +12,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -27,7 +29,9 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 import be.seeseemelk.mockbukkit.MockBukkit;
@@ -578,14 +582,215 @@ class PluginInstallCommandsTest {
     @DisplayName("Should handle command without OP permission")
     void testNoOpPermission() {
         if (executor == null) return;
-        
+
         player.setOp(false);
         player.addAttachment(UltiTools.getInstance(), "ultikits.tools.admin", false);
-        
+
         boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"help"});
         server.getScheduler().performOneTick();
-        
+
         assertThat(result).isTrue();
         // Command should still execute, just with limited functionality
+    }
+
+    @Test
+    @DisplayName("Should handle /upm check with no updates")
+    void testCheckNoUpdates() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.hasAnyUpdates()).thenReturn(false);
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        String message = player.nextMessage();
+        assertThat(message).contains("没有可用的更新");
+    }
+
+    @Test
+    @DisplayName("Should handle /upm check with framework update")
+    void testCheckFrameworkUpdate() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.hasAnyUpdates()).thenReturn(true);
+        UpdateInfo fwInfo = new UpdateInfo();
+        fwInfo.setPluginName("UltiTools-API");
+        fwInfo.setCurrentVersion("6.1.0");
+        fwInfo.setLatestVersion("6.2.0");
+        when(mockUpdateManager.getFrameworkUpdate()).thenReturn(fwInfo);
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(new HashMap<>());
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        // Collect all messages
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+        String allMessages = String.join("\n", messages);
+        assertThat(allMessages).contains("6.1.0").contains("6.2.0");
+    }
+
+    @Test
+    @DisplayName("Should handle /upm check with module updates")
+    void testCheckModuleUpdates() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.hasAnyUpdates()).thenReturn(true);
+        when(mockUpdateManager.getFrameworkUpdate()).thenReturn(null);
+        Map<String, UpdateInfo> updates = new HashMap<>();
+        UpdateInfo info = new UpdateInfo();
+        info.setPluginName("TestPlugin");
+        info.setIdentifyString("test-plugin");
+        info.setCurrentVersion("1.0.0");
+        info.setLatestVersion("1.1.0");
+        updates.put("TestPlugin", info);
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(updates);
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"check"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+        String allMessages = String.join("\n", messages);
+        assertThat(allMessages).contains("TestPlugin").contains("1.0.0").contains("1.1.0");
+    }
+
+    @Test
+    @DisplayName("Should handle /upm update with plugin name")
+    void testUpdatePlugin() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        Map<String, UpdateInfo> updates = new HashMap<>();
+        UpdateInfo info = new UpdateInfo();
+        info.setPluginName("TestPlugin");
+        info.setIdentifyString("test-plugin");
+        info.setCurrentVersion("1.0.0");
+        info.setLatestVersion("1.1.0");
+        updates.put("TestPlugin", info);
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(updates);
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        try {
+            mockedUtils.when(() -> PluginInstallUtils.updatePlugin("test-plugin"))
+                .thenReturn(true);
+        } catch (Exception e) {
+            return;
+        }
+
+        boolean result = executor.onCommand(player, mockCommand, "upm",
+            new String[]{"update", "TestPlugin"});
+
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            // ignore
+        }
+        server.getScheduler().performTicks(20);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should handle /upm update with nonexistent plugin")
+    void testUpdateNonexistentPlugin() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(new HashMap<>());
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        boolean result = executor.onCommand(player, mockCommand, "upm",
+            new String[]{"update", "NonExistent"});
+
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            // ignore
+        }
+        server.getScheduler().performTicks(20);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should handle /upm update all")
+    void testUpdateAll() {
+        if (executor == null) return;
+
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        Map<String, UpdateInfo> updates = new HashMap<>();
+        UpdateInfo info1 = new UpdateInfo();
+        info1.setPluginName("Plugin1");
+        info1.setIdentifyString("plugin-1");
+        info1.setCurrentVersion("1.0.0");
+        info1.setLatestVersion("1.1.0");
+        updates.put("Plugin1", info1);
+        UpdateInfo info2 = new UpdateInfo();
+        info2.setPluginName("Plugin2");
+        info2.setIdentifyString("plugin-2");
+        info2.setCurrentVersion("2.0.0");
+        info2.setLatestVersion("2.1.0");
+        updates.put("Plugin2", info2);
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(updates);
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+
+        try {
+            mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-1"))
+                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-2"))
+                .thenReturn(true);
+        } catch (Exception e) {
+            return;
+        }
+
+        boolean result = executor.onCommand(player, mockCommand, "upm",
+            new String[]{"update", "all"});
+
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            // ignore
+        }
+        server.getScheduler().performTicks(20);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should show check and update in help")
+    void testHelpContainsCheckAndUpdate() {
+        if (executor == null) return;
+
+        boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"help"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+
+        String allMessages = String.join("\n", messages);
+        assertThat(allMessages)
+            .contains("check")
+            .contains("update");
     }
 }

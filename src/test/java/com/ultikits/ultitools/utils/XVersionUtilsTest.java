@@ -196,14 +196,14 @@ class XVersionUtilsTest {
 
         @Test
         @DisplayName("应该返回声音对象")
-        void shouldReturnSoundObject() {
+        void shouldReturnSoundObject() { // NOPMD - uses Mockito verify()
             try (MockedStatic<XSound> mockedXSound = mockStatic(XSound.class)) {
                 XSound mockXSound = mock(XSound.class);
                 mockedXSound.when(() -> XSound.matchXSound(anyString()))
                     .thenReturn(Optional.of(mockXSound));
                 when(mockXSound.parseSound()).thenReturn(org.bukkit.Sound.ENTITY_PLAYER_LEVELUP);
                 
-                org.bukkit.Sound result = XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
+                XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
                 
                 // 结果可能为 null 或 Sound，取决于 XSound 的行为
             }
@@ -217,7 +217,7 @@ class XVersionUtilsTest {
                     .thenReturn(Optional.empty());
                 
                 org.bukkit.Sound result = XVersionUtils.getSound(Sounds.BLOCK_CHEST_OPEN);
-                
+
                 assertThat(result).isNull();
             }
         }

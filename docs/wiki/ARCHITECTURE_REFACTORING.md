@@ -31,6 +31,7 @@
 ### 命令系统 (`abstracts.command`)
 
 #### 设计模式
+
 - **责任链模式 (Chain of Responsibility)** - 命令验证管道
 - **策略模式 (Strategy)** - 类型解析器
 - **上下文对象模式 (Context Object)** - 命令执行上下文
@@ -489,6 +490,7 @@ public interface TransactionManager {
 ```
 
 特性：
+
 - 基于 ThreadLocal 的线程安全实现
 - 支持嵌套事务（depth 计数）
 - 支持事务隔离级别设置

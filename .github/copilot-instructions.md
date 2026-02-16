@@ -115,6 +115,7 @@ List<MyEntity> all = op.getAll(WhereCondition.builder().column("name").value("te
 ## WebSocket Integration (UltiPanel)
 
 Managers in `manager/` handle WebSocket message types:
+
 - `ServerMonitorManager` - Server status, TPS, memory
 - `CommandExecutionManager` - Remote command execution
 - `FileOperationManager` - Remote file operations

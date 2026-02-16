@@ -13,6 +13,9 @@ import java.util.jar.JarFile;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -44,6 +47,8 @@ public class PluginManager {
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
+    @Getter
+    private PlayerCacheManager playerCacheManager;
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -55,6 +60,8 @@ public class PluginManager {
     public void init(ClassLoader classLoader) throws IOException {
         this.classLoader = classLoader;
         this.taskManager = new TaskManager(UltiTools.getInstance());
+        this.playerCacheManager = new PlayerCacheManager();
+        registerPlayerQuitListener();
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -215,6 +222,12 @@ public class PluginManager {
         if (taskManager != null) {
             taskManager.cancelAll(plugin);
         }
+        // Unregister @PlayerCache beans before context closes
+        if (playerCacheManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                playerCacheManager.unregisterBean(bean);
+            }
+        }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         plugin.getContext().close();
@@ -232,6 +245,22 @@ public class PluginManager {
         }
         pluginList.clear();
         pluginClassList.clear();
+    }
+
+    /**
+     * Register a Bukkit listener for PlayerQuitEvent to clean up @PlayerCache maps.
+     * <br>
+     * 注册 Bukkit 监听器，在玩家退出时清理 @PlayerCache 标注的 Map。
+     */
+    private void registerPlayerQuitListener() {
+        Bukkit.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onPlayerQuit(PlayerQuitEvent event) {
+                if (playerCacheManager != null) {
+                    playerCacheManager.onPlayerQuit(event.getPlayer().getUniqueId());
+                }
+            }
+        }, Bukkit.getPluginManager().getPlugin("UltiTools"));
     }
 
     /**
@@ -260,7 +289,7 @@ public class PluginManager {
      * @param pluginJar   Plugin jar file <br> 模块jar文件
      * @return Plugin main class <br> 模块主类
      */
-    private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) {
+    private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
         // 验证jar文件安全性
         if (!validateJarFile(pluginJar)) {
             Bukkit.getLogger().log(Level.SEVERE, 
@@ -351,11 +380,7 @@ public class PluginManager {
             }
             
             // 使用 SecurityPolicy 验证文件结构
-            if (!SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount)) {
-                return false;
-            }
-            
-            return true;
+            return SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount);
         } catch (IOException e) {
             Bukkit.getLogger().log(Level.WARNING, 
                 "[UltiTools-API] Failed to validate jar file: " + jarFile.getName(), e);
@@ -373,49 +398,51 @@ public class PluginManager {
      * @return Register result <br> 注册结果
      */
     private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
-        for (UltiToolsPlugin plugin1 : pluginList) {
-            if (!plugin1.getMainClass().equals(plugin.getMainClass())) {
+        if (hasNewerVersionLoaded(plugin)) {
+            return false;
+        }
+        if (!isUltiToolsVersionCompatible(plugin)) {
+            return false;
+        }
+        return attemptPluginRegistration(plugin);
+    }
+
+    private boolean hasNewerVersionLoaded(UltiToolsPlugin plugin) {
+        for (UltiToolsPlugin existing : pluginList) {
+            if (!existing.getMainClass().equals(plugin.getMainClass())) {
                 continue;
             }
-            if (plugin1.isNewerVersionThan(plugin)) {
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName())
-                );
+            if (existing.isNewerVersionThan(plugin)) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
                 plugin.getContext().close();
-                return false;
-            } else if (plugin.isNewerVersionThan(plugin1)) {
-                plugin1.unregisterSelf();
+                return true;
+            } else if (plugin.isNewerVersionThan(existing)) {
+                existing.unregisterSelf();
             }
         }
+        return false;
+    }
+
+    private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName())
-            );
+            Bukkit.getLogger().log(Level.WARNING,
+                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
             plugin.getContext().close();
             return false;
         }
+        return true;
+    }
+
+    private boolean attemptPluginRegistration(UltiToolsPlugin plugin) {
         try {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
-                pluginList.add(plugin);
-                // Register @Scheduled methods from all beans
-                if (taskManager != null && plugin.getContext() != null) {
-                    for (Object bean : plugin.getContext().getSingletonValues()) {
-                        taskManager.registerScheduledMethods(plugin, bean);
-                    }
-                }
-                Bukkit.getLogger().log(
-                        Level.INFO,
-                        String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion())
-                );
+                onPluginRegistered(plugin);
             } else {
                 plugin.getContext().close();
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion())
-                );
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
@@ -423,6 +450,22 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
             return false;
         }
+    }
+
+    private void onPluginRegistered(UltiToolsPlugin plugin) {
+        pluginList.add(plugin);
+        if (taskManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                taskManager.registerScheduledMethods(plugin, bean);
+            }
+        }
+        if (playerCacheManager != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                playerCacheManager.registerBean(bean);
+            }
+        }
+        Bukkit.getLogger().log(Level.INFO,
+                String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
     }
 
     /**
@@ -500,7 +543,7 @@ public class PluginManager {
             plugin.setContext(pluginContext);
             return plugin;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to initialize plugin: " + pluginClass.getName(), e);
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
         }
     }
     
@@ -599,7 +642,7 @@ public class PluginManager {
         try {
             java.lang.reflect.Field instanceField = pluginClass.getDeclaredField("instance");
             if (java.lang.reflect.Modifier.isStatic(instanceField.getModifiers())) {
-                instanceField.setAccessible(true);
+                instanceField.setAccessible(true); // NOPMD - required for plugin instance injection
                 instanceField.set(null, plugin);
             }
         } catch (NoSuchFieldException ignored) {

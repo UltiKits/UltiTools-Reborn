@@ -18,6 +18,8 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 
@@ -208,6 +210,76 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         }
     }
 
+    @CmdMapping(format = "check")
+    public void checkUpdates(@CmdSender CommandSender sender) {
+        UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
+        if (updateManager == null || !updateManager.hasAnyUpdates()) {
+            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            return;
+        }
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("可用更新列表："));
+        UpdateInfo fwUpdate = updateManager.getFrameworkUpdate();
+        if (fwUpdate != null) {
+            sender.sendMessage(ChatColor.YELLOW + String.format("  UltiTools-API %s → %s",
+                fwUpdate.getCurrentVersion(), fwUpdate.getLatestVersion()));
+            sender.sendMessage(ChatColor.GRAY + "  " + String.format(
+                UltiTools.getInstance().i18n("下载地址：%s"),
+                "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+        }
+        for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
+            sender.sendMessage(ChatColor.YELLOW + String.format("  %s %s → %s",
+                info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
+        }
+    }
+
+    @CmdMapping(format = "update <plugin>")
+    @RunAsync
+    public void updatePlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String pluginName) {
+        if ("all".equalsIgnoreCase(pluginName)) {
+            updateAllPlugins(sender);
+            return;
+        }
+        UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
+        if (updateManager == null) {
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+            return;
+        }
+        UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
+        if (info == null) {
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+            UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
+        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
+            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
+        } else {
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        }
+    }
+
+    private void updateAllPlugins(CommandSender sender) {
+        UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
+        if (updateManager == null || updateManager.getModuleUpdates().isEmpty()) {
+            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            return;
+        }
+        int success = 0;
+        int failed = 0;
+        for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
+            sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
+            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
+                success++;
+            } else {
+                failed++;
+            }
+        }
+        sender.sendMessage(ChatColor.GREEN + String.format(
+            UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
+            success, failed));
+    }
+
     @Override
     protected void handleHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("========|插件安装帮助|========"));
@@ -216,5 +288,8 @@ public class PluginInstallCommands extends AbstractCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm install [插件] [版本] - 安装某版本插件"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm versions [插件] - 查看插件版本列表"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm uninstall [插件] - 删除插件"));
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm check - 查看可用更新"));
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update [插件] - 更新插件"));
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update all - 更新所有插件"));
     }
 }

@@ -20,6 +20,7 @@
 `SimpleContainer` 是 UltiTools 框架的核心组件，提供类似 Spring 的依赖注入功能，但更加轻量和适配 Bukkit 环境。
 
 **核心功能**:
+
 - Bean 注册与管理
 - 自动依赖注入（`@Autowired`）
 - 组件扫描（`@ComponentScan`）
@@ -109,6 +110,7 @@ public class GameService {
 ```
 
 **注入位置**:
+
 - 字段（推荐）
 - 构造函数
 - Setter 方法
@@ -309,6 +311,7 @@ public class ServiceB {
 ```
 
 **解决方案**:
+
 1. 重构代码，消除循环依赖
 2. 使用 Setter 注入而非字段注入
 3. 引入中间服务

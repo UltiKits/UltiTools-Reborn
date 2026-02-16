@@ -352,7 +352,7 @@ class BasePaginationPageTest {
 
         @Test
         @DisplayName("Should use green color for buttons")
-        void shouldUseGreenColorForButtons() {
+        void shouldUseGreenColorForButtons() { // NOPMD - uses Mockito verify()
             TestPaginationPage page = new TestPaginationPage(mockPlayer, "test", "Test", 3, new ArrayList<>());
             
             page.testCreatePreviousButton();

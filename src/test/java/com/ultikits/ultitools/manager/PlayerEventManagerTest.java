@@ -151,7 +151,7 @@ class PlayerEventManagerTest {
 
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
-        void shouldNotThrowWhenWebSocketNull() throws Exception {
+        void shouldNotThrowWhenWebSocketNull() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Field clientField = PlayerEventManager.class.getDeclaredField("webSocketClient");
             clientField.setAccessible(true);

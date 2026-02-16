@@ -431,7 +431,7 @@ class ChatCallbackManagerTest {
         void callbackExceptionShouldStillAllowRemove() throws Exception {
             // Arrange
             Runnable throwingCallback = () -> {
-                throw new RuntimeException("Test exception");
+                throw new IllegalStateException("Test exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
 
@@ -823,7 +823,7 @@ class ChatCallbackManagerTest {
 
         @Test
         @DisplayName("模拟命令执行 - 无效 UUID 字符串应该被忽略")
-        void executeWithInvalidUUIDShouldBeIgnored() throws Exception {
+        void executeWithInvalidUUIDShouldBeIgnored() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             String invalidUUID = "not-a-valid-uuid";
 
@@ -888,7 +888,7 @@ class ChatCallbackManagerTest {
         void executeWithThrowingCallbackShouldCatchException() throws Exception {
             // Arrange
             Runnable throwingCallback = () -> {
-                throw new RuntimeException("Callback exception");
+                throw new IllegalStateException("Callback exception");
             };
             UUID uuid = ChatCallbackManager.registerCallback(throwingCallback);
 

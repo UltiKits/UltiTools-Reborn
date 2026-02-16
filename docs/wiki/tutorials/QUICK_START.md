@@ -599,6 +599,7 @@ plugins/UltiTools/pluginConfig/MyUltiToolsPlugin/data/player_stats/
 ### Q: 依赖注入失败？
 
 检查：
+
 1. 服务类是否添加了 `@Service` 注解
 2. 字段是否添加了 `@Autowired` 注解
 3. 类是否在扫描包路径下
@@ -606,6 +607,7 @@ plugins/UltiTools/pluginConfig/MyUltiToolsPlugin/data/player_stats/
 ### Q: 数据没有保存？
 
 检查：
+
 1. 实体类是否继承 `AbstractDataEntity`
 2. 是否添加了 `@Table` 和 `@Column` 注解
 3. `config.yml` 中的数据源配置

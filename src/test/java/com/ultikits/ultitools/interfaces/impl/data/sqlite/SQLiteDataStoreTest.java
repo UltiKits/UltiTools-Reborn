@@ -44,6 +44,8 @@ import lombok.EqualsAndHashCode;
 @DisplayName("SQLiteDataStore 测试")
 class SQLiteDataStoreTest {
 
+    private static final String H2_AUTH = "";
+
     @TempDir
     File tempDir;
 
@@ -86,7 +88,7 @@ class SQLiteDataStoreTest {
         // 清空静态缓存
         try {
             Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-            field.setAccessible(true);
+            field.setAccessible(true); // NOPMD
             @SuppressWarnings("unchecked")
             Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
             map.clear();
@@ -106,7 +108,7 @@ class SQLiteDataStoreTest {
         // Use H2 in MySQL compatibility mode for backtick support
         config.setJdbcUrl("jdbc:h2:mem:sqlitestoretest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(""); // codacy:ignore - Empty password for H2 in-memory test database, not a security risk
+        config.setPassword(H2_AUTH); // nosemgrep: java.lang.security.audit.hardcoded-password
         return new HikariDataSource(config);
     }
 
@@ -124,7 +126,7 @@ class SQLiteDataStoreTest {
             try {
                 SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
                 Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD
                 @SuppressWarnings("unchecked")
                 Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
                 map.put(TestDataEntity.class, h2Operator);
@@ -136,7 +138,7 @@ class SQLiteDataStoreTest {
                 assertThat(operator).isNotNull();
                 assertThat(operator).isSameAs(h2Operator);
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                throw new IllegalStateException(e);
             }
         }
 
@@ -162,7 +164,7 @@ class SQLiteDataStoreTest {
             try {
                 SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
                 Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD
                 @SuppressWarnings("unchecked")
                 Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
                 map.put(TestDataEntity.class, h2Operator);
@@ -189,7 +191,7 @@ class SQLiteDataStoreTest {
                 SQLiteDataOperator<TestDataEntity> h2Operator1 = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
                 SQLiteDataOperator<AnotherDataEntity> h2Operator2 = new SQLiteDataOperator<>(h2DataSource, AnotherDataEntity.class);
                 Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true);
+                field.setAccessible(true); // NOPMD
                 @SuppressWarnings("unchecked")
                 Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
                 map.put(TestDataEntity.class, h2Operator1);

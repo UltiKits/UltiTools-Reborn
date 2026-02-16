@@ -27,6 +27,7 @@ BUILD SUCCESS
 | `BaseCommandExecutorTest` | 12 | 命令执行器核心逻辑 |
 
 **测试场景:**
+
 - ✅ 默认构造函数创建
 - ✅ 自定义验证链创建
 - ✅ 命令映射扫描
@@ -43,6 +44,7 @@ BUILD SUCCESS
 | `CommandContextTest` | 10 | 上下文不可变性 |
 
 **测试场景:**
+
 - ✅ Builder 模式创建
 - ✅ 玩家发送者检测
 - ✅ 非玩家发送者检测
@@ -58,6 +60,7 @@ BUILD SUCCESS
 | `ValidationChainTest` | 10 | 验证链执行 |
 
 **测试场景:**
+
 - ✅ SenderTypeValidator - PLAYER/CONSOLE/BOTH 类型
 - ✅ PermissionValidator - 权限检查
 - ✅ PermissionValidator - OP 检查
@@ -95,6 +98,7 @@ BUILD SUCCESS
 | `LocationParserTest` | 18 | Location 解析 |
 
 **测试场景:**
+
 - ✅ 返回类型检查
 - ✅ x,y,z 格式解析
 - ✅ 小数坐标解析
@@ -120,6 +124,7 @@ BUILD SUCCESS
 | `WorldParserTest` | 12 | World 解析 |
 
 **测试场景:**
+
 - ✅ 返回类型检查
 - ✅ 有效世界名解析
 - ✅ 无效世界名异常
@@ -140,6 +145,7 @@ BUILD SUCCESS
 | `EnchantmentParserTest` | 12 | Enchantment 解析 |
 
 **测试场景:**
+
 - ✅ 返回类型检查
 - ✅ 精确名称解析
 - ✅ 小写名称解析
@@ -158,6 +164,7 @@ BUILD SUCCESS
 | `GameModeParserTest` | 16 | GameMode 解析 |
 
 **测试场景:**
+
 - ✅ 返回类型检查
 - ✅ SURVIVAL 名称解析（大小写不敏感）
 - ✅ CREATIVE 名称解析
@@ -186,6 +193,7 @@ BUILD SUCCESS
 **测试场景:**
 
 **BaseDataEntity:**
+
 - ✅ UUID ID 创建
 - ✅ Long ID 创建
 - ✅ onCreate 钩子调用
@@ -244,6 +252,7 @@ BUILD SUCCESS
 | `BaseConfirmationPageTest` | 14 | 确认对话框 |
 
 **测试场景:**
+
 - ✅ 正确的页面大小
 - ✅ 取消按钮位置 (column 3)
 - ✅ OK 按钮位置 (column 5)

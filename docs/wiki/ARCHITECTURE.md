@@ -112,6 +112,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 | 三级缓存 | 解决循环依赖问题 |
 
 **作用域支持**:
+
 - `SINGLETON`: 单例模式（默认）
 - `PROTOTYPE`: 原型模式，每次获取创建新实例
 
@@ -192,6 +193,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 | `getPluginList()` | 获取已加载模块列表 |
 
 **加载流程**:
+
 1. 扫描 `plugins/UltiTools/plugins/` 目录
 2. 加载 JAR 中的主类（继承 `UltiToolsPlugin`）
 3. **依赖排序** - 使用 PluginDependencyResolver 进行拓扑排序 (6.2.0 新增)

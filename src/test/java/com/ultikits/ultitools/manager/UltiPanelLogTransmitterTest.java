@@ -519,7 +519,7 @@ class UltiPanelLogTransmitterTest {
 
         @Test
         @DisplayName("应该关闭调度器")
-        void shouldShutdownScheduler() {
+        void shouldShutdownScheduler() { // NOPMD - uses Mockito verify()
             // Act
             logTransmitter.shutdown();
 
@@ -800,7 +800,7 @@ class UltiPanelLogTransmitterTest {
 
         @Test
         @DisplayName("并发发送日志不应该抛出异常")
-        void concurrentSendShouldNotThrow() throws Exception {
+        void concurrentSendShouldNotThrow() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             int threadCount = 10;
@@ -963,7 +963,7 @@ class UltiPanelLogTransmitterTest {
 
         @Test
         @DisplayName("sendBatch 异常时应该安全处理")
-        void shouldHandleSendBatchException() throws Exception {
+        void shouldHandleSendBatchException() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(true);
             logTransmitter.setBatchEnabled(true);

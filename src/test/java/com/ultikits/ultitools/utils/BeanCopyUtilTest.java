@@ -24,6 +24,7 @@ class BeanCopyUtilTest {
         private String ignored;
         @SuppressWarnings("PMD.UnusedPrivateField") // Static field is intentionally unused - tests that static fields are not copied
         private static String staticField = "static";
+        @SuppressWarnings("PMD.UnusedPrivateField") // Final field is intentionally unused - tests that final fields are not copied
         private final String finalField = "final";
 
         public SourceBean() {}
@@ -55,8 +56,6 @@ class BeanCopyUtilTest {
         private static String staticField = "static";
         @SuppressWarnings("PMD.UnusedPrivateField") // Final field is intentionally unused - tests that final fields are not copied
         private final String finalField = "final";
-
-        public TargetBean() {}
 
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
@@ -158,7 +157,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该处理 null 目标对象")
-        void shouldHandleNullTarget() {
+        void shouldHandleNullTarget() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
 
             // Should not throw exception
@@ -362,7 +361,7 @@ class BeanCopyUtilTest {
         @DisplayName("私有构造函数应该抛出 UnsupportedOperationException")
         void privateConstructorShouldThrowException() throws Exception {
             Constructor<BeanCopyUtil> constructor = BeanCopyUtil.class.getDeclaredConstructor();
-            constructor.setAccessible(true);
+            constructor.setAccessible(true); // NOPMD
             
             assertThatThrownBy(constructor::newInstance)
                 .isInstanceOf(InvocationTargetException.class)
@@ -376,7 +375,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该忽略 static 字段")
-        void shouldIgnoreStaticFields() {
+        void shouldIgnoreStaticFields() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
             TargetBean target = new TargetBean();
 
@@ -388,7 +387,7 @@ class BeanCopyUtilTest {
 
         @Test
         @DisplayName("应该忽略 final 字段")
-        void shouldIgnoreFinalFields() {
+        void shouldIgnoreFinalFields() { // NOPMD - uses Mockito verify()
             SourceBean source = new SourceBean("John", 25, 95.5, "ignore");
             TargetBean target = new TargetBean();
 

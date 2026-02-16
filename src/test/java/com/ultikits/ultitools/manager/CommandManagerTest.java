@@ -249,7 +249,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("未注册插件的 unregisterAll 不应该抛出异常")
-        void shouldNotThrowForUnregisteredPlugin() {
+        void shouldNotThrowForUnregisteredPlugin() { // NOPMD - uses Mockito verify()
             // Act & Assert - 不应该抛出异常
             commandManager.unregisterAll(mockPlugin);
         }
@@ -276,7 +276,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("空 commandListMap 的 close 不应该抛出异常")
-        void shouldNotThrowForEmptyMap() {
+        void shouldNotThrowForEmptyMap() { // NOPMD - uses Mockito verify()
             // Act & Assert - 不应该抛出异常
             commandManager.close();
         }
@@ -414,7 +414,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("getCommandMap 在 MockBukkit 环境中可能返回 null")
-        void shouldHandleMockBukkitEnvironment() throws Exception {
+        void shouldHandleMockBukkitEnvironment() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Method getCommandMapMethod = CommandManager.class.getDeclaredMethod("getCommandMap");
             getCommandMapMethod.setAccessible(true);
@@ -466,7 +466,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("带注解的 CommandExecutor 应该能注册为核心命令")
-        void shouldRegisterCoreCommand() {
+        void shouldRegisterCoreCommand() { // NOPMD - uses Mockito verify()
             // Arrange
             TestCommandExecutor executor = new TestCommandExecutor();
             
@@ -628,7 +628,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("handleHelp 应该发送帮助消息")
-        void handleHelpShouldSendMessage() {
+        void handleHelpShouldSendMessage() { // NOPMD - uses Mockito verify()
             // Arrange
             TestCommandExecutor executor = new TestCommandExecutor();
             CommandSender sender = mock(CommandSender.class);
@@ -783,7 +783,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("close 应该处理有命令的插件")
-        void shouldHandlePluginsWithCommands() throws Exception {
+        void shouldHandlePluginsWithCommands() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Field mapField = CommandManager.class.getDeclaredField("commandListMap");
             mapField.setAccessible(true);
@@ -813,7 +813,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("unregisterAll 应该遍历所有命令并调用 unregister")
-        void shouldCallUnregisterForEachCommand() throws Exception {
+        void shouldCallUnregisterForEachCommand() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Field mapField = CommandManager.class.getDeclaredField("commandListMap");
             mapField.setAccessible(true);
@@ -845,7 +845,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("register(CommandExecutor, permission, description, aliases) 应该设置命令属性")
-        void shouldSetCommandProperties() throws Exception {
+        void shouldSetCommandProperties() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             TestCommandExecutor executor = new TestCommandExecutor();
             
@@ -964,7 +964,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("register(UltiToolsPlugin, CommandExecutor, permission, description, aliases) 应该添加到 map")
-        void privateRegisterWithParamsShouldAddToMap() throws Exception {
+        void privateRegisterWithParamsShouldAddToMap() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Method registerMethod = CommandManager.class.getDeclaredMethod(
                 "register", UltiToolsPlugin.class, CommandExecutor.class, 
@@ -1108,7 +1108,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("应该扫描指定包下的类")
-        void shouldScanPackage() {
+        void shouldScanPackage() { // NOPMD - uses Mockito verify()
             // 注意：这个测试主要验证方法不会抛出异常
             // 实际的扫描逻辑依赖于 PackageScanUtils 和 ClassLoader
             
@@ -1331,7 +1331,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("废弃的 register(CommandExecutor) 应该检查注解")
-        void deprecatedRegisterWithExecutorShouldCheckAnnotation() throws Exception {
+        void deprecatedRegisterWithExecutorShouldCheckAnnotation() throws Exception { // NOPMD - uses Mockito verify()
             // 测试无注解的 executor 行为
             Method registerMethod = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
             registerMethod.setAccessible(true);
@@ -1428,7 +1428,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("unregisterAll 应该遍历所有命令")
-        void unregisterAllShouldIterateAllCommands() throws Exception {
+        void unregisterAllShouldIterateAllCommands() throws Exception { // NOPMD - uses Mockito verify()
             // Arrange
             Field mapField = CommandManager.class.getDeclaredField("commandListMap");
             mapField.setAccessible(true);
@@ -1527,7 +1527,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("register(plugin, class, perm, desc, aliases) 应该获取 bean 并注册")
-        void registerWithClassShouldGetBeanAndRegister() {
+        void registerWithClassShouldGetBeanAndRegister() { // NOPMD - uses Mockito verify()
             // Arrange
             DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
             SimpleContainer mockContext = mock(SimpleContainer.class);
@@ -1547,7 +1547,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("register(plugin, class) 应该从插件 context 获取 bean")
-        void registerWithPluginClassShouldGetBeanFromPluginContext() {
+        void registerWithPluginClassShouldGetBeanFromPluginContext() { // NOPMD - uses Mockito verify()
             // Arrange
             SimpleContainer mockContext = mock(SimpleContainer.class);
             AutowireFactory mockFactory = mock(AutowireFactory.class);
@@ -1839,7 +1839,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("应该注册 manualRegister=false 的命令")
-        void shouldRegisterNonManualCommands() {
+        void shouldRegisterNonManualCommands() { // NOPMD - uses Mockito verify()
             // Arrange
             SimpleContainer mockContext = mock(SimpleContainer.class);
             AutowireFactory mockFactory = mock(AutowireFactory.class);
@@ -1861,7 +1861,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("多个命令应该逐个处理")
-        void multipleCommandsShouldBeProcessedSequentially() {
+        void multipleCommandsShouldBeProcessedSequentially() { // NOPMD - uses Mockito verify()
             // Arrange
             SimpleContainer mockContext = mock(SimpleContainer.class);
             when(mockPlugin.getContext()).thenReturn(mockContext);

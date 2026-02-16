@@ -98,7 +98,7 @@ class EnhancedPlayerEventListenerTest {
 
         @Test
         @DisplayName("ServerMonitorManager 为 null 时不应该抛出异常")
-        void shouldNotThrowWhenManagerIsNull() {
+        void shouldNotThrowWhenManagerIsNull() { // NOPMD - uses Mockito verify()
             // Arrange
             when(UltiTools.getInstance().getServerMonitorManager()).thenReturn(null);
             PlayerMock player = server.addPlayer("TestPlayer");
@@ -216,7 +216,7 @@ class EnhancedPlayerEventListenerTest {
         void shouldIncludeKillerInfo() {
             // Arrange
             when(mockMonitorManager.isMonitoring()).thenReturn(true);
-            PlayerMock victim = server.addPlayer("Victim");
+            server.addPlayer("Victim");
             PlayerMock killer = server.addPlayer("Killer");
             
             // Mock the killer

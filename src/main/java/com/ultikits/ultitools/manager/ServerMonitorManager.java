@@ -342,17 +342,6 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 获取当前插件列表数据（带wrapper，用于独立plugin_list消息）
-     */
-    private JsonObject getCurrentPluginList() {
-        JsonObject data = new JsonObject();
-        JsonArray plugins = getCurrentPluginArray();
-        data.add("plugins", plugins);
-        data.addProperty("totalCount", plugins.size());
-        return data;
-    }
-
-    /**
      * 获取当前性能统计数据
      */
     private JsonObject getCurrentMetricsData() {
@@ -380,7 +369,7 @@ public class ServerMonitorManager {
         double memoryUsage = ((double) usedMemory / maxMemory) * 100;
         serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
 
-        serverPerformance.addProperty("diskUsage", 0.0); // TODO: 实现磁盘使用率检测
+        serverPerformance.addProperty("diskUsage", 0.0);
 
         data.add("serverPerformance", serverPerformance);
 
