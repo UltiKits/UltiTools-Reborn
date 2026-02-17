@@ -10,7 +10,7 @@ import java.util.Comparator;
  * 支持格式: 1.0.0, 1.0.0-SNAPSHOT, 1.0.0-alpha.1, 1.0.0-beta
  * 
  * @author wisdomme
- * @since 7.0.0
+ * @since 6.2.0
  */
 public final class VersionComparatorUtil {
     

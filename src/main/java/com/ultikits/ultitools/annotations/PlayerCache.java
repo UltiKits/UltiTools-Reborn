@@ -13,7 +13,7 @@ import java.lang.annotation.Target;
  * <p>
  * 标记一个 Map&lt;UUID, ?&gt; 字段，当玩家退出时自动清理。
  *
- * @since 6.3.0
+ * @since 6.2.0
  */
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
