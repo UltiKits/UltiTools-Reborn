@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -22,7 +23,10 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
@@ -227,6 +231,11 @@ public class PluginManager {
             for (Object bean : plugin.getContext().getSingletonValues()) {
                 playerCacheManager.unregisterBean(bean);
             }
+        }
+        // Unregister @ModuleEventHandler handlers from EventBus
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus != null) {
+            eventBus.unregisterAll(plugin.getPluginName());
         }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
@@ -464,8 +473,38 @@ public class PluginManager {
                 playerCacheManager.registerBean(bean);
             }
         }
+        // Register @ModuleEventHandler methods with EventBus
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus != null && plugin.getContext() != null) {
+            for (Object bean : plugin.getContext().getSingletonValues()) {
+                registerModuleEventHandlers(eventBus, plugin, bean);
+            }
+        }
         Bukkit.getLogger().log(Level.INFO,
                 String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+    }
+
+    /**
+     * Scan a bean for @ModuleEventHandler methods and register them with the EventBus.
+     */
+    private void registerModuleEventHandlers(EventBus eventBus, UltiToolsPlugin plugin, Object bean) {
+        for (Method method : bean.getClass().getMethods()) {
+            ModuleEventHandler annotation = method.getAnnotation(ModuleEventHandler.class);
+            if (annotation == null) {
+                continue;
+            }
+            Class<?>[] params = method.getParameterTypes();
+            if (params.length != 1 || !ModuleEvent.class.isAssignableFrom(params[0])) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] Invalid @ModuleEventHandler: %s#%s — must have exactly 1 ModuleEvent parameter",
+                                bean.getClass().getName(), method.getName()));
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Class<? extends ModuleEvent> eventType = (Class<? extends ModuleEvent>) params[0];
+            eventBus.register(eventType, annotation.priority(), annotation.ignoreCancelled(),
+                    plugin.getPluginName(), method, bean);
+        }
     }
 
     /**
