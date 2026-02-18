@@ -17,10 +17,12 @@ class ModuleEventHandlerTest {
 
     static class SampleHandler {
         @ModuleEventHandler
-        public void defaultHandler(SampleEvent event) {}
+        public void defaultHandler(SampleEvent event) { // no-op test handler
+        }
 
         @ModuleEventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-        public void customHandler(SampleEvent event) {}
+        public void customHandler(SampleEvent event) { // no-op test handler
+        }
     }
 
     @Test

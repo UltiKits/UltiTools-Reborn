@@ -18,7 +18,8 @@ class HandlerEntryTest {
 
     static class TestEvent extends ModuleEvent {}
 
-    public void dummyHandler(TestEvent e) {}
+    public void dummyHandler(TestEvent e) { // no-op test handler
+    }
 
     @Test
     @DisplayName("annotation-based entry stores method and instance")
