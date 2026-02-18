@@ -246,7 +246,7 @@ class EventBusTest {
         void throwingHandlerIsolated() {
             List<String> calls = new ArrayList<>();
             eventBus.subscribe(TestEvent.class, EventPriority.LOW, false, "A", e -> {
-                throw new RuntimeException("boom");
+                throw new IllegalStateException("boom");
             });
             eventBus.subscribe(TestEvent.class, EventPriority.HIGH, false, "B", e -> calls.add("B"));
             eventBus.publish(new TestEvent());
