@@ -50,7 +50,7 @@ jobs:
           -Dversion="${VERSION}" \
           -Dpackaging=jar \
           -Dfile="target/UltiTools-API-${VERSION}.jar" \
-          -DpomFile=pom.xml \
+          -DpomFile=.flattened-pom.xml \
           -DrepositoryId=github \
           -Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn
 
