@@ -39,6 +39,7 @@ jobs:
       run: mvn -B clean package -Dgpg.skip=true -Dmaven.test.skip=true
 
     - name: 📦 Publish to GitHub Packages
+      id: publish-ghp
       env:
         VERSION: ${{ steps.version.outputs.version }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,7 +47,7 @@ jobs:
         printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > /tmp/gh-settings.xml
         JAR_PATH="$(pwd)/target/UltiTools-API-${VERSION}.jar"
         cd /tmp
-        mvn deploy:deploy-file \
+        if mvn deploy:deploy-file \
           -s /tmp/gh-settings.xml \
           -DgroupId=com.ultikits \
           -DartifactId=ultitools-api \
@@ -55,7 +56,12 @@ jobs:
           -Dfile="${JAR_PATH}" \
           -DgeneratePom=true \
           -DrepositoryId=github \
-          -Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn
+          -Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn; then
+          echo "result=published" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::Version ${VERSION} may already exist in GitHub Packages (409 Conflict is expected on re-runs)"
+          echo "result=already-exists" >> $GITHUB_OUTPUT
+        fi
 
     - name: 📝 Publish Summary
       env:
@@ -95,6 +101,12 @@ jobs:
         gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
         gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+    - name: 🔐 Configure GPG agent for CI
+      run: |
+        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+        gpg-connect-agent reloadagent /bye || true
+
     - name: 🏷️ Extract version from tag
       id: version
       run: |
@@ -111,4 +123,4 @@ jobs:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
         MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-      run: mvn -B deploy -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}" -Dgpg.gpgArguments="--pinentry-mode=loopback"
+      run: mvn -B deploy -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
