@@ -49,7 +49,7 @@ jobs:
         mvn deploy:deploy-file \
           -s /tmp/gh-settings.xml \
           -DgroupId=com.ultikits \
-          -DartifactId=UltiTools-API \
+          -DartifactId=ultitools-api \
           -Dversion="${VERSION}" \
           -Dpackaging=jar \
           -Dfile="${JAR_PATH}" \
@@ -65,11 +65,14 @@ jobs:
         echo '```xml' >> $GITHUB_STEP_SUMMARY
         echo "<dependency>" >> $GITHUB_STEP_SUMMARY
         echo "    <groupId>com.ultikits</groupId>" >> $GITHUB_STEP_SUMMARY
-        echo "    <artifactId>UltiTools-API</artifactId>" >> $GITHUB_STEP_SUMMARY
+        echo "    <artifactId>ultitools-api</artifactId>" >> $GITHUB_STEP_SUMMARY
         echo "    <version>${VERSION}</version>" >> $GITHUB_STEP_SUMMARY
         echo "    <scope>provided</scope>" >> $GITHUB_STEP_SUMMARY
         echo "</dependency>" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "> **Note**: GitHub Packages requires lowercase artifact IDs." >> $GITHUB_STEP_SUMMARY
+        echo "> For Maven Central, use \`UltiTools-API\` (original case)." >> $GITHUB_STEP_SUMMARY
 
   publish-central:
     name: 📤 Maven Central
