@@ -26,7 +26,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -59,7 +59,7 @@ class SQLiteDataStoreTest {
 
     @EqualsAndHashCode(callSuper = true)
     @Table("test_data")
-    public static class TestDataEntity extends AbstractDataEntity {
+    public static class TestDataEntity extends BaseDataEntity<String> {
         @Column("name")
         private String name;
 
@@ -69,7 +69,7 @@ class SQLiteDataStoreTest {
 
     @EqualsAndHashCode(callSuper = true)
     @Table("another_data")
-    public static class AnotherDataEntity extends AbstractDataEntity {
+    public static class AnotherDataEntity extends BaseDataEntity<String> {
         @Column("value")
         private int value;
 
@@ -77,7 +77,7 @@ class SQLiteDataStoreTest {
         public void setValue(int value) { this.value = value; }
     }
 
-    public static class NoTableAnnotationEntity extends AbstractDataEntity {}
+    public static class NoTableAnnotationEntity extends BaseDataEntity<String> {}
 
     @BeforeEach
     void setUp() {

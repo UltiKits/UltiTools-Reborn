@@ -122,6 +122,7 @@ run/
 doc/
 .vscode/
 docs/plans/
+docs/test/
 .mcp.json
 
 CLAUDE.md

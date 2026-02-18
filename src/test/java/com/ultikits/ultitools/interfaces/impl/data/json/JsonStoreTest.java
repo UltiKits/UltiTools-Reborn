@@ -25,7 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -309,7 +309,7 @@ class JsonStoreTest {
     // ==================== Test Data Entities ====================
     
     @Table("test_table")
-    public static class AnnotatedTestData extends AbstractDataEntity {
+    public static class AnnotatedTestData extends BaseDataEntity<String> {
         private String name;
 
         public AnnotatedTestData() {}
@@ -324,7 +324,7 @@ class JsonStoreTest {
     }
     
     @Table("another_table")
-    public static class AnotherAnnotatedTestData extends AbstractDataEntity {
+    public static class AnotherAnnotatedTestData extends BaseDataEntity<String> {
         private String value;
 
         public AnotherAnnotatedTestData() {}
@@ -339,7 +339,7 @@ class JsonStoreTest {
     }
     
     // Entity without @Table annotation for testing error case
-    public static class NonAnnotatedTestData extends AbstractDataEntity {
+    public static class NonAnnotatedTestData extends BaseDataEntity<String> {
         private String data;
 
         public String getData() {

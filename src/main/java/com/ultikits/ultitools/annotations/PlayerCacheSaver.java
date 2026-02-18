@@ -8,7 +8,7 @@ import java.util.UUID;
  * <p>
  * 可选接口，用于在玩家退出前保存缓存数据。
  *
- * @since 6.3.0
+ * @since 6.2.0
  */
 public interface PlayerCacheSaver {
 

@@ -16,7 +16,7 @@ import com.ultikits.ultitools.annotations.PlayerCacheSaver;
  * <p>
  * 管理带有 @PlayerCache 注解的 Map 字段，在玩家退出时自动清理。
  *
- * @since 6.3.0
+ * @since 6.2.0
  */
 public class PlayerCacheManager {
 

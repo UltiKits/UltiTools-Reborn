@@ -850,7 +850,7 @@ public class SimpleContainer {
                         method.setAccessible(true);
                         method.invoke(bean);
                         LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
-                    } catch (Exception e) {
+                    } catch (Throwable e) { // NOPMD - must catch Error (e.g. NoClassDefFoundError when dependency plugins unload first)
                         LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
                     }
                 }

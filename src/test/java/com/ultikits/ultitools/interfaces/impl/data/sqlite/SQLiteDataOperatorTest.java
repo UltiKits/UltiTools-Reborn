@@ -15,7 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -41,7 +41,7 @@ class SQLiteDataOperatorTest {
      */
     @EqualsAndHashCode(callSuper = true)
     @Table("test_entity")
-    public static class TestEntity extends AbstractDataEntity {
+    public static class TestEntity extends BaseDataEntity<String> {
         @Column("name")
         private String name;
 

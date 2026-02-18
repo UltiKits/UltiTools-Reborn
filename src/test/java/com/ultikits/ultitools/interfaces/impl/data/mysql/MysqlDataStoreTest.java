@@ -29,7 +29,7 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
@@ -67,10 +67,7 @@ class MysqlDataStoreTest {
     @Data
     @EqualsAndHashCode(callSuper = true)
     @Table("test_table")
-    public static class TestDataEntity extends AbstractDataEntity {
-        @Column("id")
-        private Object id;
-
+    public static class TestDataEntity extends BaseDataEntity<String> {
         @Column("name")
         private String name;
 
@@ -83,10 +80,7 @@ class MysqlDataStoreTest {
      */
     @Data
     @EqualsAndHashCode(callSuper = true)
-    public static class NoTableAnnotationEntity extends AbstractDataEntity {
-        @Column("id")
-        private Object id;
-
+    public static class NoTableAnnotationEntity extends BaseDataEntity<String> {
         @Column("name")
         private String name;
     }
@@ -97,10 +91,7 @@ class MysqlDataStoreTest {
     @Data
     @EqualsAndHashCode(callSuper = true)
     @Table("another_table")
-    public static class AnotherDataEntity extends AbstractDataEntity {
-        @Column("id")
-        private Object id;
-
+    public static class AnotherDataEntity extends BaseDataEntity<String> {
         @Column("description")
         private String description;
     }

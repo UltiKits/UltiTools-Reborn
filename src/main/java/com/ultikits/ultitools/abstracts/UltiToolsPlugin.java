@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.Language;
@@ -50,7 +51,7 @@ import lombok.Setter;
  * @version 1.0.0
  */
 public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
-    private final Language language;
+    private Language language;
     @Getter
     private final String version;
     @Getter
@@ -359,7 +360,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param <T>       the type of the data entity <br> 数据实体的类型
      * @return the data operator <br> 数据操作器
      */
-    public final <T extends AbstractDataEntity> DataOperator<T> getDataOperator(Class<T> dataClazz) {
+    public final <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(Class<T> dataClazz) {
         return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
     }
 
@@ -410,6 +411,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Override
     public void reloadSelf() {
         getConfigManager().reloadConfigs(this);
+        // Reinitialize language in case language setting changed
+        language = createLanguageFromPath(resourceFolderPath);
     }
 
     /**

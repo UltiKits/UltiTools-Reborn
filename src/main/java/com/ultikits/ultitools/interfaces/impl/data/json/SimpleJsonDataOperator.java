@@ -25,7 +25,7 @@ import org.bukkit.ChatColor;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -38,11 +38,11 @@ import com.ultikits.ultitools.utils.JsonPathUtil;
  * <br>
  * 简单Json存储操作类
  *
- * @param <T> Date type inherited from AbstractDataEntity (数据类型，继承自AbstractDataEntity)
+ * @param <T> Data type inherited from BaseDataEntity (数据类型，继承自BaseDataEntity)
  * @author wisdomme
  * @version 1.0.0
  */
-public class SimpleJsonDataOperator<T extends AbstractDataEntity> implements DataOperator<T>, Cached {
+public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T>, Cached {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     private final String storeLocation;

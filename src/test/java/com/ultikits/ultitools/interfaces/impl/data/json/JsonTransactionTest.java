@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 
 @DisplayName("JSON Data Operator - Transaction & Batch Tests")
 class JsonTransactionTest {
@@ -54,7 +54,7 @@ class JsonTransactionTest {
 
     // ===== Test Entity =====
 
-    public static class TestData extends AbstractDataEntity {
+    public static class TestData extends BaseDataEntity<String> {
         private String name;
         private int value;
 
