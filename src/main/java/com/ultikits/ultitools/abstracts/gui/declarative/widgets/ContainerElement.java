@@ -6,6 +6,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -56,13 +57,18 @@ public class ContainerElement extends Element {
         super.unmount();
     }
 
+    @Override
+    @NotNull
+    public List<Element> getChildren() {
+        return Collections.unmodifiableList(childElements);
+    }
+
     private void mountChildren() {
         Container container = (Container) getWidget();
         for (Widget childWidget : container.getChildren()) {
             Element childElement = childWidget.createElement();
             childElement.mount(this);
             childElements.add(childElement);
-            addChild(childElement);
         }
     }
 

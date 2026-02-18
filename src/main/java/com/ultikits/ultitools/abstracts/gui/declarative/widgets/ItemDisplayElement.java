@@ -4,7 +4,6 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
 import mc.obliviate.inventory.Icon;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 /**
  * ItemDisplay 对应的 RenderObjectElement。
@@ -14,9 +13,6 @@ import org.jetbrains.annotations.Nullable;
  * @since 6.2.0
  */
 public class ItemDisplayElement extends RenderObjectElement {
-
-    @Nullable
-    private RenderNode renderNode;
 
     public ItemDisplayElement(@NotNull ItemDisplay widget) {
         super(widget);

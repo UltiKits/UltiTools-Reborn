@@ -6,6 +6,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -54,13 +55,18 @@ public class GridViewElement extends Element {
         super.unmount();
     }
 
+    @Override
+    @NotNull
+    public List<Element> getChildren() {
+        return Collections.unmodifiableList(childElements);
+    }
+
     private void mountChildren() {
         GridView<?> gridView = (GridView<?>) getWidget();
         for (Widget childWidget : gridView.getChildren()) {
             Element childElement = childWidget.createElement();
             childElement.mount(this);
             childElements.add(childElement);
-            addChild(childElement);
         }
     }
 

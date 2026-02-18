@@ -100,7 +100,7 @@ public abstract class Element {
      * @return 如果可以更新则返回 true
      */
     public boolean canUpdate(@NotNull Widget newWidget) {
-        return _widget != null && _widget.canUpdate(this);
+        return _widget != null && newWidget.canUpdate(this);
     }
 
     /**
