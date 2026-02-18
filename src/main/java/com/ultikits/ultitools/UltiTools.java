@@ -53,6 +53,7 @@ import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
+import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.ApiRateLimiter;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
@@ -106,6 +107,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private PlayerEventManager playerEventManager;
     @Getter
     private UpdateManager updateManager;
+    @Getter
+    private EventBus eventBus;
 
     /**
      * Returns the instance of the UltiTools.
@@ -174,6 +177,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onEnable() {
         ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
+        this.eventBus = new EventBus();
 
         if (!initDependencies()) return;
         initLanguage();
@@ -341,6 +345,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
+
+        if (eventBus != null) {
+            eventBus.shutdown();
+        }
 
         // 关闭日志流管理器
         if (logStreamManager != null) {
