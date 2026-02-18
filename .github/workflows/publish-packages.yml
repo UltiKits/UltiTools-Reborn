@@ -1,12 +1,12 @@
-name: 📦 Publish to GitHub Packages
+name: 📦 Publish Release
 
 on:
   release:
     types: [published]
 
 jobs:
-  publish:
-    name: 📦 Publish Maven Package
+  publish-github:
+    name: 📦 GitHub Packages
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,7 +22,6 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: maven
-        server-id: github
 
     - name: 🏷️ Extract version from tag
       id: version
@@ -44,13 +43,17 @@ jobs:
         VERSION: ${{ steps.version.outputs.version }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > /tmp/gh-settings.xml
+        JAR_PATH="$(pwd)/target/UltiTools-API-${VERSION}.jar"
+        cd /tmp
         mvn deploy:deploy-file \
+          -s /tmp/gh-settings.xml \
           -DgroupId=com.ultikits \
           -DartifactId=UltiTools-API \
           -Dversion="${VERSION}" \
           -Dpackaging=jar \
-          -Dfile="target/UltiTools-API-${VERSION}.jar" \
-          -DpomFile=.flattened-pom.xml \
+          -Dfile="${JAR_PATH}" \
+          -DgeneratePom=true \
           -DrepositoryId=github \
           -Durl=https://maven.pkg.github.com/UltiKits/UltiTools-Reborn
 
@@ -59,19 +62,50 @@ jobs:
         VERSION: ${{ steps.version.outputs.version }}
       run: |
         echo "## Published to GitHub Packages" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Group ID** | \`com.ultikits\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Artifact ID** | \`UltiTools-API\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Version** | \`${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Maven Dependency" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`xml" >> $GITHUB_STEP_SUMMARY
+        echo '```xml' >> $GITHUB_STEP_SUMMARY
         echo "<dependency>" >> $GITHUB_STEP_SUMMARY
         echo "    <groupId>com.ultikits</groupId>" >> $GITHUB_STEP_SUMMARY
         echo "    <artifactId>UltiTools-API</artifactId>" >> $GITHUB_STEP_SUMMARY
         echo "    <version>${VERSION}</version>" >> $GITHUB_STEP_SUMMARY
         echo "    <scope>provided</scope>" >> $GITHUB_STEP_SUMMARY
         echo "</dependency>" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+  publish-central:
+    name: 📤 Maven Central
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_TO_CENTRAL == 'true' }}
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: ☕ Set up JDK 17 with Sonatype credentials
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+        server-id: ultikits-sonatype
+        server-username: SONATYPE_USERNAME
+        server-password: SONATYPE_PASSWORD
+        gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+        gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+    - name: 🏷️ Extract version from tag
+      id: version
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+    - name: 🔧 Set version from release tag
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+
+    - name: 📤 Publish to Maven Central
+      env:
+        SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+        SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+      run: mvn -B deploy -Dmaven.test.skip=true
