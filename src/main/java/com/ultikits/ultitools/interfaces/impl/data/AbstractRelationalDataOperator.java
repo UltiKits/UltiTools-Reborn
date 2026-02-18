@@ -19,7 +19,7 @@ import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
 
 import com.google.gson.Gson;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -41,7 +41,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @since 6.2.0
  */
-public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntity> implements DataOperator<T> {
+public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T> {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
     private static final Gson GSON = new Gson();
@@ -263,6 +263,10 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
 
     @Override
     public void insert(T obj) {
+        // Auto-generate UUID for id if not set
+        if (obj.getId() == null) {
+            obj.setId(java.util.UUID.randomUUID().toString());
+        }
         StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
         StringBuilder values = new StringBuilder(") VALUES (");
         List<Object> params = new ArrayList<>();
@@ -282,9 +286,6 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
                     Object value = field.get(obj);
                     if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
                         String jsonString = GSON.toJson(value);
-                        // Remove surrounding quotes for simple string values if needed, but usually GSON handles objects correctly.
-                        // The original code had logic to remove quotes, let's keep it simple for now or replicate if necessary.
-                        // Original logic:
                         if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
                             jsonString = jsonString.substring(1, jsonString.length() - 1);
                         }
@@ -432,6 +433,12 @@ public abstract class AbstractRelationalDataOperator<T extends AbstractDataEntit
             return;
         }
         transaction(() -> {
+            // Auto-generate UUID for entities without id
+            for (T entity : entities) {
+                if (entity.getId() == null) {
+                    entity.setId(java.util.UUID.randomUUID().toString());
+                }
+            }
             List<ColumnMapping> columns = getColumnMappings();
             StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
             StringBuilder placeholders = new StringBuilder(") VALUES (");

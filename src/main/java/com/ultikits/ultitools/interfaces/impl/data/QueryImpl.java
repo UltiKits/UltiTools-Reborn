@@ -8,7 +8,7 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -26,7 +26,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  *
  * @param <T> the entity type
  */
-public class QueryImpl<T extends AbstractDataEntity> implements Query<T> {
+public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
 
     private final DataOperator<T> operator;
 

@@ -2,7 +2,7 @@ package com.ultikits.ultitools.interfaces.impl.data.mysql;
 
 import javax.sql.DataSource;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.impl.data.AbstractRelationalDataOperator;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -17,7 +17,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @since 6.0.0
  */
-public class MysqlDataOperator<T extends AbstractDataEntity> extends AbstractRelationalDataOperator<T> {
+public class MysqlDataOperator<T extends BaseDataEntity<String>> extends AbstractRelationalDataOperator<T> {
 
     /**
      * Creates a new MySQL data operator.

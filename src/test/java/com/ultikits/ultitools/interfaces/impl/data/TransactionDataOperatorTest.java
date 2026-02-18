@@ -18,7 +18,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -39,7 +39,7 @@ class TransactionDataOperatorTest {
 
     @EqualsAndHashCode(callSuper = true)
     @Table("tx_test")
-    public static class TestEntity extends AbstractDataEntity {
+    public static class TestEntity extends BaseDataEntity<String> {
         @Column("name")
         private String name;
 
@@ -51,7 +51,7 @@ class TransactionDataOperatorTest {
         public int getScore() { return score; }
         public void setScore(int score) { this.score = score; }
 
-        static TestEntity of(Object id, String name, int score) {
+        static TestEntity of(String id, String name, int score) {
             TestEntity e = new TestEntity();
             e.setId(id);
             e.setName(name);
@@ -97,7 +97,7 @@ class TransactionDataOperatorTest {
         @DisplayName("transaction(Runnable) should execute action directly")
         void transactionRunsWithoutManager() {
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
+                operator.insert(TestEntity.of("1", "Alice", 100));
             });
 
             assertThat(operator.getAll()).hasSize(1);
@@ -107,7 +107,7 @@ class TransactionDataOperatorTest {
         @DisplayName("transaction(Callable) should return result without manager")
         void transactionCallableWithoutManager() throws Exception {
             String result = operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
+                operator.insert(TestEntity.of("1", "Alice", 100));
                 return "done";
             });
 
@@ -132,8 +132,8 @@ class TransactionDataOperatorTest {
         @DisplayName("transaction(Runnable) should commit on success")
         void transactionCommitsOnSuccess() throws Exception {
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
-                operator.insert(TestEntity.of(2, "Bob", 200));
+                operator.insert(TestEntity.of("1", "Alice", 100));
+                operator.insert(TestEntity.of("2", "Bob", 200));
             });
 
             assertThat(countRows()).isEqualTo(2);
@@ -144,7 +144,7 @@ class TransactionDataOperatorTest {
         @DisplayName("transaction(Callable) should commit and return result")
         void transactionCallableCommits() throws Exception {
             int result = operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
+                operator.insert(TestEntity.of("1", "Alice", 100));
                 return operator.getAll().size();
             });
 
@@ -156,12 +156,12 @@ class TransactionDataOperatorTest {
         @DisplayName("transaction should rollback on RuntimeException")
         void transactionRollsBackOnRuntimeException() throws Exception {
             // Insert one row outside transaction
-            operator.insert(TestEntity.of(0, "Pre-existing", 0));
+            operator.insert(TestEntity.of("0", "Pre-existing", 0));
             assertThat(countRows()).isEqualTo(1);
 
             assertThatThrownBy(() -> {
                 operator.transaction(() -> {
-                    operator.insert(TestEntity.of(1, "Alice", 100));
+                    operator.insert(TestEntity.of("1", "Alice", 100));
                     throw new IllegalStateException("Simulated failure");
                 });
             }).isInstanceOf(RuntimeException.class)
@@ -174,11 +174,11 @@ class TransactionDataOperatorTest {
         @Test
         @DisplayName("transaction(Callable) should rollback on checked exception")
         void transactionRollsBackOnCheckedException() throws Exception {
-            operator.insert(TestEntity.of(0, "Pre-existing", 0));
+            operator.insert(TestEntity.of("0", "Pre-existing", 0));
 
             assertThatThrownBy(() -> {
                 operator.transaction(() -> {
-                    operator.insert(TestEntity.of(1, "Alice", 100));
+                    operator.insert(TestEntity.of("1", "Alice", 100));
                     throw new java.io.IOException("Checked failure");
                 });
             }).isInstanceOf(java.io.IOException.class)
@@ -191,11 +191,11 @@ class TransactionDataOperatorTest {
         @DisplayName("Multiple independent transactions should each commit")
         void multipleTransactionsCommitIndependently() throws Exception {
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
+                operator.insert(TestEntity.of("1", "Alice", 100));
             });
 
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(2, "Bob", 200));
+                operator.insert(TestEntity.of("2", "Bob", 200));
             });
 
             assertThat(countRows()).isEqualTo(2);
@@ -205,9 +205,9 @@ class TransactionDataOperatorTest {
         @DisplayName("Operations inside transaction should be visible to each other")
         void operationsVisibleWithinTransaction() throws Exception { // NOPMD - asserts inside transaction lambda
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
+                operator.insert(TestEntity.of("1", "Alice", 100));
                 // Should be able to read what we just inserted
-                TestEntity found = operator.getById(1);
+                TestEntity found = operator.getById("1");
                 assertThat(found).isNotNull();
                 assertThat(found.getName()).isEqualTo("Alice");
             });
@@ -230,17 +230,17 @@ class TransactionDataOperatorTest {
         @DisplayName("insertAll should insert all entities")
         void insertAllInsertsAll() throws Exception {
             List<TestEntity> entities = Arrays.asList(
-                    TestEntity.of(1, "Alice", 100),
-                    TestEntity.of(2, "Bob", 200),
-                    TestEntity.of(3, "Charlie", 300)
+                    TestEntity.of("1", "Alice", 100),
+                    TestEntity.of("2", "Bob", 200),
+                    TestEntity.of("3", "Charlie", 300)
             );
 
             operator.insertAll(entities);
 
             assertThat(countRows()).isEqualTo(3);
-            assertThat(operator.getById(1).getName()).isEqualTo("Alice");
-            assertThat(operator.getById(2).getName()).isEqualTo("Bob");
-            assertThat(operator.getById(3).getName()).isEqualTo("Charlie");
+            assertThat(operator.getById("1").getName()).isEqualTo("Alice");
+            assertThat(operator.getById("2").getName()).isEqualTo("Bob");
+            assertThat(operator.getById("3").getName()).isEqualTo("Charlie");
         }
 
         @Test
@@ -261,13 +261,13 @@ class TransactionDataOperatorTest {
         @DisplayName("insertAll should be atomic - all or nothing on duplicate key")
         void insertAllAtomicOnFailure() throws Exception {
             // Insert first entity normally
-            operator.insert(TestEntity.of(1, "Existing", 50));
+            operator.insert(TestEntity.of("1", "Existing", 50));
             assertThat(countRows()).isEqualTo(1);
 
             // Try to batch insert including a duplicate ID
             List<TestEntity> entities = Arrays.asList(
-                    TestEntity.of(2, "New", 100),
-                    TestEntity.of(1, "Duplicate", 200) // duplicate ID
+                    TestEntity.of("2", "New", 100),
+                    TestEntity.of("1", "Duplicate", 200) // duplicate ID
             );
 
             assertThatThrownBy(() -> operator.insertAll(entities))
@@ -275,7 +275,7 @@ class TransactionDataOperatorTest {
 
             // Original row should remain, new row should be rolled back
             assertThat(countRows()).isEqualTo(1);
-            assertThat(operator.getById(1).getName()).isEqualTo("Existing");
+            assertThat(operator.getById("1").getName()).isEqualTo("Existing");
         }
 
         @Test
@@ -290,8 +290,8 @@ class TransactionDataOperatorTest {
             noTxOperator = new SQLiteDataOperator<>(dataSource, TestEntity.class);
 
             List<TestEntity> entities = Arrays.asList(
-                    TestEntity.of(1, "Alice", 100),
-                    TestEntity.of(2, "Bob", 200)
+                    TestEntity.of("1", "Alice", 100),
+                    TestEntity.of("2", "Bob", 200)
             );
 
             noTxOperator.insertAll(entities);
@@ -303,14 +303,14 @@ class TransactionDataOperatorTest {
         void insertAllLargeBatch() throws Exception {
             List<TestEntity> entities = new ArrayList<>();
             for (int i = 1; i <= 100; i++) {
-                entities.add(TestEntity.of(i, "Entity" + i, i * 10));
+                entities.add(TestEntity.of(String.valueOf(i), "Entity" + i, i * 10));
             }
 
             operator.insertAll(entities);
 
             assertThat(countRows()).isEqualTo(100);
-            assertThat(operator.getById(50).getName()).isEqualTo("Entity50");
-            assertThat(operator.getById(50).getScore()).isEqualTo(500);
+            assertThat(operator.getById("50").getName()).isEqualTo("Entity50");
+            assertThat(operator.getById("50").getScore()).isEqualTo(500);
         }
     }
 
@@ -326,26 +326,26 @@ class TransactionDataOperatorTest {
             operator.setTransactionManager(txManager);
 
             // Insert test data
-            operator.insert(TestEntity.of(1, "Alice", 100));
-            operator.insert(TestEntity.of(2, "Bob", 200));
-            operator.insert(TestEntity.of(3, "Charlie", 300));
+            operator.insert(TestEntity.of("1", "Alice", 100));
+            operator.insert(TestEntity.of("2", "Bob", 200));
+            operator.insert(TestEntity.of("3", "Charlie", 300));
         }
 
         @Test
         @DisplayName("updateAll should update all entities")
         void updateAllUpdatesAll() throws Exception {
             List<TestEntity> updates = Arrays.asList(
-                    TestEntity.of(1, "Alice-Updated", 150),
-                    TestEntity.of(2, "Bob-Updated", 250),
-                    TestEntity.of(3, "Charlie-Updated", 350)
+                    TestEntity.of("1", "Alice-Updated", 150),
+                    TestEntity.of("2", "Bob-Updated", 250),
+                    TestEntity.of("3", "Charlie-Updated", 350)
             );
 
             operator.updateAll(updates);
 
-            assertThat(operator.getById(1).getName()).isEqualTo("Alice-Updated");
-            assertThat(operator.getById(1).getScore()).isEqualTo(150);
-            assertThat(operator.getById(2).getName()).isEqualTo("Bob-Updated");
-            assertThat(operator.getById(3).getName()).isEqualTo("Charlie-Updated");
+            assertThat(operator.getById("1").getName()).isEqualTo("Alice-Updated");
+            assertThat(operator.getById("1").getScore()).isEqualTo(150);
+            assertThat(operator.getById("2").getName()).isEqualTo("Bob-Updated");
+            assertThat(operator.getById("3").getName()).isEqualTo("Charlie-Updated");
         }
 
         @Test
@@ -366,15 +366,15 @@ class TransactionDataOperatorTest {
         @DisplayName("Partial updates should be committed together")
         void partialUpdatesAreAtomic() throws Exception {
             List<TestEntity> updates = Arrays.asList(
-                    TestEntity.of(1, "Updated1", 999),
-                    TestEntity.of(3, "Updated3", 888)
+                    TestEntity.of("1", "Updated1", 999),
+                    TestEntity.of("3", "Updated3", 888)
             );
 
             operator.updateAll(updates);
 
-            assertThat(operator.getById(1).getScore()).isEqualTo(999);
-            assertThat(operator.getById(2).getScore()).isEqualTo(200); // unchanged
-            assertThat(operator.getById(3).getScore()).isEqualTo(888);
+            assertThat(operator.getById("1").getScore()).isEqualTo(999);
+            assertThat(operator.getById("2").getScore()).isEqualTo(200); // unchanged
+            assertThat(operator.getById("3").getScore()).isEqualTo(888);
         }
     }
 
@@ -394,33 +394,33 @@ class TransactionDataOperatorTest {
         @DisplayName("Insert + Update + Delete in single transaction should commit together")
         void mixedOperationsCommitTogether() throws Exception {
             operator.transaction(() -> {
-                operator.insert(TestEntity.of(1, "Alice", 100));
-                operator.insert(TestEntity.of(2, "Bob", 200));
-                operator.insert(TestEntity.of(3, "Charlie", 300));
+                operator.insert(TestEntity.of("1", "Alice", 100));
+                operator.insert(TestEntity.of("2", "Bob", 200));
+                operator.insert(TestEntity.of("3", "Charlie", 300));
                 try {
-                    operator.update(TestEntity.of(1, "Alice-Updated", 150));
+                    operator.update(TestEntity.of("1", "Alice-Updated", 150));
                 } catch (IllegalAccessException e) {
                     throw new IllegalStateException(e);
                 }
-                operator.delById(3);
+                operator.delById("3");
             });
 
             assertThat(countRows()).isEqualTo(2);
-            assertThat(operator.getById(1).getName()).isEqualTo("Alice-Updated");
-            assertThat(operator.getById(2).getName()).isEqualTo("Bob");
-            assertThat(operator.getById(3)).isNull();
+            assertThat(operator.getById("1").getName()).isEqualTo("Alice-Updated");
+            assertThat(operator.getById("2").getName()).isEqualTo("Bob");
+            assertThat(operator.getById("3")).isNull();
         }
 
         @Test
         @DisplayName("Mixed operations should rollback together on failure")
         void mixedOperationsRollbackTogether() throws Exception {
-            operator.insert(TestEntity.of(1, "Original", 100));
+            operator.insert(TestEntity.of("1", "Original", 100));
 
             assertThatThrownBy(() -> {
                 operator.transaction(() -> {
-                    operator.insert(TestEntity.of(2, "New", 200));
+                    operator.insert(TestEntity.of("2", "New", 200));
                     try {
-                        operator.update(TestEntity.of(1, "Modified", 999));
+                        operator.update(TestEntity.of("1", "Modified", 999));
                     } catch (IllegalAccessException e) {
                         throw new IllegalStateException(e);
                     }
@@ -430,8 +430,8 @@ class TransactionDataOperatorTest {
 
             // Everything should be rolled back
             assertThat(countRows()).isEqualTo(1);
-            assertThat(operator.getById(1).getName()).isEqualTo("Original");
-            assertThat(operator.getById(1).getScore()).isEqualTo(100);
+            assertThat(operator.getById("1").getName()).isEqualTo("Original");
+            assertThat(operator.getById("1").getScore()).isEqualTo(100);
         }
     }
 }

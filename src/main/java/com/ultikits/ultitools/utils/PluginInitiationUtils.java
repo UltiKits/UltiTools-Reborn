@@ -183,17 +183,15 @@ public class PluginInitiationUtils {
                         break;
 
                     default:
-                        UltiTools.getInstance().getLogger().log(Level.WARNING, 
+                        UltiTools.getInstance().getLogger().log(Level.WARNING,
                             String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                        // 发送错误响应
-                        sendErrorResponse("Unknown message type: " + type);
+                        // Don't send error responses to avoid feedback loops with server
                         break;
                 }
             } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.SEVERE, 
+                UltiTools.getInstance().getLogger().log(Level.SEVERE,
                     String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
-                // 发送错误响应
-                sendErrorResponse("Error processing message: " + e.getMessage());
+                // Don't send error responses to avoid feedback loops with server
             }
             
             // 记录消息处理完成日志

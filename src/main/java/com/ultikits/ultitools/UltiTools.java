@@ -381,6 +381,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @throws IOException if an I/O error occurs during the reloading process
      */
     public void reloadPlugins() throws IOException {
+        // Refresh Bukkit config from disk so language changes are picked up
+        reloadConfig();
+        // Reinitialize framework language based on (possibly changed) config
+        initLanguage();
         pluginManager.reload();
     }
 

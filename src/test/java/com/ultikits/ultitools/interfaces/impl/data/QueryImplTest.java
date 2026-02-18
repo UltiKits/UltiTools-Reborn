@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -45,7 +45,7 @@ class QueryImplTest {
     @EqualsAndHashCode(callSuper = true)
     @NoArgsConstructor
     @AllArgsConstructor
-    static class TestEntity extends AbstractDataEntity {
+    static class TestEntity extends BaseDataEntity<String> {
         @Column("player_name")
         private String playerName;
 
@@ -55,7 +55,7 @@ class QueryImplTest {
         @Column("balance")
         private double balance;
 
-        static TestEntity of(Object id, String name, int score, double balance) {
+        static TestEntity of(String id, String name, int score, double balance) {
             TestEntity e = new TestEntity(name, score, balance);
             e.setId(id);
             return e;
@@ -66,11 +66,11 @@ class QueryImplTest {
 
     private List<TestEntity> sampleData() {
         List<TestEntity> list = new ArrayList<>();
-        list.add(TestEntity.of(1, "Alice", 100, 50.0));
-        list.add(TestEntity.of(2, "Bob", 200, 30.0));
-        list.add(TestEntity.of(3, "Charlie", 150, 80.0));
-        list.add(TestEntity.of(4, "Diana", 300, 10.0));
-        list.add(TestEntity.of(5, "Eve", 100, 60.0));
+        list.add(TestEntity.of("1", "Alice", 100, 50.0));
+        list.add(TestEntity.of("2", "Bob", 200, 30.0));
+        list.add(TestEntity.of("3", "Charlie", 150, 80.0));
+        list.add(TestEntity.of("4", "Diana", 300, 10.0));
+        list.add(TestEntity.of("5", "Eve", 100, 60.0));
         return list;
     }
 
@@ -83,7 +83,7 @@ class QueryImplTest {
         @Test
         @DisplayName("Should delegate eq condition to DataOperator.getAll()")
         void shouldDelegateEqToDataOperator() {
-            TestEntity alice = TestEntity.of(1, "Alice", 100, 50.0);
+            TestEntity alice = TestEntity.of("1", "Alice", 100, 50.0);
             when(operator.getAll(any(WhereCondition[].class)))
                     .thenReturn(Collections.singletonList(alice));
 
@@ -97,7 +97,7 @@ class QueryImplTest {
         @Test
         @DisplayName("Should delegate multiple eq conditions")
         void shouldDelegateMultipleEqConditions() {
-            TestEntity alice = TestEntity.of(1, "Alice", 100, 50.0);
+            TestEntity alice = TestEntity.of("1", "Alice", 100, 50.0);
             when(operator.getAll(any(WhereCondition[].class)))
                     .thenReturn(Collections.singletonList(alice));
 
@@ -253,8 +253,8 @@ class QueryImplTest {
         void eqPlusGtTest() {
             // eq("score", 100) returns Alice(100) and Eve(100)
             List<TestEntity> eqResults = new ArrayList<>();
-            eqResults.add(TestEntity.of(1, "Alice", 100, 50.0));
-            eqResults.add(TestEntity.of(5, "Eve", 100, 60.0));
+            eqResults.add(TestEntity.of("1", "Alice", 100, 50.0));
+            eqResults.add(TestEntity.of("5", "Eve", 100, 60.0));
             when(operator.getAll(any(WhereCondition[].class))).thenReturn(eqResults);
 
             List<TestEntity> results = query
@@ -514,7 +514,7 @@ class QueryImplTest {
         void resolveIdFromParent() {
             when(operator.getAll()).thenReturn(sampleData());
 
-            List<TestEntity> results = query.where("id").ne(1).list();
+            List<TestEntity> results = query.where("id").ne("1").list();
 
             assertEquals(4, results.size());
         }

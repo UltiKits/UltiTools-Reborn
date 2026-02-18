@@ -14,8 +14,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 
 /**
  * Tests for the {@link DataStore} interface.
@@ -112,7 +112,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -136,7 +136,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -152,7 +152,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -168,7 +168,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -194,7 +194,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -228,7 +228,7 @@ class DataStoreTest {
 
                 @Override
                 @SuppressWarnings("unchecked")
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     DataOperator<T> operator = mock(DataOperator.class);
                     operators.put(dataEntity, operator);
                     return operator;
@@ -281,7 +281,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -307,7 +307,7 @@ class DataStoreTest {
                 }
 
                 @Override
-                public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+                public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
                     return null;
                 }
 
@@ -323,9 +323,9 @@ class DataStoreTest {
     }
 
     // Test entity classes for testing generic methods
-    static class TestEntity1 extends AbstractDataEntity {
+    static class TestEntity1 extends BaseDataEntity<String> {
     }
 
-    static class TestEntity2 extends AbstractDataEntity {
+    static class TestEntity2 extends BaseDataEntity<String> {
     }
 }
