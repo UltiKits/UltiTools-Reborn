@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -684,7 +684,7 @@ class SimpleJsonDataOperatorTest {
     // ==================== Test Data Entity ====================
     
     @Table("test_data")
-    public static class TestData extends AbstractDataEntity {
+    public static class TestData extends BaseDataEntity<String> {
         private String name;
         private int value;
 

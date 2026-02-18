@@ -8,8 +8,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -88,7 +88,7 @@ public class JsonStore implements DataStore {
     }
 
     @Override
-    public <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }

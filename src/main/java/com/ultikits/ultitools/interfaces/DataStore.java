@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 
 /**
  * Data storage interface.
@@ -25,10 +25,10 @@ public interface DataStore {
      *
      * @param plugin     Plugin <br> 插件
      * @param dataEntity Data entity class <br> 数据实体类
-     * @param <T>        Must inherit {@link AbstractDataEntity}
+     * @param <T>        Must inherit {@link BaseDataEntity}
      * @return Data operation entity <br> 数据操作实体
      */
-    <T extends AbstractDataEntity> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
+    <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
 
     /**
      * Save all possible caches and destroy all data operation classes.

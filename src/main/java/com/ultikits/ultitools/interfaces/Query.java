@@ -3,7 +3,7 @@ package com.ultikits.ultitools.interfaces;
 import java.util.Collection;
 import java.util.List;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 
 /**
  * Fluent query builder for data entities.
@@ -22,7 +22,7 @@ import com.ultikits.ultitools.abstracts.AbstractDataEntity;
  *
  * @param <T> the entity type
  */
-public interface Query<T extends AbstractDataEntity> {
+public interface Query<T extends BaseDataEntity<String>> {
 
     // === Conditions ===
 

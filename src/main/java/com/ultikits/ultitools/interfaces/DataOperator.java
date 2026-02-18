@@ -3,7 +3,7 @@ package com.ultikits.ultitools.interfaces;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
@@ -12,9 +12,9 @@ import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
  * <p>
  * 数据操作接口
  *
- * @param <T> 数据类型，继承自AbstractDataEntity
+ * @param <T> 数据类型，继承自BaseDataEntity
  */
-public interface DataOperator<T extends AbstractDataEntity> {
+public interface DataOperator<T extends BaseDataEntity<String>> {
 
     enum LikeType {
         START, END, CONTAINS
