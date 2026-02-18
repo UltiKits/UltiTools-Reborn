@@ -58,6 +58,7 @@ Writing Spigot plugins often means pages of boilerplate — registering commands
 | Scheduled tasks | `new BukkitRunnable()` boilerplate | `@Scheduled(period = 6000)` on any method |
 | Feature toggles | Manual `if` checks | `@ConditionalOnConfig` skips entire components |
 | Transactions | Manual try/catch/rollback | `@Transactional` AOP proxy |
+| Inter-module events | Custom event buses or static coupling | `@ModuleEventHandler` pub/sub EventBus |
 
 <br>
 
@@ -286,6 +287,33 @@ public class BankService {
 }
 ```
 
+### Module EventBus
+Decoupled pub/sub communication between modules — no direct dependencies needed.
+
+```java
+// Define a custom event
+public class BalanceChangeEvent extends ModuleEvent {
+    @Getter private final UUID player;
+    @Getter private final double amount;
+    public BalanceChangeEvent(UUID player, double amount) {
+        this.player = player;
+        this.amount = amount;
+    }
+}
+
+// Subscribe via annotation — auto-discovered by the framework
+@Service
+public class AuditService {
+    @ModuleEventHandler(priority = EventPriority.NORMAL)
+    public void onBalanceChange(BalanceChangeEvent event) {
+        log(event.getSourceModule(), event.getPlayer(), event.getAmount());
+    }
+}
+
+// Publish from anywhere
+eventBus.publish(new BalanceChangeEvent(player, 100.0));
+```
+
 ### More Built-in
 
 - **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs
@@ -311,13 +339,13 @@ public class BankService {
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>6.2.0</version>
+    <version>6.2.2</version>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-implementation 'com.ultikits:UltiTools-API:6.2.0'
+implementation 'com.ultikits:UltiTools-API:6.2.2'
 ```
 
 ### Create `plugin.yml`
@@ -377,6 +405,7 @@ UltiTools-Reborn/
 │   │   └── config/              # Validation annotations (@Range, @NotEmpty, @Size, @Pattern)
 │   ├── aop/                     # AOP system (CglibProxyFactory, TransactionInterceptor)
 │   ├── context/                 # IoC container (SimpleContainer, ComponentScanner)
+│   ├── events/                  # Module EventBus (EventBus, ModuleEvent, EventPriority, Cancellable)
 │   ├── manager/                 # Core managers (Command, Listener, Config, Plugin, Task)
 │   ├── interfaces/              # Core interfaces (DataOperator, Query, DataStore) + impl/
 │   ├── websocket/               # UltiPanel WebSocket client + handlers
