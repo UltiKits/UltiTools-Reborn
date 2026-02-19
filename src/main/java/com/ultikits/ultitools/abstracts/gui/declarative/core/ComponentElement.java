@@ -3,6 +3,9 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * ComponentElement 是包含子 Widget 的 Element 基类。
  * <p>
@@ -34,6 +37,12 @@ public abstract class ComponentElement extends Element {
         Widget built = build();
         _child = updateChild(built, _child);
         clearDirty();
+    }
+
+    @Override
+    @NotNull
+    public List<Element> getChildren() {
+        return _child != null ? Collections.singletonList(_child) : Collections.emptyList();
     }
 
     @Override
