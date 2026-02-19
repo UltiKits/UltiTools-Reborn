@@ -31,6 +31,21 @@ public interface DataStore {
     <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
 
     /**
+     * Get data operator for an external plugin, scoped to the plugin's own data folder.
+     * <p>
+     * 获取外部插件的数据操作器，数据范围限定在插件自己的数据文件夹中。
+     *
+     * @param dataFolder the external plugin's data folder (e.g., plugins/MyPlugin/)
+     * @param dataEntity data entity class
+     * @param <T> entity type
+     * @return data operator
+     * @since 6.2.2
+     */
+    default <T extends BaseDataEntity<String>> DataOperator<T> getOperator(java.io.File dataFolder, Class<T> dataEntity) {
+        throw new UnsupportedOperationException("This DataStore does not support external plugin data storage");
+    }
+
+    /**
      * Save all possible caches and destroy all data operation classes.
      * <p>
      * 保存所有可能的缓存并销毁所有的数据操作类

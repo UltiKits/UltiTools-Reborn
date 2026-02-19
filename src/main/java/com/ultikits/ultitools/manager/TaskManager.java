@@ -29,6 +29,7 @@ import com.ultikits.ultitools.annotations.Scheduled;
 public class TaskManager {
 
     private final Map<UltiToolsPlugin, List<BukkitTask>> pluginTasks = new HashMap<>();
+    private final Map<String, List<BukkitTask>> externalTasks = new HashMap<>();
     private final JavaPlugin hostPlugin;
 
     public TaskManager(JavaPlugin hostPlugin) {
@@ -145,10 +146,102 @@ public class TaskManager {
     }
 
     /**
+     * Scan a bean for {@link Scheduled} methods and register them for an external plugin.
+     * <p>
+     * 扫描 Bean 中的 {@link Scheduled} 方法并为外部插件注册。
+     *
+     * @param pluginName the external plugin name (used as key)
+     * @param bean       the bean instance to scan
+     * @since 6.2.2
+     */
+    public void registerScheduledMethodsExternal(String pluginName, Object bean) {
+        Class<?> targetClass = getTargetClass(bean.getClass());
+
+        for (Method method : targetClass.getDeclaredMethods()) {
+            Scheduled scheduled = method.getAnnotation(Scheduled.class);
+            if (scheduled == null) {
+                continue;
+            }
+            if (method.getParameterCount() != 0) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] @Scheduled method '%s.%s' must have no parameters. Skipping.",
+                                targetClass.getSimpleName(), method.getName()));
+                continue;
+            }
+            if (method.getReturnType() != void.class && method.getReturnType() != Void.class) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] @Scheduled method '%s.%s' must return void. Skipping.",
+                                targetClass.getSimpleName(), method.getName()));
+                continue;
+            }
+
+            method.setAccessible(true); // NOPMD
+            final Method targetMethod = method;
+
+            BukkitRunnable runnable = new BukkitRunnable() {
+                @Override
+                public void run() {
+                    try {
+                        targetMethod.invoke(bean);
+                    } catch (Exception e) {
+                        Bukkit.getLogger().log(Level.WARNING,
+                                String.format("[UltiTools-API] Error executing @Scheduled method '%s.%s'",
+                                        targetClass.getSimpleName(), targetMethod.getName()),
+                                e);
+                    }
+                }
+            };
+
+            BukkitTask task;
+            if (scheduled.period() <= 0) {
+                task = scheduled.async()
+                        ? runnable.runTaskLaterAsynchronously(hostPlugin, scheduled.delay())
+                        : runnable.runTaskLater(hostPlugin, scheduled.delay());
+            } else {
+                task = scheduled.async()
+                        ? runnable.runTaskTimerAsynchronously(hostPlugin, scheduled.delay(), scheduled.period())
+                        : runnable.runTaskTimer(hostPlugin, scheduled.delay(), scheduled.period());
+            }
+
+            externalTasks.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(task);
+        }
+    }
+
+    /**
+     * Cancel all scheduled tasks for an external plugin.
+     * <p>
+     * 取消外部插件的所有定时任务。
+     *
+     * @param pluginName the external plugin name
+     * @since 6.2.2
+     */
+    public void cancelAllExternal(String pluginName) {
+        List<BukkitTask> tasks = externalTasks.remove(pluginName);
+        if (tasks != null) {
+            for (BukkitTask task : tasks) {
+                try {
+                    task.cancel();
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(Level.FINE,
+                            "[UltiTools-API] Task already cancelled: " + task.getTaskId());
+                }
+            }
+        }
+    }
+
+    /**
      * Get the number of registered tasks for a plugin (for testing).
      */
     int getTaskCount(UltiToolsPlugin plugin) {
         List<BukkitTask> tasks = pluginTasks.get(plugin);
+        return tasks == null ? 0 : tasks.size();
+    }
+
+    /**
+     * Get the number of registered tasks for an external plugin (for testing).
+     */
+    int getExternalTaskCount(String pluginName) {
+        List<BukkitTask> tasks = externalTasks.get(pluginName);
         return tasks == null ? 0 : tasks.size();
     }
 }

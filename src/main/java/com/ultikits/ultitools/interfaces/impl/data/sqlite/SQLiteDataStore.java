@@ -46,6 +46,27 @@ public class SQLiteDataStore implements DataStore {
     }
 
     @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        if (!dataEntity.isAnnotationPresent(Table.class)) {
+            throw new RuntimeException("No Table annotation is presented!");
+        }
+        DataOperator<T> tSQLiteDataOperator = (DataOperator<T>) dataOperatorMap.get(dataEntity);
+        if (tSQLiteDataOperator == null) {
+            if (!dataFolder.exists()) {
+                dataFolder.mkdirs();
+            }
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:sqlite://" + dataFolder.getAbsolutePath() + "/data.db");
+            config.setDriverClassName("org.sqlite.JDBC");
+            config.setMaximumPoolSize(10);
+            DataSource dataSource = new HikariDataSource(config);
+            tSQLiteDataOperator = new SQLiteDataOperator<>(dataSource, dataEntity);
+            dataOperatorMap.put(dataEntity, tSQLiteDataOperator);
+        }
+        return tSQLiteDataOperator;
+    }
+
+    @Override
     public void destroyAllOperators() {
     }
 

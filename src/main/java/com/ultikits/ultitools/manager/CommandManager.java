@@ -23,6 +23,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 
@@ -33,6 +34,7 @@ import com.ultikits.ultitools.utils.PackageScanUtils;
  */
 public class CommandManager {
     private final Map<UltiToolsPlugin, List<Command>> commandListMap = new HashMap<>();
+    private final Map<String, List<Command>> externalCommandMap = new HashMap<>();
 
     /**
      * Manually register a command. Only used to register classes annotated with @CmdExecutor. Dependencies will be injected automatically.
@@ -253,6 +255,48 @@ public class CommandManager {
         } else {
             Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         }
+    }
+
+    /**
+     * Register all @CmdExecutor commands from an external plugin's IoC container.
+     * Uses raw description (no i18n) since external plugins don't have UltiTools i18n.
+     * <p>
+     * 注册外部插件 IoC 容器中所有 @CmdExecutor 命令。
+     *
+     * @param adapter the external plugin adapter
+     * @since 6.2.2
+     */
+    public void registerAllExternal(ExternalPluginAdapter adapter) {
+        if (adapter.getContext() == null) return;
+        for (String cmdBean : adapter.getContext().getBeanNamesForType(CommandExecutor.class)) {
+            CommandExecutor executor = adapter.getContext().getBean(cmdBean, CommandExecutor.class);
+            if (executor == null) continue;
+            CmdExecutor annotation = AnnotationUtils.findAnnotation(executor.getClass(), CmdExecutor.class);
+            if (annotation == null || annotation.manualRegister()) continue;
+            registerExternalCommand(adapter.getPluginName(), executor, annotation);
+        }
+    }
+
+    /**
+     * Unregister all commands for an external plugin.
+     * <p>
+     * 注销外部插件的所有命令。
+     *
+     * @param pluginName the external plugin name
+     * @since 6.2.2
+     */
+    public void unregisterAllExternal(String pluginName) {
+        List<Command> commands = externalCommandMap.remove(pluginName);
+        if (commands == null) return;
+        for (Command command : commands) {
+            command.unregister(getCommandMap());
+        }
+    }
+
+    private void registerExternalCommand(String pluginName, CommandExecutor executor, CmdExecutor annotation) {
+        register(executor, annotation.permission(), annotation.description(), annotation.alias());
+        PluginCommand command = getCommand(annotation.alias()[0], UltiTools.getInstance());
+        externalCommandMap.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(command);
     }
 
     private PluginCommand getCommand(String name, Plugin plugin) {
