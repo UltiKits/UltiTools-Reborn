@@ -16,14 +16,14 @@ import java.util.Objects;
  * Widget 本身不包含任何可变状态，也不直接操作 Inventory。
  * 它只负责描述"应该显示什么"，而不管"如何显示"和"显示在哪里"。
  *
- * <h3>子类类型：</h3>
+ * <p><strong>子类类型：</strong></p>
  * <ul>
  *   <li>{@link StatelessWidget} - 无状态 Widget，纯函数式，只依赖输入参数</li>
  *   <li>{@link StatefulWidget} - 有状态 Widget，可以响应 setState 重建</li>
  *   <li>{@link RenderObjectWidget} - 渲染 Widget，对应实际的 RenderNode</li>
  * </ul>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * // 创建一个计数器 Widget
  * public class CounterWidget extends StatefulWidget {

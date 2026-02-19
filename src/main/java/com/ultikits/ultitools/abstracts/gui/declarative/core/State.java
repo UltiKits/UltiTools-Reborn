@@ -13,7 +13,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>在 StatefulWidget 重建时复用</li>
  * </ul>
  *
- * <h3>生命周期：</h3>
+ * <p><strong>生命周期：</strong></p>
  * <ol>
  *   <li>{@link #initState()} - 初始化状态，只调用一次</li>
  *   <li>{@link #build(BuildContext)} - 构建 UI，可能调用多次</li>
@@ -21,7 +21,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>{@link #dispose()} - 清理资源，只调用一次</li>
  * </ol>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * class CounterState extends State<CounterWidget> {
  *     private int count = 0;
@@ -93,7 +93,7 @@ public abstract class State<T extends StatefulWidget> {
      * <p>
      * <b>重要：</b> 回调函数中应该只修改状态，不应该有副作用。
      *
-     * <h3>使用示例：</h3>
+     * <p><strong>使用示例：</strong></p>
      * <pre>{@code
      * void handleClick() {
      *     setState(() -> {

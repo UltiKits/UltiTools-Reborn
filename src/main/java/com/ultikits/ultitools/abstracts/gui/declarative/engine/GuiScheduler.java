@@ -20,7 +20,7 @@ import java.util.function.Consumer;
  *   <li>防止重复调度</li>
  * </ul>
  *
- * <h3>帧调度机制：</h3>
+ * <p><strong>帧调度机制：</strong></p>
  * <pre>
  * 时间轴：
  * |----16ms----|----16ms----|----16ms----|

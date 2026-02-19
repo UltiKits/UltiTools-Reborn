@@ -21,7 +21,7 @@ import java.util.function.Function;
  *   <li>支持数据列表自动映射</li>
  * </ul>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * // 手动指定子 Widget
  * GridView.builder()

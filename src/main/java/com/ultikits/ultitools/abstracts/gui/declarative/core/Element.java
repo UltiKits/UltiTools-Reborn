@@ -19,7 +19,7 @@ import java.util.*;
  * <li>为 RenderObjectElement 提供 RenderNode</li>
  * </ul>
  *
- * <h3>Element 类型：</h3>
+ * <p><strong>Element 类型：</strong></p>
  * <ul>
  * <li>{@link ComponentElement} - 组合型，管理子
  * Widget（StatelessWidget/StatefulWidget）</li>

@@ -21,7 +21,7 @@ import java.util.*;
  * <li>新增、删除、更新的节点都会被记录在 DiffResult 中</li>
  * </ul>
  *
- * <h3>算法步骤：</h3>
+ * <p><strong>算法步骤：</strong></p>
  * <ol>
  * <li>构建旧节点的 key → node 映射</li>
  * <li>遍历新节点列表，匹配旧节点</li>

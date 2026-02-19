@@ -19,7 +19,7 @@ import java.util.List;
  *   <li>支持背景填充</li>
  * </ul>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * Container.builder()
  *     .child(ItemDisplay.builder(item).build())

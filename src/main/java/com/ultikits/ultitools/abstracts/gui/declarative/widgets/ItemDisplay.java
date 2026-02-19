@@ -15,7 +15,7 @@ import java.util.function.Consumer;
  * <p>
  * 它是最基本的渲染 Widget，将一个 ItemStack 显示在指定的槽位。
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * ItemDisplay.builder(itemStack)
  *     .slot(10)
