@@ -403,7 +403,7 @@ public class MyBukkitPlugin extends JavaPlugin {
 
 After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container. You get dependency injection, scheduled tasks, the EventBus, the ORM — everything a native UltiTools module gets, while keeping your plugin as a standard Bukkit plugin.
 
-See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details.
+See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details, or check out the [complete working example](https://github.com/UltiKits/UltiTools-External-Example) that demonstrates `@Service`, `@CmdExecutor`, `@EventListener`, `@Autowired`, and `DataOperator` CRUD.
 
 <br>
 
