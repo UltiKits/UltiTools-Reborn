@@ -375,7 +375,7 @@ public class MyPlugin extends UltiToolsPlugin {
 
 Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
 
-For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/en/) or [Project Wiki](docs/wiki/README.md).
+For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction) or [Project Wiki](docs/wiki/README.md).
 
 <br>
 
@@ -403,7 +403,7 @@ public class MyBukkitPlugin extends JavaPlugin {
 
 After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container. You get dependency injection, scheduled tasks, the EventBus, the ORM — everything a native UltiTools module gets, while keeping your plugin as a standard Bukkit plugin.
 
-See the [External Plugin API Guide](https://dev.ultikits.com/en/guide/advanced/external-plugin-api) for full details.
+See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details.
 
 <br>
 
@@ -411,7 +411,7 @@ See the [External Plugin API Guide](https://dev.ultikits.com/en/guide/advanced/e
 
 | Document | Description |
 |----------|-------------|
-| [Developer Docs](https://dev.ultikits.com/en/) | Full documentation site |
+| [Developer Docs](https://dev.ultikits.com/guide/introduction) | Full documentation site |
 | [Project Wiki](docs/wiki/README.md) | Complete project documentation |
 | [Architecture Guide](docs/wiki/ARCHITECTURE.md) | System architecture overview |
 | [IoC Container](docs/wiki/modules/IOC_CONTAINER.md) | Dependency injection guide |
