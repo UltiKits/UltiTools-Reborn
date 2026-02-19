@@ -96,7 +96,18 @@ Building an UltiTools module is the best way to develop with UltiTools-API. Modu
 - **Shared infrastructure** — Database connections, config management, and i18n are handled by the framework; your module stays small and focused
 - **Inter-module communication** — Publish and subscribe to events across modules with the built-in EventBus
 
-Create `plugin.yml`:
+**Quickest start — scaffold with the CLI:**
+
+```bash
+npm install -g @ultikits/cli
+ultikits create
+# Answer the prompts, then:
+cd MyModule && mvn compile
+```
+
+This generates a complete, compilable project with `pom.xml`, main class, `plugin.yml`, language files, and tests directory. See the [CLI documentation](https://dev.ultikits.com/guide/advanced/ultikits-cli) for details.
+
+**Or set up manually** — create `plugin.yml`:
 
 ```yaml
 name: MyPlugin
