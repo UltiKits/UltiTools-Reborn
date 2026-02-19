@@ -109,6 +109,27 @@ public class JsonStore implements DataStore {
     }
 
     @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        if (!dataEntity.isAnnotationPresent(Table.class)) {
+            throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
+        }
+        Cached dataOperator = dataOperatorMap.get(dataEntity);
+        if (dataOperator == null) {
+            SimpleJsonDataOperator<T> tSimpleJsonDataOperator = new SimpleJsonDataOperator<>(
+                    dataFolder.getAbsolutePath() +
+                            File.separator +
+                            "data" +
+                            File.separator +
+                            ReflectionUtil.getAnnotation(dataEntity, Table.class).value()
+                    , dataEntity
+            );
+            dataOperatorMap.putIfAbsent(dataEntity, tSimpleJsonDataOperator);
+            return tSimpleJsonDataOperator;
+        }
+        return (DataOperator<T>) dataOperator;
+    }
+
+    @Override
     public void destroyAllOperators() {
         Iterator<Cached> iterator = dataOperatorMap.values().iterator();
         iterator.forEachRemaining(each -> {
