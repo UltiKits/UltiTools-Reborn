@@ -288,10 +288,10 @@ public class LogStreamManager implements Listener {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
-        
+
         try {
             JsonObject response = new JsonObject();
-            response.addProperty("type", "log_stream");
+            response.addProperty("type", "log_stream_response");
             response.addProperty("serverId", getServerId());
             response.addProperty("timestamp", System.currentTimeMillis());
             
@@ -318,10 +318,10 @@ public class LogStreamManager implements Listener {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
-        
+
         try {
             JsonObject response = new JsonObject();
-            response.addProperty("type", "error");
+            response.addProperty("type", "log_stream_response");
             response.addProperty("serverId", getServerId());
             response.addProperty("timestamp", System.currentTimeMillis());
             
@@ -344,7 +344,7 @@ public class LogStreamManager implements Listener {
      */
     private void sendStreamStatus(String clientId) {
         JsonObject message = new JsonObject();
-        message.addProperty("type", "log_stream");
+        message.addProperty("type", "log_stream_response");
         message.addProperty("timestamp", System.currentTimeMillis());
         message.addProperty("serverId", getServerId());
         

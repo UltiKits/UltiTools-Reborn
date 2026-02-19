@@ -155,6 +155,7 @@ public class PluginInitiationUtils {
                     
                     // 数据流消息
                     case "log_stream":
+                    case "log_stream_control":
                         UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
                         break;
                     case "backup_operation":
