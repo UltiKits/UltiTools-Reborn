@@ -4,7 +4,7 @@ import java.lang.reflect.Field;
 
 import org.bukkit.Bukkit;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.MockBukkit;
 
 /**
  * MockBukkit 测试工具类

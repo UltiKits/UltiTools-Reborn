@@ -41,8 +41,8 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.context.AutowireFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
 
 /**
  * CommandManager 测试

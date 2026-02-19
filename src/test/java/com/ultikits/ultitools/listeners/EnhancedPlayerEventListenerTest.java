@@ -8,6 +8,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.bukkit.damage.DamageSource;
+import org.bukkit.damage.DamageType;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
@@ -27,10 +29,10 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.WorldMock;
-import be.seeseemelk.mockbukkit.entity.PlayerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.world.WorldMock;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 /**
  * EnhancedPlayerEventListener 测试 - 使用 MockBukkit
@@ -202,7 +204,7 @@ class EnhancedPlayerEventListenerTest {
             // Arrange
             when(mockMonitorManager.isMonitoring()).thenReturn(true);
             PlayerMock player = server.addPlayer("TestPlayer");
-            PlayerDeathEvent event = new PlayerDeathEvent(player, new java.util.ArrayList<>(), 0, "TestPlayer died");
+            PlayerDeathEvent event = new PlayerDeathEvent(player, DamageSource.builder(DamageType.GENERIC).build(), new java.util.ArrayList<>(), 0, "TestPlayer died");
 
             // Act
             listener.onPlayerDeath(event);
@@ -224,7 +226,7 @@ class EnhancedPlayerEventListenerTest {
             when(mockedVictim.getKiller()).thenReturn(killer);
             when(mockedVictim.getName()).thenReturn("Victim");
             
-            PlayerDeathEvent event = new PlayerDeathEvent(mockedVictim, new java.util.ArrayList<>(), 0, "Victim was slain by Killer");
+            PlayerDeathEvent event = new PlayerDeathEvent(mockedVictim, DamageSource.builder(DamageType.GENERIC).build(), new java.util.ArrayList<>(), 0, "Victim was slain by Killer");
 
             // Capture the JSONObject
             final JsonObject[] capturedJson = new JsonObject[1];
@@ -395,7 +397,7 @@ class EnhancedPlayerEventListenerTest {
             listener.onPlayerJoin(new PlayerJoinEvent(player, "joined"));
             listener.onPlayerQuit(new PlayerQuitEvent(player, "left"));
             listener.onPlayerChat(new AsyncPlayerChatEvent(false, player, "msg", new java.util.HashSet<>()));
-            listener.onPlayerDeath(new PlayerDeathEvent(player, new java.util.ArrayList<>(), 0, "died"));
+            listener.onPlayerDeath(new PlayerDeathEvent(player, DamageSource.builder(DamageType.GENERIC).build(), new java.util.ArrayList<>(), 0, "died"));
             listener.onPlayerKick(new PlayerKickEvent(player, "reason", "msg"));
             listener.onPlayerCommandPreprocess(new PlayerCommandPreprocessEvent(player, "/cmd"));
             

@@ -64,7 +64,7 @@ public class Toast {
      * @param style   the visual style / 视觉样式
      */
     private Toast(String icon, String message, Style style) {
-        this.key = new NamespacedKey(UltiTools.getInstance(), UUID.randomUUID().toString());
+        this.key = new NamespacedKey("ultitools", UUID.randomUUID().toString());
         this.icon = icon;
         this.message = message;
         this.style = style;

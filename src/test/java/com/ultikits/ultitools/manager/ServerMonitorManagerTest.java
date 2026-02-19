@@ -25,8 +25,8 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
 
 /**
  * ServerMonitorManager 测试
@@ -552,7 +552,7 @@ class ServerMonitorManagerTest {
         @DisplayName("应该发送玩家事件消息")
         void shouldSendPlayerEventMessage() {
             // Arrange
-            be.seeseemelk.mockbukkit.entity.PlayerMock player = server.addPlayer();
+            org.mockbukkit.mockbukkit.entity.PlayerMock player = server.addPlayer();
             JsonObject additionalData = new JsonObject();
             additionalData.addProperty("extra", "data");
             when(mockWebSocketClient.isConnected()).thenReturn(true);
@@ -568,7 +568,7 @@ class ServerMonitorManagerTest {
         @DisplayName("additionalData 为 null 时不应该抛出异常")
         void shouldNotThrowWhenAdditionalDataIsNull() {
             // Arrange
-            be.seeseemelk.mockbukkit.entity.PlayerMock player = server.addPlayer();
+            org.mockbukkit.mockbukkit.entity.PlayerMock player = server.addPlayer();
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             // Act - 不应该抛出异常

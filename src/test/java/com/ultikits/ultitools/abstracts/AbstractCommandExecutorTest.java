@@ -30,9 +30,9 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.manager.CommandManager;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.entity.PlayerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class AbstractCommandExecutorTest {
