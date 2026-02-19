@@ -316,6 +316,7 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 ### More Built-in
 
+- **External Plugin API** — Let any Bukkit/Spigot plugin use UltiTools features via `UltiToolsAPI.connect(this)`
 - **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs
 - **i18n** — Built-in internationalization with `i18n("key")`
 - **Hot Module Loading** — Load/unload plugin modules without server restart
@@ -400,6 +401,7 @@ For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/
 UltiTools-Reborn/
 ├── src/main/java/com/ultikits/ultitools/
 │   ├── UltiTools.java           # Main plugin entry
+│   ├── api/                     # External Plugin API (UltiToolsAPI, ExternalPluginAdapter)
 │   ├── abstracts/               # Base classes (UltiToolsPlugin, AbstractCommandExecutor, etc.)
 │   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Scheduled, etc.)
 │   │   └── config/              # Validation annotations (@Range, @NotEmpty, @Size, @Pattern)
