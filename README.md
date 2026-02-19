@@ -316,7 +316,6 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 ### More Built-in
 
-- **External Plugin API** — Let any Bukkit/Spigot plugin use UltiTools features via `UltiToolsAPI.connect(this)`
 - **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs
 - **i18n** — Built-in internationalization with `i18n("key")`
 - **Hot Module Loading** — Load/unload plugin modules without server restart
@@ -377,6 +376,34 @@ public class MyPlugin extends UltiToolsPlugin {
 Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
 
 For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/en/) or [Project Wiki](docs/wiki/README.md).
+
+<br>
+
+## Use UltiTools from Any Plugin
+
+**Don't want to write an UltiTools module?** You can use UltiTools framework features (`@Service`, `@CmdExecutor`, `@EventListener`, `@Scheduled`, EventBus, ORM, etc.) directly from a regular Bukkit/Spigot plugin — no need to extend `UltiToolsPlugin`.
+
+Just add `depend: [UltiTools]` to your `plugin.yml` and call `UltiToolsAPI.connect(this)`:
+
+```java
+public class MyBukkitPlugin extends JavaPlugin {
+
+    @Override
+    public void onEnable() {
+        // One line — UltiTools scans your plugin for @Service, @CmdExecutor, @EventListener, etc.
+        UltiToolsAPI.connect(this);
+    }
+
+    @Override
+    public void onDisable() {
+        UltiToolsAPI.disconnect(this);
+    }
+}
+```
+
+After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container. You get dependency injection, scheduled tasks, the EventBus, the ORM — everything a native UltiTools module gets, while keeping your plugin as a standard Bukkit plugin.
+
+See the [External Plugin API Guide](https://dev.ultikits.com/en/guide/advanced/external-plugin-api) for full details.
 
 <br>
 
