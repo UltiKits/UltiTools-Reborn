@@ -5,7 +5,7 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import be.seeseemelk.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.MockBukkit;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;

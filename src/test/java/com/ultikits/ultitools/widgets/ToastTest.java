@@ -341,7 +341,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -371,7 +370,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -395,7 +393,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -419,7 +416,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -443,7 +439,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -467,7 +462,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -504,7 +498,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -533,7 +526,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -557,7 +549,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -593,7 +584,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -617,7 +607,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -641,7 +630,6 @@ class ToastTest {
             try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                  MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 
-                when(mockUltiTools.getName()).thenReturn("UltiTools");
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                 bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -666,7 +654,6 @@ class ToastTest {
                 try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                      MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                     
-                    when(mockUltiTools.getName()).thenReturn("UltiTools");
                     ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                     bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                     bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -705,7 +692,6 @@ class ToastTest {
                 try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                      MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                     
-                    when(mockUltiTools.getName()).thenReturn("UltiTools");
                     ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                     bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                     bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);
@@ -737,7 +723,6 @@ class ToastTest {
                 try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class);
                      MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                     
-                    when(mockUltiTools.getName()).thenReturn("UltiTools");
                     ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                     bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
                     bukkitMock.when(Bukkit::getUnsafe).thenReturn(mockUnsafe);

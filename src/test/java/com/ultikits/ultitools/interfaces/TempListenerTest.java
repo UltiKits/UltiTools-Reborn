@@ -19,9 +19,9 @@ import java.util.concurrent.TimeUnit;
 import com.ultikits.ultitools.interfaces.TempListener.DefaultTempListenerBuilder;
 import com.ultikits.ultitools.interfaces.impl.SimpleTempListener;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.entity.PlayerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 /**
  * TempListener 接口测试 - 使用 MockBukkit

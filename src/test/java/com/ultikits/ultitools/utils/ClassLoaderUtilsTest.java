@@ -22,8 +22,8 @@ import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
 
 /**
  * ClassLoaderUtils 测试类
