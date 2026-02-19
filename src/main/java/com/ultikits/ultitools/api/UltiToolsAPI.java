@@ -66,7 +66,7 @@ public final class UltiToolsAPI {
                     "[UltiTools-API] External plugin connected: " + plugin.getName() + " v" + adapter.getVersion());
         } catch (Exception e) {
             adapters.remove(plugin);
-            throw new RuntimeException("Failed to connect plugin " + plugin.getName() + " to UltiTools", e);
+            throw new IllegalStateException("Failed to connect plugin " + plugin.getName() + " to UltiTools", e);
         }
     }
 
