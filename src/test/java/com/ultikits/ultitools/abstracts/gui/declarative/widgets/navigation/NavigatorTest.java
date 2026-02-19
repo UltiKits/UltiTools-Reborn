@@ -87,7 +87,7 @@ public class NavigatorTest {
         final NavigatorState[] capturedState = new NavigatorState[1];
         
         Map<String, RouteBuilder> routes = new HashMap<>();
-        routes.put("/", context -> new com.ultikits.ultitools.abstracts.gui.declarative.core.StatelessWidget() {
+        routes.put("/", context -> new StatelessWidget() {
              @Override
              public Widget build(BuildContext context) {
                  capturedState[0] = Navigator.of(context);
@@ -96,7 +96,7 @@ public class NavigatorTest {
              
              @Override
              public Element createElement() {
-                 return new com.ultikits.ultitools.abstracts.gui.declarative.core.StatelessElement(this);
+                 return new StatelessElement(this);
              }
              
              @Override
