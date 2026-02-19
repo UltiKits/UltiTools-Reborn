@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.logging.Logger;
 
+import com.ultikits.ultitools.UltiTools;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +19,7 @@ public class UltiToolsAPITest {
     private JavaPlugin mockPlugin;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         mockPlugin = mock(JavaPlugin.class);
         PluginDescriptionFile desc = mock(PluginDescriptionFile.class);
         when(mockPlugin.getName()).thenReturn("TestPlugin");
@@ -29,6 +32,20 @@ public class UltiToolsAPITest {
 
         // Reset state between tests
         UltiToolsAPI.reset();
+        // Ensure UltiTools singleton is null so connect() tests work correctly
+        setUltiToolsInstance(null);
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        UltiToolsAPI.reset();
+        setUltiToolsInstance(null);
+    }
+
+    private static void setUltiToolsInstance(UltiTools instance) throws Exception {
+        Field field = UltiTools.class.getDeclaredField("ultiTools");
+        field.setAccessible(true); // NOPMD
+        field.set(null, instance);
     }
 
     @Test

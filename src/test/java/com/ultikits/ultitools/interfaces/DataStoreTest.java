@@ -91,10 +91,12 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 3 methods")
-        void shouldHaveExactlyThreeMethods() {
-            Method[] methods = DataStore.class.getDeclaredMethods();
-            assertThat(methods).hasSize(3);
+        @DisplayName("Should have exactly 4 methods (3 abstract + 1 default)")
+        void shouldHaveExactlyFourMethods() {
+            long count = java.util.Arrays.stream(DataStore.class.getDeclaredMethods())
+                    .filter(m -> !m.isSynthetic())
+                    .count();
+            assertThat(count).isEqualTo(4);
         }
     }
 
