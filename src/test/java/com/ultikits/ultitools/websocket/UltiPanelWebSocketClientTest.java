@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
 /**
@@ -425,6 +426,47 @@ class UltiPanelWebSocketClientTest {
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
 
             assertThat(client.getToken()).isEqualTo(TEST_TOKEN);
+        }
+    }
+
+    @Nested
+    @DisplayName("Gson HTML 转义测试")
+    class GsonHtmlEscapingTests {
+
+        @Test
+        @DisplayName("Gson 不应该转义 HTML 字符")
+        void gsonShouldNotEscapeHtmlCharacters() throws Exception {
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+            Field gsonField = UltiPanelWebSocketClient.class.getDeclaredField("gson");
+            gsonField.setAccessible(true);
+            Gson gson = (Gson) gsonField.get(client);
+
+            JsonObject msg = new JsonObject();
+            msg.addProperty("message", "<player> joined & left");
+            String json = gson.toJson(msg);
+
+            assertThat(json).contains("<player>");
+            assertThat(json).contains("&");
+            assertThat(json).doesNotContain("\\u003c");
+            assertThat(json).doesNotContain("\\u003e");
+            assertThat(json).doesNotContain("\\u0026");
+        }
+
+        @Test
+        @DisplayName("Gson 应该正确序列化包含路径的消息")
+        void gsonShouldSerializePathsCorrectly() throws Exception {
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+            Field gsonField = UltiPanelWebSocketClient.class.getDeclaredField("gson");
+            gsonField.setAccessible(true);
+            Gson gson = (Gson) gsonField.get(client);
+
+            JsonObject msg = new JsonObject();
+            msg.addProperty("message", "[INFO] Loading plugins/UltiTools/config.yml");
+            String json = gson.toJson(msg);
+
+            assertThat(json).contains("plugins/UltiTools/config.yml");
         }
     }
 }
