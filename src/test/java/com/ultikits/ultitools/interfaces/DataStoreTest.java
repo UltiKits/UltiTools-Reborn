@@ -91,10 +91,12 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 3 methods")
-        void shouldHaveExactlyThreeMethods() {
-            Method[] methods = DataStore.class.getDeclaredMethods();
-            assertThat(methods).hasSize(3);
+        @DisplayName("Should have exactly 4 methods (3 abstract + 1 default)")
+        void shouldHaveExactlyFourMethods() {
+            long count = java.util.Arrays.stream(DataStore.class.getDeclaredMethods())
+                    .filter(m -> !m.isSynthetic())
+                    .count();
+            assertThat(count).isEqualTo(4);
         }
     }
 
@@ -123,7 +125,7 @@ class DataStoreTest {
             };
 
             assertThat(dataStore.getStoreType()).isEqualTo("test");
-            assertThat(dataStore.getOperator(null, null)).isNull();
+            assertThat(dataStore.getOperator((UltiToolsPlugin) null, null)).isNull();
         }
 
         @Test
@@ -254,10 +256,10 @@ class DataStoreTest {
 
             // Simulate getting operators for different entity types
             // In real usage, these would be actual entity classes
-            store.getOperator(null, TestEntity1.class);
+            store.getOperator((UltiToolsPlugin) null, TestEntity1.class);
             assertThat(store.getOperatorCount()).isEqualTo(1);
 
-            store.getOperator(null, TestEntity2.class);
+            store.getOperator((UltiToolsPlugin) null, TestEntity2.class);
             assertThat(store.getOperatorCount()).isEqualTo(2);
 
             assertThat(store.isDestroyed()).isFalse();

@@ -60,6 +60,19 @@ public class MysqlDataStore implements DataStore {
     }
 
     @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(java.io.File dataFolder, Class<T> dataEntity) {
+        if (!dataEntity.isAnnotationPresent(Table.class)) {
+            throw new RuntimeException("No Table annotation is presented!");
+        }
+        DataOperator<T> tMysqlDataOperator = (DataOperator<T>) dataOperatorMap.get(dataEntity);
+        if (tMysqlDataOperator == null) {
+            tMysqlDataOperator = new MysqlDataOperator<>(dataSource, dataEntity);
+            dataOperatorMap.put(dataEntity, tMysqlDataOperator);
+        }
+        return tMysqlDataOperator;
+    }
+
+    @Override
     public void destroyAllOperators() {
         dataSource.close();
     }
