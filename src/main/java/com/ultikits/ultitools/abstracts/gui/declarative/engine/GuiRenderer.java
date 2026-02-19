@@ -22,7 +22,7 @@ import java.util.function.Consumer;
  * <li>应用变更到实际 Inventory</li>
  * </ul>
  *
- * <h3>工作流程：</h3>
+ * <p><strong>工作流程：</strong></p>
  * 
  * <pre>
  * 1. 初始化：createRootElement → build RenderNode 树

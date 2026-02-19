@@ -18,7 +18,7 @@ import java.util.Objects;
  *   <li>复用 Element 以提高性能</li>
  * </ul>
  *
- * <h3>最佳实践：</h3>
+ * <p><strong>最佳实践：</strong></p>
  * <pre>{@code
  * // 好的做法：使用业务唯一标识作为 key
  * ListView.builder()

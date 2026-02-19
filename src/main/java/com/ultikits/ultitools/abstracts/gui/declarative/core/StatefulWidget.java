@@ -17,7 +17,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>需要订阅外部数据源的 UI（实时数据更新）</li>
  * </ul>
  *
- * <h3>生命周期：</h3>
+ * <p><strong>生命周期：</strong></p>
  * <ol>
  *   <li>{@link State#initState()} - 初始化状态，只调用一次</li>
  *   <li>{@link State#build(BuildContext)} - 构建 UI，可能调用多次</li>
@@ -25,7 +25,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>{@link State#dispose()} - 清理资源，只调用一次</li>
  * </ol>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * public class CounterButton extends StatefulWidget {
  *     @Override

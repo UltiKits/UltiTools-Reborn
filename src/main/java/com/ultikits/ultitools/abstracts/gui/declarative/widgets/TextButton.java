@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  * <p>
  * 它使用彩色玻璃板作为按钮背景，上面显示文本。
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * TextButton.builder()
  *     .text("Confirm")

@@ -16,7 +16,7 @@ import org.jetbrains.annotations.NotNull;
  *   <li>没有副作用的纯函数式组件</li>
  * </ul>
  *
- * <h3>使用示例：</h3>
+ * <p><strong>使用示例：</strong></p>
  * <pre>{@code
  * public class ItemRow extends StatelessWidget {
  *     private final ItemStack item;
