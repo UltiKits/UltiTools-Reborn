@@ -17,6 +17,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.plugin.java.JavaPlugin;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -26,6 +28,7 @@ import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
+import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -67,6 +70,7 @@ public class PluginManager {
         this.taskManager = new TaskManager(UltiTools.getInstance());
         this.playerCacheManager = new PlayerCacheManager();
         registerPlayerQuitListener();
+        registerPluginDisableListener();
         String currentPath = System.getProperty("user.dir");
         String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
         File pluginFolder = new File(path);
@@ -249,6 +253,9 @@ public class PluginManager {
      * 注销所有插件。
      */
     public void close() {
+        // Disconnect all external plugins first
+        UltiToolsAPI.disconnectAll();
+
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
             unregister(plugin);
@@ -268,6 +275,24 @@ public class PluginManager {
             public void onPlayerQuit(PlayerQuitEvent event) {
                 if (playerCacheManager != null) {
                     playerCacheManager.onPlayerQuit(event.getPlayer().getUniqueId());
+                }
+            }
+        }, Bukkit.getPluginManager().getPlugin("UltiTools"));
+    }
+
+    /**
+     * Register a Bukkit listener for PluginDisableEvent to auto-disconnect external plugins.
+     * <br>
+     * 注册 Bukkit 监听器，在外部插件禁用时自动断开连接。
+     *
+     * @since 6.2.2
+     */
+    private void registerPluginDisableListener() {
+        Bukkit.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onPluginDisable(PluginDisableEvent event) {
+                if (event.getPlugin() instanceof JavaPlugin) {
+                    UltiToolsAPI.onPluginDisable((JavaPlugin) event.getPlugin());
                 }
             }
         }, Bukkit.getPluginManager().getPlugin("UltiTools"));
@@ -749,18 +774,60 @@ public class PluginManager {
 
     /**
      * Register an external Bukkit plugin adapter with the framework.
-     * Creates an IoC container, scans for annotated components, and registers commands/listeners.
+     * Creates an IoC container, scans for annotated components, and registers commands/listeners/tasks.
      * <p>
      * 注册外部 Bukkit 插件适配器到框架中。
-     * 创建 IoC 容器，扫描注解组件，并注册命令和监听器。
+     * 创建 IoC 容器，扫描注解组件，并注册命令、监听器和定时任务。
      *
      * @param adapter the external plugin adapter
      * @since 6.2.2
      */
     public void registerExternal(ExternalPluginAdapter adapter) {
-        // TODO: Full implementation in Task 4 — create IoC context, scan components, register commands/listeners
+        // 1. Create child IoC container
+        SimpleContainer context = new SimpleContainer();
+        context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        context.registerShutdownHook();
+        context.setClassLoader(adapter.getPluginClassLoader());
+
+        // 2. Scan components in the external plugin's package
+        if (!adapter.getScanPackage().isEmpty()) {
+            context.scanComponents(new String[]{adapter.getScanPackage()});
+        }
+
+        // 3. Refresh container to instantiate beans
+        context.refresh();
+        adapter.setContext(context);
+
+        String pluginName = adapter.getPluginName();
+
+        // 4. Register @Scheduled tasks
+        if (taskManager != null) {
+            for (Object bean : context.getSingletonValues()) {
+                taskManager.registerScheduledMethodsExternal(pluginName, bean);
+            }
+        }
+
+        // 5. Register @PlayerCache beans
+        if (playerCacheManager != null) {
+            for (Object bean : context.getSingletonValues()) {
+                playerCacheManager.registerBean(bean);
+            }
+        }
+
+        // 6. Register @ModuleEventHandler with EventBus
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus != null) {
+            for (Object bean : context.getSingletonValues()) {
+                registerModuleEventHandlersExternal(eventBus, pluginName, bean);
+            }
+        }
+
+        // 7. Register commands and listeners
+        UltiTools.getInstance().getCommandManager().registerAllExternal(adapter);
+        UltiTools.getInstance().getListenerManager().registerAllExternal(adapter);
+
         Bukkit.getLogger().log(Level.INFO,
-                "[UltiTools-API] Registering external plugin: " + adapter.getPluginName());
+                "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
     }
 
     /**
@@ -774,8 +841,60 @@ public class PluginManager {
      * @since 6.2.2
      */
     public void unregisterExternal(ExternalPluginAdapter adapter) {
-        // TODO: Full implementation in Task 4 — close IoC context, unregister commands/listeners
+        String pluginName = adapter.getPluginName();
+
+        // Cancel @Scheduled tasks
+        if (taskManager != null) {
+            taskManager.cancelAllExternal(pluginName);
+        }
+
+        // Unregister @PlayerCache beans
+        if (playerCacheManager != null && adapter.getContext() != null) {
+            for (Object bean : adapter.getContext().getSingletonValues()) {
+                playerCacheManager.unregisterBean(bean);
+            }
+        }
+
+        // Unregister @ModuleEventHandler from EventBus
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus != null) {
+            eventBus.unregisterAll(pluginName);
+        }
+
+        // Unregister commands and listeners
+        UltiTools.getInstance().getCommandManager().unregisterAllExternal(pluginName);
+        UltiTools.getInstance().getListenerManager().unregisterAllExternal(pluginName);
+
+        // Close IoC container
+        if (adapter.getContext() != null) {
+            adapter.getContext().close();
+            adapter.setContext(null);
+        }
+
         Bukkit.getLogger().log(Level.INFO,
-                "[UltiTools-API] Unregistering external plugin: " + adapter.getPluginName());
+                "[UltiTools-API] External plugin unregistered: " + pluginName);
+    }
+
+    /**
+     * Scan a bean for @ModuleEventHandler methods and register them with EventBus for an external plugin.
+     */
+    private void registerModuleEventHandlersExternal(EventBus eventBus, String pluginName, Object bean) {
+        for (Method method : bean.getClass().getMethods()) {
+            ModuleEventHandler annotation = method.getAnnotation(ModuleEventHandler.class);
+            if (annotation == null) {
+                continue;
+            }
+            Class<?>[] params = method.getParameterTypes();
+            if (params.length != 1 || !ModuleEvent.class.isAssignableFrom(params[0])) {
+                Bukkit.getLogger().log(Level.WARNING,
+                        String.format("[UltiTools-API] Invalid @ModuleEventHandler: %s#%s — must have exactly 1 ModuleEvent parameter",
+                                bean.getClass().getName(), method.getName()));
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Class<? extends ModuleEvent> eventType = (Class<? extends ModuleEvent>) params[0];
+            eventBus.register(eventType, annotation.priority(), annotation.ignoreCancelled(),
+                    pluginName, method, bean);
+        }
     }
 }

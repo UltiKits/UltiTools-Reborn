@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
@@ -19,6 +20,7 @@ import java.util.*;
  */
 public class ListenerManager {
     private final Map<UltiToolsPlugin, List<Listener>> listenerListMap = new HashMap<>();
+    private final Map<String, List<Listener>> externalListenerMap = new HashMap<>();
 
     /**
      * Register listener.
@@ -118,6 +120,42 @@ public class ListenerManager {
         if (listeners == null) return;
         for (Listener listener : listeners) {
             unregister(listener);
+        }
+    }
+
+    /**
+     * Register all @EventListener listeners from an external plugin's IoC container.
+     * <p>
+     * 注册外部插件 IoC 容器中所有 @EventListener 监听器。
+     *
+     * @param adapter the external plugin adapter
+     * @since 6.2.2
+     */
+    public void registerAllExternal(ExternalPluginAdapter adapter) {
+        if (adapter.getContext() == null) return;
+        for (String listenerBean : adapter.getContext().getBeanNamesForType(Listener.class)) {
+            Listener listener = adapter.getContext().getBean(listenerBean, Listener.class);
+            if (listener == null) continue;
+            EventListener annotation = AnnotationUtils.findAnnotation(listener.getClass(), EventListener.class);
+            if (annotation == null || annotation.manualRegister()) continue;
+            Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
+            externalListenerMap.computeIfAbsent(adapter.getPluginName(), k -> new ArrayList<>()).add(listener);
+        }
+    }
+
+    /**
+     * Unregister all listeners for an external plugin.
+     * <p>
+     * 注销外部插件的所有监听器。
+     *
+     * @param pluginName the external plugin name
+     * @since 6.2.2
+     */
+    public void unregisterAllExternal(String pluginName) {
+        List<Listener> listeners = externalListenerMap.remove(pluginName);
+        if (listeners == null) return;
+        for (Listener listener : listeners) {
+            HandlerList.unregisterAll(listener);
         }
     }
 }

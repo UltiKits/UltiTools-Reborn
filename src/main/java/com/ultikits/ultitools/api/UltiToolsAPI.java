@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.api;
 
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -157,11 +158,29 @@ public final class UltiToolsAPI {
     }
 
     /**
-     * Auto-disconnect a plugin. Called by the PluginDisableEvent listener.
+     * Auto-disconnect a plugin when it is disabled.
+     * Called by the PluginDisableEvent listener in PluginManager.
+     * <p>
+     * 插件禁用时自动断开连接。由 PluginManager 中的 PluginDisableEvent 监听器调用。
+     *
      * @param plugin the plugin being disabled
+     * @since 6.2.2
      */
-    static void onPluginDisable(JavaPlugin plugin) {
+    public static void onPluginDisable(JavaPlugin plugin) {
         if (adapters.containsKey(plugin)) {
+            disconnect(plugin);
+        }
+    }
+
+    /**
+     * Disconnect all external plugins. Called during UltiTools shutdown.
+     * <p>
+     * 断开所有外部插件的连接。在 UltiTools 关闭时调用。
+     *
+     * @since 6.2.2
+     */
+    public static void disconnectAll() {
+        for (JavaPlugin plugin : new ArrayList<>(adapters.keySet())) {
             disconnect(plugin);
         }
     }
