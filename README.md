@@ -8,9 +8,9 @@
 
 <h1 align="center">UltiTools-API</h1>
 
-<div align="center"><strong>The Modern Spigot Plugin Framework</strong></div>
+<div align="center"><strong>The Modern Paper Plugin Framework</strong></div>
 
-<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Java 8+ compatible, Minecraft 1.8 - 1.21.</p>
+<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Works with any Bukkit/Paper plugin. Java 21+, Minecraft 1.21+.</p>
 
 <br>
 
@@ -19,8 +19,8 @@
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/UltiKits/UltiTools-Reborn?style=flat-square"/>
-<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.8--1.21-blue?style=flat-square"/>
-<img alt="Java Version" src="https://img.shields.io/badge/Java-8+-orange?style=flat-square"/>
+<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.21+-blue?style=flat-square"/>
+<img alt="Java Version" src="https://img.shields.io/badge/Java-21+-orange?style=flat-square"/>
 <img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
@@ -44,11 +44,11 @@
 
 ## Why UltiTools?
 
-Writing Spigot plugins often means pages of boilerplate — registering commands manually, wiring up listeners, building raw SQL, scheduling BukkitRunnables everywhere. UltiTools-API eliminates all of that.
+Writing Minecraft plugins often means pages of boilerplate — registering commands manually, wiring up listeners, building raw SQL, scheduling BukkitRunnables everywhere. UltiTools-API eliminates all of that.
 
 **What you get:**
 
-| Feature | Traditional Spigot | With UltiTools-API |
+| Feature | Traditional Bukkit | With UltiTools-API |
 |---------|-------------------|-------------------|
 | Commands | `onCommand()` switch/case | `@CmdMapping(format = "pay <player> <amount>")` |
 | Listeners | Manual registration in `onEnable()` | `@EventListener` auto-discovered |
@@ -59,6 +59,97 @@ Writing Spigot plugins often means pages of boilerplate — registering commands
 | Feature toggles | Manual `if` checks | `@ConditionalOnConfig` skips entire components |
 | Transactions | Manual try/catch/rollback | `@Transactional` AOP proxy |
 | Inter-module events | Custom event buses or static coupling | `@ModuleEventHandler` pub/sub EventBus |
+
+<br>
+
+## Getting Started
+
+### Requirements
+
+- **Java**: 21 or higher
+- **Minecraft**: 1.21+ (Paper)
+- **UltiTools Plugin**: Install on your server
+
+### Add the Dependency
+
+**Maven**
+```xml
+<dependency>
+    <groupId>com.ultikits</groupId>
+    <artifactId>UltiTools-API</artifactId>
+    <version>6.2.2</version>
+</dependency>
+```
+
+**Gradle**
+```groovy
+implementation 'com.ultikits:UltiTools-API:6.2.2'
+```
+
+### Option A: Write an UltiTools Module (Recommended)
+
+Building an UltiTools module is the best way to develop with UltiTools-API. Modules are lightweight plugins managed by the UltiTools framework, giving you everything you'd get from a standalone plugin plus:
+
+- **One-click updates** — Server admins can update your module directly from the UltiTools panel, no manual JAR swapping
+- **Built-in marketplace** — Publish to [UltiCloud](https://panel.ultikits.com) and let users discover, install, and manage your module from a central catalog
+- **Hot reload** — Modules can be loaded and unloaded at runtime without restarting the server
+- **Shared infrastructure** — Database connections, config management, and i18n are handled by the framework; your module stays small and focused
+- **Inter-module communication** — Publish and subscribe to events across modules with the built-in EventBus
+
+Create `plugin.yml`:
+
+```yaml
+name: MyPlugin
+version: '${project.version}'
+main: com.example.myplugin.MyPlugin
+api-version: 620
+authors: [ YourName ]
+```
+
+Write your main class:
+
+```java
+@UltiToolsModule(scanBasePackages = {"com.example.myplugin"})
+public class MyPlugin extends UltiToolsPlugin {
+    @Override
+    public boolean registerSelf() {
+        return true;  // Commands, listeners, services are all auto-registered!
+    }
+
+    @Override
+    public void unregisterSelf() { }
+}
+```
+
+Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
+
+For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction) or [Project Wiki](docs/wiki/README.md).
+
+### Option B: Use from Any Bukkit Plugin
+
+Already have a plugin? You can integrate UltiTools-API into any existing Bukkit/Paper plugin without rewriting it as a module. You get the full framework — DI, ORM, scheduled tasks, EventBus — with a single line of code.
+
+Add `depend: [UltiTools]` to your `plugin.yml` and call `UltiToolsAPI.connect(this)`:
+
+```java
+public class MyBukkitPlugin extends JavaPlugin {
+
+    @Override
+    public void onEnable() {
+        // One line — UltiTools scans your plugin for @Service, @CmdExecutor, @EventListener, etc.
+        UltiToolsAPI.connect(this);
+    }
+
+    @Override
+    public void onDisable() {
+        UltiToolsAPI.disconnect(this);
+    }
+}
+```
+
+After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container — everything a native module gets, while keeping your plugin as a standard Bukkit plugin.
+
+See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details, or check out the [complete working example](https://github.com/UltiKits/UltiTools-External-Example).
 
 <br>
 
@@ -83,7 +174,7 @@ public class MyPlugin extends UltiToolsPlugin {
 @Data @Builder @NoArgsConstructor @AllArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 @Table("homes")
-public class HomeEntity extends AbstractDataEntity {
+public class HomeEntity extends BaseDataEntity<String> {
     @Column("player_id") private String playerId;
     @Column("name")      private String name;
     @Column("world")     private String world;
@@ -234,7 +325,7 @@ Invalid config values are automatically caught and reset to safe defaults on loa
 
 ```java
 @Getter @Setter
-@ConfigEntity(path = "config/config.yml")
+@ConfigEntity("config/config.yml")
 public class EcoConfig extends AbstractConfigEntity {
 
     @ConfigEntry(path = "interestRate", comment = "Interest rate per cycle")
@@ -316,94 +407,11 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 ### More Built-in
 
-- **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs
+- **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs, plus a declarative reactive GUI system
 - **i18n** — Built-in internationalization with `i18n("key")`
 - **Hot Module Loading** — Load/unload plugin modules without server restart
 - **WebSocket + UltiPanel** — Remote server management (commands, files, monitoring, logs)
 - **Plugin Sandbox** — Class blacklisting, path traversal protection, command blocklists
-
-<br>
-
-## Getting Started
-
-### Requirements
-
-- **Java**: 8 or higher
-- **Minecraft**: 1.8 - 1.21 (Spigot/Paper)
-- **UltiTools Plugin**: Install on your server
-
-### Add the Dependency
-
-**Maven**
-```xml
-<dependency>
-    <groupId>com.ultikits</groupId>
-    <artifactId>UltiTools-API</artifactId>
-    <version>6.2.2</version>
-</dependency>
-```
-
-**Gradle**
-```groovy
-implementation 'com.ultikits:UltiTools-API:6.2.2'
-```
-
-### Create `plugin.yml`
-
-```yaml
-name: MyPlugin
-version: '${project.version}'
-main: com.example.myplugin.MyPlugin
-api-version: 600
-authors: [ YourName ]
-```
-
-### Write Your Plugin
-
-```java
-@UltiToolsModule(scanBasePackages = {"com.example.myplugin"})
-public class MyPlugin extends UltiToolsPlugin {
-    @Override
-    public boolean registerSelf() {
-        return true;  // Commands, listeners, services are all auto-registered!
-    }
-
-    @Override
-    public void unregisterSelf() { }
-}
-```
-
-Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
-
-For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction) or [Project Wiki](docs/wiki/README.md).
-
-<br>
-
-## Use UltiTools from Any Plugin
-
-**Don't want to write an UltiTools module?** You can use UltiTools framework features (`@Service`, `@CmdExecutor`, `@EventListener`, `@Scheduled`, EventBus, ORM, etc.) directly from a regular Bukkit/Spigot plugin — no need to extend `UltiToolsPlugin`.
-
-Just add `depend: [UltiTools]` to your `plugin.yml` and call `UltiToolsAPI.connect(this)`:
-
-```java
-public class MyBukkitPlugin extends JavaPlugin {
-
-    @Override
-    public void onEnable() {
-        // One line — UltiTools scans your plugin for @Service, @CmdExecutor, @EventListener, etc.
-        UltiToolsAPI.connect(this);
-    }
-
-    @Override
-    public void onDisable() {
-        UltiToolsAPI.disconnect(this);
-    }
-}
-```
-
-After `connect()`, all annotated classes in your plugin's package are auto-discovered and managed by the UltiTools IoC container. You get dependency injection, scheduled tasks, the EventBus, the ORM — everything a native UltiTools module gets, while keeping your plugin as a standard Bukkit plugin.
-
-See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details, or check out the [complete working example](https://github.com/UltiKits/UltiTools-External-Example) that demonstrates `@Service`, `@CmdExecutor`, `@EventListener`, `@Autowired`, and `DataOperator` CRUD.
 
 <br>
 
