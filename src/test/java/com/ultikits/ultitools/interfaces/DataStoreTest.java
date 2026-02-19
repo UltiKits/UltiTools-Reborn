@@ -123,7 +123,7 @@ class DataStoreTest {
             };
 
             assertThat(dataStore.getStoreType()).isEqualTo("test");
-            assertThat(dataStore.getOperator(null, null)).isNull();
+            assertThat(dataStore.getOperator((UltiToolsPlugin) null, null)).isNull();
         }
 
         @Test
@@ -254,10 +254,10 @@ class DataStoreTest {
 
             // Simulate getting operators for different entity types
             // In real usage, these would be actual entity classes
-            store.getOperator(null, TestEntity1.class);
+            store.getOperator((UltiToolsPlugin) null, TestEntity1.class);
             assertThat(store.getOperatorCount()).isEqualTo(1);
 
-            store.getOperator(null, TestEntity2.class);
+            store.getOperator((UltiToolsPlugin) null, TestEntity2.class);
             assertThat(store.getOperatorCount()).isEqualTo(2);
 
             assertThat(store.isDestroyed()).isFalse();

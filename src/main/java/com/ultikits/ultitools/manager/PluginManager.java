@@ -25,6 +25,7 @@ import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -724,25 +725,57 @@ public class PluginManager {
      */
     private List<Class<? extends UltiToolsPlugin>> sortPluginsByDependencies(
             List<Class<? extends UltiToolsPlugin>> plugins) {
-        
+
         PluginDependencyResolver resolver = new PluginDependencyResolver(Bukkit.getLogger());
-        
+
         try {
             List<Class<? extends UltiToolsPlugin>> sorted = resolver.resolve(plugins);
             Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin load order resolved successfully.");
             return sorted;
         } catch (CircularDependencyException e) {
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] " + e.getMessage());
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
             return new ArrayList<>(plugins);
         } catch (MissingDependencyException e) {
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] " + e.getMessage());
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
             return new ArrayList<>(plugins);
         }
+    }
+
+    /**
+     * Register an external Bukkit plugin adapter with the framework.
+     * Creates an IoC container, scans for annotated components, and registers commands/listeners.
+     * <p>
+     * 注册外部 Bukkit 插件适配器到框架中。
+     * 创建 IoC 容器，扫描注解组件，并注册命令和监听器。
+     *
+     * @param adapter the external plugin adapter
+     * @since 6.2.2
+     */
+    public void registerExternal(ExternalPluginAdapter adapter) {
+        // TODO: Full implementation in Task 4 — create IoC context, scan components, register commands/listeners
+        Bukkit.getLogger().log(Level.INFO,
+                "[UltiTools-API] Registering external plugin: " + adapter.getPluginName());
+    }
+
+    /**
+     * Unregister an external Bukkit plugin adapter from the framework.
+     * Tears down the IoC container, unregisters commands/listeners, and cleans up resources.
+     * <p>
+     * 从框架中注销外部 Bukkit 插件适配器。
+     * 拆除 IoC 容器，注销命令和监听器，并清理资源。
+     *
+     * @param adapter the external plugin adapter
+     * @since 6.2.2
+     */
+    public void unregisterExternal(ExternalPluginAdapter adapter) {
+        // TODO: Full implementation in Task 4 — close IoC context, unregister commands/listeners
+        Bukkit.getLogger().log(Level.INFO,
+                "[UltiTools-API] Unregistering external plugin: " + adapter.getPluginName());
     }
 }
