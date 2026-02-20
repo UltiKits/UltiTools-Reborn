@@ -651,6 +651,33 @@ class ServerMonitorManagerTest {
         }
 
         @Test
+        @DisplayName("getCurrentServerStatusData should include enriched world objects")
+        void shouldIncludeEnrichedWorldObjects() throws Exception {
+            server.addSimpleWorld("test_world");
+
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentServerStatusData");
+            method.setAccessible(true);
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
+
+            JsonArray worlds = data.getAsJsonArray("worlds");
+            assertThat(worlds.size()).isGreaterThan(0);
+
+            JsonObject world = worlds.get(0).getAsJsonObject();
+            assertThat(world.get("name").getAsString()).isNotEmpty();
+            assertThat(world.has("environment")).isTrue();
+            assertThat(world.has("difficulty")).isTrue();
+            assertThat(world.has("pvpEnabled")).isTrue();
+            assertThat(world.has("loadedChunks")).isTrue();
+            assertThat(world.has("playerCount")).isTrue();
+            assertThat(world.has("spawnLocation")).isTrue();
+
+            JsonObject spawnLoc = world.getAsJsonObject("spawnLocation");
+            assertThat(spawnLoc.has("x")).isTrue();
+            assertThat(spawnLoc.has("y")).isTrue();
+            assertThat(spawnLoc.has("z")).isTrue();
+        }
+
+        @Test
         @DisplayName("onlinePlayers should be empty when no players online")
         void shouldReturnEmptyPlayersWhenNoneOnline() throws Exception {
             Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentServerStatusData");

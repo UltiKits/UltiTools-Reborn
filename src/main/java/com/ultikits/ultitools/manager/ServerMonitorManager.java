@@ -260,10 +260,24 @@ public class ServerMonitorManager {
         // 运行时间
         data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
         
-        // 世界列表
+        // 世界列表 (enriched objects)
         JsonArray worlds = new JsonArray();
         for (World world : Bukkit.getWorlds()) {
-            worlds.add(world.getName());
+            JsonObject worldObj = new JsonObject();
+            worldObj.addProperty("name", world.getName());
+            worldObj.addProperty("environment", world.getEnvironment().name());
+            worldObj.addProperty("difficulty", world.getDifficulty().name());
+            worldObj.addProperty("playerCount", world.getPlayers().size());
+            worldObj.addProperty("loadedChunks", world.getLoadedChunks().length);
+            worldObj.addProperty("pvpEnabled", world.getPVP());
+
+            JsonObject spawnLoc = new JsonObject();
+            spawnLoc.addProperty("x", world.getSpawnLocation().getBlockX());
+            spawnLoc.addProperty("y", world.getSpawnLocation().getBlockY());
+            spawnLoc.addProperty("z", world.getSpawnLocation().getBlockZ());
+            worldObj.add("spawnLocation", spawnLoc);
+
+            worlds.add(worldObj);
         }
         data.add("worlds", worlds);
 
