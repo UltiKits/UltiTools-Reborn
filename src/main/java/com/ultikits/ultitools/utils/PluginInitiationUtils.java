@@ -172,6 +172,11 @@ public class PluginInitiationUtils {
                     case "update_config":
                         handleConfigUpdate(data);
                         break;
+                    case "server_properties":
+                        if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                            UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+                        }
+                        break;
 
                     // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
                     case "auth_complete":
@@ -233,6 +238,11 @@ public class PluginInitiationUtils {
             
             // 初始化文件操作管理器
             UltiTools.getInstance().getFileOperationManager().setWebSocketClient(panelWS);
+
+            // 初始化服务器属性管理器
+            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(panelWS);
+            }
             
             // 初始化日志流管理器
             if (UltiTools.getInstance().getLogStreamManager() != null) {
