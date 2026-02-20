@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
@@ -24,7 +25,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 public class FileOperationManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     private static final Set<String> BLOCKED_FILES = new HashSet<String>(Arrays.asList(
         "server.properties", "ops.json", "whitelist.json",

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
@@ -30,7 +31,7 @@ public class LogStreamManager implements Listener {
     private UltiPanelWebSocketClient webSocketClient;
     private final AtomicBoolean streaming = new AtomicBoolean(false);
     private final ConcurrentHashMap<String, Boolean> subscribedClients = new ConcurrentHashMap<>();
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     
     @Getter
     private UltiPanelLogTransmitter logTransmitter;
