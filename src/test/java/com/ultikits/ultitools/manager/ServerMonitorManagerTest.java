@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -619,6 +620,73 @@ class ServerMonitorManagerTest {
             assertThat(memory.has("used")).isTrue();
             assertThat(memory.has("max")).isTrue();
             assertThat(memory.has("free")).isTrue();
+        }
+
+        @Test
+        @DisplayName("getCurrentServerStatusData should include onlinePlayers array")
+        void shouldIncludeOnlinePlayersArray() throws Exception {
+            // Add a player to MockBukkit server
+            server.addPlayer("Steve");
+
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentServerStatusData");
+            method.setAccessible(true);
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
+
+            assertThat(data.has("onlinePlayers")).isTrue();
+            JsonArray onlinePlayers = data.getAsJsonArray("onlinePlayers");
+            assertThat(onlinePlayers.size()).isEqualTo(1);
+
+            JsonObject playerObj = onlinePlayers.get(0).getAsJsonObject();
+            assertThat(playerObj.get("name").getAsString()).isEqualTo("Steve");
+            assertThat(playerObj.has("uuid")).isTrue();
+            assertThat(playerObj.has("world")).isTrue();
+            assertThat(playerObj.has("health")).isTrue();
+            assertThat(playerObj.has("maxHealth")).isTrue();
+            assertThat(playerObj.has("gameMode")).isTrue();
+            assertThat(playerObj.has("x")).isTrue();
+            assertThat(playerObj.has("y")).isTrue();
+            assertThat(playerObj.has("z")).isTrue();
+            assertThat(playerObj.has("op")).isTrue();
+            assertThat(playerObj.has("foodLevel")).isTrue();
+        }
+
+        @Test
+        @DisplayName("getCurrentServerStatusData should include enriched world objects")
+        void shouldIncludeEnrichedWorldObjects() throws Exception {
+            server.addSimpleWorld("test_world");
+
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentServerStatusData");
+            method.setAccessible(true);
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
+
+            JsonArray worlds = data.getAsJsonArray("worlds");
+            assertThat(worlds.size()).isGreaterThan(0);
+
+            JsonObject world = worlds.get(0).getAsJsonObject();
+            assertThat(world.get("name").getAsString()).isNotEmpty();
+            assertThat(world.has("environment")).isTrue();
+            assertThat(world.has("difficulty")).isTrue();
+            assertThat(world.has("pvpEnabled")).isTrue();
+            assertThat(world.has("loadedChunks")).isTrue();
+            assertThat(world.has("playerCount")).isTrue();
+            assertThat(world.has("spawnLocation")).isTrue();
+
+            JsonObject spawnLoc = world.getAsJsonObject("spawnLocation");
+            assertThat(spawnLoc.has("x")).isTrue();
+            assertThat(spawnLoc.has("y")).isTrue();
+            assertThat(spawnLoc.has("z")).isTrue();
+        }
+
+        @Test
+        @DisplayName("onlinePlayers should be empty when no players online")
+        void shouldReturnEmptyPlayersWhenNoneOnline() throws Exception {
+            Method method = ServerMonitorManager.class.getDeclaredMethod("getCurrentServerStatusData");
+            method.setAccessible(true);
+            JsonObject data = (JsonObject) method.invoke(serverMonitorManager);
+
+            assertThat(data.has("onlinePlayers")).isTrue();
+            JsonArray onlinePlayers = data.getAsJsonArray("onlinePlayers");
+            assertThat(onlinePlayers.size()).isEqualTo(0);
         }
     }
 

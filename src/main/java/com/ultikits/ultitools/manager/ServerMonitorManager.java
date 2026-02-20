@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -259,13 +260,47 @@ public class ServerMonitorManager {
         // 运行时间
         data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
         
-        // 世界列表
+        // 世界列表 (enriched objects)
         JsonArray worlds = new JsonArray();
         for (World world : Bukkit.getWorlds()) {
-            worlds.add(world.getName());
+            JsonObject worldObj = new JsonObject();
+            worldObj.addProperty("name", world.getName());
+            worldObj.addProperty("environment", world.getEnvironment().name());
+            worldObj.addProperty("difficulty", world.getDifficulty().name());
+            worldObj.addProperty("playerCount", world.getPlayers().size());
+            worldObj.addProperty("loadedChunks", world.getLoadedChunks().length);
+            worldObj.addProperty("pvpEnabled", world.getPVP());
+
+            JsonObject spawnLoc = new JsonObject();
+            spawnLoc.addProperty("x", world.getSpawnLocation().getBlockX());
+            spawnLoc.addProperty("y", world.getSpawnLocation().getBlockY());
+            spawnLoc.addProperty("z", world.getSpawnLocation().getBlockZ());
+            worldObj.add("spawnLocation", spawnLoc);
+
+            worlds.add(worldObj);
         }
         data.add("worlds", worlds);
-        
+
+        // Online player details
+        JsonArray onlinePlayers = new JsonArray();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            JsonObject playerObj = new JsonObject();
+            playerObj.addProperty("uuid", player.getUniqueId().toString());
+            playerObj.addProperty("name", player.getName());
+            playerObj.addProperty("world", player.getWorld().getName());
+            Location loc = player.getLocation();
+            playerObj.addProperty("x", Math.round(loc.getX() * 10.0) / 10.0);
+            playerObj.addProperty("y", Math.round(loc.getY() * 10.0) / 10.0);
+            playerObj.addProperty("z", Math.round(loc.getZ() * 10.0) / 10.0);
+            playerObj.addProperty("health", player.getHealth());
+            playerObj.addProperty("maxHealth", player.getMaxHealth());
+            playerObj.addProperty("foodLevel", player.getFoodLevel());
+            playerObj.addProperty("gameMode", player.getGameMode().name());
+            playerObj.addProperty("op", player.isOp());
+            onlinePlayers.add(playerObj);
+        }
+        data.add("onlinePlayers", onlinePlayers);
+
         return data;
     }
     
