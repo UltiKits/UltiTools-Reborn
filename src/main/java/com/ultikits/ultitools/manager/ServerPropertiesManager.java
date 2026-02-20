@@ -148,6 +148,7 @@ public class ServerPropertiesManager {
 
     private void sendResponse(JsonObject response) {
         if (webSocketClient != null) {
+            response.addProperty("serverId", webSocketClient.getServerId());
             webSocketClient.sendMessage(response);
         }
     }
