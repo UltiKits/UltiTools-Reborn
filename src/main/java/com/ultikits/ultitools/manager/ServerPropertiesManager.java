@@ -90,46 +90,57 @@ public class ServerPropertiesManager {
             ? data.get("action").getAsString() : "get";
 
         if ("get".equals(action)) {
-            Map<String, String> props = getSafeProperties();
-            JsonObject response = new JsonObject();
-            response.addProperty("type", "server_properties_result");
-            JsonObject payload = new JsonObject();
-            for (Map.Entry<String, String> entry : props.entrySet()) {
-                payload.addProperty(entry.getKey(), entry.getValue());
-            }
-            response.add("data", payload);
-            sendResponse(response);
+            handleGet();
         } else if ("set".equals(action)) {
-            String key = data.has("key") ? data.get("key").getAsString() : null;
-            String value = data.has("value") ? data.get("value").getAsString() : null;
-            if (key != null && value != null) {
-                boolean success = setProperty(key, value);
-                JsonObject response = new JsonObject();
-                response.addProperty("type", "server_properties_result");
-                response.addProperty("action", "set");
-                response.addProperty("success", success);
-                response.addProperty("key", key);
-                sendResponse(response);
-            }
+            handleSet(data);
         } else if ("set_all".equals(action)) {
-            // Bulk update from frontend settings panel
-            JsonObject values = data.has("values") && data.get("values").isJsonObject()
-                ? data.getAsJsonObject("values") : null;
-            if (values != null) {
-                int updated = 0;
-                for (String key : values.keySet()) {
-                    if (setProperty(key, values.get(key).getAsString())) {
-                        updated++;
-                    }
-                }
-                JsonObject response = new JsonObject();
-                response.addProperty("type", "server_properties_result");
-                response.addProperty("action", "set_all");
-                response.addProperty("success", true);
-                response.addProperty("updated", updated);
-                sendResponse(response);
+            handleSetAll(data);
+        }
+    }
+
+    private void handleGet() {
+        Map<String, String> props = getSafeProperties();
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "server_properties_result");
+        JsonObject payload = new JsonObject();
+        for (Map.Entry<String, String> entry : props.entrySet()) {
+            payload.addProperty(entry.getKey(), entry.getValue());
+        }
+        response.add("data", payload);
+        sendResponse(response);
+    }
+
+    private void handleSet(JsonObject data) {
+        String key = data.has("key") ? data.get("key").getAsString() : null;
+        String value = data.has("value") ? data.get("value").getAsString() : null;
+        if (key == null || value == null) return;
+
+        boolean success = setProperty(key, value);
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "server_properties_result");
+        response.addProperty("action", "set");
+        response.addProperty("success", success);
+        response.addProperty("key", key);
+        sendResponse(response);
+    }
+
+    private void handleSetAll(JsonObject data) {
+        JsonObject values = data.has("values") && data.get("values").isJsonObject()
+            ? data.getAsJsonObject("values") : null;
+        if (values == null) return;
+
+        int updated = 0;
+        for (String key : values.keySet()) {
+            if (setProperty(key, values.get(key).getAsString())) {
+                updated++;
             }
         }
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "server_properties_result");
+        response.addProperty("action", "set_all");
+        response.addProperty("success", true);
+        response.addProperty("updated", updated);
+        sendResponse(response);
     }
 
     private void sendResponse(JsonObject response) {
