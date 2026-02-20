@@ -177,6 +177,11 @@ public class PluginInitiationUtils {
                             UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
                         }
                         break;
+                    case "server_properties_result":
+                        // Response from this plugin forwarded back by DO — ignore silently
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                            "Received server_properties_result echo — ignoring");
+                        break;
 
                     // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
                     case "auth_complete":
