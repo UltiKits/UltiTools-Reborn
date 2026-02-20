@@ -1,13 +1,17 @@
 package com.ultikits.ultitools.manager;
 
-import java.io.*;
-import java.util.*;
-import java.util.logging.Level;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
@@ -17,7 +21,6 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 public class ServerPropertiesManager {
     private final File serverRoot;
     private UltiPanelWebSocketClient webSocketClient;
-    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     private static final Set<String> SAFE_KEYS = new HashSet<>(Arrays.asList(
         "motd", "max-players", "view-distance", "simulation-distance",
