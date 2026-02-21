@@ -11,6 +11,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -22,7 +23,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 public class CommandExecutionManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     /**
      * 远程命令执行黑名单

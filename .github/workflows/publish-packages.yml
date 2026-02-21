@@ -83,6 +83,8 @@ jobs:
   publish-central:
     name: 📤 Maven Central
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: ${{ vars.PUBLISH_TO_CENTRAL == 'true' }}
 
     steps:

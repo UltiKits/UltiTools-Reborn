@@ -15,6 +15,7 @@ import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
@@ -37,7 +38,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private boolean isConnected = false;
     private ScheduledFuture<?> heartbeatTask;
     
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private Consumer<JsonObject> messageHandler;
     private Runnable onConnectHandler;
     private Runnable onDisconnectHandler;

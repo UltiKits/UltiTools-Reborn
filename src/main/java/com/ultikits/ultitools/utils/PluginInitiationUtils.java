@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
@@ -8,6 +9,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -155,6 +157,7 @@ public class PluginInitiationUtils {
                     
                     // 数据流消息
                     case "log_stream":
+                    case "log_stream_control":
                         UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
                         break;
                     case "backup_operation":
@@ -170,6 +173,16 @@ public class PluginInitiationUtils {
                         break;
                     case "update_config":
                         handleConfigUpdate(data);
+                        break;
+                    case "server_properties":
+                        if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                            UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+                        }
+                        break;
+                    case "server_properties_result":
+                        // Response from this plugin forwarded back by DO — ignore silently
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                            "Received server_properties_result echo — ignoring");
                         break;
 
                     // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
@@ -211,6 +224,9 @@ public class PluginInitiationUtils {
             
             // 上传配置
             uploadConfig();
+
+            // 上传服务器属性到云端
+            uploadServerProperties();
         });
 
         // 连接到WebSocket服务器
@@ -232,6 +248,11 @@ public class PluginInitiationUtils {
             
             // 初始化文件操作管理器
             UltiTools.getInstance().getFileOperationManager().setWebSocketClient(panelWS);
+
+            // 初始化服务器属性管理器
+            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(panelWS);
+            }
             
             // 初始化日志流管理器
             if (UltiTools.getInstance().getLogStreamManager() != null) {
@@ -254,6 +275,30 @@ public class PluginInitiationUtils {
      */
     private static void handleConfigUpdate(JsonObject data) {
         if (data != null) {
+            // Route server_properties to dedicated manager
+            String fileName = (data.has("fileName") && !data.get("fileName").isJsonNull())
+                    ? data.get("fileName").getAsString() : null;
+            if ("server_properties".equals(fileName)) {
+                ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
+                if (spm != null) {
+                    // Parse configData as JSON and forward as set_all action
+                    String configDataStr = (data.has("configData") && !data.get("configData").isJsonNull())
+                            ? data.get("configData").getAsString() : null;
+                    if (configDataStr != null) {
+                        JsonObject spData = new JsonObject();
+                        spData.addProperty("action", "set_all");
+                        spData.add("values", com.google.gson.JsonParser.parseString(configDataStr).getAsJsonObject());
+                        spm.handleServerProperties(spData);
+                    } else {
+                        // No configData means "get" request
+                        JsonObject spData = new JsonObject();
+                        spData.addProperty("action", "get");
+                        spm.handleServerProperties(spData);
+                    }
+                }
+                return;
+            }
+
             // 只处理明确的配置更新请求（包含requestId），忽略服务器的确认消息
             if (data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
@@ -683,6 +728,32 @@ public class PluginInitiationUtils {
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("正在上传本地配置..."));
         panelWS.sendMessage(configMessage);
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("配置上传成功!"));
+    }
+
+    /**
+     * Upload server.properties safe keys to cloud for panel editing.
+     */
+    private static void uploadServerProperties() {
+        ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
+        if (spm == null) return;
+
+        Map<String, String> props = spm.getSafeProperties();
+        if (props.isEmpty()) return;
+
+        JsonObject propsJson = new JsonObject();
+        for (Map.Entry<String, String> entry : props.entrySet()) {
+            propsJson.addProperty(entry.getKey(), entry.getValue());
+        }
+
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "server_properties_result");
+        message.addProperty("serverId", panelWS.getServerId());
+
+        message.add("data", propsJson);
+
+        UltiTools.getInstance().getLogger().log(Level.FINE, "正在上传服务器属性配置...");
+        panelWS.sendMessage(message);
+        UltiTools.getInstance().getLogger().log(Level.FINE, "服务器属性配置上传成功!");
     }
 
     public static void stopWebsocket() {

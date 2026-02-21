@@ -51,6 +51,7 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
@@ -105,6 +106,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private LogStreamManager logStreamManager;
     @Getter
     private PlayerEventManager playerEventManager;
+    @Getter
+    private ServerPropertiesManager serverPropertiesManager;
     @Getter
     private UpdateManager updateManager;
     @Getter
@@ -262,6 +265,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         fileOperationManager = new FileOperationManager();
         logStreamManager = LogStreamManager.getInstance();
         playerEventManager = new PlayerEventManager();
+        serverPropertiesManager = new ServerPropertiesManager(new File(System.getProperty("user.dir")));
     }
 
     private boolean attemptCloudLogin() {

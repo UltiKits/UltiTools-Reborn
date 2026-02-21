@@ -892,7 +892,7 @@ class LogStreamManagerTest {
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
             JsonObject sentMessage = captor.getValue();
-            assertThat(sentMessage.get("type").getAsString()).isEqualTo("log_stream");
+            assertThat(sentMessage.get("type").getAsString()).isEqualTo("log_stream_response");
             assertThat(sentMessage.has("timestamp")).isTrue();
             assertThat(sentMessage.has("serverId")).isTrue();
             assertThat(sentMessage.has("data")).isTrue();
@@ -1146,7 +1146,7 @@ class LogStreamManagerTest {
             verify(mockWebSocketClient).sendMessage(captor.capture());
             
             JsonObject message = captor.getValue();
-            assertThat(message.get("type").getAsString()).isEqualTo("log_stream");
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
         }
 
         @Test
