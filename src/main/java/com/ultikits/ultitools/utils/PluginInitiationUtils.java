@@ -276,12 +276,14 @@ public class PluginInitiationUtils {
     private static void handleConfigUpdate(JsonObject data) {
         if (data != null) {
             // Route server_properties to dedicated manager
-            String fileName = data.has("fileName") ? data.get("fileName").getAsString() : null;
+            String fileName = (data.has("fileName") && !data.get("fileName").isJsonNull())
+                    ? data.get("fileName").getAsString() : null;
             if ("server_properties".equals(fileName)) {
                 ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
                 if (spm != null) {
                     // Parse configData as JSON and forward as set_all action
-                    String configDataStr = data.has("configData") ? data.get("configData").getAsString() : null;
+                    String configDataStr = (data.has("configData") && !data.get("configData").isJsonNull())
+                            ? data.get("configData").getAsString() : null;
                     if (configDataStr != null) {
                         JsonObject spData = new JsonObject();
                         spData.addProperty("action", "set_all");

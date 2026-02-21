@@ -134,6 +134,9 @@ public class ServerPropertiesManager {
 
         int updated = 0;
         for (String key : values.keySet()) {
+            if (values.get(key).isJsonNull()) {
+                continue;
+            }
             if (setProperty(key, values.get(key).getAsString())) {
                 updated++;
             }
