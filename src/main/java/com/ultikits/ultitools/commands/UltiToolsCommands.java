@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.bukkit.ChatColor;
+
 import org.bukkit.command.CommandSender;
 
 import com.ultikits.ultitools.UltiTools;
@@ -41,12 +41,12 @@ public class UltiToolsCommands extends AbstractCommandExecutor {
         for (UltiToolsPlugin plugin : pluginList) {
             if (plugin.getPluginName().equalsIgnoreCase(name)) {
                 plugin.reloadSelf();
-                sender.sendMessage(ChatColor.GREEN + String.format(
+                sender.sendMessage(String.format(
                         UltiTools.getInstance().i18n("模块 %s 已重载"), name));
                 return;
             }
         }
-        sender.sendMessage(ChatColor.RED + String.format(
+        sender.sendMessage(String.format(
                 UltiTools.getInstance().i18n("模块 %s 不存在，请使用 /ul list 查看已加载的模块"), name));
     }
 
