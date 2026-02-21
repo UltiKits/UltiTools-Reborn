@@ -26,6 +26,8 @@ jobs:
   validate:
     name: ✅ Validate & Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # 🔐 使用受保护的 Environment，需要在 GitHub Settings 中配置
     # 设置路径: Repository Settings → Environments → 创建 "release" → Required reviewers
     environment: release
@@ -98,6 +100,8 @@ jobs:
     name: 🔨 Build Release
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
     - name: 📥 Checkout code
@@ -130,6 +134,8 @@ jobs:
     name: 🚀 Create Release
     needs: [validate, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: ${{ github.event.inputs.dry_run != 'true' }}
     
     steps:
@@ -232,6 +238,8 @@ jobs:
     name: 📋 Dry Run Report
     needs: [validate, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: ${{ github.event.inputs.dry_run == 'true' }}
     
     steps:

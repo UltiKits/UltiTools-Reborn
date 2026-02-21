@@ -83,12 +83,20 @@ public class HttpDownloadUtils {
                 throw new IOException("Failed to create directory: " + savePath);
             }
 
-            File file = new File(saveDir, fileName);
-            
+            // Path traversal protection: strip directory components from fileName
+            String sanitizedName = new File(fileName).getName();
+            if (sanitizedName.isEmpty() || sanitizedName.equals("..") || sanitizedName.equals(".")) {
+                throw new IllegalArgumentException("Invalid file name: " + fileName);
+            }
+            File file = new File(saveDir, sanitizedName);
+            if (!file.getCanonicalPath().startsWith(saveDir.getCanonicalPath() + File.separator)) {
+                throw new SecurityException("Path traversal detected: " + fileName);
+            }
+
             // 使用try-with-resources确保资源正确关闭
             try (InputStream inputStream = conn.getInputStream();
                  FileOutputStream fos = new FileOutputStream(file)) {
-                
+
                 byte[] buffer = new byte[8192]; // 增大缓冲区提高性能
                 int bytesRead;
                 while ((bytesRead = inputStream.read(buffer)) != -1) {
@@ -150,12 +158,20 @@ public class HttpDownloadUtils {
                 throw new IOException("Failed to create directory: " + savePath);
             }
 
-            File file = new File(saveDir, fileName);
-            
+            // Path traversal protection: strip directory components from fileName
+            String sanitizedName = new File(fileName).getName();
+            if (sanitizedName.isEmpty() || sanitizedName.equals("..") || sanitizedName.equals(".")) {
+                throw new IllegalArgumentException("Invalid file name: " + fileName);
+            }
+            File file = new File(saveDir, sanitizedName);
+            if (!file.getCanonicalPath().startsWith(saveDir.getCanonicalPath() + File.separator)) {
+                throw new SecurityException("Path traversal detected: " + fileName);
+            }
+
             // 使用try-with-resources确保资源正确关闭
             try (InputStream inputStream = conn.getInputStream();
                  FileOutputStream fos = new FileOutputStream(file)) {
-                
+
                 byte[] buffer = new byte[8192];
                 int bytesRead;
                 long totalBytesRead = 0;

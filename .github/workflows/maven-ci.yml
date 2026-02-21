@@ -11,6 +11,8 @@ jobs:
   test:
     name: 🧪 Test & Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
     - name: 📥 Checkout code
@@ -96,6 +98,8 @@ jobs:
     name: 🔨 Build SNAPSHOT
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
