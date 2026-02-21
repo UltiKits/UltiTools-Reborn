@@ -316,6 +316,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         throw new IllegalArgumentException("The embedded resource '" + fileName + "' cannot be found in " + fileName);
                     }
                     File outFile = new File(resourceFolderPath, fileName);
+                    // Zip Slip protection: ensure extracted file stays within resource folder
+                    String canonicalDest = outFile.getCanonicalPath();
+                    String canonicalBase = new File(resourceFolderPath).getCanonicalPath() + File.separator;
+                    if (!canonicalDest.startsWith(canonicalBase)) {
+                        getLogger().warn("Skipping jar entry with path traversal: " + fileName);
+                        continue;
+                    }
                     try {
                         if (outFile.exists()) {
                             continue;
