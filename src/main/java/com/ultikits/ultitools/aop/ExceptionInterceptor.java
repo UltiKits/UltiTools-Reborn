@@ -14,8 +14,11 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.context.ContextHolder;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.TriggerContext;
 
 /**
  * AOP interceptor that handles @ExceptionCatch annotated methods.
@@ -102,6 +105,21 @@ public class ExceptionInterceptor implements MethodInterceptor {
         if (!annotation.silent()) {
             LOGGER.log(Level.WARNING, "Exception caught in " + method.getDeclaringClass().getSimpleName() +
                     "." + method.getName() + "(): " + e.getMessage(), e);
+        }
+
+        // Report to error collector
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance != null) {
+                ErrorReportCollector erc = instance.getErrorReportCollector();
+                if (erc != null) {
+                    erc.reportError(e, method.getDeclaringClass().getSimpleName(),
+                            TriggerContext.aop(method.getDeclaringClass().getSimpleName(),
+                                    method.getName()));
+                }
+            }
+        } catch (Exception ignored) {
+            // Never re-enter logging from error reporting
         }
 
         // Try custom handler first

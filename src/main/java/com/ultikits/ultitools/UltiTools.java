@@ -45,6 +45,7 @@ import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.DataStoreManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.LogStreamManager;
@@ -112,6 +113,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private UpdateManager updateManager;
     @Getter
     private EventBus eventBus;
+    @Getter
+    private ErrorReportCollector errorReportCollector;
 
     /**
      * Returns the instance of the UltiTools.
@@ -193,6 +196,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
             initWebSocket();
+            CloudAuthManager.startTokenRefreshScheduler();
         }
 
         registerCommands();
@@ -266,6 +270,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         logStreamManager = LogStreamManager.getInstance();
         playerEventManager = new PlayerEventManager();
         serverPropertiesManager = new ServerPropertiesManager(new File(System.getProperty("user.dir")));
+        errorReportCollector = new ErrorReportCollector();
+        errorReportCollector.init();
     }
 
     private boolean attemptCloudLogin() {
@@ -354,11 +360,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
             eventBus.shutdown();
         }
 
+        // 关闭错误报告收集器
+        if (errorReportCollector != null) {
+            errorReportCollector.shutdown();
+        }
+
         // 关闭日志流管理器
         if (logStreamManager != null) {
             logStreamManager.shutdown();
         }
 
+        CloudAuthManager.stopTokenRefreshScheduler();
         CloudAuthManager.stopPolling();
         if (dependenceManagers != null) {
             dependenceManagers.closeAdventure();

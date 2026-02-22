@@ -68,10 +68,21 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("stopWebsocket 方法应该存在且签名正确")
         void stopWebsocketMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod("stopWebsocket");
-            
+
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(void.class);
+        }
+
+        @Test
+        @DisplayName("reinitWebSocket 方法应该存在且签名正确")
+        void reinitWebSocketMethodShouldExist() throws NoSuchMethodException {
+            Method method = PluginInitiationUtils.class.getDeclaredMethod("reinitWebSocket");
+
+            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
+            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+            assertThat(method.getParameterCount()).isEqualTo(0);
         }
     }
 
@@ -347,10 +358,54 @@ class PluginInitiationUtilsWebSocketTest {
             List<String> configTypes = Arrays.asList(
                 "upload_config", "update_config"
             );
-            
+
             for (String type : configTypes) {
                 assertThat(type).isNotEmpty();
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("reinitWebSocket 方法测试")
+    class ReinitWebSocketTests {
+
+        @Test
+        @DisplayName("reinitWebSocket 方法应该存在且签名正确")
+        void reinitWebSocketMethodShouldExistWithCorrectSignature() throws NoSuchMethodException {
+            Method method = PluginInitiationUtils.class.getDeclaredMethod("reinitWebSocket");
+
+            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
+            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+            assertThat(method.getParameterCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("reinitWebSocket 方法应该是公共方法")
+        void reinitWebSocketMethodShouldBePublic() throws NoSuchMethodException {
+            Method method = PluginInitiationUtils.class.getDeclaredMethod("reinitWebSocket");
+
+            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
+        }
+
+        @Test
+        @DisplayName("panelWS 字段应该可以被 reinitWebSocket 访问")
+        void panelWSFieldShouldBeAccessibleByReinitWebSocket() throws NoSuchFieldException {
+            Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
+
+            assertThat(field.getType().getName())
+                .isEqualTo("com.ultikits.ultitools.websocket.UltiPanelWebSocketClient");
+            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+        }
+
+        @Test
+        @DisplayName("token 字段应该可以被 reinitWebSocket 使用")
+        void tokenFieldShouldBeUsableByReinitWebSocket() throws NoSuchFieldException {
+            Field field = PluginInitiationUtils.class.getDeclaredField("token");
+
+            assertThat(field.getType().getName())
+                .isEqualTo("com.ultikits.ultitools.entities.TokenEntity");
+            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
         }
     }
 

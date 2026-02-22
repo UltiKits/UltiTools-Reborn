@@ -337,6 +337,86 @@ class UltiPanelWebSocketClientTest {
     }
 
     @Nested
+    @DisplayName("重连耗尽处理器测试")
+    class ReconnectExhaustedHandlerTests {
+
+        @Test
+        @DisplayName("setOnReconnectExhaustedHandler 方法应该存在")
+        void setOnReconnectExhaustedHandlerMethodShouldExist() throws NoSuchMethodException {
+            Method method = UltiPanelWebSocketClient.class.getDeclaredMethod(
+                "setOnReconnectExhaustedHandler", Runnable.class);
+
+            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+            assertThat(method.getParameterTypes()).hasSize(1);
+            assertThat(method.getParameterTypes()[0]).isEqualTo(Runnable.class);
+        }
+
+        @Test
+        @DisplayName("应该能设置重连耗尽处理器")
+        void shouldSetOnReconnectExhaustedHandler() throws Exception {
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+
+            Runnable handler = new Runnable() {
+                @Override
+                public void run() {
+                }
+            };
+            client.setOnReconnectExhaustedHandler(handler);
+
+            Field handlerField = UltiPanelWebSocketClient.class.getDeclaredField(
+                "onReconnectExhaustedHandler");
+            handlerField.setAccessible(true);
+            assertThat(handlerField.get(client)).isEqualTo(handler);
+        }
+
+        @Test
+        @DisplayName("onReconnectExhaustedHandler 字段应该存在且为私有 Runnable 类型")
+        void onReconnectExhaustedHandlerFieldShouldExist() throws NoSuchFieldException {
+            Field field = UltiPanelWebSocketClient.class.getDeclaredField(
+                "onReconnectExhaustedHandler");
+
+            assertThat(Modifier.isPrivate(field.getModifiers())).isTrue();
+            assertThat(field.getType()).isEqualTo(Runnable.class);
+        }
+
+        @Test
+        @DisplayName("MAX_RECONNECT_ATTEMPTS 常量应该为 5")
+        void maxReconnectAttemptsShouldBeFive() throws Exception {
+            Field field = UltiPanelWebSocketClient.class.getDeclaredField("MAX_RECONNECT_ATTEMPTS");
+            field.setAccessible(true);
+
+            int value = (Integer) field.get(null);
+            assertThat(value).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("INITIAL_RECONNECT_DELAY_MS 常量应该为 5000")
+        void initialReconnectDelayMsShouldBeFiveThousand() throws Exception {
+            Field field = UltiPanelWebSocketClient.class.getDeclaredField(
+                "INITIAL_RECONNECT_DELAY_MS");
+            field.setAccessible(true);
+
+            long value = (Long) field.get(null);
+            assertThat(value).isEqualTo(5000L);
+        }
+
+        @Test
+        @DisplayName("intentionalDisconnect 字段应该存在且初始为 false")
+        void intentionalDisconnectFieldShouldExistAndDefaultToFalse() throws Exception {
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+
+            Field field = UltiPanelWebSocketClient.class.getDeclaredField("intentionalDisconnect");
+            field.setAccessible(true);
+
+            assertThat(field).isNotNull();
+            assertThat((boolean) field.get(client)).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("消息类型处理测试")
     class MessageTypeHandlingTests {
 

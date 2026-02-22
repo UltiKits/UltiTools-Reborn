@@ -37,6 +37,8 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.TriggerContext;
 
 import lombok.Getter;
 
@@ -224,7 +226,11 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         // Check for async annotations
         AsyncCommand asyncCommand = method.getAnnotation(AsyncCommand.class);
         boolean isAsync = asyncCommand != null || method.isAnnotationPresent(RunAsync.class);
-        
+
+        // Capture trigger context BEFORE async dispatch (player info as immutable strings)
+        final TriggerContext triggerCtx = TriggerContext.command(context.getSender(),
+                method.getName());
+
         BukkitRunnable runnable = new BukkitRunnable() {
             @Override
             public void run() {
@@ -237,6 +243,16 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
                     Logger.getLogger(BaseCommandExecutor.class.getName())
                             .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
+                    // Report to error collector
+                    try {
+                        ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                        if (erc != null) {
+                            Throwable cause = e.getCause() != null ? e.getCause() : e;
+                            erc.reportError(cause, extractModuleName(), triggerCtx);
+                        }
+                    } catch (Exception ignored) {
+                        // Never re-enter logging from error reporting
+                    }
                 } finally {
                     lockValidator.releaseLock(context);
                 }
@@ -604,5 +620,19 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      */
     public void removeValidator(CommandValidator validator) {
         validatorChain.removeValidator(validator);
+    }
+
+    /**
+     * Extract module name from the concrete command executor class.
+     * Uses the simple class name as a reasonable approximation.
+     */
+    private String extractModuleName() {
+        String className = this.getClass().getSimpleName();
+        // Try to derive from CmdExecutor annotation description
+        CmdExecutor annotation = this.getClass().getAnnotation(CmdExecutor.class);
+        if (annotation != null && !annotation.description().isEmpty()) {
+            return annotation.description();
+        }
+        return className;
     }
 }

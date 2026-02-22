@@ -341,6 +341,15 @@ public class ServerMonitorManager {
                 }
             }
 
+            // 从错误报告收集器排空错误
+            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+            if (erc != null) {
+                JsonArray errors = erc.drainErrors(10);
+                if (errors.size() > 0) {
+                    data.add("errors", errors);
+                }
+            }
+
             message.add("data", data);
             webSocketClient.sendMessage(message);
 
@@ -486,6 +495,17 @@ public class ServerMonitorManager {
             String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     
+    /**
+     * Get current 1-minute average TPS.
+     *
+     * @return the 1-minute average TPS
+     * @since 6.2.3
+     */
+    public double getCurrentTPS() {
+        double[] tps = calculateTPS();
+        return Math.round(tps[0] * 100.0) / 100.0;
+    }
+
     /**
      * 计算TPS - 返回 [1分钟, 5分钟, 15分钟] 平均值
      */

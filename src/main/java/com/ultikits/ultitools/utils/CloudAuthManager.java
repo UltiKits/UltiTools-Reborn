@@ -36,14 +36,23 @@ public class CloudAuthManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final long POLL_INTERVAL_MS = 3000;
     private static final int MAX_POLL_ATTEMPTS = 100; // 5 minutes at 3s intervals
+    /** How often to check if the access token needs refreshing (1 hour) */
+    private static final long TOKEN_REFRESH_CHECK_INTERVAL_MS = 60 * 60 * 1000L;
+    /** Refresh the token when it has less than this many seconds remaining (2 hours) */
+    private static final long TOKEN_REFRESH_THRESHOLD_SECONDS = 2 * 60 * 60L;
+    /** Basic auth header for OAuth2 client credentials (client:112233) */
+    private static final String OAUTH2_BASIC_AUTH = "Basic Y2xpZW50OjExMjIzMw==";
 
     private static TokenEntity currentToken;
     private static ScheduledExecutorService pollExecutor;
     private static ScheduledFuture<?> pollTask;
+    private static ScheduledExecutorService refreshExecutor;
+    private static ScheduledFuture<?> refreshTask;
 
     /**
      * Try to load a saved token from data.json on startup.
-     * Returns the token if valid and not expired, null otherwise.
+     * If the access token is expired but a refresh token exists, attempts automatic refresh.
+     * Returns the token if valid, null otherwise.
      */
     public static TokenEntity loadSavedToken() {
         try {
@@ -64,7 +73,22 @@ public class CloudAuthManager {
             token.decodeJwtPayload();
 
             if (token.isExpired()) {
-                UltiTools.getInstance().getLogger().log(Level.INFO, "Saved cloud token has expired, will need re-login");
+                // Access token expired — try refreshing with the refresh token
+                if (token.getRefresh_token() != null && !token.getRefresh_token().isEmpty()) {
+                    UltiTools.getInstance().getLogger().log(Level.INFO,
+                        "Saved cloud token has expired, attempting automatic refresh...");
+                    TokenEntity refreshed = refreshToken(token.getRefresh_token());
+                    if (refreshed != null) {
+                        UltiTools.getInstance().getLogger().log(Level.INFO,
+                            "Cloud token refreshed successfully!");
+                        return refreshed;
+                    }
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        "Token refresh failed. Use /ulticloud login to re-authenticate.");
+                } else {
+                    UltiTools.getInstance().getLogger().log(Level.INFO,
+                        "Saved cloud token has expired and no refresh token available. Use /ulticloud login.");
+                }
                 return null;
             }
 
@@ -74,6 +98,53 @@ public class CloudAuthManager {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Failed to load saved cloud token: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Refresh the access token using the refresh token.
+     * Calls POST /oauth/token with grant_type=refresh_token.
+     *
+     * @param refreshTokenValue the refresh token string
+     * @return a new TokenEntity with fresh access and refresh tokens, or null on failure
+     */
+    public static TokenEntity refreshToken(String refreshTokenValue) {
+        String apiUrl = HttpRequestUtils.getBaseUrl();
+        if (apiUrl == null || apiUrl.trim().isEmpty()) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "Cannot refresh token: API URL not configured");
+            return null;
+        }
+        apiUrl = apiUrl.trim();
+
+        try {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Authorization", OAUTH2_BASIC_AUTH);
+
+            Map<String, Object> formData = new HashMap<>();
+            formData.put("grant_type", "refresh_token");
+            formData.put("refresh_token", refreshTokenValue);
+
+            SimpleHttpClient.Response response = SimpleHttpClient.post(
+                apiUrl + "/oauth/token",
+                headers,
+                formData
+            );
+
+            if (response.isOk()) {
+                TokenEntity newToken = GSON.fromJson(response.body(), TokenEntity.class);
+                if (newToken != null && newToken.getAccess_token() != null) {
+                    newToken.decodeJwtPayload();
+                    saveToken(newToken);
+                    return newToken;
+                }
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Token refresh returned invalid token data");
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "Token refresh failed: HTTP " + response.getStatus() + " - " + response.body());
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "Token refresh error: " + e.getMessage());
+        }
+        return null;
     }
 
     /**
@@ -240,6 +311,7 @@ public class CloudAuthManager {
                                 try {
                                     PluginInitiationUtils.loginWithToken(token);
                                     PluginInitiationUtils.initWebsocket();
+                                    startTokenRefreshScheduler();
                                 } catch (Exception e) {
                                     UltiTools.getInstance().getLogger().log(Level.WARNING,
                                         "Cloud features initialization failed: " + e.getMessage());
@@ -258,6 +330,59 @@ public class CloudAuthManager {
                 UltiTools.getInstance().getLogger().log(Level.FINE, "Magic link poll failed: " + e.getMessage());
             }
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Start a background scheduler that proactively refreshes the access token
+     * before it expires (checks every hour, refreshes when &lt;2 hours remaining).
+     */
+    public static void startTokenRefreshScheduler() {
+        stopTokenRefreshScheduler();
+        refreshExecutor = Executors.newSingleThreadScheduledExecutor();
+        refreshTask = refreshExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                if (currentToken == null || currentToken.getAccess_token() == null) {
+                    return;
+                }
+                Long exp = currentToken.getExp();
+                if (exp == null) {
+                    return;
+                }
+                long remainingSeconds = exp - (System.currentTimeMillis() / 1000);
+                if (remainingSeconds < TOKEN_REFRESH_THRESHOLD_SECONDS) {
+                    String refreshTokenValue = currentToken.getRefresh_token();
+                    if (refreshTokenValue != null && !refreshTokenValue.isEmpty()) {
+                        UltiTools.getInstance().getLogger().log(Level.INFO,
+                            "Access token expires in " + remainingSeconds + "s, refreshing proactively...");
+                        TokenEntity refreshed = refreshToken(refreshTokenValue);
+                        if (refreshed != null) {
+                            UltiTools.getInstance().getLogger().log(Level.INFO,
+                                "Proactive token refresh successful");
+                        } else {
+                            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                                "Proactive token refresh failed — WebSocket may disconnect on next reconnect");
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "Token refresh scheduler error: " + e.getMessage());
+            }
+        }, TOKEN_REFRESH_CHECK_INTERVAL_MS, TOKEN_REFRESH_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Stop the background token refresh scheduler.
+     */
+    public static void stopTokenRefreshScheduler() {
+        if (refreshTask != null) {
+            refreshTask.cancel(false);
+            refreshTask = null;
+        }
+        if (refreshExecutor != null) {
+            refreshExecutor.shutdown();
+            refreshExecutor = null;
+        }
     }
 
     /**
