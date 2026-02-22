@@ -43,6 +43,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private Runnable onConnectHandler;
     private Runnable onDisconnectHandler;
     private Consumer<String> onErrorHandler;
+    private Runnable onReconnectExhaustedHandler;
     private static final int MAX_RECONNECT_ATTEMPTS = 5;
     private static final long INITIAL_RECONNECT_DELAY_MS = 5000;
     private int reconnectAttempts = 0;
@@ -195,6 +196,15 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
+     * 设置重连耗尽处理器（当所有重连尝试都失败后调用）
+     *
+     * @param handler 重连耗尽处理器
+     */
+    public void setOnReconnectExhaustedHandler(Runnable handler) {
+        this.onReconnectExhaustedHandler = handler;
+    }
+
+    /**
      * 启动心跳任务
      */
     private void startHeartbeat() {
@@ -254,19 +264,32 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             onDisconnectHandler.run();
         }
 
-        if (!intentionalDisconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !heartbeatExecutor.isShutdown()) {
-            reconnectAttempts++;
-            long delay = INITIAL_RECONNECT_DELAY_MS * reconnectAttempts;
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("Attempting WebSocket reconnection %d/%d in %ds...",
-                    reconnectAttempts, MAX_RECONNECT_ATTEMPTS, delay / 1000));
-            heartbeatExecutor.schedule(() -> {
-                try {
-                    reconnect();
-                } catch (Exception e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket reconnection failed: " + e.getMessage());
-                }
-            }, delay, TimeUnit.MILLISECONDS);
+        if (!intentionalDisconnect && !heartbeatExecutor.isShutdown()) {
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                long delay = INITIAL_RECONNECT_DELAY_MS * reconnectAttempts;
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                    String.format("Attempting WebSocket reconnection %d/%d in %ds...",
+                        reconnectAttempts, MAX_RECONNECT_ATTEMPTS, delay / 1000));
+                heartbeatExecutor.schedule(() -> {
+                    try {
+                        reconnect();
+                    } catch (Exception e) {
+                        UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket reconnection failed: " + e.getMessage());
+                    }
+                }, delay, TimeUnit.MILLISECONDS);
+            } else if (onReconnectExhaustedHandler != null) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "All WebSocket reconnection attempts exhausted, attempting token refresh and re-initialization...");
+                heartbeatExecutor.schedule(() -> {
+                    try {
+                        onReconnectExhaustedHandler.run();
+                    } catch (Exception e) {
+                        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                            "WebSocket re-initialization after reconnect exhaustion failed: " + e.getMessage());
+                    }
+                }, INITIAL_RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS);
+            }
         }
     }
 

@@ -229,6 +229,9 @@ public class PluginInitiationUtils {
             uploadServerProperties();
         });
 
+        // 设置重连耗尽处理器 — 尝试刷新令牌并重新建立连接
+        panelWS.setOnReconnectExhaustedHandler(PluginInitiationUtils::reinitWebSocket);
+
         // 连接到WebSocket服务器
         panelWS.connect();
     }
@@ -754,6 +757,58 @@ public class PluginInitiationUtils {
         UltiTools.getInstance().getLogger().log(Level.FINE, "正在上传服务器属性配置...");
         panelWS.sendMessage(message);
         UltiTools.getInstance().getLogger().log(Level.FINE, "服务器属性配置上传成功!");
+    }
+
+    /**
+     * Re-initialize the WebSocket connection with a fresh token.
+     * Disconnects the old client (if any), refreshes the token if needed,
+     * and creates a new WebSocket client.
+     * <br>
+     * 使用新令牌重新初始化WebSocket连接。
+     */
+    public static void reinitWebSocket() {
+        UltiTools.getInstance().getLogger().log(Level.INFO, "Re-initializing WebSocket connection...");
+
+        // Disconnect old client
+        if (panelWS != null) {
+            try {
+                panelWS.disconnect();
+            } catch (Exception e) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Error disconnecting old WebSocket: " + e.getMessage());
+            }
+            panelWS = null;
+        }
+
+        // Ensure token is valid — refresh if needed
+        if (token == null || token.isExpired()) {
+            if (token != null && token.getRefresh_token() != null && !token.getRefresh_token().isEmpty()) {
+                TokenEntity refreshed = CloudAuthManager.refreshToken(token.getRefresh_token());
+                if (refreshed != null) {
+                    token = refreshed;
+                    UltiTools.getInstance().getLogger().log(Level.INFO,
+                        "Token refreshed for WebSocket re-initialization");
+                } else {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        "Token refresh failed — cannot re-initialize WebSocket");
+                    return;
+                }
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "No valid token available — cannot re-initialize WebSocket");
+                return;
+            }
+        }
+
+        // Create new WebSocket connection
+        try {
+            initWebsocket();
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                "WebSocket re-initialized successfully");
+        } catch (IOException e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "WebSocket re-initialization failed: " + e.getMessage());
+        }
     }
 
     public static void stopWebsocket() {

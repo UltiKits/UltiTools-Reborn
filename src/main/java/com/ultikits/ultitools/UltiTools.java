@@ -196,6 +196,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
             initWebSocket();
+            CloudAuthManager.startTokenRefreshScheduler();
         }
 
         registerCommands();
@@ -369,6 +370,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             logStreamManager.shutdown();
         }
 
+        CloudAuthManager.stopTokenRefreshScheduler();
         CloudAuthManager.stopPolling();
         if (dependenceManagers != null) {
             dependenceManagers.closeAdventure();
