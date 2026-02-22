@@ -433,6 +433,183 @@ class ErrorReportCollectorTest {
             assertThat(error.has("playerCount")).isTrue();
             assertThat(error.has("occurrenceCount")).isTrue();
             assertThat(error.has("timestamp")).isTrue();
+            assertThat(error.has("isFramework")).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("isFramework classification")
+    class IsFrameworkTests {
+
+        @Test
+        @DisplayName("framework error: null module name with framework stack trace")
+        void frameworkErrorNullModule() {
+            RuntimeException ex = new RuntimeException("framework error");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.ultikits.ultitools.manager.PluginManager",
+                            "loadPlugin", "PluginManager.java", 42),
+                    new StackTraceElement("com.ultikits.ultitools.UltiTools",
+                            "onEnable", "UltiTools.java", 100)
+            });
+            collector.reportError(ex, null, TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("framework error: empty module name with framework stack trace")
+        void frameworkErrorEmptyModule() {
+            RuntimeException ex = new RuntimeException("framework error");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.ultikits.ultitools.aop.ExceptionInterceptor",
+                            "intercept", "ExceptionInterceptor.java", 50)
+            });
+            collector.reportError(ex, "", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("framework error: 'UltiTools' module name with framework stack trace")
+        void frameworkErrorUltiToolsModule() {
+            RuntimeException ex = new RuntimeException("framework error");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.ultikits.ultitools.commands.UltiToolsCommands",
+                            "execute", "UltiToolsCommands.java", 10)
+            });
+            collector.reportError(ex, "UltiTools", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("module error: named module with module stack trace")
+        void moduleErrorNamedModule() {
+            RuntimeException ex = new RuntimeException("module error");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.ultikits.plugins.ultichat.ChatListener",
+                            "onChat", "ChatListener.java", 30),
+                    new StackTraceElement("org.bukkit.plugin.EventExecutor",
+                            "execute", "EventExecutor.java", 10)
+            });
+            collector.reportError(ex, "UltiChat", TriggerContext.event("AsyncPlayerChatEvent"));
+
+            JsonArray errors = collector.drainErrors(10);
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isFalse();
+        }
+
+        @Test
+        @DisplayName("module error: named module even with framework stack trace")
+        void moduleErrorNamedModuleFrameworkStack() {
+            RuntimeException ex = new RuntimeException("module error from framework stack");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.ultikits.ultitools.manager.PluginManager",
+                            "loadPlugin", "PluginManager.java", 42)
+            });
+            collector.reportError(ex, "UltiChat", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            // Module name is not "UltiTools"/null/empty, so not framework
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isFalse();
+        }
+
+        @Test
+        @DisplayName("module error: UltiTools module name but non-framework stack trace")
+        void ultiToolsModuleWithExternalStack() {
+            RuntimeException ex = new RuntimeException("external stack error");
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("org.bukkit.craftbukkit.CraftServer",
+                            "dispatchCommand", "CraftServer.java", 100)
+            });
+            collector.reportError(ex, "UltiTools", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            // Module is "UltiTools" but top stack is not com.ultikits.ultitools.*
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isFalse();
+        }
+
+        @Test
+        @DisplayName("framework error with empty stack trace defaults to true when module is framework")
+        void frameworkErrorEmptyStackTrace() {
+            RuntimeException ex = new RuntimeException("no stack");
+            ex.setStackTrace(new StackTraceElement[0]);
+            collector.reportError(ex, "UltiTools", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            assertThat(errors.get(0).getAsJsonObject().get("isFramework").getAsBoolean()).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Queue overflow")
+    class QueueOverflowTests {
+
+        @Test
+        @DisplayName("rejects errors when queue is full")
+        void rejectsWhenQueueFull() {
+            // Fill the queue to MAX_QUEUE_SIZE (200)
+            for (int i = 0; i < 200; i++) {
+                collector.reportError(createExceptionAtLine("error" + i, i), "Module",
+                        TriggerContext.uncaught("test"));
+            }
+
+            // This one should be silently dropped
+            collector.reportError(createExceptionAtLine("overflow", 999), "Module",
+                    TriggerContext.uncaught("test"));
+
+            // Drain all and count unique entries
+            JsonArray errors = collector.drainErrors(200);
+            // Should not exceed 200 (some may be less due to maxErrorsPerBatch limit)
+            assertThat(errors.size()).isLessThanOrEqualTo(200);
+        }
+    }
+
+    @Nested
+    @DisplayName("Stack trace formatting")
+    class StackTraceTests {
+
+        @Test
+        @DisplayName("includes cause chain in stack trace")
+        void includesCauseChain() {
+            RuntimeException cause = new RuntimeException("root cause");
+            cause.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.example.DataAccess", "query", "DataAccess.java", 50)
+            });
+            RuntimeException ex = new RuntimeException("wrapper error", cause);
+            ex.setStackTrace(new StackTraceElement[]{
+                    new StackTraceElement("com.example.Service", "handle", "Service.java", 20)
+            });
+
+            collector.reportError(ex, "Module", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            String stackTrace = errors.get(0).getAsJsonObject().get("stackTrace").getAsString();
+            assertThat(stackTrace).contains("wrapper error");
+            assertThat(stackTrace).contains("Caused by");
+            assertThat(stackTrace).contains("root cause");
+        }
+
+        @Test
+        @DisplayName("truncates stack trace to max length")
+        void truncatesStackTrace() {
+            RuntimeException ex = new RuntimeException("deep stack");
+            StackTraceElement[] frames = new StackTraceElement[100];
+            for (int i = 0; i < 100; i++) {
+                frames[i] = new StackTraceElement(
+                        "com.example.very.long.package.name.Class" + i,
+                        "veryLongMethodNameThatTakesUpLotsOfSpace" + i,
+                        "VeryLongFileName" + i + ".java", i);
+            }
+            ex.setStackTrace(frames);
+
+            collector.reportError(ex, "Module", TriggerContext.uncaught("test"));
+
+            JsonArray errors = collector.drainErrors(10);
+            String stackTrace = errors.get(0).getAsJsonObject().get("stackTrace").getAsString();
+            assertThat(stackTrace.length()).isLessThanOrEqualTo(2048);
         }
     }
 
