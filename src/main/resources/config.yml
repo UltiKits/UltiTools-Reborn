@@ -58,3 +58,18 @@ email:
     name: "UltiTools Server"
   # 调试模式 (开启后会在控制台输出详细的SMTP通信日志)
   debug: false
+
+# UltiPanel 面板集成配置
+ultipanel:
+  logging:
+    error-reporting:
+      # 是否启用错误自动上报到 UltiPanel (Enable auto error reporting to UltiPanel)
+      enabled: true
+      # 去重窗口时间（秒），同一错误在此时间内只上报一次
+      dedup-window-seconds: 300
+      # 每个批次最多上报的错误数量
+      max-errors-per-batch: 10
+      # 同一错误累计超过此次数后开始采样
+      sample-after-count: 10
+      # 采样率（0.1 = 10%）
+      sample-rate: 0.1

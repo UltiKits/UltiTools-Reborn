@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.handler;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
 import lombok.Getter;
 import lombok.Setter;
@@ -64,7 +66,8 @@ public class SystemLogHandler extends Handler {
         excludedLoggers.add("org.apache.http");
         excludedLoggers.add("com.zaxxer.hikari");
         excludedLoggers.add("org.eclipse.jetty");
-        
+        excludedLoggers.add("ErrorReportCollector");
+
         // 设置最小级别
         setLevel(minimumLevel);
     }
@@ -86,6 +89,8 @@ public class SystemLogHandler extends Handler {
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.excluded-loggers")) {
                 excludedLoggers.clear();
                 excludedLoggers.addAll(UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.excluded-loggers"));
+                // Always preserve internal loggers to prevent circular logging
+                excludedLoggers.add("ErrorReportCollector");
             }
             
             UltiTools.getInstance().getLogger().info("[UltiPanel] 系统日志处理器配置已加载");
@@ -119,7 +124,24 @@ public class SystemLogHandler extends Handler {
             
             // 发送日志
             logTransmitter.sendLog(level, message, source, record.getThrown());
-            
+
+            // Report error-level logs with exceptions to ErrorReportCollector
+            if ("error".equals(level) && record.getThrown() != null) {
+                try {
+                    UltiTools instance = UltiTools.getInstance();
+                    if (instance != null) {
+                        ErrorReportCollector erc = instance.getErrorReportCollector();
+                        if (erc != null) {
+                            String moduleName = extractModuleFromSource(source);
+                            TriggerContext ctx = inferTriggerFromStackTrace(record.getThrown());
+                            erc.reportError(record.getThrown(), moduleName, ctx);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // Never re-enter logging from error reporting
+                }
+            }
+
         } catch (Exception e) {
             // 避免日志循环，使用System.err
             System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
@@ -289,6 +311,58 @@ public class SystemLogHandler extends Handler {
         return Character.toUpperCase(str.charAt(0)) + str.substring(1);
     }
     
+    /**
+     * Extract module name from the log source string (e.g., "plugin:UltiChat" -> "UltiChat").
+     */
+    private String extractModuleFromSource(String source) {
+        if (source != null && source.startsWith("plugin:")) {
+            return source.substring("plugin:".length());
+        }
+        return source != null ? source : "unknown";
+    }
+
+    /**
+     * Infer trigger context from exception stack trace.
+     */
+    private TriggerContext inferTriggerFromStackTrace(Throwable throwable) {
+        StackTraceElement[] frames = throwable.getStackTrace();
+        for (StackTraceElement frame : frames) {
+            String className = frame.getClassName();
+            String methodName = frame.getMethodName();
+
+            // Command execution
+            if (className.contains("BaseCommandExecutor") && "executeCommand".equals(methodName)) {
+                return TriggerContext.uncaught("command execution");
+            }
+
+            // Bukkit event handler
+            if (className.contains("EventExecutor") || className.contains("TimedEventExecutor")) {
+                // Try to find the event class name from surrounding frames
+                for (StackTraceElement f : frames) {
+                    if (f.getClassName().endsWith("Event") || f.getClassName().contains(".event.")) {
+                        String eventName = f.getClassName();
+                        int lastDot = eventName.lastIndexOf('.');
+                        if (lastDot >= 0) {
+                            eventName = eventName.substring(lastDot + 1);
+                        }
+                        return TriggerContext.event(eventName);
+                    }
+                }
+                return TriggerContext.event("unknown");
+            }
+
+            // Scheduled task
+            if (className.contains("BukkitRunnable") && "run".equals(methodName)) {
+                return TriggerContext.scheduled("BukkitRunnable");
+            }
+            if (className.contains("CraftScheduler") || className.contains("ScheduledTask")) {
+                return TriggerContext.scheduled("ScheduledTask");
+            }
+        }
+
+        return TriggerContext.uncaught("unknown");
+    }
+
     /**
      * 添加启用的日志级别
      */
