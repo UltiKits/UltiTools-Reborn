@@ -12,7 +12,6 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Colors;
 import com.ultikits.ultitools.utils.XVersionUtils;
 

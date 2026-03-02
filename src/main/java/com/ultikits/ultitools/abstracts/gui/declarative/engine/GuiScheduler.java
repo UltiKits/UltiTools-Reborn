@@ -7,7 +7,6 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
 /**
  * GuiScheduler 负责确保所有 GUI 操作都在 Bukkit 主线程执行。

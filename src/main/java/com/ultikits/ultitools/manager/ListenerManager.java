@@ -45,9 +45,8 @@ public class ListenerManager {
      */
     @Deprecated
     public void register(UltiToolsPlugin plugin, Listener listener) {
-        listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
+        List<Listener> listeners = listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
-        List<Listener> listeners = listenerListMap.get(plugin);
         if (!listeners.contains(listener)) {
             listeners.add(listener);
         }

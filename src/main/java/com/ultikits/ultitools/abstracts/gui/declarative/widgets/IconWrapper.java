@@ -4,8 +4,6 @@ import mc.obliviate.inventory.Icon;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.function.Consumer;
-
 /**
  * IconWrapper 是对 Icon 的简单包装，用于在 Widget 树中传递。
  * <p>
