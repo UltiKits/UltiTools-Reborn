@@ -1,7 +1,5 @@
 package com.ultikits.ultitools.abstracts;
 
-import org.bukkit.command.CommandSender;
-
 /**
  * This abstract class represents a command executor.
  * It implements the TabExecutor interface from the Bukkit API.

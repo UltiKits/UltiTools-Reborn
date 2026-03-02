@@ -67,15 +67,8 @@ public class ConfigManager {
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
         }
-        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
-        if (configMap == null) {
-            configMap = new HashMap<>();
-            configMap.put(configEntity.getConfigFilePath(), configEntity);
-            pluginConfigMap.put(configEntity.getUltiToolsPlugin(), configMap);
-            return;
-        }
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.computeIfAbsent(ultiToolsPlugin, k -> new HashMap<>());
         configMap.put(configEntity.getConfigFilePath(), configEntity);
-        pluginConfigMap.put(configEntity.getUltiToolsPlugin(), configMap);
     }
 
     /**

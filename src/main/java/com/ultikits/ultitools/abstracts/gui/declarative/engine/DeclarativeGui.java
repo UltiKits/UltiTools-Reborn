@@ -1,10 +1,8 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
-import com.ultikits.ultitools.abstracts.gui.declarative.core.Element;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import mc.obliviate.inventory.Gui;
-import mc.obliviate.inventory.Icon;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
