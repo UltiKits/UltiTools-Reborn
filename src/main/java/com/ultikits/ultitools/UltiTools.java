@@ -312,13 +312,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         commandManager.registerCoreCommand(new UltiToolsCommands());
         commandManager.registerCoreCommand(new PluginInstallCommands());
         commandManager.registerCoreCommand(new CloudLoginCommand());
-
-        try {
-            commandManager.registerCoreCommand(new com.ultikits.ultitools.commands.LogTransmissionCommands());
-            getLogger().info("[UltiTools] 日志传输测试命令已注册: /logtest");
-        } catch (Exception e) {
-            getLogger().warning("[UltiTools] 注册日志传输测试命令失败: " + e.getMessage());
-        }
     }
 
     private void scheduleStartupMessages(boolean loginSuccess) {
