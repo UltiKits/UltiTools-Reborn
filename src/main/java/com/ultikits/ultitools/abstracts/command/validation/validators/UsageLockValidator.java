@@ -5,7 +5,6 @@ import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import org.bukkit.ChatColor;
-import org.bukkit.entity.Player;
 
 import java.lang.reflect.Method;
 import java.util.Map;

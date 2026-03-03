@@ -9,7 +9,6 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -194,12 +193,7 @@ public class ErrorReportCollector {
 
         // Sort by count descending (most frequent first)
         List<ErrorReport> sorted = new ArrayList<>(merged.values());
-        Collections.sort(sorted, new Comparator<ErrorReport>() {
-            @Override
-            public int compare(ErrorReport a, ErrorReport b) {
-                return Integer.compare(b.getCount(), a.getCount());
-            }
-        });
+        Collections.sort(sorted, (a, b) -> Integer.compare(b.getCount(), a.getCount()));
 
         // Take at most limit
         JsonArray result = new JsonArray();

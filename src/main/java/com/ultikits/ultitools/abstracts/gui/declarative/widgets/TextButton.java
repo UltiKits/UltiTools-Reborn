@@ -2,11 +2,7 @@ package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.*;
 import com.ultikits.ultitools.abstracts.gui.declarative.util.WidgetBuilder;
-import com.ultikits.ultitools.utils.XVersionUtils;
-import mc.obliviate.inventory.Icon;
-import org.bukkit.Material;
 import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

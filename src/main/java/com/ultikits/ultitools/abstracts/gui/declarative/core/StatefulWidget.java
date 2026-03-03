@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 /**
  * StatefulWidget 是一个具有可变状态的 Widget。

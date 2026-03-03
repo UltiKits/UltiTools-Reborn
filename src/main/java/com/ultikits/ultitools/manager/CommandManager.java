@@ -66,8 +66,7 @@ public class CommandManager {
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         register(commandExecutor, permission, plugin.i18n(description), aliases);
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
-        commandListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
-        List<Command> commands = commandListMap.get(plugin);
+        List<Command> commands = commandListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         if (!commands.contains(command)) {
             commands.add(command);
         }
@@ -101,9 +100,8 @@ public class CommandManager {
             CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
             register(plugin, commandExecutor, cmdExecutor.permission(), plugin.i18n(cmdExecutor.description()), cmdExecutor.alias());
             return;
-        } else {
-            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         }
+        Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
         register(commandExecutor);
     }
