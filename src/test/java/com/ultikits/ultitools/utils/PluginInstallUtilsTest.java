@@ -2,6 +2,15 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.sun.net.httpserver.HttpServer;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
@@ -10,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.entities.PluginEntity;
@@ -21,6 +31,71 @@ import com.ultikits.ultitools.entities.PluginEntity;
 @DisplayName("PluginInstallUtils 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsTest {
+
+    @Test
+    void normalizesAndEncodesLookupForAllMetadataPaths() throws Exception {
+        AtomicReference<String> request = new AtomicReference<>();
+        AtomicReference<String> versionPath = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/plugin/get", exchange -> {
+            request.set(exchange.getRequestURI().getRawQuery());
+            byte[] body = "{\"code\":\"200\",\"data\":{\"id\":7,\"identifyString\":\"ultitrade\"}}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/plugin/7/latest", exchange -> {
+            byte[] body = "{\"code\":\"200\",\"data\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/plugin/7/", exchange -> {
+            versionPath.set(exchange.getRequestURI().getRawPath());
+            byte[] body = "{\"code\":\"200\",\"data\":\"https://example.invalid/artifact.jar\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            PluginInstallUtils.setBaseUrlForTesting("http://localhost:" + server.getAddress().getPort());
+            assertThat(PluginInstallUtils.getPluginLatestVersion("  UltiTrade  ")).isEqualTo("1.0.0");
+            assertThat(request.get()).isEqualTo("identifyString=ultitrade");
+            assertThat(PluginInstallUtils.getPlugin(" bad name+/")).isNotNull();
+            assertThat(request.get()).isEqualTo("identifyString=bad+name%2B%2F");
+            assertThat(PluginInstallUtils.getPluginVersionDownloadLink("UltiTrade", "release candidate"))
+                    .isEqualTo("https://example.invalid/artifact.jar");
+            assertThat(versionPath.get()).isEqualTo("/plugin/7/release%20candidate/download");
+            assertThat(PluginInstallUtils.getPlugin(null)).isNull();
+            assertThat(PluginInstallUtils.getPlugin("  ")).isNull();
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void constructsDeterministicSafeJarNames() {
+        assertThat(PluginInstallUtils.installedJarName(" UltiTrade ", "1.0.0-SNAPSHOT")).isEqualTo("ultitrade-1.0.0-SNAPSHOT.jar");
+        assertThat(PluginInstallUtils.installedJarName("../../escape", "../bad")).isNull();
+        assertThat(PluginInstallUtils.installedJarName(null, "1.0.0")).isNull();
+    }
+
+    @Test
+    void findsExistingPluginJarUsingCanonicalIdentifyString(@TempDir Path pluginsFolder) throws Exception {
+        Path jar = pluginsFolder.resolve("artifact.jar");
+        try (OutputStream output = java.nio.file.Files.newOutputStream(jar);
+             JarOutputStream jarOutput = new JarOutputStream(output)) {
+            jarOutput.putNextEntry(new JarEntry("plugin.yml"));
+            jarOutput.write("identify-string: ultitrade\n".getBytes(StandardCharsets.UTF_8));
+            jarOutput.closeEntry();
+        }
+
+        assertThat(PluginInstallUtils.findPluginJar(pluginsFolder.toFile(), " UltiTrade "))
+                .isEqualTo(jar.toFile());
+    }
 
     @Nested
     @DisplayName("类结构测试")

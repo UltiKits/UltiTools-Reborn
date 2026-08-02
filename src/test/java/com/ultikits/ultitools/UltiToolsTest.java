@@ -1,6 +1,7 @@
 package com.ultikits.ultitools;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -30,6 +31,27 @@ import com.ultikits.ultitools.manager.ServerMonitorManager;
  */
 @DisplayName("UltiTools Main Class Tests")
 class UltiToolsTest {
+
+    @Nested
+    @DisplayName("Version parsing tests")
+    class VersionParsingTests {
+        @Test
+        void parsesNumericCoreAndSnapshotQualifiers() {
+            assertThat(UltiTools.parsePluginVersion("6.2.5")).isEqualTo(625);
+            assertThat(UltiTools.parsePluginVersion("6.2.5-SNAPSHOT")).isEqualTo(625);
+            assertThat(UltiTools.parsePluginVersion("6.2.5-SNAPSHOT-abcdefg")).isEqualTo(625);
+            assertThat(UltiTools.parsePluginVersion("6.2.0")).isEqualTo(620);
+        }
+
+        @Test
+        void rejectsMissingMalformedAndOverflowVersions() {
+            assertThatThrownBy(() -> UltiTools.parsePluginVersion(null)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> UltiTools.parsePluginVersion(" ")).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> UltiTools.parsePluginVersion("6.2-SNAPSHOT")).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> UltiTools.parsePluginVersion("6.2.x")).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> UltiTools.parsePluginVersion("2147483648.1.1")).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
 
     @Nested
     @DisplayName("Class Structure Tests")
