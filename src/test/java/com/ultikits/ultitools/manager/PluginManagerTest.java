@@ -285,10 +285,12 @@ class PluginManagerTest {
 
         @Override
         public void unregisterSelf() {
+            // No-op for this scanner fixture.
         }
 
         @Override
         public void reloadSelf() {
+            // No-op for this scanner fixture.
         }
     }
 
