@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -32,7 +33,6 @@ import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.AnnotationUtils;
@@ -364,10 +364,12 @@ public class PluginManager {
                     // Use security-validated class loading (checks dangerous classes/packages)
                     // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
                     Class<?> aClass = ClassLoaderUtils.loadClass(className);
-                    if (IPlugin.class.isAssignableFrom(aClass)) {
+                    if (UltiToolsPlugin.class.isAssignableFrom(aClass)
+                            && !aClass.isInterface()
+                            && !Modifier.isAbstract(aClass.getModifiers())) {
                         return aClass.asSubclass(UltiToolsPlugin.class);
                     }
-                } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                } catch (ClassNotFoundException | LinkageError e) {
                     // 记录但不中断，继续扫描其他类
                     Bukkit.getLogger().log(Level.FINE,
                         "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
@@ -377,7 +379,7 @@ public class PluginManager {
                         "[UltiTools-API] Security violation while loading class: " + className + " - " + e.getMessage());
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE, 
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
         }
