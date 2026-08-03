@@ -15,6 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -41,6 +43,7 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
  * @since 6.0.0
  */
 public class PluginInstallUtils {
+    private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
             .create();
@@ -379,7 +382,7 @@ public class PluginInstallUtils {
      */
     public static boolean installLatestPlugin(String idString) {
         String latestVersion = getPluginLatestVersion(idString);
-        String pluginVersionDownloadLink = getPluginLatestDownloadLink(idString);
+        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, latestVersion);
         String fileName = installedJarName(idString, latestVersion);
         if (pluginVersionDownloadLink == null || fileName == null) {
             return false;
@@ -461,8 +464,7 @@ public class PluginInstallUtils {
                     }
                 }
             } catch (IOException e) {
-                // Skip unreadable JARs
-                continue;
+                LOGGER.log(Level.FINE, "Skipping unreadable plugin JAR: " + jar.getName(), e);
             }
         }
         return null;
@@ -478,7 +480,7 @@ public class PluginInstallUtils {
      */
     public static boolean updatePlugin(String identifyString) {
         String latestVersion = getPluginLatestVersion(identifyString);
-        String downloadLink = getPluginLatestDownloadLink(identifyString);
+        String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
         String fileName = installedJarName(identifyString, latestVersion);
         if (downloadLink == null || fileName == null) {
             return false;

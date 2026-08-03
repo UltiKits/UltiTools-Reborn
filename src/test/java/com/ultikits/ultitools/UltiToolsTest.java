@@ -33,9 +33,10 @@ import com.ultikits.ultitools.manager.ServerMonitorManager;
 class UltiToolsTest {
 
     @Nested
-    @DisplayName("Version parsing tests")
+    @DisplayName("版本解析测试")
     class VersionParsingTests {
         @Test
+        @DisplayName("应解析数字核心并忽略 SNAPSHOT 限定符")
         void parsesNumericCoreAndSnapshotQualifiers() {
             assertThat(UltiTools.parsePluginVersion("6.2.5")).isEqualTo(625);
             assertThat(UltiTools.parsePluginVersion("6.2.5-SNAPSHOT")).isEqualTo(625);
@@ -44,6 +45,7 @@ class UltiToolsTest {
         }
 
         @Test
+        @DisplayName("应拒绝缺失、格式错误或溢出的版本")
         void rejectsMissingMalformedAndOverflowVersions() {
             assertThatThrownBy(() -> UltiTools.parsePluginVersion(null)).isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> UltiTools.parsePluginVersion(" ")).isInstanceOf(IllegalArgumentException.class);

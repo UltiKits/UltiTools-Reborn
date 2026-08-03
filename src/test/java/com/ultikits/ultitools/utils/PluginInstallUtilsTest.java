@@ -33,6 +33,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 class PluginInstallUtilsTest {
 
     @Test
+    @DisplayName("所有元数据请求应规范化并编码插件标识与版本路径")
     void normalizesAndEncodesLookupForAllMetadataPaths() throws Exception {
         AtomicReference<String> request = new AtomicReference<>();
         AtomicReference<String> versionPath = new AtomicReference<>();
@@ -77,6 +78,7 @@ class PluginInstallUtilsTest {
     }
 
     @Test
+    @DisplayName("应构造确定且路径安全的模块 JAR 文件名")
     void constructsDeterministicSafeJarNames() {
         assertThat(PluginInstallUtils.installedJarName(" UltiTrade ", "1.0.0-SNAPSHOT")).isEqualTo("ultitrade-1.0.0-SNAPSHOT.jar");
         assertThat(PluginInstallUtils.installedJarName("../../escape", "../bad")).isNull();
@@ -84,6 +86,7 @@ class PluginInstallUtilsTest {
     }
 
     @Test
+    @DisplayName("应使用规范化标识查找既有模块 JAR")
     void findsExistingPluginJarUsingCanonicalIdentifyString(@TempDir Path pluginsFolder) throws Exception {
         Path jar = pluginsFolder.resolve("artifact.jar");
         try (OutputStream output = java.nio.file.Files.newOutputStream(jar);
@@ -95,6 +98,14 @@ class PluginInstallUtilsTest {
 
         assertThat(PluginInstallUtils.findPluginJar(pluginsFolder.toFile(), " UltiTrade "))
                 .isEqualTo(jar.toFile());
+    }
+
+    @Test
+    @DisplayName("不可读 JAR 不应中断模块目录扫描")
+    void skipsUnreadablePluginJars(@TempDir Path pluginsFolder) throws Exception {
+        java.nio.file.Files.write(pluginsFolder.resolve("broken.jar"), "not-a-jar".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.findPluginJar(pluginsFolder.toFile(), "UltiTrade")).isNull();
     }
 
     @Nested
