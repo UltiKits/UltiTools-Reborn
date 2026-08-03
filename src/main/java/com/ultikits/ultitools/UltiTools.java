@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
@@ -73,6 +75,7 @@ import net.milkbowl.vault.economy.Economy;
  * @version 6.0.7
  */
 public final class UltiTools extends JavaPlugin implements Localized {
+    private static final Pattern VERSION_PATTERN = Pattern.compile("^([0-9]+\\.[0-9]+\\.[0-9]+)(?:-[0-9A-Za-z]+)*$");
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
@@ -135,10 +138,26 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     public static int getPluginVersion() {
         String versionString = getEnv().getString("version");
-        if (versionString == null) {
-            throw new RuntimeException("Version not found in env.yml!");
+        return parsePluginVersion(versionString);
+    }
+
+    static int parsePluginVersion(String versionString) {
+        if (versionString == null || versionString.trim().isEmpty()) {
+            throw new IllegalArgumentException("Plugin version is missing");
         }
-        return Integer.parseInt(versionString.replace(".", ""));
+        Matcher matcher = VERSION_PATTERN.matcher(versionString.trim());
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Invalid plugin version: " + versionString);
+        }
+        try {
+            long parsed = Long.parseLong(matcher.group(1).replace(".", ""));
+            if (parsed > Integer.MAX_VALUE) {
+                throw new NumberFormatException("Version exceeds supported range");
+            }
+            return (int) parsed;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid plugin version: " + versionString, e);
+        }
     }
 
     /**

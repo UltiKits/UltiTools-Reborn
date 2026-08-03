@@ -7,12 +7,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.EventListener;
-
-import me.clip.placeholderapi.PlaceholderAPI;
 
 @EventListener
 public class PlayerJoinListener implements Listener {
@@ -46,11 +45,15 @@ public class PlayerJoinListener implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
+        Plugin placeholderApi = Bukkit.getPluginManager().getPlugin("PlaceholderAPI");
+        if (placeholderApi == null || !placeholderApi.isEnabled()) {
+            return;
+        }
         try {
             boolean reload = false;
             long time = 30L;
             for (String placeholder : placeholderList) {
-                if (!PlaceholderAPI.isRegistered(placeholder)) {
+                if (!PlaceholderApiBridge.isRegistered(placeholder)) {
                     reload = true;
                     final String ph = placeholder;
                     new BukkitRunnable() {
@@ -71,8 +74,14 @@ public class PlayerJoinListener implements Listener {
                     }
                 }.runTaskLater(UltiTools.getInstance(), finalTime + 30L);
             }
-        } catch (Exception ignored) {
+        } catch (LinkageError error) {
+            Bukkit.getLogger().warning("PlaceholderAPI became unavailable while handling player join: " + error.getClass().getSimpleName());
+        }
+    }
 
+    private static final class PlaceholderApiBridge {
+        private static boolean isRegistered(String placeholder) {
+            return me.clip.placeholderapi.PlaceholderAPI.isRegistered(placeholder);
         }
     }
 }
