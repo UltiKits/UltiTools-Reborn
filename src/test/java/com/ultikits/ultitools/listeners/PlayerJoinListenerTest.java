@@ -47,13 +47,6 @@ class PlayerJoinListenerTest {
         listener = new PlayerJoinListener();
     }
 
-    private static void assertDoesNotThrow(Runnable runnable) {
-        try {
-            runnable.run();
-        } catch (Exception e) {
-            throw new AssertionError("Expected no exception but got: " + e.getClass().getName() + " - " + e.getMessage(), e);
-        }
-    }
 
     @AfterEach
     void tearDown() {

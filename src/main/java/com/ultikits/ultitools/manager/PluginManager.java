@@ -708,7 +708,7 @@ public class PluginManager {
     private void setPluginStaticInstance(Class<? extends UltiToolsPlugin> pluginClass, UltiToolsPlugin plugin) {
         try {
             java.lang.reflect.Field instanceField = pluginClass.getDeclaredField("instance");
-            if (java.lang.reflect.Modifier.isStatic(instanceField.getModifiers())) {
+            if (Modifier.isStatic(instanceField.getModifiers())) {
                 instanceField.setAccessible(true); // NOPMD - required for plugin instance injection
                 instanceField.set(null, plugin);
             }
