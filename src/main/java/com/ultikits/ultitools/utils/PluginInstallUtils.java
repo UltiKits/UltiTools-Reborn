@@ -462,6 +462,7 @@ public class PluginInstallUtils {
                 }
             } catch (IOException e) {
                 // Skip unreadable JARs
+                continue;
             }
         }
         return null;
