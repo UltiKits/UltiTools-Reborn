@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -38,7 +37,7 @@ class PluginInstallUtilsTest {
     void normalizesAndEncodesLookupForAllMetadataPaths() throws Exception {
         AtomicReference<String> request = new AtomicReference<>();
         AtomicReference<String> versionPath = new AtomicReference<>();
-        HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/plugin/get", exchange -> {
             request.set(exchange.getRequestURI().getRawQuery());
             byte[] body = "{\"code\":\"200\",\"data\":{\"id\":7,\"identifyString\":\"ultitrade\"}}".getBytes(StandardCharsets.UTF_8);
