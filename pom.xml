@@ -41,6 +41,14 @@
         <excludedGroups>isolated</excludedGroups>
         <!-- Default API URL for production; override with -Dultitools.api.url=http://localhost:8787 for dev -->
         <ultitools.api.url>https://api.ultikits.com</ultitools.api.url>
+        <!--
+            Target folder for the ultitools-maven-plugin deploy goal. Defaults to a directory inside
+            target/ so a clean checkout never writes outside the project. Developers who want the
+            built JAR copied straight into a local test server should override it locally, either
+            with -Dultitools.deploy.folder=/path/to/server/plugins on the command line or with a
+            profile in ~/.m2/settings.xml. Do not hard-code a machine-specific path here.
+        -->
+        <ultitools.deploy.folder>${project.build.directory}/deploy</ultitools.deploy.folder>
     </properties>
 
     <distributionManagement>
@@ -362,7 +370,7 @@
                     <identifyString>UltiTools-API</identifyString>
                     <shortDescription>UltiTools-API</shortDescription>
                     <accessKeyFile>access_key.txt</accessKeyFile>
-                    <pluginFolder>/home/wisdomme/servers/plugins</pluginFolder>
+                    <pluginFolder>${ultitools.deploy.folder}</pluginFolder>
                 </configuration>
             </plugin>
         </plugins>
