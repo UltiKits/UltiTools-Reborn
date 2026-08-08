@@ -4,7 +4,7 @@
 # UltiPanel 配置
 ultipanel:
   # 服务器ID（从UltiPanel后台获取，通常自动生成）
-  server-id: "e502c24dd77c439791f75217d7243aab"
+  server-id: "<your-server-id>"
   
   # WebSocket连接配置
   websocket:

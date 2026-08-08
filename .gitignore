@@ -120,9 +120,22 @@ run/
 
 doc/
 .vscode/
-docs/plans/
-docs/test/
+# Project docs are kept local-only and are published at https://dev.ultikits.com
+docs/
 .mcp.json
 
 CLAUDE.md
 .worktrees/
+
+# Secrets and local runtime artifacts
+.env
+.env.*
+.dev.vars
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+secring.gpg
+.claude/settings.local.json
+data.json

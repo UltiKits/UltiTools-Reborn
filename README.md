@@ -134,7 +134,7 @@ public class MyPlugin extends UltiToolsPlugin {
 
 Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
 
-For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction) or [Project Wiki](docs/wiki/README.md).
+For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction).
 
 ### Option B: Use from Any Bukkit Plugin
 
@@ -428,16 +428,14 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 ## Documentation
 
+Architecture notes, module guides, tutorials, and the API reference all live on the
+documentation site — it is the single source of truth and is kept in sync with each release.
+
 | Document | Description |
 |----------|-------------|
 | [Developer Docs](https://dev.ultikits.com/guide/introduction) | Full documentation site |
-| [Project Wiki](docs/wiki/README.md) | Complete project documentation |
-| [Architecture Guide](docs/wiki/ARCHITECTURE.md) | System architecture overview |
-| [IoC Container](docs/wiki/modules/IOC_CONTAINER.md) | Dependency injection guide |
-| [Command System](docs/wiki/modules/COMMAND_SYSTEM.md) | Command development guide |
-| [Data Storage](docs/wiki/modules/DATA_STORAGE.md) | Database operations guide |
-| [Quick Start Tutorial](docs/wiki/tutorials/QUICK_START.md) | First module tutorial |
-| [API Reference](docs/wiki/api/INDEX.md) | API quick reference |
+| [External Plugin API](https://dev.ultikits.com/guide/advanced/external-plugin-api) | Integrate UltiTools into an existing Bukkit plugin |
+| [UltiKits CLI](https://dev.ultikits.com/guide/advanced/ultikits-cli) | Scaffold and publish modules from the terminal |
 
 <br>
 
@@ -458,7 +456,6 @@ UltiTools-Reborn/
 │   ├── interfaces/              # Core interfaces (DataOperator, Query, DataStore) + impl/
 │   ├── websocket/               # UltiPanel WebSocket client + handlers
 │   └── utils/                   # SecurityPolicy, CloudAuthManager, ApiRateLimiter
-├── docs/wiki/                   # Project documentation
 └── pom.xml
 ```
 
