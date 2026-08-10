@@ -1,0 +1,38 @@
+name: PR Source Guard
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+# `main` accepts pull requests from `alpha` only. Everything else integrates
+# into `alpha` first. GitHub has no native way to restrict a pull request's
+# source branch, so this job provides it and is wired up as a required check.
+#
+# To allow emergency fixes to bypass the alpha integration step, add a second
+# accepted pattern below, e.g.:
+#     case "$HEAD_REF" in alpha|hotfix/*) ;; *) exit 1 ;; esac
+
+jobs:
+  check-source:
+    name: PR into main must come from alpha
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify head branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+            echo "::error::Pull requests into main must come from this repository. This one is from '$HEAD_REPO'."
+            echo "Open it against 'alpha' instead."
+            exit 1
+          fi
+          if [ "$HEAD_REF" != "alpha" ]; then
+            echo "::error::Pull requests into main must originate from 'alpha'. This one is from '$HEAD_REF'."
+            echo "Merge into 'alpha' first, then open alpha -> main."
+            exit 1
+          fi
+          echo "Source branch OK: $HEAD_REF"
