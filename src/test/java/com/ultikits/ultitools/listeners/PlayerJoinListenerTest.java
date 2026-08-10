@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
 
+
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +18,8 @@ import org.mockito.MockedStatic;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
+import org.mockbukkit.mockbukkit.plugin.PluginManagerMock;
+import org.mockbukkit.mockbukkit.plugin.PluginMock;
 import me.clip.placeholderapi.PlaceholderAPI;
 
 /**
@@ -28,6 +31,7 @@ class PlayerJoinListenerTest {
 
     private ServerMock server;
     private PlayerJoinListener listener;
+    private PluginMock placeholderApi;
 
     @BeforeEach
     void setUp() {
@@ -35,17 +39,14 @@ class PlayerJoinListenerTest {
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
+        PluginManagerMock pluginManager = (PluginManagerMock) server.getPluginManager();
+        placeholderApi = PluginMock.builder().withPluginName("PlaceholderAPI").build();
+        pluginManager.registerLoadedPlugin(placeholderApi);
+        pluginManager.enablePlugin(placeholderApi);
 
         listener = new PlayerJoinListener();
     }
 
-    private static void assertDoesNotThrow(Runnable runnable) {
-        try {
-            runnable.run();
-        } catch (Exception e) {
-            throw new AssertionError("Expected no exception but got: " + e.getClass().getName() + " - " + e.getMessage(), e);
-        }
-    }
 
     @AfterEach
     void tearDown() {
@@ -122,15 +123,31 @@ class PlayerJoinListenerTest {
     class OnPlayerJoinTests {
 
         @Test
-        @DisplayName("PlaceholderAPI 不可用时不应该抛出异常")
-        void shouldNotThrowWhenPlaceholderAPINotAvailable() {
+        @DisplayName("PlaceholderAPI 插件禁用时不应调用 bridge 或调度任务")
+        void shouldNotCallBridgeOrScheduleWhenPlaceholderApiPluginDisabled() {
             // Arrange
             PlayerMock player = server.addPlayer("TestPlayer");
             PlayerJoinEvent event = new PlayerJoinEvent(player, "TestPlayer joined");
 
-            // Act & Assert - 不应该抛出异常
-            // PlaceholderAPI 类不存在时会捕获 NoClassDefFoundError
-            assertDoesNotThrow(() -> listener.onPlayerJoin(event));
+            server.getPluginManager().disablePlugin(placeholderApi);
+            try (MockedStatic<PlaceholderAPI> placeholderAPIMock = mockStatic(PlaceholderAPI.class)) {
+                listener.onPlayerJoin(event);
+                placeholderAPIMock.verifyNoInteractions();
+                assertThat(server.getScheduler().getPendingTasks()).isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("PlaceholderAPI 插件缺失时不应调用 bridge 或调度任务")
+        void shouldNotCallBridgeOrScheduleWhenPlaceholderApiPluginMissing() {
+            PlayerMock player = server.addPlayer("TestPlayer");
+            PlayerJoinEvent event = new PlayerJoinEvent(player, "TestPlayer joined");
+            server.getPluginManager().clearPlugins();
+            try (MockedStatic<PlaceholderAPI> placeholderAPIMock = mockStatic(PlaceholderAPI.class)) {
+                listener.onPlayerJoin(event);
+                placeholderAPIMock.verifyNoInteractions();
+                assertThat(server.getScheduler().getPendingTasks()).isEmpty();
+            }
         }
 
         @Test
@@ -183,16 +200,16 @@ class PlayerJoinListenerTest {
         }
 
         @Test
-        @DisplayName("异常应该被捕获而不是传播")
-        void exceptionShouldBeCaughtNotPropagated() { // NOPMD - uses Mockito verify()
+        @DisplayName("链接错误应该被捕获而不是传播")
+        void linkageErrorShouldBeCaughtNotPropagated() { // NOPMD - uses Mockito verify()
             // Arrange
             PlayerMock player = server.addPlayer("TestPlayer");
             PlayerJoinEvent event = new PlayerJoinEvent(player, "TestPlayer joined");
 
             try (MockedStatic<PlaceholderAPI> placeholderAPIMock = mockStatic(PlaceholderAPI.class)) {
-                // 模拟抛出异常
+                // 模拟可选依赖在 guard 后被卸载的竞态
                 placeholderAPIMock.when(() -> PlaceholderAPI.isRegistered(anyString()))
-                        .thenThrow(new RuntimeException("Test exception"));
+                        .thenThrow(new NoClassDefFoundError("PlaceholderAPI"));
 
                 // Act & Assert - 不应该抛出异常
                 listener.onPlayerJoin(event);

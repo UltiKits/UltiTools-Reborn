@@ -9,9 +9,14 @@ import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -38,6 +43,7 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
  * @since 6.0.0
  */
 public class PluginInstallUtils {
+    private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
             .create();
@@ -92,6 +98,40 @@ public class PluginInstallUtils {
     static void resetBaseUrl() {
         baseUrl = null;
         customBaseUrl = null;
+    }
+
+    private static String normalizeIdentifyString(String idString) {
+        if (idString == null) {
+            return null;
+        }
+        String normalized = idString.trim().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String encodeQueryValue(String value) {
+        try {
+            return URLEncoder.encode(value, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalStateException("UTF-8 is required by the Java runtime", e);
+        }
+    }
+
+    private static String encodePathSegment(String value) {
+        return encodeQueryValue(value).replace("+", "%20");
+    }
+
+    static String installedJarName(String idString, String version) {
+        String normalized = normalizeIdentifyString(idString);
+        if (normalized == null || version == null) {
+            return null;
+        }
+        String trimmedVersion = version.trim();
+        if (!normalized.matches("[a-z0-9][a-z0-9._-]*")
+                || !trimmedVersion.matches("[0-9A-Za-z][0-9A-Za-z._-]*")
+                || normalized.contains("..") || trimmedVersion.contains("..")) {
+            return null;
+        }
+        return normalized + "-" + trimmedVersion + ".jar";
     }
 
     /**
@@ -236,7 +276,10 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + version + "/download")) {
+        if (version == null || version.trim().isEmpty()) {
+            return null;
+        }
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim()) + "/download")) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -317,7 +360,11 @@ public class PluginInstallUtils {
      * @return Plugin entity or null if not found <br> 插件信息，未找到返回null
      */
     public static PluginEntity getPlugin(String idString) {
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/get?identifyString=" + idString)) {
+        String normalized = normalizeIdentifyString(idString);
+        if (normalized == null) {
+            return null;
+        }
+        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/get?identifyString=" + encodeQueryValue(normalized))) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -334,14 +381,16 @@ public class PluginInstallUtils {
      * @return 是否安装成功
      */
     public static boolean installLatestPlugin(String idString) {
-        String pluginVersionDownloadLink = getPluginLatestDownloadLink(idString);
-        if (pluginVersionDownloadLink == null) {
+        String latestVersion = getPluginLatestVersion(idString);
+        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, latestVersion);
+        String fileName = installedJarName(idString, latestVersion);
+        if (pluginVersionDownloadLink == null || fileName == null) {
             return false;
         }
 
         try {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    pluginVersionDownloadLink.substring(pluginVersionDownloadLink.lastIndexOf("/") + 1),
+                    fileName,
                     UltiTools.getInstance().getDataFolder() + "/plugins");
             return true;
         } catch (IOException e) {
@@ -365,13 +414,14 @@ public class PluginInstallUtils {
             return false;
         }
         String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, version);
-        if (pluginVersionDownloadLink == null) {
+        String fileName = installedJarName(idString, version);
+        if (pluginVersionDownloadLink == null || fileName == null) {
             return false;
         }
 
         try {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    pluginVersionDownloadLink.substring(pluginVersionDownloadLink.lastIndexOf("/") + 1),
+                    fileName,
                     UltiTools.getInstance().getDataFolder() + "/plugins");
             return true;
         } catch (IOException e) {
@@ -391,7 +441,8 @@ public class PluginInstallUtils {
      * @return the matching JAR file, or null if not found
      */
     public static File findPluginJar(File pluginsFolder, String identifyString) {
-        if (pluginsFolder == null || !pluginsFolder.isDirectory()) {
+        String normalizedIdentifyString = normalizeIdentifyString(identifyString);
+        if (pluginsFolder == null || !pluginsFolder.isDirectory() || normalizedIdentifyString == null) {
             return null;
         }
         File[] jars = pluginsFolder.listFiles((f) -> f.getName().endsWith(".jar"));
@@ -408,12 +459,12 @@ public class PluginInstallUtils {
                      BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
                     YamlConfiguration config = YamlConfiguration.loadConfiguration(reader);
                     String id = config.getString("identify-string");
-                    if (identifyString.equals(id)) {
+                    if (normalizedIdentifyString.equals(normalizeIdentifyString(id))) {
                         return jar;
                     }
                 }
             } catch (IOException e) {
-                // Skip unreadable JARs
+                LOGGER.log(Level.FINE, "Skipping unreadable plugin JAR: " + jar.getName(), e);
             }
         }
         return null;
@@ -428,8 +479,10 @@ public class PluginInstallUtils {
      * @return true if update succeeded
      */
     public static boolean updatePlugin(String identifyString) {
-        String downloadLink = getPluginLatestDownloadLink(identifyString);
-        if (downloadLink == null) {
+        String latestVersion = getPluginLatestVersion(identifyString);
+        String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
+        String fileName = installedJarName(identifyString, latestVersion);
+        if (downloadLink == null || fileName == null) {
             return false;
         }
 
@@ -437,7 +490,6 @@ public class PluginInstallUtils {
         File pluginsFolder = new File(pluginsPath);
         File oldJar = findPluginJar(pluginsFolder, identifyString);
 
-        String fileName = downloadLink.substring(downloadLink.lastIndexOf("/") + 1);
         try {
             HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
         } catch (IOException e) {

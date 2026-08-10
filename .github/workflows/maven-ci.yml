@@ -144,14 +144,6 @@ jobs:
         path: target/UltiTools-API-${{ steps.snapshot.outputs.snapshot_version }}.jar
         retention-days: 14
         
-    - name: 📚 Deploy Java DOC
-      continue-on-error: true
-      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
-      with:
-        server: ${{ secrets.FTP_HOST }}
-        username: ${{ secrets.FTP_USERNAME }}
-        password: ${{ secrets.FTP_PASSWORD }}
-        local-dir: "./target/site/apidocs/"
 
     - name: 📝 SNAPSHOT Build Summary
       run: |
