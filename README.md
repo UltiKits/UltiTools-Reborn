@@ -77,13 +77,13 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>6.2.3</version>
+    <version>6.2.4</version>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-implementation 'com.ultikits:UltiTools-API:6.2.3'
+implementation 'com.ultikits:UltiTools-API:6.2.4'
 ```
 
 ### Option A: Write an UltiTools Module (Recommended)
