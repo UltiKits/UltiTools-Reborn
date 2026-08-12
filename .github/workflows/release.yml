@@ -231,7 +231,7 @@ jobs:
         - [ ] \`examples/pom.xml\` 的 \`<ultitools.version>\` 更新为 ${VERSION}
         - [ ] \`.vitepress/config.mts\` 的 \`versionsConfig.current\` 更新为 v${VERSION}，并把 \`docs/src/\` 快照进 \`docs/archive/\`
         - [ ] \`mvn -f examples/pom.xml compile\` 通过（编译失败的示例即需要改的页面）
-        - [ ] 跑 \`./scripts/report-doc-coverage.sh <上一版本> ${VERSION}\` 并处理报告中的两段清单
+        - [ ] 跑 \`./scripts/report-doc-coverage.sh 6.2.4 ${VERSION}\`（第一个参数替换为上一个正式发布版本号，示例中的 6.2.4 仅供参考）并处理报告中的两段清单
 
         关闭本 issue 即代表本次同步完成。
         EOF
