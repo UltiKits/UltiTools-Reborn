@@ -220,6 +220,7 @@ jobs:
         GH_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
         VERSION: ${{ needs.validate.outputs.version }}
       if: ${{ env.GH_TOKEN != '' }}
+      continue-on-error: true
       run: |
         gh issue create \
           --repo UltiKits/UltiTools-Dev-Doc \
