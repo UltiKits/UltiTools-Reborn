@@ -215,6 +215,28 @@ jobs:
         password: ${{ secrets.FTP_PASSWORD }}
         local-dir: "./javadoc/"
 
+    - name: 📖 Open documentation sync issue
+      env:
+        GH_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+        VERSION: ${{ needs.validate.outputs.version }}
+      if: ${{ env.GH_TOKEN != '' }}
+      continue-on-error: true
+      run: |
+        gh issue create \
+          --repo UltiKits/UltiTools-Dev-Doc \
+          --title "docs: sync v${VERSION}" \
+          --body "$(cat <<EOF
+        UltiTools-API v${VERSION} 已发布，文档需要同步。
+
+        - [ ] \`examples/pom.xml\` 的 \`<ultitools.version>\` 更新为 ${VERSION}
+        - [ ] \`.vitepress/config.mts\` 的 \`versionsConfig.current\` 更新为 v${VERSION}，并把 \`docs/src/\` 快照进 \`docs/archive/\`
+        - [ ] \`mvn -f examples/pom.xml compile\` 通过（编译失败的示例即需要改的页面）
+        - [ ] 跑 \`./scripts/report-doc-coverage.sh 6.2.4 ${VERSION}\`（第一个参数替换为上一个正式发布版本号，示例中的 6.2.4 仅供参考）并处理报告中的两段清单
+
+        关闭本 issue 即代表本次同步完成。
+        EOF
+        )"
+
     - name: 📝 Release Summary
       env:
         VERSION: ${{ needs.validate.outputs.version }}
