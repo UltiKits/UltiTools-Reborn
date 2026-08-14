@@ -353,20 +353,6 @@
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-gpg-plugin</artifactId>
-                <version>1.6</version>
-                <executions>
-                    <execution>
-                        <id>sign-artifacts</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <version>3.6.3</version>
                 <configuration>
@@ -635,4 +621,43 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
+
+    <profiles>
+        <!--
+            发布 profile：GPG 签名只在这里激活，别处一律不签。
+            只有 Maven Central 需要签名产物，而私钥只存在于发布环境。
+            把 maven-gpg-plugin 无条件绑在 verify 上，会让任何没有私钥的人
+            跑 mvn verify 或 mvn install 都失败，CI 也得处处传 gpg.skip 才能绕开。
+            发布时漏掉 -P release 的后果是产物没有签名、被 Central 的校验直接拒绝，
+            是一次响亮的失败，而不是静默发出未签名产物。
+
+            Release-only profile: GPG signing is activated here and nowhere else.
+            Only Maven Central needs signed artifacts, and the private key exists
+            only in the release environment. Binding maven-gpg-plugin to verify
+            unconditionally breaks mvn verify and mvn install for everyone without
+            a key. Forgetting -P release fails loudly at Central's validation
+            instead of silently publishing unsigned artifacts.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
