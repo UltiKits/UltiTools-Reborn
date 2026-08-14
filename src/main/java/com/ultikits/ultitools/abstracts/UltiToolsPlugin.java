@@ -164,8 +164,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
      * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
      * @param mainClass           the main class of the plugin <br> 插件的主类
+     * @deprecated Use the seven-argument constructor and pass {@code resourceFolderPath}
+     *             explicitly. This overload hard-codes it to
+     *             {@code <dataFolder>/pluginConfig/<pluginName>}.
+     *             <p>
+     *             请改用七参数构造函数并显式传入 {@code resourceFolderPath}。
+     *             此重载把它硬编码成了 {@code <dataFolder>/pluginConfig/<插件名>}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.8", forRemoval = true)
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
         this(pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass,
              UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + pluginName);

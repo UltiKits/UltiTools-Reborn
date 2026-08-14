@@ -42,8 +42,13 @@ public class ListenerManager {
      *
      * @param plugin   UltiTools plugin instance <br> UltiTools模块实例
      * @param listener Listener <br> 监听器
+     * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead; this overload takes an
+     *             already-constructed instance and therefore performs no dependency injection.
+     *             <p>
+     *             请改用 {@link #register(UltiToolsPlugin, Class)}；此重载接收已经构造好的实例，
+     *             因此不会执行任何依赖注入。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(UltiToolsPlugin plugin, Listener listener) {
         List<Listener> listeners = listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());

@@ -16,8 +16,11 @@ import org.bukkit.event.player.PlayerEvent;
  *
  * @param <E> PlayerEvent type
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/event-listener.html#temporary-listener">Temporary Listener</a>
+ * @deprecated Use {@link TempListener#common(Class)} and filter by player instead.
+ *             <p>
+ *             请改用 {@link TempListener#common(Class)} 并按玩家过滤。
  */
-@Deprecated
+@Deprecated(since = "6.1.0", forRemoval = true)
 @AllArgsConstructor
 @NoArgsConstructor
 @Setter
