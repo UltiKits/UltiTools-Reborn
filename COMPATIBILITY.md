@@ -224,6 +224,25 @@ flatten-maven-plugin 处理后不含依赖声明，因此把 UltiTools-API 放�
 | `plugin.yml` 的 `api-version` | `1.19`（Bukkit API 层级，与上面两项无关） |
 | 模块 `plugin.yml` 的 `api-version` | `620`（UltiTools API 层级，与 Bukkit 的同名字段无关） |
 
+### 运行时依赖来自哪里
+
+框架 JAR 里只打包三个库：obliviate-invs（GUI）、XSeries（跨版本）、UniversalScheduler（调度）。
+其余依赖一个都不在 JAR 里，而是走下面两条路之一：
+
+| 投送方式 | 版本由谁决定 | 例子 |
+|---|---|---|
+| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、CGLIB |
+| Paper 服务端自身携带 | **服主所装的 Paper 版本** | log4j、Paper 内部实现 `libraries:` 用的 Maven resolver 及其依赖 |
+
+这条分界决定了第三方安全告警该由谁修。命中第一类的，在本仓库钉版本是有效的修复；
+命中第二类的，唯一的修法是**升级 Paper** —— 在 `pom.xml` 里怎么写都不会改变服务器上
+实际加载的那个 jar，只会制造「已经修了」的错觉。
+
+注意 Maven 的 `provided` 作用域**不是**这条分界：上表两类依赖在 `pom.xml` 里都声明为
+`provided`。判断依据是「有没有出现在 `libraries:` 块里」，不是作用域。
+
+建议服主跟进 Paper 的构建更新，安全构建尤其如此。
+
 ## 反馈
 
 对本策略有异议，或你的模块受到上述移除影响，
