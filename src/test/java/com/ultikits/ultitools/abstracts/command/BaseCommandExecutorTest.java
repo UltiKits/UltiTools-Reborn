@@ -1067,8 +1067,9 @@ class BaseCommandExecutorTest {
 
         @Override
         protected void executeCommand(CommandContext context, Method method, Object[] params) {
+            // No setAccessible here: the invocation happens inside this class on its own
+            // public methods, so the access check already passes.
             try {
-                method.setAccessible(true);
                 method.invoke(this, params);
             } catch (ReflectiveOperationException e) {
                 throw new IllegalStateException(e);
