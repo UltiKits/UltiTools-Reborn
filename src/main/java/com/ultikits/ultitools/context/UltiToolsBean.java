@@ -26,7 +26,7 @@ public class UltiToolsBean {
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
-    @Deprecated
+    @Deprecated(since = "6.2.0", forRemoval = true)
     @Bean
     public VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();

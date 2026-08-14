@@ -87,7 +87,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
-    @Deprecated
+    @Deprecated(since = "6.2.0", forRemoval = true)
     @Getter
     private VersionWrapper versionWrapper;
     @Getter
