@@ -88,8 +88,30 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
-    @Getter
     private VersionWrapper versionWrapper;
+
+    /**
+     * 手写而不是用 Lombok 的 {@code @Getter}。Lombok 会把 {@code @Deprecated} 复制到生成的
+     * accessor 上，但<b>丢掉 {@code since} 与 {@code forRemoval} 两个元素</b>，编译产物里只剩一个
+     * 裸 {@code @Deprecated}。而 javac 的 {@code -Xlint:removal} 自 JDK 9 起默认开启、
+     * {@code -Xlint:deprecation} 默认关闭，所以下游用默认参数编译时收不到点名的移除警告，
+     * 只会看到一句不含 API 名的笼统提示。字段上标了 {@code forRemoval} 不解决问题 ——
+     * 对外的入口是这个 getter，标注必须落在它身上。改回 {@code @Getter} 会让
+     * COMPATIBILITY.md 的移除清单对这一项失真。
+     *
+     * <p>Hand-written rather than Lombok's {@code @Getter}: Lombok copies
+     * {@code @Deprecated} onto the generated accessor but drops the {@code since}
+     * and {@code forRemoval} elements, so downstream compiling with default flags
+     * never sees the named {@code [removal]} warning for this API.
+     *
+     * @return the version wrapper <br> 版本适配器
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     */
+    @Deprecated(since = "6.2.0", forRemoval = true)
+    public VersionWrapper getVersionWrapper() {
+        return versionWrapper;
+    }
+
     @Getter
     private Language language;
     @Getter
