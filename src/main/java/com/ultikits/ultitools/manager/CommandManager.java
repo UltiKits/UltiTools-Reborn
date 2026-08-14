@@ -205,8 +205,11 @@ public class CommandManager {
      * @param permission      Permission <br> 权限
      * @param description     Description <br> 描述
      * @param aliases         Aliases <br> 别名
+     * @deprecated Use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
+     *             <p>
+     *             请改用 {@link #register(UltiToolsPlugin, Class, String, String, String...)}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
         command.setAliases(Arrays.asList(aliases));
@@ -222,8 +225,11 @@ public class CommandManager {
      * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class)}代替。
      *
      * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead.
+     *             <p>
+     *             请改用 {@link #register(UltiToolsPlugin, Class)}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
 

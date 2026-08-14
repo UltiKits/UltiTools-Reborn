@@ -63,7 +63,7 @@ public interface TempListener extends Listener {
      * @param <E>        PlayerEvent type <br> 玩家事件类型
      * @return Builder <br> 构建器
      */
-    @Deprecated
+    @Deprecated(since = "6.1.0", forRemoval = true)
     static <E extends PlayerEvent> PlayerTempListenerBuilder<E> player(Class<E> eventClass) {
         return new PlayerTempListenerBuilder<E>().eventClass(eventClass);
     }
@@ -176,7 +176,19 @@ public interface TempListener extends Listener {
         }
     }
 
-    @Deprecated
+    /**
+     * Builder for player-scoped temporary listeners.
+     * <p>
+     * 玩家维度临时监听器的构建器。
+     *
+     * @param <E> PlayerEvent type <br> 玩家事件类型
+     * @deprecated Use {@link #common(Class)} instead, narrowing with
+     *             {@link DefaultTempListenerBuilder#filter(Function)}.
+     *             <p>
+     *             请改用 {@link #common(Class)}，并用
+     *             {@link DefaultTempListenerBuilder#filter(Function)} 收窄范围。
+     */
+    @Deprecated(since = "6.1.0", forRemoval = true)
     class PlayerTempListenerBuilder<E extends PlayerEvent> {
         private Class<E> eventClass;
         private TempEventHandler<E> eventHandler;
