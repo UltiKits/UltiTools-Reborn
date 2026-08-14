@@ -31,6 +31,7 @@ import com.ultikits.ultitools.manager.LogStreamManager;
  * 于是 logout 之后插件仍在拿已作废的凭证持续敲面板。
  */
 @DisplayName("云连接重连状态机")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 测试需要反射读写内部状态，与仓库其它测试类一致
 class CloudReconnectStateMachineTest {
 
     private Logger mockLogger;

@@ -25,7 +25,17 @@ import org.jetbrains.annotations.ApiStatus;
 @SuppressWarnings("deprecation")
 @ApiStatus.Internal
 public class PlayerEventManager implements Listener {
-    private UltiPanelWebSocketClient webSocketClient;
+    /**
+     * 必须 volatile。写在 WebSocket 的 onOpen 线程上（{@link #initialize}），读在 Bukkit 主线程上
+     * （三个事件处理器）。只给写方加 {@code synchronized} 不构成发布——读方从不获取同一把监视器，
+     * 两边之间没有 happens-before 边。
+     * <p>
+     * 这一点在加幂等守卫之前是<b>被意外掩盖</b>的：那时每次 {@code initialize} 都会调
+     * {@code registerEvents}，而 Bukkit 注册监听器会写 {@code HandlerList} 的 volatile 字段，
+     * 事件分发再读它，于是本字段的写被顺带发布了出去。守卫跳过注册之后这条捎带链就断了，
+     * 重连后处理器可能一直看着旧的、已断开的客户端，玩家事件被静默丢弃。见 PR #264 的评审。
+     */
+    private volatile UltiPanelWebSocketClient webSocketClient;
 
     /**
      * 是否已经把自己挂进 Bukkit 事件系统。
