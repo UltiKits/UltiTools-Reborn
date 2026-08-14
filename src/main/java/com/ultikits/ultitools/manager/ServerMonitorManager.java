@@ -179,8 +179,9 @@ public class ServerMonitorManager {
             try {
                 task.cancel();
             } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    "取消监控任务时出错: " + e.getMessage());
+                // 把异常本身交给 logger 而不是拼 getMessage()：既保住栈，也避免在日志调用点
+                // 无条件做字符串拼接（PMD 的 PreserveStackTrace / GuardLogStatement 都盯这一点）。
+                UltiTools.getInstance().getLogger().log(Level.FINE, "取消监控任务时出错", e);
             }
         }
     }
