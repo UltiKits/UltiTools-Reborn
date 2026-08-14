@@ -17,7 +17,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 
@@ -38,12 +37,13 @@ class DataStoreManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         
         // Mock getDataFolder
         File mockDataFolder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test");
         mockDataFolder.mkdirs();
-        when(UltiTools.getInstance().getDataFolder()).thenReturn(mockDataFolder);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getDataFolder()).thenReturn(mockDataFolder);
+        });
 
         // 清理静态 map
         clearDataMap();

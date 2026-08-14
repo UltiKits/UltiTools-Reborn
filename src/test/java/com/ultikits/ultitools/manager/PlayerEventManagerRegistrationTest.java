@@ -58,13 +58,14 @@ class PlayerEventManagerRegistrationTest {
         server = MockBukkit.mock();
         // 名字必须是 UltiTools —— registerEvents 拿的就是 getPlugin("UltiTools")
         MockBukkit.createMockPlugin("UltiTools");
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         Logger mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         LogStreamManager mockLogStreamManager = mock(LogStreamManager.class);
-        when(UltiTools.getInstance().getLogStreamManager()).thenReturn(mockLogStreamManager);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getLogStreamManager()).thenReturn(mockLogStreamManager);
+        });
 
         mockClient = mock(UltiPanelWebSocketClient.class);
         when(mockClient.isConnected()).thenReturn(true);

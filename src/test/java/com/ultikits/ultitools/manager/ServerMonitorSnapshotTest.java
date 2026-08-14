@@ -25,7 +25,6 @@ import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -58,14 +57,15 @@ class ServerMonitorSnapshotTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // MockBukkit 默认一个世界都没有，而 worlds 数组正是本次改动搬家的重点之一，
         // 没有世界的话形状断言会变成空转。
         server.addSimpleWorld("world");
 
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         mockClient = mock(UltiPanelWebSocketClient.class);
         when(mockClient.isConnected()).thenReturn(true);

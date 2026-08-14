@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -42,11 +41,12 @@ class CommandExecutionManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         // Mock WebSocket client
         mockWebSocketClient = mock(UltiPanelWebSocketClient.class);

@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -45,11 +44,12 @@ class PluginManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         MockBukkit.mock(); // Server mock not stored as field - only used for initialization
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         pluginManager = new PluginManager();
     }
