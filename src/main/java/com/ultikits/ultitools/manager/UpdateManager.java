@@ -13,6 +13,7 @@ import com.ultikits.ultitools.utils.VersionComparatorUtil;
 import com.ultikits.ultitools.utils.VersionUtils;
 
 import lombok.Getter;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Manages version checking and update notifications for UltiTools-API and modules.
@@ -23,6 +24,7 @@ import lombok.Getter;
  *
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class UpdateManager {
 
     private final Logger logger;

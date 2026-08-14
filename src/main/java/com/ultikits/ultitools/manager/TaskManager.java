@@ -14,6 +14,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Manages scheduled tasks for plugin modules.
@@ -26,6 +27,7 @@ import com.ultikits.ultitools.annotations.Scheduled;
  *
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class TaskManager {
 
     private final Map<UltiToolsPlugin, List<BukkitTask>> pluginTasks = new HashMap<>();

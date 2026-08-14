@@ -20,12 +20,14 @@ import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Component scanner to find and register components.
  * <br>
  * 组件扫描器，用于查找和注册组件。
  */
+@ApiStatus.Internal
 public class ComponentScanner {
     private final SimpleContainer container;
 

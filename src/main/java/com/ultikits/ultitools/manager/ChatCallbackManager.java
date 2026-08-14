@@ -12,6 +12,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.SimplePluginManager;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Manager for chat-based callback commands.
@@ -40,6 +41,7 @@ import org.bukkit.plugin.SimplePluginManager;
  * @see com.ultikits.ultitools.widgets.impl.ChatConfirm
  * @since 6.0.0
  */
+@ApiStatus.Internal
 public class ChatCallbackManager {
     /** Thread-safe storage for pending callbacks / 待处理回调的线程安全存储 */
     private static final Map<UUID, Runnable> callbacks = new ConcurrentHashMap<>();

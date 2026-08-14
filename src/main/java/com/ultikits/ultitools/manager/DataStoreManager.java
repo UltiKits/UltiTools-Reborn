@@ -9,12 +9,14 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Data store manager.
  * <p>
  * 数据存储管理器
  */
+@ApiStatus.Internal
 public class DataStoreManager {
     private static final Map<String, DataStore> dataMap = new HashMap<>();
 

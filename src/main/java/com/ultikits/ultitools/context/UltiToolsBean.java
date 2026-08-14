@@ -8,8 +8,10 @@ import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Configuration;
+import org.jetbrains.annotations.ApiStatus;
 
 @Configuration
+@ApiStatus.Internal
 public class UltiToolsBean {
     @Bean
     public UltiTools getUltiTools() {
