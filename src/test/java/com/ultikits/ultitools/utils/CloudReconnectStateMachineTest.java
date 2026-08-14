@@ -31,6 +31,7 @@ import com.ultikits.ultitools.manager.LogStreamManager;
  * 于是 logout 之后插件仍在拿已作废的凭证持续敲面板。
  */
 @DisplayName("云连接重连状态机")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 测试需要反射读写内部状态，与仓库其它测试类一致
 class CloudReconnectStateMachineTest {
 
     private Logger mockLogger;
@@ -316,6 +317,84 @@ class CloudReconnectStateMachineTest {
                     .getDeclaredField("logQueue");
             queueField.setAccessible(true);
             return ((java.util.Collection<?>) queueField.get(transmitter)).size();
+        }
+    }
+
+    @Nested
+    @DisplayName("迟到的握手不得复活管理器（#264 评审）")
+    class LateHandshakeIsIgnored {
+
+        @Test
+        @DisplayName("云已关闭时 initializeManagers 直接返回")
+        void managersAreNotWiredWhenCloudDisabled() {
+            // logout 之后仍可能有一次在途的握手落地。没有这道闸的话，disableCloud() 刚摘掉的
+            // 监听器会被这次迟到的 onOpen 原样装回去——「谁都不是所有者」的毛病换个地方重现。
+            PluginInitiationUtils.disableCloud();
+
+            PluginInitiationUtils.initializeManagers();
+
+            Mockito.verify(UltiTools.getInstance(), Mockito.never()).getServerMonitorManager();
+            assertThat(loggedAt(Level.FINE))
+                    .anySatisfy(line -> assertThat(line).contains("跳过管理器初始化"));
+        }
+
+        @Test
+        @DisplayName("云开启时照常接线")
+        void managersAreWiredWhenCloudEnabled() {
+            // 负向对照：闸门只该拦住关闭态，正常路径必须原样通过。
+            PluginInitiationUtils.enableCloud();
+
+            PluginInitiationUtils.initializeManagers();
+
+            Mockito.verify(UltiTools.getInstance(), Mockito.atLeastOnce()).getServerMonitorManager();
+        }
+
+        @Test
+        @DisplayName("接线与拆线落在同一把生命周期锁上")
+        void wiringAndTeardownShareTheSameLock() throws Exception {
+            // 光检查 cloudEnabled 是不够的：那只是一次锁外的读。读到 true 之后、真正接线之前，
+            // disableCloud() 完全可以插进来把开关置否并拆干净，随后接线一侧继续往下又装回去。
+            // 状态位表达不了「检查与动作之间不许有人插队」，只有锁能。见 PR #264 第二轮评审。
+            Field lockField = PluginInitiationUtils.class.getDeclaredField("cloudLifecycleLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(null);
+
+            Runnable[] actions = {
+                PluginInitiationUtils::initializeManagers,
+                PluginInitiationUtils::disableCloud
+            };
+
+            for (Runnable action : actions) {
+                java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+
+                Thread worker = new Thread(() -> {
+                    started.countDown();
+                    try {
+                        action.run();
+                    } catch (Exception ignored) {
+                        // 本用例只关心它能不能进得去，不关心它做了什么
+                    } finally {
+                        finished.countDown();
+                    }
+                }, "lifecycle-lock-probe");
+                worker.setDaemon(true);
+
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                            .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
+                            .isTrue();
+                    assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                            .as("持有生命周期锁期间，这个动作必须进不去")
+                            .isFalse();
+                }
+
+                assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("释放锁之后应当立刻放行")
+                        .isTrue();
+                worker.join(1000);
+            }
         }
     }
 

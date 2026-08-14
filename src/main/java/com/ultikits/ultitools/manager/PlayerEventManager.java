@@ -6,10 +6,12 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerChatEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.Plugin;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
@@ -23,19 +25,81 @@ import org.jetbrains.annotations.ApiStatus;
 @SuppressWarnings("deprecation")
 @ApiStatus.Internal
 public class PlayerEventManager implements Listener {
-    private UltiPanelWebSocketClient webSocketClient;
-    
+    /**
+     * 必须 volatile。写在 WebSocket 的 onOpen 线程上（{@link #initialize}），读在 Bukkit 主线程上
+     * （三个事件处理器）。只给写方加 {@code synchronized} 不构成发布——读方从不获取同一把监视器，
+     * 两边之间没有 happens-before 边。
+     * <p>
+     * 这一点在加幂等守卫之前是<b>被意外掩盖</b>的：那时每次 {@code initialize} 都会调
+     * {@code registerEvents}，而 Bukkit 注册监听器会写 {@code HandlerList} 的 volatile 字段，
+     * 事件分发再读它，于是本字段的写被顺带发布了出去。守卫跳过注册之后这条捎带链就断了，
+     * 重连后处理器可能一直看着旧的、已断开的客户端，玩家事件被静默丢弃。见 PR #264 的评审。
+     */
+    private volatile UltiPanelWebSocketClient webSocketClient;
+
+    /**
+     * 是否已经把自己挂进 Bukkit 事件系统。
+     * <p>
+     * {@link #initialize(UltiPanelWebSocketClient)} 由 {@code initializeManagers()} 调用，而后者挂在
+     * WebSocket 的 {@code onConnectHandler} 上——<b>每次 onOpen 都会跑一遍</b>。没有这个守卫的话，
+     * 断线重连 N 次就会注册 N 份监听器，同一个玩家事件被发 N 遍。见 issue #180。
+     */
+    private volatile boolean listenerRegistered = false;
+
     /**
      * 初始化玩家事件管理器
+     * <p>
+     * 整个方法与 {@link #shutdown()} 互斥。只让 {@code registerEvents} 单独同步是不够的：
+     * 「赋值客户端」与「注册监听器」之间会留下一个窗口，logout 恰好挤进去的话，
+     * {@code shutdown()} 摘掉的监听器会被紧随其后的 {@code registerEvents} 又装回去，
+     * 于是 {@code disableCloud()} 之后 {@code listenerRegistered} 仍为 true。见 PR #264 的评审。
+     *
      * @param client WebSocket客户端
      */
-    public void initialize(UltiPanelWebSocketClient client) {
+    public synchronized void initialize(UltiPanelWebSocketClient client) {
+        // 客户端每次重连都是新造的实例（见 PluginInitiationUtils.getPanelWebsocketClient），
+        // 所以引用要无条件更新；只有注册动作是幂等的。
         this.webSocketClient = client;
-        // 注册事件监听器
-        Bukkit.getPluginManager().registerEvents(this, 
-            Bukkit.getPluginManager().getPlugin("UltiTools"));
+        registerEvents();
     }
-    
+
+    /**
+     * 幂等地注册事件监听器：已注册过就直接返回。
+     * <p>
+     * 调用方必须已持有本对象的监视器锁（目前唯一调用方是 {@link #initialize}）。
+     */
+    private synchronized void registerEvents() {
+        if (listenerRegistered) {
+            return;
+        }
+        Plugin plugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+        if (plugin == null) {
+            UltiTools.getInstance().getLogger().log(java.util.logging.Level.WARNING,
+                "[PlayerEventManager] 找不到 UltiTools 插件实例，玩家事件监听器未注册");
+            return;
+        }
+        Bukkit.getPluginManager().registerEvents(this, plugin);
+        listenerRegistered = true;
+    }
+
+    /**
+     * 注销事件监听器并断开与客户端的关联。
+     * <p>
+     * 由 {@code PluginInitiationUtils.disableCloud()} 调用——即 {@code /ulticloud logout} 之后。
+     * 注意与「断线重连」区分：那种断开之后 {@code initialize} 还会被调回来，注销了反而要重注册；
+     * 这里处理的是「云功能被显式关掉」，监听器应当真的摘掉。
+     */
+    public synchronized void shutdown() {
+        HandlerList.unregisterAll(this);
+        listenerRegistered = false;
+        this.webSocketClient = null;
+    }
+
+    /** 供测试断言幂等守卫的状态。 */
+    boolean isListenerRegistered() {
+        return listenerRegistered;
+    }
+
     /**
      * 处理玩家加入事件
      */
@@ -131,10 +195,15 @@ public class PlayerEventManager implements Listener {
     
     /**
      * 获取服务器ID
+     * <p>
+     * 取建连时交给客户端的那份 UUID（即 {@code CommonUtils.getUltiToolsUUID()}，见
+     * {@code PluginInitiationUtils.getPanelWebsocketClient}），与所有兄弟 manager 一致。
+     * 在 #180 之前这里返回的是一个写死的占位字符串，意味着全球每台服务器发出的
+     * {@code player_event} 都自称同一身份，面板侧无法路由。
+     *
      * @return 服务器ID
      */
     private String getServerId() {
-        // 这里应该返回配置中的服务器ID或生成一个唯一ID
-        return "minecraft-server-1";
+        return webSocketClient == null ? "unknown" : webSocketClient.getServerId();
     }
 }

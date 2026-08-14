@@ -45,6 +45,19 @@ public class PluginInitiationUtils {
     private static final java.util.concurrent.atomic.AtomicBoolean cloudEnabled =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    /**
+     * 云管理器「接线」与「拆线」的互斥锁。
+     * <p>
+     * {@link #cloudEnabled} 单独用是不够的：它只能表达状态，表达不了「检查与动作之间不许有人插队」。
+     * {@code initializeManagers()} 读到 true 之后、真正接线之前，{@code disableCloud()} 完全可以
+     * 插进来把开关置否并把监听器拆干净，随后前者继续往下又把它们装回去——logout 之后监听器
+     * 还在，甚至还能继续往面板发事件。见 PR #264 的两轮评审。
+     * <p>
+     * 两边都持这把锁之后，二者只能整体先后发生：要么先接线再拆掉（干净），要么先拆再接而接线
+     * 一侧在持锁复查时看到 false 直接返回（也干净）。
+     */
+    private static final Object cloudLifecycleLock = new Object();
+
     /** 外层 reinit 的全局上限。超过之后进入终态，需要 {@code /ulticloud login} 或重启才恢复。 */
     private static final int MAX_REINIT_ATTEMPTS = 10;
 
@@ -330,7 +343,35 @@ public class PluginInitiationUtils {
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
     }
 
-    private static void initializeManagers() {
+    /**
+     * 把所有 WebSocket 管理器接到当前连接上。
+     * <p>
+     * 本方法挂在 {@code onConnectHandler} 上，而 {@code /ulticloud logout} 之后仍可能有一次
+     * 在途的握手落地。不设防的话，{@code disableCloud()} 刚摘掉的监听器会被这次迟到的 onOpen
+     * 原样装回去——这正是 #181/#223 里「谁都不是所有者」那个毛病换个地方重现。
+     * <p>
+     * <b>光检查 {@link #cloudEnabled} 是不够的。</b>那只是一次锁外的读：读到 true 之后、
+     * 真正接线之前，{@code disableCloud()} 完全可以插进来把开关置否并拆干净，然后本方法
+     * 继续往下把监听器又装回去。所以接线与拆线必须落在同一把 {@link #cloudLifecycleLock} 上，
+     * 并在<b>持锁期间</b>复查开关。见 PR #264 的两轮评审。
+     * <p>
+     * 包级可见而非 private —— 只为可测。
+     */
+    static void initializeManagers() {
+        synchronized (cloudLifecycleLock) {
+            // 持锁复查：disableCloud() 拿的是同一把锁，所以到这里为止它要么还没开始、
+            // 要么已经整个跑完，不可能卡在中间。
+            if (!cloudEnabled.get()) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）");
+                return;
+            }
+            wireManagers();
+        }
+    }
+
+    /** {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
+    private static void wireManagers() {
         try {
             // 初始化服务器监控管理器
             UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(panelWS);
@@ -949,8 +990,19 @@ public class PluginInitiationUtils {
      * <p>
      * 顺带摘掉 root logger 上的日志 handler 与传输线程，并停掉 token 刷新调度——
      * 都是「云功能已关闭」这句话应当为真的组成部分。
+     * <p>
+     * 整个方法持有 {@link #cloudLifecycleLock}，与 {@code initializeManagers()} 互斥。
+     * 不然的话，一次在途的 onOpen 可以在「置否」与「拆线」之间挤进来，把刚要拆的东西
+     * 又装回去。见 PR #264 的两轮评审。
      */
     public static void disableCloud() {
+        synchronized (cloudLifecycleLock) {
+            doDisableCloud();
+        }
+    }
+
+    /** {@link #disableCloud()} 的实际拆线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
+    private static void doDisableCloud() {
         cloudEnabled.set(false);
         reinitBackoff.reset();
 
@@ -963,6 +1015,17 @@ public class PluginInitiationUtils {
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Error shutting down log stream manager: " + e.getMessage());
+        }
+
+        // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
+        // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
+        try {
+            if (UltiTools.getInstance().getPlayerEventManager() != null) {
+                UltiTools.getInstance().getPlayerEventManager().shutdown();
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error shutting down player event manager: " + e.getMessage());
         }
 
         stopWebsocket();
