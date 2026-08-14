@@ -38,9 +38,66 @@ public class ServerMonitorManager {
 
     // CPU采样（在Bukkit主线程定期采样，batch_update线程读取）
     private volatile double lastCpuUsage = 0.0;
-    
+
+    /** 世界/玩家/插件状态的采样周期，单位 tick。100 tick = 5 秒，与 batch_update 的发送节拍一致。 */
+    private static final long SNAPSHOT_INTERVAL_TICKS = 100L;
+
+    /**
+     * 主线程采出来的服务器状态快照，异步发送线程只读它。
+     * <p>
+     * <b>这是 issue #179 的全部要点。</b>在它存在之前，{@code sendBatchUpdate} 跑在普通
+     * {@code ScheduledThreadPool} 上，却在那里直接调 {@code Bukkit.getWorlds()}、
+     * {@code world.getLoadedChunks()}、{@code Bukkit.getOnlinePlayers()}、
+     * {@code player.getLocation()} —— 全是 Paper 明确不支持在异步线程上碰的可变世界状态，
+     * 表现为偶发的并发修改异常或读到撕裂的数据。
+     * <p>
+     * 同一个类里的 TPS/CPU 采样<b>已经</b>正确地 hop 到了 {@code runTaskTimer}，说明契约当时
+     * 就被识别到了，只是只应用了一半。本字段把剩下那一半补齐，沿用完全相同的模式。
+     * <p>
+     * 代价是数据最多陈旧一个采样周期（5 秒）。这是刻意选的：另一条路是让异步线程用
+     * {@code callSyncMethod().get()} 同步等主线程，那会让监控的存活依赖主线程的健康度，
+     * 而服务器卡顿时恰恰是最需要监控还能说话的时候。
+     */
+    private volatile ServerStateSnapshot stateSnapshot = ServerStateSnapshot.EMPTY;
+
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
+    }
+
+    /**
+     * 一次主线程采样的结果。字段全部 final，构造完成后不再改动，通过 volatile 字段发布，
+     * 因此读线程看到的要么是上一份完整快照、要么是这一份完整快照，不会看到半份。
+     * <p>
+     * 其中三个 {@link JsonArray} 在发布之后<b>绝不可再被修改</b>——它们会被直接塞进待发送的
+     * 消息里，序列化只读不写，所以共享实例是安全的；一旦有人在发布后 add 一笔，这个前提就没了。
+     */
+    private static final class ServerStateSnapshot {
+        static final ServerStateSnapshot EMPTY = new ServerStateSnapshot(
+                0, 0, false, "Unknown", 0, 0, new JsonArray(), new JsonArray(), new JsonArray());
+
+        final int playerCount;
+        final int maxPlayers;
+        final boolean onlineMode;
+        final String serverVersion;
+        final int worldCount;
+        final int pluginCount;
+        final JsonArray worlds;
+        final JsonArray onlinePlayers;
+        final JsonArray plugins;
+
+        ServerStateSnapshot(int playerCount, int maxPlayers, boolean onlineMode, String serverVersion,
+                            int worldCount, int pluginCount,
+                            JsonArray worlds, JsonArray onlinePlayers, JsonArray plugins) {
+            this.playerCount = playerCount;
+            this.maxPlayers = maxPlayers;
+            this.onlineMode = onlineMode;
+            this.serverVersion = serverVersion;
+            this.worldCount = worldCount;
+            this.pluginCount = pluginCount;
+            this.worlds = worlds;
+            this.onlinePlayers = onlinePlayers;
+            this.plugins = plugins;
+        }
     }
     
     /**
@@ -76,10 +133,18 @@ public class ServerMonitorManager {
         }
 
         // 每5秒发送一次batch_update（包含status、metrics，每12个tick包含plugins，每次包含logs）
+        // 注意：这条线程**只负责发送**，一切 Bukkit 状态都来自主线程采好的快照。见 issue #179。
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
 
         // 启动TPS计算 + CPU采样任务（每秒）
         Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
+
+        // 世界/玩家/插件状态的采样任务（每5秒，主线程）。
+        // 刻意不并进上面那个 1Hz 的任务：world.getLoadedChunks() 会分配一个装下所有已加载区块
+        // 的数组，大服上并不便宜，按 1Hz 采就是凭空把这份开销放大 5 倍。100 tick 与今天实际的
+        // 采样频率一致，只是换到了正确的线程上。
+        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
+                0L, SNAPSHOT_INTERVAL_TICKS);
     }
     
     /**
@@ -116,10 +181,12 @@ public class ServerMonitorManager {
             // 发送消息
             webSocketClient.sendMessage(message);
             
-            UltiTools.getInstance().getLogger().log(Level.FINE, 
-                String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB", 
-                    Bukkit.getOnlinePlayers().size(), Bukkit.getMaxPlayers(),
-                    calculateTPS()[0], 
+            // 日志里的玩家数同样取自快照——这句也跑在异步线程上，直接读 Bukkit 是同一个毛病。
+            ServerStateSnapshot snapshot = currentSnapshot();
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
+                    snapshot.playerCount, snapshot.maxPlayers,
+                    calculateTPS()[0],
                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024,
                     Runtime.getRuntime().maxMemory() / 1024 / 1024));
             
@@ -219,21 +286,141 @@ public class ServerMonitorManager {
     }
     
     /**
+     * 在主线程上采一份服务器状态快照。
+     * <p>
+     * <b>只能在 Bukkit 主线程调用。</b>非主线程调用会被拒绝并记 SEVERE —— 这是防御性的第二道
+     * 闸：调度已经保证了线程，但这个类的历史正是「契约被识别了，只应用了一半」，把契约写进
+     * 代码里比写进注释里可靠。
+     *
+     * @return 新的快照；若不在主线程则返回 {@code null}
+     */
+    private ServerStateSnapshot sampleServerState() {
+        if (!Bukkit.isPrimaryThread()) {
+            UltiTools.getInstance().getLogger().log(Level.SEVERE,
+                "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+            return null;
+        }
+
+        JsonArray worlds = new JsonArray();
+        for (World world : Bukkit.getWorlds()) {
+            JsonObject worldObj = new JsonObject();
+            worldObj.addProperty("name", world.getName());
+            worldObj.addProperty("environment", world.getEnvironment().name());
+            worldObj.addProperty("difficulty", world.getDifficulty().name());
+            worldObj.addProperty("playerCount", world.getPlayers().size());
+            worldObj.addProperty("loadedChunks", world.getLoadedChunks().length);
+            worldObj.addProperty("pvpEnabled", world.getPVP());
+
+            JsonObject spawnLoc = new JsonObject();
+            spawnLoc.addProperty("x", world.getSpawnLocation().getBlockX());
+            spawnLoc.addProperty("y", world.getSpawnLocation().getBlockY());
+            spawnLoc.addProperty("z", world.getSpawnLocation().getBlockZ());
+            worldObj.add("spawnLocation", spawnLoc);
+
+            worlds.add(worldObj);
+        }
+
+        JsonArray onlinePlayers = new JsonArray();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            JsonObject playerObj = new JsonObject();
+            playerObj.addProperty("uuid", player.getUniqueId().toString());
+            playerObj.addProperty("name", player.getName());
+            playerObj.addProperty("world", player.getWorld().getName());
+            Location loc = player.getLocation();
+            playerObj.addProperty("x", Math.round(loc.getX() * 10.0) / 10.0);
+            playerObj.addProperty("y", Math.round(loc.getY() * 10.0) / 10.0);
+            playerObj.addProperty("z", Math.round(loc.getZ() * 10.0) / 10.0);
+            playerObj.addProperty("health", player.getHealth());
+            playerObj.addProperty("maxHealth", player.getMaxHealth());
+            playerObj.addProperty("foodLevel", player.getFoodLevel());
+            playerObj.addProperty("gameMode", player.getGameMode().name());
+            playerObj.addProperty("op", player.isOp());
+            onlinePlayers.add(playerObj);
+        }
+
+        JsonArray plugins = new JsonArray();
+        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
+            JsonObject pluginInfo = new JsonObject();
+            pluginInfo.addProperty("name", plugin.getName());
+            pluginInfo.addProperty("version", plugin.getDescription().getVersion());
+            pluginInfo.addProperty("enabled", plugin.isEnabled());
+
+            if (plugin.getDescription().getAuthors() != null && !plugin.getDescription().getAuthors().isEmpty()) {
+                pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
+            } else {
+                pluginInfo.addProperty("author", "Unknown");
+            }
+
+            pluginInfo.addProperty("description", plugin.getDescription().getDescription());
+            plugins.add(pluginInfo);
+        }
+
+        return new ServerStateSnapshot(
+                Bukkit.getOnlinePlayers().size(),
+                Bukkit.getMaxPlayers(),
+                Bukkit.getOnlineMode(),
+                extractVersionNumber(Bukkit.getVersion()),
+                Bukkit.getWorlds().size(),
+                plugins.size(),
+                worlds,
+                onlinePlayers,
+                plugins);
+    }
+
+    /**
+     * 主线程定时任务的入口：采样并发布快照。
+     * <p>
+     * 包级可见，供测试直接驱动。
+     */
+    void refreshStateSnapshot() {
+        try {
+            ServerStateSnapshot snapshot = sampleServerState();
+            if (snapshot != null) {
+                stateSnapshot = snapshot;
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[ServerMonitor] 采样服务器状态失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 取当前快照供发送线程使用。
+     * <p>
+     * 若还一次都没采过、而调用方恰好就在主线程上，就地补采一次——否则连接建立后的第一帧
+     * 会是一片零，以及 {@code sendServerStatusWithRequestId} 这类按需请求在监控启动前会返回空数据。
+     */
+    private ServerStateSnapshot currentSnapshot() {
+        ServerStateSnapshot snapshot = stateSnapshot;
+        if (snapshot == ServerStateSnapshot.EMPTY && Bukkit.isPrimaryThread()) {
+            ServerStateSnapshot sampled = sampleServerState();
+            if (sampled != null) {
+                stateSnapshot = sampled;
+                return sampled;
+            }
+        }
+        return snapshot;
+    }
+
+    /**
      * 获取当前服务器状态数据
+     * <p>
+     * 所有 Bukkit 派生的字段都取自主线程采好的快照（见 {@link #stateSnapshot}）；
+     * 本方法本身可以在任意线程调用。Runtime 内存、JVM 运行时长、TPS、CPU 不属于 Bukkit 状态，
+     * 就地读取即可——TPS 与 CPU 早已由主线程的 1Hz 任务维护。
      */
     private JsonObject getCurrentServerStatusData() {
+        ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
-        
+
         // 玩家信息
-        data.addProperty("playerCount", Bukkit.getOnlinePlayers().size());
-        data.addProperty("maxPlayers", Bukkit.getMaxPlayers());
-        data.addProperty("onlineMode", Bukkit.getOnlineMode());
-        
+        data.addProperty("playerCount", snapshot.playerCount);
+        data.addProperty("maxPlayers", snapshot.maxPlayers);
+        data.addProperty("onlineMode", snapshot.onlineMode);
+
         // 服务器版本信息
-        String version = Bukkit.getVersion();
-        String serverVersion = extractVersionNumber(version);
-        data.addProperty("serverVersion", serverVersion);
-        
+        data.addProperty("serverVersion", snapshot.serverVersion);
+
         // TPS信息
         JsonArray tpsArray = new JsonArray();
         double[] tps = calculateTPS();
@@ -262,46 +449,11 @@ public class ServerMonitorManager {
         // 运行时间
         data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
         
-        // 世界列表 (enriched objects)
-        JsonArray worlds = new JsonArray();
-        for (World world : Bukkit.getWorlds()) {
-            JsonObject worldObj = new JsonObject();
-            worldObj.addProperty("name", world.getName());
-            worldObj.addProperty("environment", world.getEnvironment().name());
-            worldObj.addProperty("difficulty", world.getDifficulty().name());
-            worldObj.addProperty("playerCount", world.getPlayers().size());
-            worldObj.addProperty("loadedChunks", world.getLoadedChunks().length);
-            worldObj.addProperty("pvpEnabled", world.getPVP());
+        // 世界列表 (enriched objects) —— 主线程采样，此处只引用
+        data.add("worlds", snapshot.worlds);
 
-            JsonObject spawnLoc = new JsonObject();
-            spawnLoc.addProperty("x", world.getSpawnLocation().getBlockX());
-            spawnLoc.addProperty("y", world.getSpawnLocation().getBlockY());
-            spawnLoc.addProperty("z", world.getSpawnLocation().getBlockZ());
-            worldObj.add("spawnLocation", spawnLoc);
-
-            worlds.add(worldObj);
-        }
-        data.add("worlds", worlds);
-
-        // Online player details
-        JsonArray onlinePlayers = new JsonArray();
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            JsonObject playerObj = new JsonObject();
-            playerObj.addProperty("uuid", player.getUniqueId().toString());
-            playerObj.addProperty("name", player.getName());
-            playerObj.addProperty("world", player.getWorld().getName());
-            Location loc = player.getLocation();
-            playerObj.addProperty("x", Math.round(loc.getX() * 10.0) / 10.0);
-            playerObj.addProperty("y", Math.round(loc.getY() * 10.0) / 10.0);
-            playerObj.addProperty("z", Math.round(loc.getZ() * 10.0) / 10.0);
-            playerObj.addProperty("health", player.getHealth());
-            playerObj.addProperty("maxHealth", player.getMaxHealth());
-            playerObj.addProperty("foodLevel", player.getFoodLevel());
-            playerObj.addProperty("gameMode", player.getGameMode().name());
-            playerObj.addProperty("op", player.isOp());
-            onlinePlayers.add(playerObj);
-        }
-        data.add("onlinePlayers", onlinePlayers);
+        // Online player details —— 同上
+        data.add("onlinePlayers", snapshot.onlinePlayers);
 
         return data;
     }
@@ -364,39 +516,26 @@ public class ServerMonitorManager {
 
     /**
      * 获取当前插件列表数组
+     * <p>
+     * 取自主线程采好的快照。{@code Bukkit.getPluginManager().getPlugins()} 同样不该在异步线程上遍历。
      */
     private JsonArray getCurrentPluginArray() {
-        JsonArray plugins = new JsonArray();
-
-        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
-            JsonObject pluginInfo = new JsonObject();
-            pluginInfo.addProperty("name", plugin.getName());
-            pluginInfo.addProperty("version", plugin.getDescription().getVersion());
-            pluginInfo.addProperty("enabled", plugin.isEnabled());
-
-            if (plugin.getDescription().getAuthors() != null && !plugin.getDescription().getAuthors().isEmpty()) {
-                pluginInfo.addProperty("author", String.join(", ", plugin.getDescription().getAuthors()));
-            } else {
-                pluginInfo.addProperty("author", "Unknown");
-            }
-
-            pluginInfo.addProperty("description", plugin.getDescription().getDescription());
-            plugins.add(pluginInfo);
-        }
-
-        return plugins;
+        return currentSnapshot().plugins;
     }
 
     /**
      * 获取当前性能统计数据
+     * <p>
+     * Bukkit 派生的字段取自快照；Runtime 内存与 TPS 就地计算。
      */
     private JsonObject getCurrentMetricsData() {
+        ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
 
         // 玩家活动统计
         JsonObject playerActivity = new JsonObject();
-        playerActivity.addProperty("currentOnline", Bukkit.getOnlinePlayers().size());
-        playerActivity.addProperty("maxPlayers", Bukkit.getMaxPlayers());
+        playerActivity.addProperty("currentOnline", snapshot.playerCount);
+        playerActivity.addProperty("maxPlayers", snapshot.maxPlayers);
         data.add("playerActivity", playerActivity);
 
         // 服务器性能
@@ -421,8 +560,8 @@ public class ServerMonitorManager {
 
         // 插件使用情况
         JsonObject pluginUsage = new JsonObject();
-        pluginUsage.addProperty("enabledPlugins", Bukkit.getPluginManager().getPlugins().length);
-        pluginUsage.addProperty("loadedWorlds", Bukkit.getWorlds().size());
+        pluginUsage.addProperty("enabledPlugins", snapshot.pluginCount);
+        pluginUsage.addProperty("loadedWorlds", snapshot.worldCount);
         data.add("pluginUsage", pluginUsage);
 
         return data;
