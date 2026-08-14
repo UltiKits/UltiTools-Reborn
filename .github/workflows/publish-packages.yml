@@ -36,7 +36,8 @@ jobs:
       run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
     - name: 🔨 Build package
-      run: mvn -B clean package -Dgpg.skip=true -Dmaven.test.skip=true
+      # GitHub Packages 不要求签名，因此不激活 release profile。
+      run: mvn -B clean package -Dmaven.test.skip=true
 
     - name: 📦 Publish to GitHub Packages
       id: publish-ghp
@@ -125,4 +126,6 @@ jobs:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
         MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-      run: mvn -B deploy -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
+      # -P release：GPG 签名只在这个 profile 里，唯独 Maven Central 需要签名产物。
+      # 漏掉它不会静默发出未签名产物，Central 的校验会直接拒绝。
+      run: mvn -B deploy -P release -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
