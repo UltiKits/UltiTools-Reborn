@@ -5,9 +5,38 @@ on:
     types: [published]
 
 jobs:
+  validate:
+    name: 🏷️ Validate tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+    - name: 🏷️ Extract and validate version from tag
+      # 两个发布 job 都从这里取版本号，不再各自解析一次 GITHUB_REF_NAME。
+      # 少一份重复就少一处漂移——往 Maven Central 推出去的坐标不可撤销
+      # （Central 不允许覆盖或删除已发布的坐标），两个 job 用的必须是同一个
+      # 且已经校验过的字符串。
+      #
+      # 这一层挡的是绕过 .github/scripts/release.sh 的路径：直接在 GitHub 网页上
+      # 建 release，或者手工推一个 tag。入口脚本能在打 tag 之前拒绝，但只在有人
+      # 走它的时候生效；这里挡不住 tag 被创建，挡得住坏版本号被发出去。
+      id: version
+      run: |
+        set -euo pipefail
+        VERSION="${GITHUB_REF_NAME#v}"
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::tag ${GITHUB_REF_NAME} 解析出的版本号不符合 MAJOR.MINOR.PATCH，发布已中止。"
+          echo "::error::解析结果为 [${VERSION}]。请删除该 release 与 tag，用正确的版本号重新发布。"
+          exit 1
+        fi
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "${GITHUB_REF_NAME} -> ${VERSION}"
+
   publish-github:
     name: 📦 GitHub Packages
     runs-on: ubuntu-latest
+    needs: validate
     permissions:
       # contents: write —— 往 release 挂 JAR 附件需要。
       contents: write
@@ -24,16 +53,9 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: 🏷️ Extract version from tag
-      id: version
-      run: |
-        VERSION=${GITHUB_REF_NAME#v}
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        echo "Publishing version: ${VERSION}"
-
     - name: 🔧 Set version from release tag
       env:
-        VERSION: ${{ steps.version.outputs.version }}
+        VERSION: ${{ needs.validate.outputs.version }}
       run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
     - name: 🔨 Build package
@@ -50,7 +72,7 @@ jobs:
       #
       # --clobber 让它幂等：入口脚本已经传过同名附件时覆盖，而不是报错退出。
       env:
-        VERSION: ${{ steps.version.outputs.version }}
+        VERSION: ${{ needs.validate.outputs.version }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
@@ -68,7 +90,7 @@ jobs:
     - name: 📦 Publish to GitHub Packages
       id: publish-ghp
       env:
-        VERSION: ${{ steps.version.outputs.version }}
+        VERSION: ${{ needs.validate.outputs.version }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         printf '<settings><servers><server><id>github</id><username>${env.GITHUB_ACTOR}</username><password>${env.GITHUB_TOKEN}</password></server></servers></settings>' > /tmp/gh-settings.xml
@@ -92,7 +114,7 @@ jobs:
 
     - name: 📝 Publish Summary
       env:
-        VERSION: ${{ steps.version.outputs.version }}
+        VERSION: ${{ needs.validate.outputs.version }}
       run: |
         echo "## Published to GitHub Packages" >> $GITHUB_STEP_SUMMARY
         echo '```xml' >> $GITHUB_STEP_SUMMARY
@@ -110,6 +132,7 @@ jobs:
   publish-central:
     name: 📤 Maven Central
     runs-on: ubuntu-latest
+    needs: validate
     permissions:
       contents: read
     if: ${{ vars.PUBLISH_TO_CENTRAL == 'true' }}
@@ -148,15 +171,9 @@ jobs:
       # 签名在密钥过期之后依然可验证。这里没有传 --fail-on-warn 就是这个意思。
       run: .github/scripts/check-gpg-expiry.sh --mode secret --warn-days 30
 
-    - name: 🏷️ Extract version from tag
-      id: version
-      run: |
-        VERSION=${GITHUB_REF_NAME#v}
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
     - name: 🔧 Set version from release tag
       env:
-        VERSION: ${{ steps.version.outputs.version }}
+        VERSION: ${{ needs.validate.outputs.version }}
       run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
     - name: 📤 Publish to Maven Central
