@@ -62,11 +62,12 @@ class CommandManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         // Mock plugin
         mockPlugin = mock(UltiToolsPlugin.class);

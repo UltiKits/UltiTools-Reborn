@@ -65,11 +65,12 @@ class OkCancelPageTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        TestHelper.mockUltiToolsInstance();
 
         // Mock VersionWrapper
         VersionWrapper versionWrapper = mock(VersionWrapper.class);
-        lenient().when(UltiTools.getInstance().getVersionWrapper()).thenReturn(versionWrapper);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getVersionWrapper()).thenReturn(versionWrapper);
+        });
         lenient().when(versionWrapper.getColoredPlaneGlass(any())).thenReturn(new ItemStack(Material.STONE));
 
         // Initialize InventoryAPI

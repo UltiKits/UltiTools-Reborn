@@ -47,15 +47,16 @@ class InMemoryNotificationServiceTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         // Mock VersionWrapper - local variable as only used for stubbing
         VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
-        when(UltiTools.getInstance().getVersionWrapper()).thenReturn(mockVersionWrapper);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
+        });
 
         notificationService = new InMemoryNotificationService();
 

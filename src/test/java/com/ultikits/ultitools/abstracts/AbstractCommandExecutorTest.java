@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -47,7 +46,6 @@ class AbstractCommandExecutorTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin(); // Create a dummy plugin for permissions
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         player = server.addPlayer("testplayer");
         player.setOp(false);
         mockCommand = mock(Command.class);
@@ -56,7 +54,9 @@ class AbstractCommandExecutorTest {
         // Mock CommandManager for suggestion tests
         CommandManager mockCommandManager = mock(CommandManager.class);
         UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
-        when(UltiTools.getInstance().getCommandManager()).thenReturn(mockCommandManager);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getCommandManager()).thenReturn(mockCommandManager);
+        });
         when(mockCommandManager.getPluginByCommand(any())).thenReturn(mockPlugin);
         
         executor = new ComplexCommandExecutor();

@@ -50,11 +50,12 @@ class PagingPageTest {
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         
         // Mock VersionWrapper
         com.ultikits.ultitools.interfaces.VersionWrapper versionWrapper = org.mockito.Mockito.mock(com.ultikits.ultitools.interfaces.VersionWrapper.class);
-        org.mockito.Mockito.lenient().when(com.ultikits.ultitools.UltiTools.getInstance().getVersionWrapper()).thenReturn(versionWrapper);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            org.mockito.Mockito.lenient().when(ultiTools.getVersionWrapper()).thenReturn(versionWrapper);
+        });
         org.mockito.Mockito.lenient().when(versionWrapper.getColoredPlaneGlass(org.mockito.ArgumentMatchers.any())).thenReturn(new org.bukkit.inventory.ItemStack(org.bukkit.Material.STONE));
         
         // Initialize InventoryAPI

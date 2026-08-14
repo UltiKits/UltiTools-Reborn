@@ -39,7 +39,6 @@ class UltiToolsCommandsTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         
         player = server.addPlayer("testplayer");
         player.setOp(true);
@@ -48,7 +47,9 @@ class UltiToolsCommandsTest {
         when(mockCommand.getName()).thenReturn("ul");
         
         mockPluginManager = mock(PluginManager.class);
-        when(UltiTools.getInstance().getPluginManager()).thenReturn(mockPluginManager);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getPluginManager()).thenReturn(mockPluginManager);
+        });
         
         executor = new UltiToolsCommands();
     }
