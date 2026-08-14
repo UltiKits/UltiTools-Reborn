@@ -236,13 +236,29 @@ public abstract class DeclarativeGui extends Gui {
      * GUI 点击时的钩子方法。
      * <p>
      * 注意：点击事件首先由声明式框架处理，然后才调用此方法。
+     * <p>
+     * <b>返回值语义与直觉相反，务必看清：</b>返回 {@code false} 表示保持事件被取消，
+     * 玩家<b>拿不走</b>格子里的物品；返回 {@code true} 表示放行，玩家<b>可以取走</b>物品。
+     * 这一层语义来自 obliviate-invs —— 其 {@code InvListener} 在 {@code Gui.onClick}
+     * 返回 true 时调用 {@code setCancelled(false)}，返回 false 时调用
+     * {@code setCancelled(true)}。默认值 {@code false} 与库基类 {@code Gui.onClick}
+     * 的默认值保持一致，也是安全的一侧。
+     * <p>
+     * The return value reads backwards, so read it carefully: returning {@code false}
+     * keeps the event cancelled and the player <b>cannot</b> take the clicked item;
+     * returning {@code true} lets the click through and the item <b>can</b> be taken.
+     * The semantics come from obliviate-invs, whose {@code InvListener} calls
+     * {@code setCancelled(false)} when {@code Gui.onClick} returns true and
+     * {@code setCancelled(true)} when it returns false. The default of {@code false}
+     * matches the library base class and is the safe side.
      *
      * @param event 点击事件
-     * @return 是否取消默认行为（true 取消）
+     * @return {@code false} 保持事件取消（默认，物品拿不走）；{@code true} 放行
      */
     protected boolean onGuiClick(@NotNull InventoryClickEvent event) {
-        // 子类重写
-        return true;
+        // 子类重写。默认保持事件取消——这是安全的一侧。
+        // Subclasses override. The default keeps the event cancelled, which is the safe side.
+        return false;
     }
 
     /**
