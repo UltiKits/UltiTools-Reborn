@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -26,7 +27,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -45,27 +45,63 @@ class UltiPanelLogTransmitterTest {
     private UltiPanelWebSocketClient mockWebSocketClient;
     private Logger mockLogger;
 
+    /**
+     * 本测试里造出来的所有 transmitter，tearDown 统一关掉。
+     *
+     * <p>UltiPanelLogTransmitter 的构造函数就会起一条 "UltiPanel-LogTransmitter" 守护
+     * 调度线程（{@code scheduleWithFixedDelay}，5 秒一次），只有 shutdown() 停得掉。
+     * 这个类有 55 个用例，直接 new 而不关的话，跑完就有几十条线程活到 fork 结束——
+     * surefire 这里没配 forkCount/reuseForks，是单个 JVM 跑完整个测试套件。这些线程会周期性调
+     * {@code UltiTools.getInstance().getLogger()}，撞上别的测试类正在给静态 mock 打桩，
+     * 就把 answer 抢走了。issue #250 里 LogStreamManagerTest 的间歇性
+     * ClassCastException 就是这么来的：失败那次运行里本类排在它前面 250 个类。
+     */
+    private final java.util.List<UltiPanelLogTransmitter> createdTransmitters =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+    /**
+     * 统一的创建入口。不要在用例里直接 {@code new UltiPanelLogTransmitter(...)}，
+     * 那样造出来的线程没人关。
+     */
+    private UltiPanelLogTransmitter newTransmitter(UltiPanelWebSocketClient client, String serverId) {
+        UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(client, serverId);
+        createdTransmitters.add(transmitter);
+        return transmitter;
+    }
+
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+
+        // 这个桩要在 mock 发布到静态单例之前打完，否则别的线程可能在打桩中途调进来
+        // 把 answer 抢走。见 issue #250。
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                ultiTools -> lenient().when(ultiTools.getLogger()).thenReturn(mockLogger));
 
         // Mock WebSocket client
         mockWebSocketClient = mock(UltiPanelWebSocketClient.class);
         when(mockWebSocketClient.isConnected()).thenReturn(true);
         when(mockWebSocketClient.getServerId()).thenReturn("test-server");
 
-        logTransmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test-server");
+        logTransmitter = newTransmitter(mockWebSocketClient, "test-server");
     }
 
     @AfterEach
     void tearDown() {
+        // 关掉本用例造出来的每一条调度线程。漏一条就活到 fork 结束，见上面 createdTransmitters 的注释。
+        for (UltiPanelLogTransmitter transmitter : createdTransmitters) {
+            try {
+                transmitter.shutdown();
+            } catch (Exception ignored) {
+                // shutdown 内部自己吞异常，这里只是兜底；重点是每条都调到
+            }
+        }
+        createdTransmitters.clear();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
@@ -77,7 +113,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("应该使用提供的 serverId")
         void shouldUseProvidedServerId() throws Exception {
             // Arrange & Act
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "custom-server-id");
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "custom-server-id");
 
             // Assert
             Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
@@ -89,7 +125,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("serverId 为 null 时应该使用默认值")
         void shouldUseDefaultServerIdWhenNull() throws Exception {
             // Arrange & Act
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, null);
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, null);
 
             // Assert
             Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
@@ -101,7 +137,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("应该初始化日志队列")
         void shouldInitializeLogQueue() throws Exception {
             // Arrange & Act
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
 
             // Assert
             Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
@@ -113,7 +149,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("应该初始化批量调度器")
         void shouldInitializeBatchScheduler() throws Exception {
             // Arrange & Act
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
 
             // Assert
             Field schedulerField = UltiPanelLogTransmitter.class.getDeclaredField("batchScheduler");
@@ -140,7 +176,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
         void shouldNotThrowWhenWebSocketNull() {
             // Arrange
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(null, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(null, "test");
 
             // Act & Assert - 不应该抛出异常
             assertDoesNotThrow(() -> transmitter.sendLog("info", "test message", "server", null));
@@ -730,7 +766,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("webSocketClient 为 null 时应该安全处理")
         void shouldHandleNullWebSocketClient() {
             // Arrange
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(null, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(null, "test");
 
             // Act - 不应该抛出异常
             transmitter.sendLog("info", "test", "server", null);
@@ -874,7 +910,7 @@ class UltiPanelLogTransmitterTest {
             // Arrange - 使用 null serverId 创建新的 transmitter
             // 在正常情况下，getDefaultServerId 会尝试获取 UUID
             // 我们验证即使有异常也能正常工作
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, null);
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, null);
 
             // Assert
             Field serverIdField = UltiPanelLogTransmitter.class.getDeclaredField("serverId");
@@ -911,7 +947,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("shutdown 超时应该强制关闭")
         void shouldForceShutdownOnTimeout() throws Exception {
             // Arrange
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
             
             // 添加一些日志来确保有数据
             when(mockWebSocketClient.isConnected()).thenReturn(true);
@@ -928,7 +964,7 @@ class UltiPanelLogTransmitterTest {
         @DisplayName("多次 shutdown 不应该抛出异常")
         void multipleShutdownShouldNotThrow() {
             // Arrange
-            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(mockWebSocketClient, "test");
+            UltiPanelLogTransmitter transmitter = newTransmitter(mockWebSocketClient, "test");
 
             // Act - 多次 shutdown
             transmitter.shutdown();
