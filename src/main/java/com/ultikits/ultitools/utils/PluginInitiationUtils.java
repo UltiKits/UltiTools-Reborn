@@ -96,121 +96,7 @@ public class PluginInitiationUtils {
         panelWS = getPanelWebsocketClient();
         
         // 设置消息处理器
-        panelWS.setMessageHandler(message -> {
-            String type = message.get("type").getAsString();
-            JsonObject data = message.has("data") && message.get("data").isJsonObject()
-                ? message.getAsJsonObject("data") : null;
-            
-            // 记录接收到的消息处理日志
-            UltiTools.getInstance().getLogger().log(Level.FINE, 
-                String.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
-            
-            try {
-                switch (type) {
-                    // 系统基础消息
-                    case "ping":
-                        handlePing(message);
-                        break;
-                    case "pong":
-                        handlePong(data);
-                        break;
-                    case "subscribe":
-                        handleSubscribe(data);
-                        break;
-                    case "unsubscribe":
-                        handleUnsubscribe(data);
-                        break;
-                    case "notification":
-                        handleNotification(data);
-                        break;
-                    case "error":
-                        handleError(data);
-                        break;
-                    
-                    // 服务器监控消息
-                    case "server_status":
-                        handleServerStatusRequest(data);
-                        break;
-                    case "plugin_list":
-                        handlePluginListRequest(data);
-                        break;
-                    case "player_event":
-                        handlePlayerEvent(data);
-                        break;
-                    case "metrics_data":
-                        handleMetricsRequest(data);
-                        break;
-                    
-                    // 操作控制消息
-                    case "execute_command":
-                        UltiTools.getInstance().getCommandExecutionManager().executeCommand(data);
-                        break;
-                    case "command_result":
-                        handleCommandResult(data);
-                        break;
-                    case "file_operation":
-                        UltiTools.getInstance().getFileOperationManager().handleFileOperation(data);
-                        break;
-                    case "file_operation_result":
-                        handleFileOperationResult(data);
-                        break;
-                    
-                    // 数据流消息
-                    case "log_stream":
-                    case "log_stream_control":
-                        UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-                        break;
-                    case "backup_operation":
-                        handleBackupOperation(data);
-                        break;
-                    case "backup_progress":
-                        handleBackupProgress(data);
-                        break;
-                    
-                    // 配置管理消息
-                    case "upload_config":
-                        handleConfigUpload(data);
-                        break;
-                    case "update_config":
-                        handleConfigUpdate(data);
-                        break;
-                    case "server_properties":
-                        if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                            UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
-                        }
-                        break;
-                    case "server_properties_result":
-                        // Response from this plugin forwarded back by DO — ignore silently
-                        UltiTools.getInstance().getLogger().log(Level.FINE,
-                            "Received server_properties_result echo — ignoring");
-                        break;
-
-                    // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-                    case "auth_complete":
-                        UltiTools.getInstance().getLogger().log(Level.FINE,
-                            "Received auth_complete message: " + (data != null ? data.toString() : "null"));
-                        break;
-                    case "magic_link_response":
-                        UltiTools.getInstance().getLogger().log(Level.FINE,
-                            "Received magic_link_response message: " + (data != null ? data.toString() : "null"));
-                        break;
-
-                    default:
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
-                            String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                        // Don't send error responses to avoid feedback loops with server
-                        break;
-                }
-            } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.SEVERE,
-                    String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
-                // Don't send error responses to avoid feedback loops with server
-            }
-            
-            // 记录消息处理完成日志
-            UltiTools.getInstance().getLogger().log(Level.FINE, 
-                String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
-        });
+        panelWS.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
 
         // 设置连接成功处理器
         panelWS.setOnConnectHandler(() -> {
@@ -239,6 +125,160 @@ public class PluginInitiationUtils {
     /**
      * 初始化所有管理器
      */
+    /**
+     * 处理面板下发的入站 WebSocket 消息。
+     * <p>
+     * 从 {@code initWebsocket()} 的 lambda 中提取出来，唯一目的是让它可以被单元测试直接调用：
+     * 原先它是 {@code setMessageHandler} 的匿名 lambda，要构造它需要真实的鉴权 token 与真实的
+     * WebSocket 客户端，畸形输入这条路径因此完全没有测试覆盖。见 issue #234。
+     * <p>
+     * 包级可见而非 public —— 它不是对外 API，只是为了可测。
+     *
+     * @param message 面板下发的消息，允许为 null
+     */
+    static void handleInboundMessage(JsonObject message) {
+        if (message == null) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[WebSocket消息处理] 收到 null 消息，已忽略");
+            return;
+        }
+
+        // type 与 data 使用同一套守卫。原先这里是 message.get("type").getAsString()：
+        // 缺 type 字段时 get 返回 null，.getAsString() 随即抛 NPE，而它写在 try 之外，
+        // 下面那个 catch 接不住。
+        //
+        // 该 NPE 不会中断接收循环 —— UltiPanelWebSocketClient.onMessage 把
+        // messageHandler.accept 包在自己的 try 里。但它会被记成「WebSocket消息解析失败」，
+        // 而解析其实是成功的：消息被静默丢弃，诊断指向错误的方向，且那里只传了
+        // e.getMessage() 没有堆栈。
+        //
+        // 守卫形式抄自 MessageHandlerRegistry.dispatch 与
+        // UltiPanelWebSocketClient.onMessage —— 同一份代码库里已有两处正确写法。
+        String type = null;
+        try {
+            if (message.has("type") && !message.get("type").isJsonNull()) {
+                type = message.get("type").getAsString();
+            }
+            if (type == null || type.isEmpty()) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    String.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
+                        new Gson().toJson(message)));
+                return;
+            }
+
+            JsonObject data = message.has("data") && message.get("data").isJsonObject()
+                ? message.getAsJsonObject("data") : null;
+
+            // 记录接收到的消息处理日志
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
+
+            switch (type) {
+                // 系统基础消息
+                case "ping":
+                    handlePing(message);
+                    break;
+                case "pong":
+                    handlePong(data);
+                    break;
+                case "subscribe":
+                    handleSubscribe(data);
+                    break;
+                case "unsubscribe":
+                    handleUnsubscribe(data);
+                    break;
+                case "notification":
+                    handleNotification(data);
+                    break;
+                case "error":
+                    handleError(data);
+                    break;
+                
+                // 服务器监控消息
+                case "server_status":
+                    handleServerStatusRequest(data);
+                    break;
+                case "plugin_list":
+                    handlePluginListRequest(data);
+                    break;
+                case "player_event":
+                    handlePlayerEvent(data);
+                    break;
+                case "metrics_data":
+                    handleMetricsRequest(data);
+                    break;
+                
+                // 操作控制消息
+                case "execute_command":
+                    UltiTools.getInstance().getCommandExecutionManager().executeCommand(data);
+                    break;
+                case "command_result":
+                    handleCommandResult(data);
+                    break;
+                case "file_operation":
+                    UltiTools.getInstance().getFileOperationManager().handleFileOperation(data);
+                    break;
+                case "file_operation_result":
+                    handleFileOperationResult(data);
+                    break;
+                
+                // 数据流消息
+                case "log_stream":
+                case "log_stream_control":
+                    UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
+                    break;
+                case "backup_operation":
+                    handleBackupOperation(data);
+                    break;
+                case "backup_progress":
+                    handleBackupProgress(data);
+                    break;
+                
+                // 配置管理消息
+                case "upload_config":
+                    handleConfigUpload(data);
+                    break;
+                case "update_config":
+                    handleConfigUpdate(data);
+                    break;
+                case "server_properties":
+                    if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                        UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+                    }
+                    break;
+                case "server_properties_result":
+                    // Response from this plugin forwarded back by DO — ignore silently
+                    UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received server_properties_result echo — ignoring");
+                    break;
+
+                // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
+                case "auth_complete":
+                    UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received auth_complete message: " + (data != null ? data.toString() : "null"));
+                    break;
+                case "magic_link_response":
+                    UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received magic_link_response message: " + (data != null ? data.toString() : "null"));
+                    break;
+
+                default:
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
+                    // Don't send error responses to avoid feedback loops with server
+                    break;
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.SEVERE,
+                String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
+            // Don't send error responses to avoid feedback loops with server
+        }
+        
+        // 记录消息处理完成日志
+        UltiTools.getInstance().getLogger().log(Level.FINE, 
+            String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
+    }
+
     private static void initializeManagers() {
         try {
             // 初始化服务器监控管理器
