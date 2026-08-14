@@ -152,11 +152,16 @@ public class PluginInitiationUtils {
         // 而解析其实是成功的：消息被静默丢弃，诊断指向错误的方向，且那里只传了
         // e.getMessage() 没有堆栈。
         //
-        // 守卫形式抄自 MessageHandlerRegistry.dispatch 与
-        // UltiPanelWebSocketClient.onMessage —— 同一份代码库里已有两处正确写法。
+        // 用 isJsonPrimitive 而不是 !isJsonNull：后者只挡 JSON null，挡不住 type 是对象
+        // 或数组——那种情况下 getAsString() 抛 UnsupportedOperationException。非基本类型
+        // 的 type 和缺字段、JSON null、空串属于同一类畸形，应当走同一条 WARNING 分支，
+        // 而不是被当成「处理消息时发生错误」记成 SEVERE。
+        //
+        // MessageHandlerRegistry.dispatch 用的是 !isJsonNull()，那份是死代码（见 #233），
+        // 这里没有照抄它的这一点。
         String type = null;
         try {
-            if (message.has("type") && !message.get("type").isJsonNull()) {
+            if (message.has("type") && message.get("type").isJsonPrimitive()) {
                 type = message.get("type").getAsString();
             }
             if (type == null || type.isEmpty()) {

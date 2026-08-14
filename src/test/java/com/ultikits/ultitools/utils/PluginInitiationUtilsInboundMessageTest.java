@@ -12,6 +12,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -29,6 +30,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * {@link PluginInitiationUtils#handleInboundMessage(JsonObject)} 对畸形入站消息的行为。
@@ -122,11 +124,11 @@ class PluginInitiationUtilsInboundMessageTest {
         }
 
         @Test
-        @DisplayName("type 不是 JSON 基本类型时被 try 接住，不逃逸")
-        void nonPrimitiveTypeDoesNotEscape() {
-            // getAsString() 对 JsonObject / JsonArray 抛 UnsupportedOperationException。
-            // has() + !isJsonNull() 挡不住这种，所以 type 的提取必须在 try 之内 ——
-            // 这正是把它移进 try（而不只是加守卫）的理由。
+        @DisplayName("type 为 JSON 对象或数组时按畸形处理，走同一条 WARNING 分支")
+        void nonPrimitiveTypeIsRejected() {
+            // getAsString() 对 JsonObject / JsonArray 抛 UnsupportedOperationException，
+            // has() + !isJsonNull() 挡不住这种，所以守卫用的是 isJsonPrimitive()。
+            // 这类和缺字段、JSON null、空串属于同一类畸形，不该被记成 SEVERE「处理时发生错误」。
             JsonObject objectType = new JsonObject();
             objectType.add("type", new JsonObject());
 
@@ -138,9 +140,42 @@ class PluginInitiationUtilsInboundMessageTest {
             assertThatCode(() -> PluginInitiationUtils.handleInboundMessage(arrayType))
                     .doesNotThrowAnyException();
 
-            // 落进原有的 catch，带上 throwable（原先那条路径只有 e.getMessage()，没有堆栈）
-            verify(mockLogger, atLeastOnce())
-                    .log(eq(Level.SEVERE), anyString(), any(Throwable.class));
+            assertThat(loggedAt(Level.WARNING))
+                    .anySatisfy(line -> assertThat(line).contains("缺少有效的 type 字段"));
+            verify(mockLogger, never()).log(eq(Level.SEVERE), anyString(), any(Throwable.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("客户端不提前吞掉畸形消息")
+    class ClientForwarding {
+
+        /**
+         * {@code UltiPanelWebSocketClient.onMessage} 在调用 messageHandler 之前，会自己取一次
+         * type 只为打一条 FINE 日志。那一行原本写的是 {@code !isJsonNull()}，于是 type 为对象或
+         * 数组时 {@code getAsString()} 在那里就抛了，消息根本到不了处理器——处理器侧的守卫写得
+         * 再对也没用，这条路径在生产上不可达。
+         *
+         * <p>本用例走真实的 {@code onMessage(String)} 入口，确认消息现在能到达处理器。
+         */
+        @Test
+        @DisplayName("type 为对象的消息仍能到达 messageHandler")
+        void nonPrimitiveTypeStillReachesHandler() throws Exception {
+            UltiPanelWebSocketClient client =
+                    new UltiPanelWebSocketClient("ws://localhost:1", "test-server", "test-token");
+            try {
+                List<JsonObject> received = new ArrayList<>();
+                client.setMessageHandler(received::add);
+
+                client.onMessage("{\"type\":{},\"data\":{}}");
+
+                assertThat(received)
+                        .as("type 为对象时消息也应到达 handler，而不是在客户端打日志那一行就抛掉")
+                        .hasSize(1);
+            } finally {
+                // 构造函数里起了 heartbeatExecutor，不关就是一条泄漏线程。见 issue #250。
+                client.disconnect();
+            }
         }
     }
 
