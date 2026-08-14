@@ -104,7 +104,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # alpha 是开发主干，SNAPSHOT 构件对它才有意义；main 上的正式产物由
+    # publish-packages.yml 在 release 时产出。
+    if: github.event_name == 'push' && github.ref == 'refs/heads/alpha'
     
     steps:
     - name: 📥 Checkout code
