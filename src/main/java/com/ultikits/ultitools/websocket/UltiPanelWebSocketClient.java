@@ -241,7 +241,12 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         try {
             JsonObject jsonMessage = JsonParser.parseString(message).getAsJsonObject();
 
-            String messageType = jsonMessage.has("type") && !jsonMessage.get("type").isJsonNull()
+            // isJsonPrimitive 而不是 !isJsonNull：后者挡不住 type 是对象或数组的情况，
+            // 那会让 getAsString() 在这里抛 UnsupportedOperationException——而这一行
+            // 只是为了打一条 FINE 日志，却会因此让消息根本到不了下面的 messageHandler，
+            // 并被记成「消息解析失败」。诊断信息与真实原因不符，且畸形消息在到达真正的
+            // 分发逻辑之前就被吞掉了。见 issue #234。
+            String messageType = jsonMessage.has("type") && jsonMessage.get("type").isJsonPrimitive()
                 ? jsonMessage.get("type").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 String.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : "未知"));
