@@ -965,6 +965,17 @@ public class PluginInitiationUtils {
                 "Error shutting down log stream manager: " + e.getMessage());
         }
 
+        // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
+        // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
+        try {
+            if (UltiTools.getInstance().getPlayerEventManager() != null) {
+                UltiTools.getInstance().getPlayerEventManager().shutdown();
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error shutting down player event manager: " + e.getMessage());
+        }
+
         stopWebsocket();
         panelWS = null;
 
