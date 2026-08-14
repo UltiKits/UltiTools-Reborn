@@ -12,6 +12,7 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.utils.ApiRateLimiter;
 import com.ultikits.ultitools.utils.CloudAuthManager;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
  * Commands for UltiCloud authentication via magic link.
@@ -65,6 +66,12 @@ public class CloudLoginCommand extends AbstractCommandExecutor {
         }
 
         try {
+            // 先拆状态机，再清凭证。
+            //
+            // 顺序有讲究：清凭证只是让重连拿不到有效 token，并不会让它停下来——重连链会继续
+            // 用已作废的凭证敲面板，401 循环照跑，实测只有重新 login 或重启服务器才停得下来。
+            // 「Cloud features are now disabled」这句话此前是不成立的。见 issue #223。
+            PluginInitiationUtils.disableCloud();
             CloudAuthManager.clearToken();
             sender.sendMessage(ChatColor.GREEN + "Successfully logged out of UltiCloud. Cloud features are now disabled.");
             sender.sendMessage(ChatColor.GRAY + "Use /ulticloud login to re-authenticate.");
