@@ -116,6 +116,43 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!--
+                Animal Sniffer — 看守 Java 8 API 边界。
+                编译用的是 source/target 1.8 而不是 <release>8</release>，所以 javac
+                链接的是 JDK 21 的类库：误用 Java 9+ 的 API（String.strip、List.of、
+                Map.entry 等）能编译通过，直到在真 Java 8 上运行才抛 NoSuchMethodError。
+                这里在字节码层比对 java18 签名，把那个缺口补上。
+
+                不要改用 <release>8</release> —— 它会拒绝本项目已在使用的
+                @Deprecated(since=, forRemoval=)，而那些元数据是废弃契约的一部分。
+
+                Animal Sniffer — guards the Java 8 API boundary.
+                The build uses source/target 1.8 rather than <release>8</release>, so
+                javac links against the JDK 21 class library and Java 9+ API calls
+                compile cleanly, only failing with NoSuchMethodError on a real Java 8
+                runtime. This checks the emitted bytecode against the java18 signature.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.27</version>
+                <configuration>
+                    <signature>
+                        <groupId>org.codehaus.mojo.signature</groupId>
+                        <artifactId>java18</artifactId>
+                        <version>1.0</version>
+                    </signature>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>check-java18-api</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
