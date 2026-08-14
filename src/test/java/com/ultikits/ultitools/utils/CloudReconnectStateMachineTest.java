@@ -152,6 +152,61 @@ class CloudReconnectStateMachineTest {
                     .as("「云功能已关闭」应当包含不再劫持 root logger")
                     .isZero();
         }
+
+        @Test
+        @DisplayName("initWebsocket 自身不得把状态机置回启用态")
+        void initWebsocketDoesNotResurrectDisabledState() throws Exception {
+            // 回归测试，对应 PR 评审里的 P1：initWebsocket 曾经在开头 set(true)。
+            // 由于 reinitWebSocket 也复用它，一个正在途中的重连（与 logout 跑在不同线程，
+            // 中间还隔着一次 token 刷新的网络调用）能把刚被关掉的状态机重新拉起来。
+            PluginInitiationUtils.disableCloud();
+            assertThat(PluginInitiationUtils.isCloudEnabled()).isFalse();
+
+            // 直接调 initWebsocket：它会因为没有 token 而抛 IOException，
+            // 但关键是——无论成败，它都不该动 cloudEnabled。
+            assertThatCode(() -> {
+                try {
+                    PluginInitiationUtils.initWebsocket();
+                } catch (Exception expected) {
+                    // 没有 token，抛异常是预期的
+                }
+            }).doesNotThrowAnyException();
+
+            assertThat(PluginInitiationUtils.isCloudEnabled())
+                    .as("只有显式的 enableCloud 才允许开启状态机")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("logout 与进行中的 reinit 并发时，logout 必须赢")
+        void concurrentLogoutBeatsInFlightReinit() throws Exception {
+            // 真的并发跑，而不是靠顺序模拟：reinit 线程反复尝试重建，
+            // 主线程在中途 disableCloud()。此后状态机不得再被拉起来。
+            java.util.concurrent.atomic.AtomicBoolean stop =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+            Thread reinitThread = new Thread(() -> {
+                while (!stop.get()) {
+                    try {
+                        PluginInitiationUtils.reinitWebSocket();
+                    } catch (Exception ignored) {
+                        // 无 token 时的失败与本用例无关
+                    }
+                }
+            }, "issue-223-reinit-loop");
+            reinitThread.setDaemon(true);
+            reinitThread.start();
+
+            Thread.sleep(30);
+            PluginInitiationUtils.disableCloud();
+            Thread.sleep(60);   // 给在途的那一轮足够时间跑完
+
+            stop.set(true);
+            reinitThread.join(5000);
+
+            assertThat(PluginInitiationUtils.isCloudEnabled())
+                    .as("logout 之后，任何在途的重连都不得把状态机复活")
+                    .isFalse();
+        }
     }
 
     @Nested
@@ -199,6 +254,68 @@ class CloudReconnectStateMachineTest {
             assertThat(countFrameworkHandlersOnRootLogger())
                     .as("shutdown 之后应当一个不剩")
                     .isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("日志传输器 flush 有界")
+    class BoundedFlush {
+
+        /**
+         * {@code sendBatch()} 在 WebSocket 未连接时直接 return 且不消费队列，而
+         * {@code flushLogs()} 原先是 {@code while (!logQueue.isEmpty())} —— 死循环。
+         *
+         * <p>这个缺陷在 {@code disableCloud()} 出现之前就存在（{@code onDisable} 同样走这条
+         * 路径），但那时只在关服时触发。logout 走的是命令线程，会直接卡住服务器；
+         * 而「面板连不上、队列积压、socket 已断」恰恰是管理员会去 logout 的那个场景。
+         *
+         * <p><b>超时必须用 SEPARATE_THREAD</b>。JUnit 的 {@code @Timeout} 默认是
+         * {@code SAME_THREAD}——它在测试**跑完之后**才判定是否超时，对真正的死循环毫无作用，
+         * 回归会让整个 CI 挂住而不是给出一条失败。这一点是实测出来的：把 flushLogs 退回
+         * 无界版本做负向对照时，构建直接卡死超过两分钟，而不是在 10 秒时失败。
+         */
+        @Test
+        @org.junit.jupiter.api.Timeout(
+                value = 10,
+                threadMode = org.junit.jupiter.api.Timeout.ThreadMode.SEPARATE_THREAD)
+        @DisplayName("socket 已断且队列非空时，shutdown 仍会终止而不是死循环")
+        void shutdownTerminatesWhenDisconnectedWithQueuedLogs() throws Exception {
+            // 必须先「连着」才入得了队：sendLog 在未连接时直接 return，一条都不会进队列。
+            // 这也正是真实场景的顺序——连着的时候日志积压，然后连接断掉，然后才 logout/关服。
+            java.util.concurrent.atomic.AtomicBoolean connected =
+                    new java.util.concurrent.atomic.AtomicBoolean(true);
+            com.ultikits.ultitools.websocket.UltiPanelWebSocketClient client =
+                    mock(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient.class);
+            lenient().when(client.isConnected()).thenAnswer(invocation -> connected.get());
+
+            com.ultikits.ultitools.manager.UltiPanelLogTransmitter transmitter =
+                    new com.ultikits.ultitools.manager.UltiPanelLogTransmitter(client, "test-server");
+            try {
+                // batchSize 默认远大于 3，所以这几条会留在队列里而不会被立刻发出去
+                for (int i = 0; i < 3; i++) {
+                    transmitter.info("queued line " + i, "test");
+                }
+                assertThat(queueSizeOf(transmitter))
+                        .as("前置条件：队列里得真有东西，否则本用例是空的")
+                        .isPositive();
+
+                connected.set(false);   // 连接掉了
+
+                assertThatCode(transmitter::shutdown)
+                        .as("断连且队列非空时 shutdown 必须终止")
+                        .doesNotThrowAnyException();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        /** 反射读队列长度，用于确认前置条件成立——不然这条用例会静默地什么都没测。 */
+        private int queueSizeOf(com.ultikits.ultitools.manager.UltiPanelLogTransmitter transmitter)
+                throws Exception {
+            Field queueField = com.ultikits.ultitools.manager.UltiPanelLogTransmitter.class
+                    .getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            return ((java.util.Collection<?>) queueField.get(transmitter)).size();
         }
     }
 

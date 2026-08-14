@@ -310,6 +310,8 @@ public class CloudAuthManager {
                                 // Try to initialize cloud features
                                 try {
                                     PluginInitiationUtils.loginWithToken(token);
+                                    // 显式开启：logout 之后重新 login 必须能把状态机拉回来。
+                                    PluginInitiationUtils.enableCloud();
                                     PluginInitiationUtils.initWebsocket();
                                     startTokenRefreshScheduler();
                                 } catch (Exception e) {

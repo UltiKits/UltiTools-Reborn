@@ -123,9 +123,14 @@ public class PluginInitiationUtils {
             throw new IOException("Cannot initialize WebSocket: auth token has expired");
         }
 
-        // 走到这里说明这是一次有意的「开启云连接」动作（首次启动或 reinit），
-        // 因此把状态机置为启用态。logout 会把它置否，reinitWebSocket 便不再复活连接。
-        cloudEnabled.set(true);
+        // 这里刻意**不**置位 cloudEnabled。
+        //
+        // 曾经写成在这里 set(true)，那是错的：reinitWebSocket 也会走到这里，于是一个
+        // 正在途中的重连能把刚被 logout 关掉的状态机重新拉起来——两者跑在不同线程上，
+        // 中间还隔着一次 token 刷新的网络调用，窗口可能有数秒。
+        //
+        // 现在只有显式动作才开启：启动时的 UltiTools.onEnable、以及 magic-link 登录成功后
+        // 的 CloudAuthManager，两处都调 enableCloud()。见 issue #223 的 PR 评审。
 
         panelWS = getPanelWebsocketClient();
 
@@ -910,6 +915,15 @@ public class PluginInitiationUtils {
             }
         }
 
+        // 二次确认。从方法开头那次 cloudEnabled 检查到这里，中间隔了一次 token 刷新
+        // ——那是网络调用，窗口可能有数秒。logout 若发生在这个窗口内，必须在这里被看见，
+        // 否则我们会造出一个新的已认证客户端，把刚关掉的状态机重新拉起来。
+        if (!cloudEnabled.get()) {
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                "Cloud features were disabled during re-initialization — aborting");
+            return;
+        }
+
         // Create new WebSocket connection
         try {
             initWebsocket();
@@ -940,15 +954,23 @@ public class PluginInitiationUtils {
         cloudEnabled.set(false);
         reinitBackoff.reset();
 
-        stopWebsocket();
-        panelWS = null;
-
+        // 顺序有讲究：先关日志传输器，再断开 socket。
+        // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
+        // （flushLogs 本身也已改成有界，两层都要有——顺序对了是让排队的日志还有机会送出去，
+        //  有界是为了 socket 本来就断着的情况。）
         try {
             UltiTools.getInstance().getLogStreamManager().shutdown();
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Error shutting down log stream manager: " + e.getMessage());
         }
+
+        stopWebsocket();
+        panelWS = null;
+
+        // 清掉本类持有的 token。它与 CloudAuthManager 清掉的凭证是**两份**，
+        // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
+        token = null;
 
         try {
             CloudAuthManager.stopTokenRefreshScheduler();
@@ -968,8 +990,14 @@ public class PluginInitiationUtils {
         reinitBackoff.reset();
     }
 
-    /** 供测试与 {@code login} 使用：把状态机重新置为「应当保持连接」。 */
-    static void enableCloud() {
+    /**
+     * 把状态机置为「应当保持连接」，并清零外层重连预算。
+     * <p>
+     * <b>只有显式动作才应当调用它</b>：服务器启动时的云登录，以及 {@code /ulticloud login}
+     * 成功之后。{@link #initWebsocket()} 刻意不调——它同时被 {@link #reinitWebSocket()} 复用，
+     * 在那里置位会让一个正在途中的重连把刚被 logout 关掉的状态机重新拉起来。
+     */
+    public static void enableCloud() {
         cloudEnabled.set(true);
         reinitBackoff.reset();
     }
