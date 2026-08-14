@@ -347,6 +347,54 @@ class CloudReconnectStateMachineTest {
 
             Mockito.verify(UltiTools.getInstance(), Mockito.atLeastOnce()).getServerMonitorManager();
         }
+
+        @Test
+        @DisplayName("接线与拆线落在同一把生命周期锁上")
+        void wiringAndTeardownShareTheSameLock() throws Exception {
+            // 光检查 cloudEnabled 是不够的：那只是一次锁外的读。读到 true 之后、真正接线之前，
+            // disableCloud() 完全可以插进来把开关置否并拆干净，随后接线一侧继续往下又装回去。
+            // 状态位表达不了「检查与动作之间不许有人插队」，只有锁能。见 PR #264 第二轮评审。
+            Field lockField = PluginInitiationUtils.class.getDeclaredField("cloudLifecycleLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(null);
+
+            Runnable[] actions = {
+                PluginInitiationUtils::initializeManagers,
+                PluginInitiationUtils::disableCloud
+            };
+
+            for (Runnable action : actions) {
+                java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+
+                Thread worker = new Thread(() -> {
+                    started.countDown();
+                    try {
+                        action.run();
+                    } catch (Exception ignored) {
+                        // 本用例只关心它能不能进得去，不关心它做了什么
+                    } finally {
+                        finished.countDown();
+                    }
+                }, "lifecycle-lock-probe");
+                worker.setDaemon(true);
+
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                            .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
+                            .isTrue();
+                    assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                            .as("持有生命周期锁期间，这个动作必须进不去")
+                            .isFalse();
+                }
+
+                assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("释放锁之后应当立刻放行")
+                        .isTrue();
+                worker.join(1000);
+            }
+        }
     }
 
     /** 数一数 JVM root logger 上挂了几个本框架的 handler。 */
