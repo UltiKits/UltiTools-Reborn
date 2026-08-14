@@ -25,8 +25,12 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: 🧪 Run Tests with Coverage
-      run: mvn -B clean test
+    - name: 🧪 Build & Test with Coverage
+      # verify 而不是 test：shade 过滤器、资源过滤、jar 打包与 javadoc 生成都绑定在
+      # package 阶段，只跑 test 的话这些在合并之后才第一次执行。
+      # gpg.skip：maven-gpg-plugin 绑在 verify 上，签名只在发布时需要，
+      # 这里没有也不应该有私钥（与 publish-packages.yml 的 GitHub Packages 构建一致）。
+      run: mvn -B clean verify -Dgpg.skip=true
       
     - name: 📊 Generate JaCoCo Coverage Report
       run: mvn -B jacoco:report
