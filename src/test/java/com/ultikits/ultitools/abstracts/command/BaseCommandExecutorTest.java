@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
@@ -970,6 +972,49 @@ class BaseCommandExecutorTest {
         }
     }
 
+    @Nested
+    @DisplayName("Bare Command Tests")
+    class BareCommandTests {
+
+        @Test
+        @DisplayName("Should run the body of @CmdMapping(format = \"\") when invoked with no arguments")
+        void shouldExecuteBareCommandBody() {
+            BareCommandExecutor executor = new BareCommandExecutor();
+
+            boolean result = executor.onCommand(mockPlayer, mockCommand, "bare", new String[]{});
+
+            assertTrue(result);
+            assertTrue(executor.bareCalled, "the body of the bare command should have been invoked");
+            assertFalse(executor.actionCalled);
+        }
+
+        @Test
+        @DisplayName("Should not send a usage message for a bare command")
+        void shouldNotSendUsageForBareCommand() {
+            BareCommandExecutor executor = new BareCommandExecutor();
+
+            executor.onCommand(mockPlayer, mockCommand, "bare", new String[]{});
+
+            verify(mockPlayer, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("Should accept an empty format when no arguments are given")
+        void shouldValidateEmptyFormatWithNoArgs() {
+            BareCommandExecutor executor = new BareCommandExecutor();
+
+            assertTrue(executor.validateParameterCount(new String[]{}, "", mockPlayer, mockCommand));
+        }
+
+        @Test
+        @DisplayName("Should reject an empty format when arguments are supplied")
+        void shouldRejectEmptyFormatWithArgs() {
+            BareCommandExecutor executor = new BareCommandExecutor();
+
+            assertFalse(executor.validateParameterCount(new String[]{"extra"}, "", mockPlayer, mockCommand));
+        }
+    }
+
     // Test implementations
     
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
@@ -997,6 +1042,47 @@ class BaseCommandExecutorTest {
         
         @CmdMapping(format = "multi <a> <b>")
         public void doMultiParam(Player player, @CmdParam("a") String a, @CmdParam("b") String b) {
+        }
+    }
+
+    /**
+     * Fixture for the bare-command path.
+     * <p>
+     * onCommand defers a synchronous command body by one tick through BukkitRunnable,
+     * and this test class runs on plain Mockito with no Bukkit scheduler. Dispatch is
+     * overridden to invoke inline, so the whole path is still exercised -- onCommand,
+     * matchMethod, the validator chain, validateParameterCount -- minus the hop through
+     * the scheduler.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"bare"})
+    static class BareCommandExecutor extends BaseCommandExecutor {
+        boolean bareCalled = false;
+        boolean actionCalled = false;
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised by the bare command tests
+        }
+
+        @Override
+        protected void executeCommand(CommandContext context, Method method, Object[] params) {
+            try {
+                method.setAccessible(true);
+                method.invoke(this, params);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        @CmdMapping(format = "")
+        public void doBare(Player player) {
+            bareCalled = true;
+        }
+
+        @CmdMapping(format = "action <param>")
+        public void doAction(Player player, @CmdParam("param") String param) {
+            actionCalled = true;
         }
     }
     
