@@ -494,6 +494,18 @@
             <version>8.3.0</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+            protobuf-java —— 不是本项目直接用的库，是 mysql-connector-j 的传递依赖。
+            显式声明只为把版本从 3.25.1 抬到 3.25.5，规避 GHSA-735f-pc8j-v9w8。
+            provided 作用域与 plugin.yml 的 libraries: 对应（Paper 在运行时下载）。
+            删掉这一条会静默退回 3.25.1，因为传递解析还在。见 issue #220。
+        -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>3.25.5</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- Java-WebSocket - Paper libraries 自动下载 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
