@@ -110,6 +110,18 @@ jobs:
         echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
         gpg-connect-agent reloadagent /bye || true
 
+    - name: 🔑 Check GPG key expiry
+      # 放在导入密钥之后、mvn deploy 之前。密钥此时已在 runner 的钥匙串里，
+      # 不需要额外 secret 也不需要联网。
+      #
+      # 已过期就在这里失败，并明说是过期而不是密钥丢失——GPG 挑默认密钥时会跳过
+      # 已过期的，所以 gpg:sign 报的是 "no default secret key"，很容易被误判成
+      # 密钥没导入成功而去重新生成，正确处置是延长有效期。
+      #
+      # 剩余不足 30 天只告警、不拦发版：用一把还有三周有效期的密钥签名完全合法，
+      # 签名在密钥过期之后依然可验证。这里没有传 --fail-on-warn 就是这个意思。
+      run: .github/scripts/check-gpg-expiry.sh --mode secret --warn-days 30
+
     - name: 🏷️ Extract version from tag
       id: version
       run: |

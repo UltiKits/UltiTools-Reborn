@@ -7,6 +7,9 @@
 *.iws
 
 *.sh
+# 但 CI 用的脚本是仓库的一部分，必须跟着 workflow 一起走。
+# 上面那条 *.sh 挡的是 bin/ 里那些本机开发脚本。
+!.github/scripts/*.sh
 
 # IntelliJ
 out/
