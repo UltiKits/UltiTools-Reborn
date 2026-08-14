@@ -45,6 +45,7 @@ import org.mockbukkit.mockbukkit.ServerMock;
  */
 @DisplayName("服务器状态采样的线程契约")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 测试需要反射读任务句柄，与仓库其它测试类一致
 class ServerMonitorSnapshotTest {
 
     private ServerMock server;
@@ -91,7 +92,9 @@ class ServerMonitorSnapshotTest {
                         .as("这条线程必须不是主线程，否则整个用例失去意义")
                         .isFalse();
                 action.run();
-            } catch (Throwable t) {
+            } catch (Exception | AssertionError t) {
+                // 精确到这两类：要带回来的是「动作失败」和「线程里的断言没过」，
+                // 顺手吞掉 OOM / StackOverflow 只会让失败更难看懂。
                 thrown.set(t);
             }
         }, "off-primary-test-thread");
