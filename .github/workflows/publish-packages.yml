@@ -9,7 +9,8 @@ jobs:
     name: 📦 GitHub Packages
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # contents: write —— 往 release 挂 JAR 附件需要。
+      contents: write
       packages: write
 
     steps:
@@ -38,6 +39,31 @@ jobs:
     - name: 🔨 Build package
       # GitHub Packages 不要求签名，因此不激活 release profile。
       run: mvn -B clean package -Dmaven.test.skip=true
+
+    - name: 📎 Attach JAR to the release
+      # 兜底，不是主路径。发布入口 .github/scripts/release.sh 建 release 时就会带上 JAR，
+      # 但那条路依赖维护者记得用它。直接在 GitHub 网页上建 release 一样会走到这里。
+      #
+      # v6.2.1--v6.2.4 四个 release 全是零附件，正是因为当时只有「记得手动传」这一条路；
+      # 仓库里那个更完整的 release.yml 从未被跑过，也没能挡住。所以这一层要放在
+      # 不依赖记性的地方。
+      #
+      # --clobber 让它幂等：入口脚本已经传过同名附件时覆盖，而不是报错退出。
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        # 必须写全文件名。target/ 下 mvn package 会留下四个 jar：主 JAR、
+        # original-（shade 之前的原始包）、-sources、-javadoc。用通配符的话
+        # 字典序会先命中 original-，那是个没经过 shade 的包，看起来正常但缺少
+        # 被重定位的依赖。
+        JAR="target/UltiTools-API-${VERSION}.jar"
+        if [ ! -f "$JAR" ]; then
+          echo "::error::构建完成但找不到 ${JAR}。"
+          exit 1
+        fi
+        gh release upload "${GITHUB_REF_NAME}" "$JAR" --clobber
 
     - name: 📦 Publish to GitHub Packages
       id: publish-ghp
