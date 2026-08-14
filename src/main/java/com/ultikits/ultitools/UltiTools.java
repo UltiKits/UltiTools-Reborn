@@ -235,6 +235,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
+            // 显式开启云连接状态机。initWebsocket() 自己不再置位 —— 它被 reinitWebSocket
+            // 复用，在那里置位会让一个正在途中的重连把 logout 关掉的状态机重新拉起来。
+            PluginInitiationUtils.enableCloud();
             initWebSocket();
             CloudAuthManager.startTokenRefreshScheduler();
         }

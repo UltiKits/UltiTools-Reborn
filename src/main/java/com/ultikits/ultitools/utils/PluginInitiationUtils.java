@@ -11,6 +11,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
+import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
@@ -29,6 +30,35 @@ public class PluginInitiationUtils {
     private static UltiPanelWebSocketClient panelWS;
     /** Authentication token for API requests */
     private static TokenEntity token;
+
+    /**
+     * 云连接是否处于「应当保持连接」的状态。
+     * <p>
+     * 这是整条重连链的<b>唯一开关</b>。在它存在之前，有四个地方各自独立地决定「要不要继续
+     * 重连」，而谁都不是所有者：{@code UltiPanelWebSocketClient.onClose} 按每实例 5 次算、
+     * {@code reinitWebSocket} 造新实例把计数清零、{@code ulticloud logout} 只清凭证根本不碰
+     * 状态机、只有 {@code onDisable} 真正拆得干净。结果是 logout 之后插件仍在拿已作废的凭证
+     * 持续敲面板。见 issue #181 与 #223。
+     * <p>
+     * 现在的规则只有一条：<b>{@code reinitWebSocket} 只在本标志为 true 时才会重建连接。</b>
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean cloudEnabled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** 外层 reinit 的全局上限。超过之后进入终态，需要 {@code /ulticloud login} 或重启才恢复。 */
+    private static final int MAX_REINIT_ATTEMPTS = 10;
+
+    /**
+     * 外层重连（reinit 循环）的全局预算与退避。
+     * <p>
+     * 客户端自身那 5 次是<b>每实例</b>的上限，而 {@code reinitWebSocket} 每次都造一个新实例，
+     * 于是每实例上限对整体毫无约束——这正是无界循环的成因。本策略是跨实例的，
+     * 只有一次成功的 {@code onOpen} 能把它重置。
+     * <p>
+     * 顺带启用了 {@link ExponentialBackoffStrategy}——它此前是同包内零引用的死代码。
+     */
+    private static final ExponentialBackoffStrategy reinitBackoff =
+            ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
 
     /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
@@ -93,15 +123,31 @@ public class PluginInitiationUtils {
             throw new IOException("Cannot initialize WebSocket: auth token has expired");
         }
 
+        // 这里刻意**不**置位 cloudEnabled。
+        //
+        // 曾经写成在这里 set(true)，那是错的：reinitWebSocket 也会走到这里，于是一个
+        // 正在途中的重连能把刚被 logout 关掉的状态机重新拉起来——两者跑在不同线程上，
+        // 中间还隔着一次 token 刷新的网络调用，窗口可能有数秒。
+        //
+        // 现在只有显式动作才开启：启动时的 UltiTools.onEnable、以及 magic-link 登录成功后
+        // 的 CloudAuthManager，两处都调 enableCloud()。见 issue #223 的 PR 评审。
+
         panelWS = getPanelWebsocketClient();
-        
+
         // 设置消息处理器
         panelWS.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
 
         // 设置连接成功处理器
         panelWS.setOnConnectHandler(() -> {
             UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
-            
+
+            // 握手真正成功了，这里才是「重连成功」这句话唯一站得住的位置。
+            // 外层预算也只在这里清零——若在 reinitWebSocket 里清，「造出了一个客户端」
+            // 就会被当成成功，预算永远用不完。见 issue #181 / #223。
+            onWebSocketConnected();
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                "WebSocket connected to UltiPanel");
+
             // 订阅当前服务器
             panelWS.subscribeToServer(panelWS.getServerId());
             
@@ -812,7 +858,31 @@ public class PluginInitiationUtils {
      * 使用新令牌重新初始化WebSocket连接。
      */
     public static void reinitWebSocket() {
-        UltiTools.getInstance().getLogger().log(Level.INFO, "Re-initializing WebSocket connection...");
+        // 闸门一：logout 之后不再重连。
+        // 这是让 `/ulticloud logout` 真正生效的那一行——在它存在之前，logout 只清凭证，
+        // 这条链会继续拿着已作废的 token 重连，401 循环照跑，实测只有重新 login 或重启
+        // 服务器才停得下来。见 issue #223。
+        if (!cloudEnabled.get()) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Cloud features are disabled — skipping WebSocket re-initialization");
+            return;
+        }
+
+        // 闸门二：全局预算。客户端自身的 5 次上限是每实例的，而这里每次都造新实例，
+        // 所以那个上限对整体等于不存在。见 issue #181。
+        if (!reinitBackoff.shouldContinue()) {
+            cloudEnabled.set(false);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
+                "WebSocket re-initialization gave up after %d attempts. Cloud features are now idle. "
+                    + "Run /ulticloud login to retry, or restart the server.",
+                MAX_REINIT_ATTEMPTS));
+            return;
+        }
+
+        UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
+            "Re-initializing WebSocket connection (attempt %d/%d)...",
+            reinitBackoff.getAttemptCount() + 1, MAX_REINIT_ATTEMPTS));
+        reinitBackoff.getNextDelay();   // 记一次尝试；实际的等待由客户端侧的调度承担
 
         // Disconnect old client
         if (panelWS != null) {
@@ -845,15 +915,96 @@ public class PluginInitiationUtils {
             }
         }
 
+        // 二次确认。从方法开头那次 cloudEnabled 检查到这里，中间隔了一次 token 刷新
+        // ——那是网络调用，窗口可能有数秒。logout 若发生在这个窗口内，必须在这里被看见，
+        // 否则我们会造出一个新的已认证客户端，把刚关掉的状态机重新拉起来。
+        if (!cloudEnabled.get()) {
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                "Cloud features were disabled during re-initialization — aborting");
+            return;
+        }
+
         // Create new WebSocket connection
         try {
             initWebsocket();
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                "WebSocket re-initialized successfully");
+            // 这里刻意不打「re-initialized successfully」。
+            // initWebsocket() 返回只说明客户端被造出来、connect() 被发起了——connect() 是异步的，
+            // 握手与认证都还没发生。实测这句之后紧跟着的就是一条 401。成功的那句现在由
+            // onOpen 打（见 initWebsocket 里的 onConnectHandler），那才是真的连上了。
+            // 见 issue #223。
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "WebSocket re-initialization dispatched — awaiting handshake");
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "WebSocket re-initialization failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * 关闭云连接并让重连状态机进入明确的 disabled 态。
+     * <p>
+     * 供 {@code /ulticloud logout} 调用。与 {@link #stopWebsocket()} 的区别是：后者只断开当前
+     * 客户端，而重连链会把它重新拉起来；本方法先把 {@link #cloudEnabled} 置否，因此
+     * {@link #reinitWebSocket()} 之后会直接返回，状态机不会自我复活。
+     * <p>
+     * 顺带摘掉 root logger 上的日志 handler 与传输线程，并停掉 token 刷新调度——
+     * 都是「云功能已关闭」这句话应当为真的组成部分。
+     */
+    public static void disableCloud() {
+        cloudEnabled.set(false);
+        reinitBackoff.reset();
+
+        // 顺序有讲究：先关日志传输器，再断开 socket。
+        // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
+        // （flushLogs 本身也已改成有界，两层都要有——顺序对了是让排队的日志还有机会送出去，
+        //  有界是为了 socket 本来就断着的情况。）
+        try {
+            UltiTools.getInstance().getLogStreamManager().shutdown();
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error shutting down log stream manager: " + e.getMessage());
+        }
+
+        stopWebsocket();
+        panelWS = null;
+
+        // 清掉本类持有的 token。它与 CloudAuthManager 清掉的凭证是**两份**，
+        // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
+        token = null;
+
+        try {
+            CloudAuthManager.stopTokenRefreshScheduler();
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error stopping token refresh scheduler: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 重连成功时调用：把外层预算清零。
+     * <p>
+     * 只有<b>真正握手成功</b>才配重置预算。若在 {@code reinitWebSocket} 里重置，
+     * 那么「造出了一个客户端」就会被当成成功，预算永远用不完，闸门等于没加。
+     */
+    static void onWebSocketConnected() {
+        reinitBackoff.reset();
+    }
+
+    /**
+     * 把状态机置为「应当保持连接」，并清零外层重连预算。
+     * <p>
+     * <b>只有显式动作才应当调用它</b>：服务器启动时的云登录，以及 {@code /ulticloud login}
+     * 成功之后。{@link #initWebsocket()} 刻意不调——它同时被 {@link #reinitWebSocket()} 复用，
+     * 在那里置位会让一个正在途中的重连把刚被 logout 关掉的状态机重新拉起来。
+     */
+    public static void enableCloud() {
+        cloudEnabled.set(true);
+        reinitBackoff.reset();
+    }
+
+    /** 供测试断言状态机是否处于启用态。 */
+    static boolean isCloudEnabled() {
+        return cloudEnabled.get();
     }
 
     public static void stopWebsocket() {
