@@ -433,8 +433,9 @@ public class ServerMonitorManager {
                 stateSnapshot = snapshot;
             }
         } catch (Exception e) {
+            // 与 cancelTask 保持一致：异常交给 logger，不在调用点拼 getMessage()。
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "[ServerMonitor] 采样服务器状态失败: " + e.getMessage(), e);
+                "[ServerMonitor] 采样服务器状态失败", e);
         }
     }
 
