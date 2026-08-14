@@ -9,6 +9,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
@@ -59,6 +60,10 @@ public class ServerMonitorManager {
      * 而服务器卡顿时恰恰是最需要监控还能说话的时候。
      */
     private volatile ServerStateSnapshot stateSnapshot = ServerStateSnapshot.EMPTY;
+
+    /** 主线程上的两个定时任务，{@link #stopMonitoring()} 需要能取消它们。 */
+    private BukkitTask tpsTask;
+    private BukkitTask snapshotTask;
 
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
@@ -137,27 +142,47 @@ public class ServerMonitorManager {
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
 
         // 启动TPS计算 + CPU采样任务（每秒）
-        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
+        tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
 
         // 世界/玩家/插件状态的采样任务（每5秒，主线程）。
         // 刻意不并进上面那个 1Hz 的任务：world.getLoadedChunks() 会分配一个装下所有已加载区块
         // 的数组，大服上并不便宜，按 1Hz 采就是凭空把这份开销放大 5 倍。100 tick 与今天实际的
         // 采样频率一致，只是换到了正确的线程上。
-        Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
+        snapshotTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
                 0L, SNAPSHOT_INTERVAL_TICKS);
     }
-    
+
     /**
      * 停止监控
+     * <p>
+     * 除了关掉发送线程，还要取消两个主线程定时任务。原先这里只 {@code scheduler.shutdown()}，
+     * 那在采样搬到主线程<b>之前</b>是够的——遍历世界那份开销本来就长在发送线程上，关掉发送
+     * 就一起没了。搬家之后不取消的话，「停止监控」会变成「不再发送、但照样每 5 秒遍历一遍
+     * 所有世界和区块」，而且是在主线程上。见 PR #265 的评审。
      */
     public void stopMonitoring() {
         if (!isMonitoring) {
             return;
         }
-        
+
         isMonitoring = false;
+        cancelTask(snapshotTask);
+        snapshotTask = null;
+        cancelTask(tpsTask);
+        tpsTask = null;
         scheduler.shutdown();
         UltiTools.getInstance().getLogger().log(Level.INFO, "停止服务器状态监控");
+    }
+
+    private static void cancelTask(BukkitTask task) {
+        if (task != null) {
+            try {
+                task.cancel();
+            } catch (Exception e) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "取消监控任务时出错: " + e.getMessage());
+            }
+        }
     }
     
     /**
@@ -295,9 +320,7 @@ public class ServerMonitorManager {
      * @return 新的快照；若不在主线程则返回 {@code null}
      */
     private ServerStateSnapshot sampleServerState() {
-        if (!Bukkit.isPrimaryThread()) {
-            UltiTools.getInstance().getLogger().log(Level.SEVERE,
-                "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+        if (!isOnPrimaryThreadOrComplain()) {
             return null;
         }
 
@@ -370,11 +393,39 @@ public class ServerMonitorManager {
     }
 
     /**
+     * 线程契约的唯一检查点：不在主线程就记 SEVERE 并返回 false。
+     * <p>
+     * 这个类的历史正是「契约被识别了，只应用了一半」，所以把契约写成运行时可观测的信号，
+     * 比写进注释可靠——真机上只要日志里出现这句，就说明调度被改错了。
+     */
+    private boolean isOnPrimaryThreadOrComplain() {
+        if (Bukkit.isPrimaryThread()) {
+            return true;
+        }
+        UltiTools.getInstance().getLogger().log(Level.SEVERE,
+            "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+        return false;
+    }
+
+    /**
      * 主线程定时任务的入口：采样并发布快照。
      * <p>
      * 包级可见，供测试直接驱动。
      */
     void refreshStateSnapshot() {
+        // 线程契约的检查放在连接判断**之前**：断连时也要抓得住「跑错线程」这件事，
+        // 否则这道防御闸在最需要它的场景（连不上、于是走到各种异常路径）反而是哑的。
+        if (!isOnPrimaryThreadOrComplain()) {
+            return;
+        }
+
+        // 没有连接就不采样。这一条不是省电，是保持修复前的行为：原先 sendBatchUpdate 在
+        // !isConnected 时是**先返回、再遍历**的，所以永久断连的服务器一次遍历都不做。
+        // 采样搬到主线程之后若不带上这个判断，断连反而变成了每 5 秒白遍历一遍所有世界和区块。
+        // 见 PR #265 的评审。
+        if (webSocketClient == null || !webSocketClient.isConnected()) {
+            return;
+        }
         try {
             ServerStateSnapshot snapshot = sampleServerState();
             if (snapshot != null) {
@@ -384,6 +435,11 @@ public class ServerMonitorManager {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "[ServerMonitor] 采样服务器状态失败: " + e.getMessage(), e);
         }
+    }
+
+    /** 供测试断言「到底采过样没有」——比从外部观察发出去的 JSON 更直接。 */
+    boolean hasSampledState() {
+        return stateSnapshot != ServerStateSnapshot.EMPTY;
     }
 
     /**

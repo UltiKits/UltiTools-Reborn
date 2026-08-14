@@ -280,6 +280,73 @@ class ServerMonitorSnapshotTest {
     }
 
     @Nested
+    @DisplayName("断连与停止监控时不做无谓的主线程工作（#265 评审）")
+    class NoWorkWhenIdle {
+
+        @Test
+        @DisplayName("未连接时不采样")
+        void doesNotSampleWhileDisconnected() {
+            // 修复前 sendBatchUpdate 在 !isConnected 时是先返回、再遍历的，所以永久断连的
+            // 服务器一次遍历都不做。采样搬到主线程之后必须保住这个性质，否则断连反而变成了
+            // 每 5 秒白遍历一遍所有世界和区块——而且是在主线程上。
+            server.addPlayer();
+            when(mockClient.isConnected()).thenReturn(false);
+
+            manager.refreshStateSnapshot();
+
+            // 直接看快照有没有被填，而不是去看发出去的 JSON——后者会撞上「主线程惰性补采」
+            // 那条刻意保留的路径（见 primaryThreadLazilySamplesOnFirstUse），测错东西。
+            assertThat(manager.hasSampledState())
+                    .as("断连期间不该留下任何采样结果")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("客户端为 null 时不采样也不抛异常")
+        void doesNotSampleWithoutClient() {
+            ServerMonitorManager fresh = new ServerMonitorManager();
+            server.addPlayer();
+
+            org.assertj.core.api.Assertions.assertThatCode(fresh::refreshStateSnapshot)
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("断连时线程契约的闸仍然有效")
+        void threadGuardStillFiresWhileDisconnected() throws InterruptedException {
+            // 线程检查排在连接判断之前：否则这道防御闸在最需要它的场景
+            //（连不上、于是走各种异常路径）反而是哑的。
+            when(mockClient.isConnected()).thenReturn(false);
+
+            runOffPrimaryThread(manager::refreshStateSnapshot);
+
+            verify(mockLogger).log(eq(Level.SEVERE), anyString());
+        }
+
+        @Test
+        @DisplayName("stopMonitoring 取消两个主线程定时任务")
+        void stopMonitoringCancelsMainThreadTasks() throws Exception {
+            manager.startMonitoring();
+
+            java.lang.reflect.Field snapshotField =
+                    ServerMonitorManager.class.getDeclaredField("snapshotTask");
+            java.lang.reflect.Field tpsField =
+                    ServerMonitorManager.class.getDeclaredField("tpsTask");
+            snapshotField.setAccessible(true);
+            tpsField.setAccessible(true);
+            assertThat(snapshotField.get(manager)).as("启动后应当持有任务句柄").isNotNull();
+            assertThat(tpsField.get(manager)).isNotNull();
+
+            manager.stopMonitoring();
+
+            assertThat(snapshotField.get(manager))
+                    .as("不取消的话，「停止监控」会变成「不再发送、但照样每 5 秒遍历所有世界」")
+                    .isNull();
+            assertThat(tpsField.get(manager)).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("采样失败不影响发送")
     class Resilience {
 
