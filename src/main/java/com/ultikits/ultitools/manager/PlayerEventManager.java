@@ -38,9 +38,15 @@ public class PlayerEventManager implements Listener {
 
     /**
      * 初始化玩家事件管理器
+     * <p>
+     * 整个方法与 {@link #shutdown()} 互斥。只让 {@code registerEvents} 单独同步是不够的：
+     * 「赋值客户端」与「注册监听器」之间会留下一个窗口，logout 恰好挤进去的话，
+     * {@code shutdown()} 摘掉的监听器会被紧随其后的 {@code registerEvents} 又装回去，
+     * 于是 {@code disableCloud()} 之后 {@code listenerRegistered} 仍为 true。见 PR #264 的评审。
+     *
      * @param client WebSocket客户端
      */
-    public void initialize(UltiPanelWebSocketClient client) {
+    public synchronized void initialize(UltiPanelWebSocketClient client) {
         // 客户端每次重连都是新造的实例（见 PluginInitiationUtils.getPanelWebsocketClient），
         // 所以引用要无条件更新；只有注册动作是幂等的。
         this.webSocketClient = client;
@@ -49,6 +55,8 @@ public class PlayerEventManager implements Listener {
 
     /**
      * 幂等地注册事件监听器：已注册过就直接返回。
+     * <p>
+     * 调用方必须已持有本对象的监视器锁（目前唯一调用方是 {@link #initialize}）。
      */
     private synchronized void registerEvents() {
         if (listenerRegistered) {

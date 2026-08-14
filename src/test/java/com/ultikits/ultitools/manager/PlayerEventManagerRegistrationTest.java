@@ -211,5 +211,23 @@ class PlayerEventManagerRegistrationTest {
                 manager.shutdown();
             }).doesNotThrowAnyException();
         }
+
+        @Test
+        @DisplayName("initialize 与 shutdown 互斥")
+        void initializeAndShutdownShareTheSameLock() throws Exception {
+            // 只让 registerEvents 单独同步是不够的：initialize 里「赋值客户端」与「注册监听器」
+            // 之间会留下一个窗口，logout 恰好挤进去的话，shutdown 摘掉的监听器会被紧随其后的
+            // registerEvents 又装回去。见 PR #264 的评审。
+            //
+            // 真实竞态无法确定性复现，这里退而钉住结构：两个方法必须落在同一把锁上。
+            assertThat(java.lang.reflect.Modifier.isSynchronized(
+                    PlayerEventManager.class.getDeclaredMethod("initialize", UltiPanelWebSocketClient.class)
+                            .getModifiers()))
+                    .as("initialize 必须整体同步，而不是只同步内部的 registerEvents")
+                    .isTrue();
+            assertThat(java.lang.reflect.Modifier.isSynchronized(
+                    PlayerEventManager.class.getDeclaredMethod("shutdown").getModifiers()))
+                    .isTrue();
+        }
     }
 }

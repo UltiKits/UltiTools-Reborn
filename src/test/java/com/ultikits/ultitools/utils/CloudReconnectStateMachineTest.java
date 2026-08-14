@@ -319,6 +319,36 @@ class CloudReconnectStateMachineTest {
         }
     }
 
+    @Nested
+    @DisplayName("迟到的握手不得复活管理器（#264 评审）")
+    class LateHandshakeIsIgnored {
+
+        @Test
+        @DisplayName("云已关闭时 initializeManagers 直接返回")
+        void managersAreNotWiredWhenCloudDisabled() {
+            // logout 之后仍可能有一次在途的握手落地。没有这道闸的话，disableCloud() 刚摘掉的
+            // 监听器会被这次迟到的 onOpen 原样装回去——「谁都不是所有者」的毛病换个地方重现。
+            PluginInitiationUtils.disableCloud();
+
+            PluginInitiationUtils.initializeManagers();
+
+            Mockito.verify(UltiTools.getInstance(), Mockito.never()).getServerMonitorManager();
+            assertThat(loggedAt(Level.FINE))
+                    .anySatisfy(line -> assertThat(line).contains("跳过管理器初始化"));
+        }
+
+        @Test
+        @DisplayName("云开启时照常接线")
+        void managersAreWiredWhenCloudEnabled() {
+            // 负向对照：闸门只该拦住关闭态，正常路径必须原样通过。
+            PluginInitiationUtils.enableCloud();
+
+            PluginInitiationUtils.initializeManagers();
+
+            Mockito.verify(UltiTools.getInstance(), Mockito.atLeastOnce()).getServerMonitorManager();
+        }
+    }
+
     /** 数一数 JVM root logger 上挂了几个本框架的 handler。 */
     private static int countFrameworkHandlersOnRootLogger() {
         int count = 0;

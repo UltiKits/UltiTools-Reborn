@@ -330,7 +330,23 @@ public class PluginInitiationUtils {
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
     }
 
-    private static void initializeManagers() {
+    /**
+     * 把所有 WebSocket 管理器接到当前连接上。
+     * <p>
+     * 顶上这道 {@link #cloudEnabled} 闸不是可有可无的：本方法挂在 {@code onConnectHandler} 上，
+     * 而 {@code /ulticloud logout} 之后仍可能有一次在途的握手落地。没有闸的话，
+     * {@code disableCloud()} 刚摘掉的监听器会被这次迟到的 onOpen 原样装回去——
+     * 这正是 #181/#223 里「谁都不是所有者」那个毛病换个地方重现。闸放在这里而不是各个
+     * manager 里，是因为生命周期的决定权本来就属于这一层。见 PR #264 的评审。
+     * <p>
+     * 包级可见而非 private —— 只为可测。
+     */
+    static void initializeManagers() {
+        if (!cloudEnabled.get()) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）");
+            return;
+        }
         try {
             // 初始化服务器监控管理器
             UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(panelWS);

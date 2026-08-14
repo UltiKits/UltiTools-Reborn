@@ -194,9 +194,13 @@ class PluginInitiationUtilsWebSocketTest {
         @DisplayName("initializeManagers 方法应该存在")
         void initializeManagersMethodShouldExist() throws NoSuchMethodException {
             Method method = PluginInitiationUtils.class.getDeclaredMethod("initializeManagers");
-            
+
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
+            // 包级可见（PR #264 起）：cloudEnabled 闸门需要被单元测试直接驱动。
+            // 仍然不是 public —— 它不是对外 API。
+            assertThat(Modifier.isPrivate(method.getModifiers())).isFalse();
+            assertThat(Modifier.isPublic(method.getModifiers())).isFalse();
+            assertThat(Modifier.isProtected(method.getModifiers())).isFalse();
         }
 
         @Test
