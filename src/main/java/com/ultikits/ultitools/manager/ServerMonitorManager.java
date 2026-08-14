@@ -355,12 +355,14 @@ public class ServerMonitorManager {
             plugins.add(pluginInfo);
         }
 
+        // 计数一律取自上面刚构造好的数组，而不是再问一次 Bukkit：既少两次遍历，
+        // 也让「playerCount 与 onlinePlayers 长度一致」由构造保证，而不是靠「同一 tick 内不会变」这条推理。
         return new ServerStateSnapshot(
-                Bukkit.getOnlinePlayers().size(),
+                onlinePlayers.size(),
                 Bukkit.getMaxPlayers(),
                 Bukkit.getOnlineMode(),
                 extractVersionNumber(Bukkit.getVersion()),
-                Bukkit.getWorlds().size(),
+                worlds.size(),
                 plugins.size(),
                 worlds,
                 onlinePlayers,

@@ -246,6 +246,22 @@ class ServerMonitorSnapshotTest {
         }
 
         @Test
+        @DisplayName("playerCount 与 onlinePlayers 长度永远一致")
+        void playerCountMatchesPlayerArrayLength() {
+            server.addPlayer();
+            server.addPlayer();
+            server.addPlayer();
+            manager.refreshStateSnapshot();
+            manager.sendServerStatus();
+
+            JsonObject data = captureStatusData();
+            assertThat(data.get("playerCount").getAsInt())
+                    .as("两者由同一次采样的同一个数组导出，不该有分歧")
+                    .isEqualTo(data.getAsJsonArray("onlinePlayers").size())
+                    .isEqualTo(3);
+        }
+
+        @Test
         @DisplayName("metrics 里的插件与世界计数取自快照")
         void metricsCountsComeFromSnapshot() {
             manager.refreshStateSnapshot();
