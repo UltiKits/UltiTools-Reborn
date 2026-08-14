@@ -93,13 +93,18 @@ surprises you.
 |---|---|---|
 | `maven-ci.yml` | `push` on every branch, **and** `pull_request` into `main` only | `mvn -B test`, then `mvn -B package` |
 | `publish-packages.yml` | `release: [published]` — a published GitHub Release, **not** a tag push | Sets the version from the release tag, builds skipping tests and GPG, publishes to GitHub Packages under the lowercase id `ultitools-api`. A second `publish-central` job targets Maven Central but is gated behind the repository variable `PUBLISH_TO_CENTRAL == 'true'` — it does not run unless that variable is set. |
-| `release.yml` | `workflow_dispatch` only, with inputs `release_type`, `release_notes`, `dry_run` | Rejects versions containing `SNAPSHOT`, runs tests, builds package + javadoc, creates the GitHub Release, uploads javadoc over FTP |
 
 Maven Central publishing goes through `central-publishing-maven-plugin` with server id `ultikits-sonatype`.
 
+Releases are cut from the maintainer's machine with `.github/scripts/release.sh`, which runs every check
+that has to happen **before** the tag exists (clean worktree, release branch, version format, tag not taken)
+and then creates the Release with the JAR attached. `publish-packages.yml` takes over from `release:
+published`. There is no `workflow_dispatch` release workflow — one existed, was never run once, and was
+removed in #231.
+
 The release path is shared with every downstream module repository — **get maintainer sign-off before
-changing `publish-packages.yml` or `release.yml`.** Verification-only changes to `maven-ci.yml` are made
-routinely.
+changing `publish-packages.yml` or `.github/scripts/release.sh`.** Verification-only changes to
+`maven-ci.yml` are made routinely.
 
 ## Scope Boundaries
 
