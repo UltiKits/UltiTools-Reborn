@@ -13,11 +13,13 @@ import java.util.Set;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Safe server.properties manager for remote editing via WebSocket.
  * Only exposes a curated whitelist of non-sensitive keys.
  */
+@ApiStatus.Internal
 public class ServerPropertiesManager {
     private final File serverRoot;
     private UltiPanelWebSocketClient webSocketClient;

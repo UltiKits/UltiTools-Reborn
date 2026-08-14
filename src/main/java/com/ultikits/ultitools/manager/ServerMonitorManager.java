@@ -16,11 +16,13 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 服务器监控管理器
  * 负责收集服务器状态信息并通过WebSocket发送
  */
+@ApiStatus.Internal
 public class ServerMonitorManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ScheduledExecutorService scheduler;

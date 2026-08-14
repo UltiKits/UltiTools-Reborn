@@ -17,6 +17,7 @@ import org.bukkit.event.server.ServerLoadEvent;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 日志流管理器
@@ -25,6 +26,7 @@ import java.util.logging.Logger;
  * @author UltiKits
  * @version 2.0.0
  */
+@ApiStatus.Internal
 public class LogStreamManager implements Listener {
     
     private static LogStreamManager instance;

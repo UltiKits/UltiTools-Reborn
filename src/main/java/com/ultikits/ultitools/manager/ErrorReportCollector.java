@@ -19,6 +19,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Collects, deduplicates, and rate-limits error reports before they reach the WebSocket.
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * @since 6.2.3
  */
+@ApiStatus.Internal
 public class ErrorReportCollector {
 
     private static final int MAX_QUEUE_SIZE = 200;

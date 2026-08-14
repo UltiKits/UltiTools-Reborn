@@ -15,11 +15,13 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 命令执行管理器
  * 负责处理来自WebSocket的命令执行请求
  */
+@ApiStatus.Internal
 public class CommandExecutionManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final ConcurrentHashMap<String, CompletableFuture<CommandResult>> pendingCommands;

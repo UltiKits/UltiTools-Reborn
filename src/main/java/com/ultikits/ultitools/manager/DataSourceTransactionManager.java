@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * DataSource-based implementation of {@link TransactionManager}.
@@ -19,6 +20,7 @@ import java.util.logging.Logger;
  * @author wisdomme
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class DataSourceTransactionManager implements TransactionManager {
 
     private static final Logger LOGGER = Logger.getLogger(DataSourceTransactionManager.class.getName());

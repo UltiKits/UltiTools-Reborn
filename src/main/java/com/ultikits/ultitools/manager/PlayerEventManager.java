@@ -14,12 +14,14 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 玩家事件管理器
  * 处理玩家相关事件的WebSocket消息
  */
 @SuppressWarnings("deprecation")
+@ApiStatus.Internal
 public class PlayerEventManager implements Listener {
     private UltiPanelWebSocketClient webSocketClient;
     

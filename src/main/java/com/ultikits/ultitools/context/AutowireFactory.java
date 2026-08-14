@@ -3,6 +3,7 @@ package com.ultikits.ultitools.context;
 import com.ultikits.ultitools.annotations.Autowired;
 
 import java.lang.reflect.Field;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Simple autowire factory to replace Spring's AutowireCapableBeanFactory.
@@ -10,6 +11,7 @@ import java.lang.reflect.Field;
  * 简单的自动装配工厂，用于替换Spring的AutowireCapableBeanFactory。
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Autowiring requires reflection
+@ApiStatus.Internal
 public class AutowireFactory {
     private final SimpleContainer container;
 

@@ -17,6 +17,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * UltiPanel日志传输器
@@ -25,6 +26,7 @@ import lombok.Setter;
  * @author UltiKits
  * @version 1.0.0
  */
+@ApiStatus.Internal
 public class UltiPanelLogTransmitter {
 
     private static final int MAX_QUEUE_SIZE = 1000;

@@ -461,6 +461,24 @@
             <version>1.18.38</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+            JetBrains @ApiStatus —— 只用来标 API 稳定性边界，是给人和 IDE 看的信号，
+            不产生任何运行期约束。全系注解都是 RetentionPolicy.CLASS，运行时不需要
+            这个 jar：所以 scope 用 provided、plugin.yml 的 libraries: 不加条目、
+            shaded JAR 里也不该出现 org/jetbrains/**。这三件事是一套的，动一个要一起动。
+
+            JetBrains @ApiStatus — used only to mark API stability boundaries. It is a
+            signal for humans and IDEs, and enforces nothing at runtime. Every annotation
+            in the family is RetentionPolicy.CLASS, so the jar is not needed at runtime:
+            hence provided scope, no plugin.yml libraries: entry, and no org/jetbrains/**
+            inside the shaded JAR. Those three facts move together.
+        -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>26.0.2</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.github.MilkBowl</groupId>
             <artifactId>VaultAPI</artifactId>
