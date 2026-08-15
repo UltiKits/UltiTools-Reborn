@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -352,6 +353,67 @@ class JsonQuerySemanticsTest {
             assertThat(idsOf(json.getAll(eq("player_name", "Bob"), WhereCondition.empty())))
                     .as("空条件排在后面时，原先会中途 return 全量，把真条件整个吃掉")
                     .containsExactly("2");
+        }
+    }
+
+    // ==================== 列名折叠不依赖系统 locale ====================
+
+    /**
+     * 土耳其语与阿塞拜疆语的大写 {@code 'I'} 小写化成无点的 {@code 'ı'}，
+     * 因此裸的 {@code toLowerCase()} 会让列名折叠随服务器 locale 漂移。
+     * {@code PLAYER_UUID} 在 {@code tr} 下折成 {@code player_uuıd}，与建映射时
+     * 用的 {@code player_uuid} 对不上，大小写不敏感解析就此失效。
+     * <p>
+     * 两个后端都必须钉 {@link Locale#ROOT}：只钉一边会在土耳其 locale 下重新
+     * 制造出本 PR 要消灭的那种后端分歧。
+     */
+    @Nested
+    @DisplayName("列名折叠不依赖系统 locale")
+    class LocaleIndependence {
+
+        private static final String TURKISH = "tr";
+
+        @Test
+        @DisplayName("JSON 后端：土耳其 locale 下大写列名仍能解析")
+        void jsonResolvesUpperCaseColumnUnderTurkishLocale() {
+            Locale original = Locale.getDefault();
+            try {
+                Locale.setDefault(Locale.forLanguageTag(TURKISH));
+                // 映射在构造期建立，因此必须在切换 locale 之后才 new
+                SimpleJsonDataOperator<PlayerRecord> operator =
+                        new SimpleJsonDataOperator<>(tempDir.toFile().getAbsolutePath(), PlayerRecord.class);
+                operator.insert(new PlayerRecord("1", "uuid-aaa", "Alice", 3));
+
+                assertThat(operator.getAll(eq("PLAYER_UUID", "uuid-aaa")))
+                        .as("PLAYER_UUID 在 tr 下折成 player_uuıd，裸 toLowerCase() 会查不到")
+                        .hasSize(1);
+            } finally {
+                Locale.setDefault(original);
+            }
+        }
+
+        @Test
+        @DisplayName("关系型后端：土耳其 locale 下读回的字段不为空")
+        void relationalMapsColumnsUnderTurkishLocale() throws Exception {
+            Locale original = Locale.getDefault();
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("DROP TABLE IF EXISTS player_record");
+            }
+            try {
+                Locale.setDefault(Locale.forLanguageTag(TURKISH));
+                SQLiteDataOperator<PlayerRecord> operator =
+                        new SQLiteDataOperator<>(dataSource, PlayerRecord.class);
+                operator.insert(new PlayerRecord("1", "uuid-aaa", "Alice", 3));
+
+                PlayerRecord loaded = operator.getById("1");
+                assertThat(loaded).isNotNull();
+                assertThat(loaded.getPlayerUuid())
+                        .as("读路径把 JDBC 列标签折成字段名，裸 toLowerCase() 会让整列静默变 null")
+                        .isEqualTo("uuid-aaa");
+            } finally {
+                Locale.setDefault(original);
+            }
         }
     }
 }

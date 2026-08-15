@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -92,7 +93,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         Map<String, String> mapping = new LinkedHashMap<>();
         for (Field field : ReflectionUtil.getFields(type)) {
             if (field.isAnnotationPresent(Column.class)) {
-                mapping.put(field.getAnnotation(Column.class).value().toLowerCase(), field.getName());
+                // 必须用 Locale.ROOT：默认 locale 是土耳其语/阿塞拜疆语时，'I' 会折成无点的 'ı'，
+                // 建表侧与查询侧只要有一边跟着系统 locale 走，列名就对不上了。
+                mapping.put(field.getAnnotation(Column.class).value().toLowerCase(Locale.ROOT), field.getName());
             }
         }
         return Collections.unmodifiableMap(mapping);
@@ -112,7 +115,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (column == null) {
             return null;
         }
-        String fieldName = columnToFieldName.get(column.toLowerCase());
+        String fieldName = columnToFieldName.get(column.toLowerCase(Locale.ROOT));
         return fieldName != null ? fieldName : column;
     }
 
