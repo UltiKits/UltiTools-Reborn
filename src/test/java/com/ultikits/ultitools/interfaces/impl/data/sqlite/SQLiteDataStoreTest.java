@@ -44,7 +44,6 @@ import lombok.EqualsAndHashCode;
 @DisplayName("SQLiteDataStore 测试")
 class SQLiteDataStoreTest {
 
-    private static final String H2_AUTH = "";
 
     @TempDir
     File tempDir;
@@ -108,7 +107,9 @@ class SQLiteDataStoreTest {
         // Use H2 in MySQL compatibility mode for backtick support
         config.setJdbcUrl("jdbc:h2:mem:sqlitestoretest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
-        config.setPassword(H2_AUTH); // nosemgrep: java.lang.security.audit.hardcoded-password
+        // 刻意不调用 setPassword：内存库首次连接时就以「无口令」创建，
+        // 传一个空字符串反而会被静态分析当成硬编码口令（Codacy/Opengrep 的
+        // Semgrep_java_password_rule-HardcodePassword）。这里没有凭据可言。
         return new HikariDataSource(config);
     }
 
