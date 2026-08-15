@@ -43,6 +43,26 @@
   bug fix。本项目不这么做：任何会改变下游运行时行为的变更，一律按下方
   [行为变更](#行为变更) 一节处理，不会因为「这是在修 bug」就绕开迁移期。
 
+### 本节只管框架自己的版本号
+
+上面这套规则**只适用于 `UltiTools-API` 本身**。给你自己的模块定版本号是另一套契约，
+判据是「服主换上新 JAR 之后需不需要动手」，见
+[模块版本规范](https://dev.ultikits.com/zh/guide/advanced/module-versioning.html)
+（[English](https://dev.ultikits.com/guide/advanced/module-versioning.html)）。
+
+两者不一致是**故意的**，不要试图统一。差别在于版本号被拿去做什么：
+
+- 框架的版本号会被**解析和链接**——Maven 拿它挑构件，已编译的下游插件在运行时链接它的类。
+  这两件事问的都是兼容性问题。
+- 模块的版本号也会被机器读，但**只用来排序**：`PluginManager.hasNewerVersionLoaded`
+  和 `unregisterSupersededVersions` 在同一模块存在两个 JAR 时比较版本决定谁赢，
+  `UpdateManager.checkModuleUpdates` 比较版本以报告有无更新。三者都走
+  `VersionComparatorUtil.compare`，问的只是「A 是不是比 B 大」，**没有一个会去看
+  这个差异属于 MAJOR、MINOR 还是 PATCH**。模块也不发布到 Maven、不被任何东西链接。
+
+所以：模块版本号的**顺序**被机器消费，**MAJOR/MINOR/PATCH 的含义**不被机器消费，
+后者是说给服主听的。框架这边两者都被机器消费，所以它的版本号没有同样的自由度。
+
 ## 依赖声明
 
 Maven：
