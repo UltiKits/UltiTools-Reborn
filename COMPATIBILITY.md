@@ -305,9 +305,11 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 （`update(String, Object, Object)` 与 `exist(WhereCondition[])` 这两个重载不含实体类型，
 描述符未变。同名方法里只有接收实体的那个重载受影响。）
 
-**这一次的断裂是双向的**，而第一个实例只有一个方向。老 JAR 在新框架上炸（找
-`(AbstractDataEntity)`，已不存在），新 JAR 在老框架上也炸（找 `(BaseDataEntity)`，
-尚不存在）——同一份源码只改 pin 重编，两个产物各自只能跑在自己那一侧。
+**描述符变更本质上都是双向的**，两个实例都是——一个符号在两版里名字相同、描述符不同，
+那么无论从哪一侧编译，另一侧都没有它。老 JAR 在新框架上炸（找 `(AbstractDataEntity)`，
+已不存在），新 JAR 在老框架上也炸（找 `(BaseDataEntity)`，尚不存在）；同一份源码只改
+pin 重编，两个产物各自只能跑在自己那一侧。第一个实例（`getContext()`）同理，只是当时
+只有「老 JAR 撞新框架」这个方向被真实触发了。
 
 **而第二个方向还多带一层：它是被放行之后才炸的。** 15 个官方模块统一把 `pom.xml` 的
 pin 调到了 6.2.1，`plugin.yml` 的 `api-version` 却一个都没动，仍是 `620`。产物记的是
@@ -372,9 +374,20 @@ Java 是惰性解析的，所以「装上去能起来」不构成证据——不
 
 想自查的话，判据是「**产物实际引用了哪些符号**」，不是「pom 里写了什么」。把你的模块 JAR
 和你在 `api-version` 里声明的那一版框架 JAR 都解开，用 `javap -p -c` 导出模块引用的
-`com/ultikits/ultitools/**` 方法与描述符，再逐条对照框架 JAR 里 `javap -p -s` 的输出；
-只要有一条对不上，你的 `api-version` 就声明低了。现成的脚本见
-[issue #284](https://github.com/UltiKits/UltiTools-Reborn/issues/284)。
+`com/ultikits/ultitools/**` 方法与描述符，再逐条对照框架 JAR 里 `javap -p -s` 的输出。
+现成的脚本见 [issue #284](https://github.com/UltiKits/UltiTools-Reborn/issues/284)。
+
+**但对不上不等于「`api-version` 低了」，有两个成因，修法相反。** 看那条对不上的符号里写的
+是哪一版的类型：
+
+| 缺失符号引用的类型 | 说明什么 | 怎么修 |
+|---|---|---|
+| **新**的（如 `BaseDataEntity`） | 产物比声明的地板新 | **抬 `api-version`**，pin 不用动 |
+| **旧**的（如 `AbstractDataEntity`） | 产物比声明的地板旧，pin 停在老版本没跟上 | **抬 pin 并重编**，抬 `api-version` 没用，反而更错 |
+
+第二种正是本节这个实例的另一侧：一个 pin 停在 6.2.0、却声明 `api-version: 621` 的产物，
+引用的是 `insert(AbstractDataEntity)`，而 6.2.1 里没有这个描述符——地板再抬也不会让它
+出现。**先看缺的是哪一代符号，再决定动哪个数字。**
 
 于是完整的修法是：抬 pin、重编、**把 `api-version` 一并抬到对应的 API 级别**，并接受
 由此带来的后果。
