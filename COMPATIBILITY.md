@@ -193,13 +193,16 @@ flatten-maven-plugin 处理后不含依赖声明，因此把 UltiTools-API 放�
 [dotnet/runtime](https://github.com/dotnet/runtime/blob/main/docs/coding-guidelines/breaking-change-definitions.md)
 的划分：
 
-- **源码兼容（source）**——你的代码还能不能通过编译。移除类型、改方法签名、
-  给接口加抽象方法都会破坏它。
+- **源码兼容（source）**——你的代码还能不能通过编译。移除类型、改方法的参数表、
+  给接口加抽象方法都会破坏它。注意**改返回类型往往不破坏它**：调用方通常没写出返回
+  类型的名字，重新编译一次就过去了。
 - **二进制兼容（binary）**——你**已经编译好**的 JAR 还能不能在新框架上加载和运行。
   破坏它的典型表现是 `NoSuchMethodError` / `NoClassDefFoundError`。
+  上一条里那种「重新编译就过去了」的改动，对不重新编译的 JAR 就是致命的。
 - **行为兼容（behavioral）**——编译过了、也加载起来了，但**做的事情变了**。
 
-前两类由上面的移除清单和版本号规则管。本节管第三类。
+移除清单和版本号规则管的是前两类里**有意为之**的那部分；无意打破二进制兼容的情况见
+[移除清单覆盖不到的二进制不兼容](#移除清单覆盖不到的二进制不兼容)。本节管第三类。
 
 ### 哪些行为变更可以在 MINOR 直接做
 
@@ -234,6 +237,52 @@ flatten-maven-plugin 处理后不含依赖声明，因此把 UltiTools-API 放�
 
 这一节的写法参考了 [PEP 387](https://peps.python.org/pep-0387/)，
 核心是同一条：**先让人知道自己踩在了哪块地板上，再抽走它。**
+
+## 移除清单覆盖不到的二进制不兼容
+
+上面的移除清单只覆盖得了**有人知道自己在改 API** 的那些变更——它的两个前提
+（带 `@Deprecated(forRemoval = true)`、跨过一个 MINOR）都要求改动者先意识到这是一次
+API 变更。有一类改动不满足这个前提：它在作者眼里根本不是 API 变更，却改掉了公开方法的
+**JVM 方法描述符**，于是只打破二进制兼容、不打破源码兼容。
+
+这已经发生过一次，记在这里：
+
+6.1.1 → 6.2.1 移除 Spring 时，`UltiToolsPlugin` 里 context 字段的类型从
+`AnnotationConfigApplicationContext` 换成了 `SimpleContainer`。该字段带 `@Getter`，
+所以 Lombok 生成的 `getContext()` 的**返回类型**跟着变了：
+
+```
+针对 6.0.6 编译的模块，字节码里记的是
+  getContext:()Lorg/springframework/context/annotation/AnnotationConfigApplicationContext;
+6.2.1 及以后的框架提供的是
+  getContext:()Lcom/ultikits/ultitools/context/SimpleContainer;
+```
+
+返回类型是方法描述符的一部分，对 JVM 而言这是两个不同的方法，老 JAR 在 `registerSelf()`
+里拿到 `NoSuchMethodError`。而**源码是兼容的**：`getContext().getBean(X.class)` 没有写出
+返回类型的名字，同一份源码在两个版本上都编得过。三道防线因此同时失效：
+
+- 没有任何东西被「移除」，移除清单里放不进这一条；
+- 没有可以标 `@Deprecated` 的目标，`-Xlint:removal` 对下游一次都没响过；
+- `PluginManager` 的版本门禁也拦不住——它只判 `api-version > 当前框架版本`，即
+  「模块要求的框架比装的还新」这一个方向。老模块声明的下限确实被满足了，照样炸。
+
+### 这对你意味着什么
+
+**pin 得低不等于安全。** [模块版本规范](https://dev.ultikits.com/zh/guide/advanced/module-versioning)
+里说「编译 against 旧 API 不会因为够到了更新的东西而 `NoSuchMethodError`」——那句话仍然
+成立，但它只排除掉了**一个方向的原因**。反方向的原因（框架自己改了描述符）会给你同一个
+异常。
+
+可靠的动作只有一个：**跨框架 MINOR 版本时重新编译并重新发布**。已经发出去的、不重新
+编译的 JAR，不因为它 pin 得低而获得任何额外保护。
+
+### 这对我们意味着什么
+
+人工流程挡不住这一类——它要求作者在改一个字段类型时就想到「这会改掉一个 public 方法的
+描述符」。挡得住的只有机器逐方法比对描述符，也就是 japicmp 门禁（issue #216）。在它接线
+之前，本文件对二进制兼容的承诺**仅限于有意为之的移除**；无意的描述符变更我们只能事后
+记录，不能保证事前发现。
 
 ## 支持范围
 
