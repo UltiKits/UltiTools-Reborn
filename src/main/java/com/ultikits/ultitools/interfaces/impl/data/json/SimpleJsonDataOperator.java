@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -233,6 +234,14 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void insert(T obj) {
+        // 关系型后端在 id 为空时自动补一个 UUID（AbstractRelationalDataOperator.insert），
+        // 所以模块从来不自己设 id —— 全部 Modules 加起来的 setId 调用是 0 次。
+        // JSON 侧过去不补，null 直接进 ConcurrentHashMap 当 key，于是同一份模块代码
+        // 换成 datasource.type: json 就 NPE。补齐是为了让「谁生成 id」重新变成
+        // 框架的保证，而不是取决于后端。见 issue #275。
+        if (obj.getId() == null) {
+            obj.setId(UUID.randomUUID().toString());
+        }
         cache.putIfAbsent(obj.getId(), obj);
     }
 
