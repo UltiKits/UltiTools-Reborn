@@ -293,20 +293,27 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 上面那次是 MINOR。第二次发生在 **PATCH** 里，所以「盯着 MINOR 就行」是不成立的。
 
 `43f55ea refactor!: replace AbstractDataEntity with BaseDataEntity<String>` 改掉了
-`DataOperator` 三个方法的描述符：
+`DataOperator` **四个**方法的描述符——`insert(T)`、`update(T)`、`exist(T)`、`getById`：
 
 ```
 6.2.0  insert   (Lcom/ultikits/ultitools/abstracts/AbstractDataEntity;)V
 6.2.1  insert   (Lcom/ultikits/ultitools/abstracts/data/BaseDataEntity;)V
 ```
 
-`update(T)` 与 `getById` 同理。`AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
+`AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
 
-**这一次暴露的是另一种失效形状**：不是「老 JAR 在新框架上炸」，而是**新 JAR 在老框架上
-炸，而且是被放行之后才炸**。15 个官方模块统一把 `pom.xml` 的 pin 调到了 6.2.1，
-`plugin.yml` 的 `api-version` 却一个都没动，仍是 `620`。产物记的是 6.2.1 的描述符，
-声明的地板是 6.2.0，而框架只看得到后者。结果：装了 6.2.0 的服务器**加载成功**，
-然后在第一次数据读写时 `NoSuchMethodError`。11 个模块中招（剩下 4 个不碰 ORM）。
+（`update(String, Object, Object)` 与 `exist(WhereCondition[])` 这两个重载不含实体类型，
+描述符未变。同名方法里只有接收实体的那个重载受影响。）
+
+**这一次的断裂是双向的**，而第一个实例只有一个方向。老 JAR 在新框架上炸（找
+`(AbstractDataEntity)`，已不存在），新 JAR 在老框架上也炸（找 `(BaseDataEntity)`，
+尚不存在）——同一份源码只改 pin 重编，两个产物各自只能跑在自己那一侧。
+
+**而第二个方向还多带一层：它是被放行之后才炸的。** 15 个官方模块统一把 `pom.xml` 的
+pin 调到了 6.2.1，`plugin.yml` 的 `api-version` 却一个都没动，仍是 `620`。产物记的是
+6.2.1 的描述符，声明的地板却是 6.2.0，而框架只看得到后者。结果：装了 6.2.0 的服务器
+**加载成功**，然后在第一次数据读写时 `NoSuchMethodError`。11 个模块中招（剩下 4 个不碰
+ORM，负向对照成立）。
 
 Java 是惰性解析的，所以「装上去能起来」不构成证据——不碰数据路径的服主可以一直看不出问题。
 
@@ -319,9 +326,21 @@ Java 是惰性解析的，所以「装上去能起来」不构成证据——不
 6.2.1  getDataOperator  (Ljava/lang/Class;)Lcom/ultikits/ultitools/interfaces/DataOperator;
 ```
 
-于是一个 `extends AbstractDataEntity` 的模块在 6.2.1 上**跑得动但编不过**——已发出去的 JAR
-安然无恙，作者一改代码就撞墙。这是前面那种情况的镜像：**改泛型上界破坏源码兼容而不破坏
-二进制兼容；改返回类型或参数类型破坏二进制兼容而不一定破坏源码兼容。** 两者都不涉及移除。
+这是前面那种情况的镜像：**改泛型上界破坏源码兼容而不破坏二进制兼容；改返回类型或参数
+类型破坏二进制兼容而不一定破坏源码兼容。** 两者都不涉及移除，所以两者都绕过移除清单。
+
+**但这条只对 `getDataOperator` 这个调用点成立，不要推广到整个模块。** 拿到
+`DataOperator` 之后你几乎一定会调 `insert` / `update` / `exist` / `getById`，而那四个
+的描述符是变了的。所以一个用了 ORM 的模块，**两个方向都会断**：
+
+| 构建时 pin | 跑在 6.2.0 | 跑在 6.2.1+ |
+|---|---|---|
+| 6.2.0 | ✅ | ❌ `NoSuchMethodError`（找 `(AbstractDataEntity)`，已不存在） |
+| 6.2.1 | ❌ `NoSuchMethodError`（找 `(BaseDataEntity)`，尚不存在） | ✅ |
+
+实测取的是同一个模块的同一份源码，只改 pin 重编：针对 6.2.0 编译的产物在 6.2.1 上缺 3 个
+符号、在 6.2.0 上缺 0 个；针对 6.2.1 编译的产物反过来，在 6.2.0 上缺 3 个、在 6.2.1 上缺
+0 个。**对称的，两侧都不通。** 「跑得动但编不过」只描述了 `getDataOperator` 那一行。
 
 ### 这对你意味着什么
 
