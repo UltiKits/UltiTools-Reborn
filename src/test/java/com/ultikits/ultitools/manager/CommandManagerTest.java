@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -1115,8 +1116,44 @@ class CommandManagerTest {
             
             // Act - 使用不存在的包名
             commandManager.registerAll(mockPlugin, "com.nonexistent.package");
-            
+
             // Assert - 不应该抛出异常
+        }
+
+        @Test
+        @DisplayName("BaseCommandExecutor 不属于本重载强转的类型——这是弃用它的全部依据")
+        void baseCommandExecutorIsNotAssignableToTheCastTarget() {
+            // 本重载把扫描到的每个类强转为 AbstractCommandExecutor。当代命令类继承的是
+            // BaseCommandExecutor，它 implements TabExecutor 而不继承前者，所以那次强转
+            // 必抛 ClassCastException——而外层 catch 只列了四个反射类受检异常，异常会逃出去。
+            //
+            // 这条断言钉住的是那个结论的**全部依据**：一条类型关系。不去跑真实包扫描，
+            // 因为那需要往测试树里放一个 @CmdExecutor 类，会被别的扫描测试捎带上，而这个
+            // 方法在 6.3.0 就删了，不值得为一个版本的寿命引入那种耦合。
+            //
+            // 如果哪天有人让 BaseCommandExecutor 继承了 AbstractCommandExecutor，弃用理由
+            // 就不再成立——这条会立刻变红，提醒去重新评估 issue #272 的结论。
+            assertThat(AbstractCommandExecutor.class.isAssignableFrom(BaseCommandExecutor.class))
+                    .as("BaseCommandExecutor 若继承了 AbstractCommandExecutor，#272 的弃用理由需重新评估")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("本重载应当带着 forRemoval 标注，下游才会被 -Xlint:removal 点名")
+        void castingOverloadShouldBeMarkedForRemoval() throws Exception {
+            // COMPATIBILITY.md 把「你确实被点名警告过」定为可以移除的前提，而 javac 的
+            // -Xlint:removal 默认开启、-Xlint:deprecation 默认关闭。所以标注掉了不只是
+            // 文档不同步，是下游拿不到警告就被删了 API。
+            Method method = CommandManager.class.getDeclaredMethod(
+                    "registerAll", UltiToolsPlugin.class, String.class);
+            Deprecated deprecated = method.getAnnotation(Deprecated.class);
+
+            assertThat(deprecated)
+                    .as("registerAll(UltiToolsPlugin, String) 的 @Deprecated 标注不见了")
+                    .isNotNull();
+            assertThat(deprecated.forRemoval())
+                    .as("forRemoval 被改成了 false，下游将只收到不含 API 名的笼统提示")
+                    .isTrue();
         }
     }
 

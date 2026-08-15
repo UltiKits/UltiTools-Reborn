@@ -85,6 +85,7 @@ flatten-maven-plugin 处理后不含依赖声明，因此把 UltiTools-API 放�
 | `abstracts.AbstractCommandExecutor` | 6.2.1 | `abstracts.command.BaseCommandExecutor` | **15 个文件 / 6 个仓库** |
 | `abstracts.AbstractCommendExecutor`（拼写错误的空 shim） | 6.2.5 | 同上 | 0 |
 | `manager.CommandManager.register(CommandExecutor, …)` 的两个重载 | 6.2.5 | `register(UltiToolsPlugin, Class, String, String, String…)` | 0 |
+| `manager.CommandManager.registerAll(UltiToolsPlugin, String)` | 6.2.5 | `registerAll(UltiToolsPlugin)` | 0 |
 | `annotations.command.@OptionalParam` | 6.2.5 | 无替代——该注解从未实现，标注它不影响解析；改为每种可接受的参数形态各写一条 `@CmdMapping` | 0 |
 
 ### 版本适配
