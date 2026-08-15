@@ -252,9 +252,11 @@ API 变更。有一类改动不满足这个前提：它在作者眼里根本不�
 **JVM 方法描述符**——于是它必定打破二进制兼容，却可能完全不打破源码兼容，从而绕过所有
 以「有人会注意到」为前提的流程。
 
-这已经发生过一次，记在这里：
+这已经发生过两次，都记在这里。第一次在 MINOR，第二次在 PATCH——**没有哪个版本级别是豁免的**：
 
-6.1.1 → **6.2.0** 移除 Spring 时，`UltiToolsPlugin` 里 context 字段的类型从
+### 第一次：6.1.1 → 6.2.0，一个 MINOR
+
+移除 Spring 时，`UltiToolsPlugin` 里 context 字段的类型从
 `AnnotationConfigApplicationContext` 换成了 `SimpleContainer`。该字段带 `@Getter`，
 所以 Lombok 生成的 `getContext()` 的**返回类型**跟着变了：
 
@@ -286,6 +288,41 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 - `PluginManager` 的版本门禁也拦不住——它只判 `api-version > 当前框架版本`，即
   「模块要求的框架比装的还新」这一个方向。老模块声明的下限确实被满足了，照样炸。
 
+### 第二次：6.2.0 → 6.2.1，一个 PATCH
+
+上面那次是 MINOR。第二次发生在 **PATCH** 里，所以「盯着 MINOR 就行」是不成立的。
+
+`43f55ea refactor!: replace AbstractDataEntity with BaseDataEntity<String>` 改掉了
+`DataOperator` 三个方法的描述符：
+
+```
+6.2.0  insert   (Lcom/ultikits/ultitools/abstracts/AbstractDataEntity;)V
+6.2.1  insert   (Lcom/ultikits/ultitools/abstracts/data/BaseDataEntity;)V
+```
+
+`update(T)` 与 `getById` 同理。`AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
+
+**这一次暴露的是另一种失效形状**：不是「老 JAR 在新框架上炸」，而是**新 JAR 在老框架上
+炸，而且是被放行之后才炸**。15 个官方模块统一把 `pom.xml` 的 pin 调到了 6.2.1，
+`plugin.yml` 的 `api-version` 却一个都没动，仍是 `620`。产物记的是 6.2.1 的描述符，
+声明的地板是 6.2.0，而框架只看得到后者。结果：装了 6.2.0 的服务器**加载成功**，
+然后在第一次数据读写时 `NoSuchMethodError`。11 个模块中招（剩下 4 个不碰 ORM）。
+
+Java 是惰性解析的，所以「装上去能起来」不构成证据——不碰数据路径的服主可以一直看不出问题。
+
+**同一次提交里还有一个恰好相反的对照，值得一并记住。** 它把 `UltiToolsPlugin.getDataOperator`
+的泛型上界从 `AbstractDataEntity` 换成了 `BaseDataEntity<String>`，但两版描述符
+**完全相同**——上界被擦除，`T` 在描述符里早就是 `Class` / `DataOperator`：
+
+```
+6.2.0  getDataOperator  (Ljava/lang/Class;)Lcom/ultikits/ultitools/interfaces/DataOperator;
+6.2.1  getDataOperator  (Ljava/lang/Class;)Lcom/ultikits/ultitools/interfaces/DataOperator;
+```
+
+于是一个 `extends AbstractDataEntity` 的模块在 6.2.1 上**跑得动但编不过**——已发出去的 JAR
+安然无恙，作者一改代码就撞墙。这是前面那种情况的镜像：**改泛型上界破坏源码兼容而不破坏
+二进制兼容；改返回类型或参数类型破坏二进制兼容而不一定破坏源码兼容。** 两者都不涉及移除。
+
 ### 这对你意味着什么
 
 **pin 得低不等于安全。** [模块版本规范](https://dev.ultikits.com/zh/guide/advanced/module-versioning)
@@ -305,9 +342,20 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 | `pom.xml` 里的 `UltiTools-API` 版本 | 你的字节码记录**哪一版的描述符** | 没有人。它是 `provided`，不进 JAR，框架运行时看不到它 |
 | `plugin.yml` 的 `api-version` | 声明的运行时**下限** | `PluginManager.isUltiToolsVersionCompatible`，这是唯一被检查的值 |
 
-所以「pin 就是地板」是错的：抬高 pin 不会抬高地板。一个针对 6.2.0 编译、却仍然声明
-`api-version: 606` 的构件，会被 6.1.1 的服务器**放行**，然后在第一次调用新描述符时炸掉
-——同一个 `NoSuchMethodError`，方向反过来。**两个数字必须一起动。**
+所以「pin 就是地板」是错的：抬高 pin 不会抬高地板。一个针对新框架编译、却仍然声明旧
+`api-version` 的构件，会被老服务器**放行**，然后在第一次调用新描述符时炸掉——同一个
+`NoSuchMethodError`，方向反过来。**两个数字必须一起动。**
+
+**这不是假想。** 上面第二个实例就是这么发生的：15 个官方模块把 pin 调到 6.2.1，
+`api-version` 全部留在 `620`，其中 11 个的产物因此声明了一个比自己真实需求更低的地板
+（2026-08-16 已全部修正为 `621`）。**没有任何工具报过警**——构建是绿的，插件在 6.2.1 以上
+的服务器上一切正常，只有恰好停在 6.2.0 的服务器会先加载成功、再在第一次数据读写时炸。
+
+想自查的话，判据是「**产物实际引用了哪些符号**」，不是「pom 里写了什么」。把你的模块 JAR
+和你在 `api-version` 里声明的那一版框架 JAR 都解开，用 `javap -p -c` 导出模块引用的
+`com/ultikits/ultitools/**` 方法与描述符，再逐条对照框架 JAR 里 `javap -p -s` 的输出；
+只要有一条对不上，你的 `api-version` 就声明低了。现成的脚本见
+[issue #284](https://github.com/UltiKits/UltiTools-Reborn/issues/284)。
 
 于是完整的修法是：抬 pin、重编、**把 `api-version` 一并抬到对应的 API 级别**，并接受
 由此带来的后果。
@@ -333,7 +381,8 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 
 - 本文上面写着 PATCH「不移除公开 API」。那句承诺覆盖的是**有意为之**的移除，因为它靠的
   是人先意识到自己在改 API。无意的描述符变更按定义不在任何排期里，**所以它同样可能出现
-  在一个 PATCH 里**——本节这个实例恰好落在 MINOR，但那是巧合，不是保证。
+  在一个 PATCH 里**。这句话初写时只是推论，本节的第二个实例（6.2.0 → 6.2.1）已经证实了
+  它：那是一个 PATCH。**「盯着 MINOR 就够了」是不成立的。**
 - japicmp 门禁接线之后，PATCH 的二进制兼容才是被机器逐方法验证过的。到那时才可以只在
   跨 MINOR 时操心这件事。
 
