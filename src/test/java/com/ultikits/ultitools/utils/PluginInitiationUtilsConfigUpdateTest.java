@@ -45,6 +45,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * 某个分支内部的行为。
  */
 @DisplayName("PluginInitiationUtils 配置更新载荷契约")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection for mocking internal state
 class PluginInitiationUtilsConfigUpdateTest {
 
     private Logger mockLogger;

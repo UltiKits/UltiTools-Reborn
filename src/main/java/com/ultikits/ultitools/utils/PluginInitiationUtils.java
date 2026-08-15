@@ -31,6 +31,9 @@ public class PluginInitiationUtils {
     /** Authentication token for API requests */
     private static TokenEntity token;
 
+    /** {@code server_properties} 走独立管理器，不是一个真正的配置文件路径。 */
+    private static final String SERVER_PROPERTIES_FILE = "server_properties";
+
     /**
      * 云连接是否处于「应当保持连接」的状态。
      * <p>
@@ -472,9 +475,6 @@ public class PluginInitiationUtils {
             sendConfigUpdateResponse(requestId, false, e.getMessage());
         }
     }
-
-    /** {@code server_properties} 走独立管理器，不是一个真正的配置文件路径。 */
-    private static final String SERVER_PROPERTIES_FILE = "server_properties";
 
     /** 读一个可能缺失、也可能是 JSON null 的字符串字段。 */
     private static String readString(JsonObject data, String field) {
