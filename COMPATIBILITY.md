@@ -252,9 +252,11 @@ API 变更。有一类改动不满足这个前提：它在作者眼里根本不�
 **JVM 方法描述符**——于是它必定打破二进制兼容，却可能完全不打破源码兼容，从而绕过所有
 以「有人会注意到」为前提的流程。
 
-这已经发生过一次，记在这里：
+这已经发生过两次，都记在这里。第一次在 MINOR，第二次在 PATCH——**没有哪个版本级别是豁免的**：
 
-6.1.1 → **6.2.0** 移除 Spring 时，`UltiToolsPlugin` 里 context 字段的类型从
+### 第一次：6.1.1 → 6.2.0，一个 MINOR
+
+移除 Spring 时，`UltiToolsPlugin` 里 context 字段的类型从
 `AnnotationConfigApplicationContext` 换成了 `SimpleContainer`。该字段带 `@Getter`，
 所以 Lombok 生成的 `getContext()` 的**返回类型**跟着变了：
 
@@ -286,6 +288,79 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 - `PluginManager` 的版本门禁也拦不住——它只判 `api-version > 当前框架版本`，即
   「模块要求的框架比装的还新」这一个方向。老模块声明的下限确实被满足了，照样炸。
 
+### 第二次：6.2.0 → 6.2.1，一个 PATCH
+
+上面那次是 MINOR。第二次发生在 **PATCH** 里，所以「盯着 MINOR 就行」是不成立的。
+
+`43f55ea refactor!: replace AbstractDataEntity with BaseDataEntity<String>` 把实体类型
+换掉了，凡是签名里出现该类型的公开成员，描述符都跟着变：
+
+```
+6.2.0  DataOperator.insert   (Lcom/ultikits/ultitools/abstracts/AbstractDataEntity;)V
+6.2.1  DataOperator.insert   (Lcom/ultikits/ultitools/abstracts/data/BaseDataEntity;)V
+```
+
+**完整清单是逐符号算出来的，不是手工列的**（手工列过三版，每版都漏）。做法：把两个框架
+JAR 都解开，对 `com/ultikits/ultitools/**` 跑 `javap -s`，按 `(类, 成员名) → 描述符集合`
+建表再比——**必须按集合，否则重载会互相覆盖**，`exist(T)` 就是这么被 `exist(WhereCondition[])`
+盖掉、漏了一轮的。
+
+结果是 **14 个公开成员、5 个类型**，且这次改动**零移除、零新增**——变的全部是描述符：
+
+| 类型 | 受影响成员 |
+|---|---|
+| `interfaces.DataOperator` | `exist(T)` · `getById` · `insert(T)` · `update(T)` |
+| `interfaces.Query` | `first()` |
+| `…impl.data.AbstractRelationalDataOperator` | 同 `DataOperator` 四项 |
+| `…impl.data.json.SimpleJsonDataOperator` | 同 `DataOperator` 四项 |
+| `…impl.data.QueryImpl` | `first()` |
+
+下游真正会静态调用的是前两行那 **5 个接口成员**，后 9 个是实现类上的同名镜像。
+注意 `Query.first()` 是独立的一条：只走 `.query()….first()` 的模块，一个 `DataOperator`
+方法都没调，照样中招。
+
+不含实体类型的重载（`update(String, Object, Object)`、`exist(WhereCondition[])`）描述符未变。
+`AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
+
+**描述符变更本质上都是双向的**，两个实例都是——一个符号在两版里名字相同、描述符不同，
+那么无论从哪一侧编译，另一侧都没有它。老 JAR 在新框架上炸（找 `(AbstractDataEntity)`，
+已不存在），新 JAR 在老框架上也炸（找 `(BaseDataEntity)`，尚不存在）；同一份源码只改
+pin 重编，两个产物各自只能跑在自己那一侧。第一个实例（`getContext()`）同理，只是当时
+只有「老 JAR 撞新框架」这个方向被真实触发了。
+
+**而第二个方向还多带一层：它是被放行之后才炸的。** 15 个官方模块统一把 `pom.xml` 的
+pin 调到了 6.2.1，`plugin.yml` 的 `api-version` 却一个都没动，仍是 `620`。产物记的是
+6.2.1 的描述符，声明的地板却是 6.2.0，而框架只看得到后者。结果：装了 6.2.0 的服务器
+**加载成功**，然后在第一次数据读写时 `NoSuchMethodError`。11 个模块中招（剩下 4 个不碰
+ORM，负向对照成立）。
+
+Java 是惰性解析的，所以「装上去能起来」不构成证据——不碰数据路径的服主可以一直看不出问题。
+
+**同一次提交里还有一个恰好相反的对照，值得一并记住。** 它把 `UltiToolsPlugin.getDataOperator`
+的泛型上界从 `AbstractDataEntity` 换成了 `BaseDataEntity<String>`，但两版描述符
+**完全相同**——上界被擦除，`T` 在描述符里早就是 `Class` / `DataOperator`：
+
+```
+6.2.0  getDataOperator  (Ljava/lang/Class;)Lcom/ultikits/ultitools/interfaces/DataOperator;
+6.2.1  getDataOperator  (Ljava/lang/Class;)Lcom/ultikits/ultitools/interfaces/DataOperator;
+```
+
+这是前面那种情况的镜像：**改泛型上界破坏源码兼容而不破坏二进制兼容；改返回类型或参数
+类型破坏二进制兼容而不一定破坏源码兼容。** 两者都不涉及移除，所以两者都绕过移除清单。
+
+**但这条只对 `getDataOperator` 这个调用点成立，不要推广到整个模块。** 拿到
+`DataOperator` 之后你几乎一定会调 `insert` / `update` / `exist` / `getById`，而那四个
+的描述符是变了的。所以一个用了 ORM 的模块，**两个方向都会断**：
+
+| 构建时 pin | 跑在 6.2.0 | 跑在 6.2.1+ |
+|---|---|---|
+| 6.2.0 | ✅ | ❌ `NoSuchMethodError`（找 `(AbstractDataEntity)`，已不存在） |
+| 6.2.1 | ❌ `NoSuchMethodError`（找 `(BaseDataEntity)`，尚不存在） | ✅ |
+
+实测取的是同一个模块的同一份源码，只改 pin 重编：针对 6.2.0 编译的产物在 6.2.1 上缺 3 个
+符号、在 6.2.0 上缺 0 个；针对 6.2.1 编译的产物反过来，在 6.2.0 上缺 3 个、在 6.2.1 上缺
+0 个。**对称的，两侧都不通。** 「跑得动但编不过」只描述了 `getDataOperator` 那一行。
+
 ### 这对你意味着什么
 
 **pin 得低不等于安全。** [模块版本规范](https://dev.ultikits.com/zh/guide/advanced/module-versioning)
@@ -305,9 +380,31 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 | `pom.xml` 里的 `UltiTools-API` 版本 | 你的字节码记录**哪一版的描述符** | 没有人。它是 `provided`，不进 JAR，框架运行时看不到它 |
 | `plugin.yml` 的 `api-version` | 声明的运行时**下限** | `PluginManager.isUltiToolsVersionCompatible`，这是唯一被检查的值 |
 
-所以「pin 就是地板」是错的：抬高 pin 不会抬高地板。一个针对 6.2.0 编译、却仍然声明
-`api-version: 606` 的构件，会被 6.1.1 的服务器**放行**，然后在第一次调用新描述符时炸掉
-——同一个 `NoSuchMethodError`，方向反过来。**两个数字必须一起动。**
+所以「pin 就是地板」是错的：抬高 pin 不会抬高地板。一个针对新框架编译、却仍然声明旧
+`api-version` 的构件，会被老服务器**放行**，然后在第一次调用新描述符时炸掉——同一个
+`NoSuchMethodError`，方向反过来。**两个数字必须一起动。**
+
+**这不是假想。** 上面第二个实例就是这么发生的：15 个官方模块把 pin 调到 6.2.1，
+`api-version` 全部留在 `620`，其中 11 个的产物因此声明了一个比自己真实需求更低的地板
+（2026-08-16 已全部修正为 `621`）。**没有任何工具报过警**——构建是绿的，插件在 6.2.1 以上
+的服务器上一切正常，只有恰好停在 6.2.0 的服务器会先加载成功、再在第一次数据读写时炸。
+
+想自查的话，判据是「**产物实际引用了哪些符号**」，不是「pom 里写了什么」。把你的模块 JAR
+和你在 `api-version` 里声明的那一版框架 JAR 都解开，用 `javap -p -c` 导出模块引用的
+`com/ultikits/ultitools/**` 方法与描述符，再逐条对照框架 JAR 里 `javap -p -s` 的输出。
+现成的脚本见 [issue #284](https://github.com/UltiKits/UltiTools-Reborn/issues/284)。
+
+**但对不上不等于「`api-version` 低了」，有两个成因，修法相反。** 看那条对不上的符号里写的
+是哪一版的类型：
+
+| 缺失符号引用的类型 | 说明什么 | 怎么修 |
+|---|---|---|
+| **新**的（如 `BaseDataEntity`） | 产物比声明的地板新 | **抬 `api-version`**，pin 不用动 |
+| **旧**的（如 `AbstractDataEntity`） | 产物比声明的地板旧，pin 停在老版本没跟上 | **抬 pin 并重编**，抬 `api-version` 没用，反而更错 |
+
+第二种正是本节这个实例的另一侧：一个 pin 停在 6.2.0、却声明 `api-version: 621` 的产物，
+引用的是 `insert(AbstractDataEntity)`，而 6.2.1 里没有这个描述符——地板再抬也不会让它
+出现。**先看缺的是哪一代符号，再决定动哪个数字。**
 
 于是完整的修法是：抬 pin、重编、**把 `api-version` 一并抬到对应的 API 级别**，并接受
 由此带来的后果。
@@ -333,7 +430,8 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 
 - 本文上面写着 PATCH「不移除公开 API」。那句承诺覆盖的是**有意为之**的移除，因为它靠的
   是人先意识到自己在改 API。无意的描述符变更按定义不在任何排期里，**所以它同样可能出现
-  在一个 PATCH 里**——本节这个实例恰好落在 MINOR，但那是巧合，不是保证。
+  在一个 PATCH 里**。这句话初写时只是推论，本节的第二个实例（6.2.0 → 6.2.1）已经证实了
+  它：那是一个 PATCH。**「盯着 MINOR 就够了」是不成立的。**
 - japicmp 门禁接线之后，PATCH 的二进制兼容才是被机器逐方法验证过的。到那时才可以只在
   跨 MINOR 时操心这件事。
 
