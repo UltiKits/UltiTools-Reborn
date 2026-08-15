@@ -1,28 +1,23 @@
-# UltiPanel 日志传输配置示例
-# 在config.yml中添加以下配置
+# UltiPanel 日志与错误上报配置示例
+# 在 config.yml 中添加以下配置
+#
+# 这里列出的每一个键都能在 src/main/java 里找到读取它的代码。
+# 没有被读取的键写进 config.yml 不会有任何效果，所以本文件不再收录它们。
+#
+# 说明：error-reporting 一段随框架的默认 config.yml 一起发布，通常已经在你的配置里了；
+# 列在这里是为了让 ultipanel 段的全貌集中在一处。其余几段默认 config.yml 没有，需要自己加。
 
 # UltiPanel 配置
 ultipanel:
-  # 服务器ID（从UltiPanel后台获取，通常自动生成）
-  server-id: "<your-server-id>"
-  
-  # WebSocket连接配置
-  websocket:
-    url: "wss://api.ultikits.com/ws"
-    reconnect-interval: 30 # 重连间隔（秒）
-    max-reconnect-attempts: 10
-  
   # 日志传输配置
   logging:
-    enabled: true
-    
     # 要传输的日志级别
     levels:
       - "info"
-      - "warning" 
+      - "warning"
       - "error"
       # - "debug"  # 调试日志默认禁用，生产环境不建议启用
-    
+
     # 排除的记录器（避免传输过多日志）
     excluded-loggers:
       - "com.mojang.authlib"
@@ -30,18 +25,22 @@ ultipanel:
       - "org.apache.http"
       - "com.zaxxer.hikari"
       - "org.eclipse.jetty"
-    
+
     # 批量发送配置
     batch:
       enabled: true
       size: 10          # 批量大小（条数）
       interval: 5000    # 发送间隔（毫秒）
-      
-  # 性能配置
-  performance:
-    # 是否启用性能优化
-    enable-optimization: true
-    # 最大队列大小
-    max-queue-size: 1000
-    # 日志级别过滤（最小级别）
-    minimum-level: "INFO"
+
+    # 错误自动上报配置
+    error-reporting:
+      # 是否启用错误自动上报到 UltiPanel
+      enabled: true
+      # 去重窗口时间（秒），同一错误在此时间内只上报一次
+      dedup-window-seconds: 300
+      # 每个批次最多上报的错误数量
+      max-errors-per-batch: 10
+      # 同一错误累计超过此次数后开始采样
+      sample-after-count: 10
+      # 采样率（0.1 = 10%）
+      sample-rate: 0.1
