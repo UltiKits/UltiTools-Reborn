@@ -292,18 +292,35 @@ tag——**发布列表看 `maven-metadata.xml`，不要看 `git tag`**。在 6.
 
 上面那次是 MINOR。第二次发生在 **PATCH** 里，所以「盯着 MINOR 就行」是不成立的。
 
-`43f55ea refactor!: replace AbstractDataEntity with BaseDataEntity<String>` 改掉了
-`DataOperator` **四个**方法的描述符——`insert(T)`、`update(T)`、`exist(T)`、`getById`：
+`43f55ea refactor!: replace AbstractDataEntity with BaseDataEntity<String>` 把实体类型
+换掉了，凡是签名里出现该类型的公开成员，描述符都跟着变：
 
 ```
-6.2.0  insert   (Lcom/ultikits/ultitools/abstracts/AbstractDataEntity;)V
-6.2.1  insert   (Lcom/ultikits/ultitools/abstracts/data/BaseDataEntity;)V
+6.2.0  DataOperator.insert   (Lcom/ultikits/ultitools/abstracts/AbstractDataEntity;)V
+6.2.1  DataOperator.insert   (Lcom/ultikits/ultitools/abstracts/data/BaseDataEntity;)V
 ```
 
+**完整清单是逐符号算出来的，不是手工列的**（手工列过三版，每版都漏）。做法：把两个框架
+JAR 都解开，对 `com/ultikits/ultitools/**` 跑 `javap -s`，按 `(类, 成员名) → 描述符集合`
+建表再比——**必须按集合，否则重载会互相覆盖**，`exist(T)` 就是这么被 `exist(WhereCondition[])`
+盖掉、漏了一轮的。
+
+结果是 **14 个公开成员、5 个类型**，且这次改动**零移除、零新增**——变的全部是描述符：
+
+| 类型 | 受影响成员 |
+|---|---|
+| `interfaces.DataOperator` | `exist(T)` · `getById` · `insert(T)` · `update(T)` |
+| `interfaces.Query` | `first()` |
+| `…impl.data.AbstractRelationalDataOperator` | 同 `DataOperator` 四项 |
+| `…impl.data.json.SimpleJsonDataOperator` | 同 `DataOperator` 四项 |
+| `…impl.data.QueryImpl` | `first()` |
+
+下游真正会静态调用的是前两行那 **5 个接口成员**，后 9 个是实现类上的同名镜像。
+注意 `Query.first()` 是独立的一条：只走 `.query()….first()` 的模块，一个 `DataOperator`
+方法都没调，照样中招。
+
+不含实体类型的重载（`update(String, Object, Object)`、`exist(WhereCondition[])`）描述符未变。
 `AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
-
-（`update(String, Object, Object)` 与 `exist(WhereCondition[])` 这两个重载不含实体类型，
-描述符未变。同名方法里只有接收实体的那个重载受影响。）
 
 **描述符变更本质上都是双向的**，两个实例都是——一个符号在两版里名字相同、描述符不同，
 那么无论从哪一侧编译，另一侧都没有它。老 JAR 在新框架上炸（找 `(AbstractDataEntity)`，
