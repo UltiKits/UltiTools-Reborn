@@ -43,6 +43,17 @@
   bug fix。本项目不这么做：任何会改变下游运行时行为的变更，一律按下方
   [行为变更](#行为变更) 一节处理，不会因为「这是在修 bug」就绕开迁移期。
 
+### 本节只管框架自己的版本号
+
+上面这套规则**只适用于 `UltiTools-API` 本身**。给你自己的模块定版本号是另一套契约，
+判据是「服主换上新 JAR 之后需不需要动手」，见
+[模块版本规范](https://dev.ultikits.com/zh/guide/advanced/module-versioning.html)
+（[English](https://dev.ultikits.com/guide/advanced/module-versioning.html)）。
+
+两者不一致是**故意的**，不要试图统一：框架有机器消费者（Maven 解析它的版本、已编译的
+下游插件在运行时链接它），所以它的版本号必须回答机器的问题；模块一个机器消费者都没有，
+版本号唯一的读者是服主。
+
 ## 依赖声明
 
 Maven：
