@@ -406,68 +406,154 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理配置更新
+     * 处理配置更新。
+     *
+     * <p>这条路径过去有三处与面板对不上，而且失败是静默的（issue #236）：面板在
+     * {@code data.configData} 里发内容、这里读 {@code data.config}；面板用
+     * {@code data.fileName} 指定文件、这里除 {@code server_properties} 外从不读它；
+     * 面板不发 {@code requestId}、这里以 {@code requestId} 存在与否作为「是不是一条请求」
+     * 的判据，缺了就只记一行 {@code Level.FINE} 然后丢弃——而 {@code FINE} 在默认日志
+     * 配置下不打印。于是面板收到 HTTP 200、服务器上什么也没变、两端都不报错。
+     *
+     * <p>现在的判据换成「有没有配置内容」：没有内容才是回声/回执，有内容就是一条请求，
+     * 缺 {@code requestId} 也照样应用，只是记 WARNING 说明结果无法回报。
+     *
+     * <p>包级可见而非 private —— 只为可测。
      */
-    private static void handleConfigUpdate(JsonObject data) {
-        if (data != null) {
-            // Route server_properties to dedicated manager
-            String fileName = (data.has("fileName") && !data.get("fileName").isJsonNull())
-                    ? data.get("fileName").getAsString() : null;
-            if ("server_properties".equals(fileName)) {
-                ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
-                if (spm != null) {
-                    // Parse configData as JSON and forward as set_all action
-                    String configDataStr = (data.has("configData") && !data.get("configData").isJsonNull())
-                            ? data.get("configData").getAsString() : null;
-                    if (configDataStr != null) {
-                        JsonObject spData = new JsonObject();
-                        spData.addProperty("action", "set_all");
-                        spData.add("values", com.google.gson.JsonParser.parseString(configDataStr).getAsJsonObject());
-                        spm.handleServerProperties(spData);
-                    } else {
-                        // No configData means "get" request
-                        JsonObject spData = new JsonObject();
-                        spData.addProperty("action", "get");
-                        spm.handleServerProperties(spData);
-                    }
-                }
-                return;
-            }
-
-            // 只处理明确的配置更新请求（包含requestId），忽略服务器的确认消息
-            if (data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                try {
-                    ConfigEditorUtils.updateConfigMap(data.get("config").getAsString());
-                    // 发送确认消息
-                    JsonObject response = new JsonObject();
-                    response.addProperty("type", "config_update_response");
-                    response.addProperty("status", "success");
-                    response.addProperty("serverId", panelWS.getServerId());
-                    response.addProperty("requestId", requestId);
-                    panelWS.sendMessage(response);
-                } catch (IOException e) {
-                    // 发送错误消息
-                    JsonObject response = new JsonObject();
-                    response.addProperty("type", "config_update_response");
-                    response.addProperty("status", "error");
-                    response.addProperty("error", e.getMessage());
-                    response.addProperty("serverId", panelWS.getServerId());
-                    response.addProperty("requestId", requestId);
-                    panelWS.sendMessage(response);
-                }
-            } else {
-                // 识别并忽略服务器确认消息
-                if (data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器配置更新确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器配置更新消息，但不包含requestId，忽略处理");
-                }
-            }
+    static void handleConfigUpdate(JsonObject data) {
+        if (data == null) {
+            return;
         }
+
+        String fileName = readString(data, "fileName");
+        String requestId = readString(data, "requestId");
+        String configContent = readConfigContent(data);
+
+        // server_properties 的「取」请求：没有内容也是一条正当请求，不是回声。
+        if (SERVER_PROPERTIES_FILE.equals(fileName) && configContent == null) {
+            ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
+            if (spm != null) {
+                JsonObject spData = new JsonObject();
+                spData.addProperty("action", "get");
+                spm.handleServerProperties(spData);
+            }
+            return;
+        }
+
+        // 没有配置内容 = 转发层回来的回执或本机自己发出去的回声。这是唯一一种
+        // 「什么都不做」还算正常的情况，所以保持 FINE。
+        if (configContent == null) {
+            if (data.has("message") && !data.get("message").isJsonNull()) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                        String.format("收到服务器配置更新确认: %s", data.get("message").getAsString()));
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "收到不含配置内容的 update_config 消息，按回声处理");
+            }
+            return;
+        }
+
+        if (requestId == null) {
+            // 以前这里直接 return。缺 requestId 是对端的协议缺陷，不是「这条消息不必处理」，
+            // 把它当成后者就是把缺陷伪装成正常路径。
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "收到不含 requestId 的配置更新请求，仍会应用，但无法向面板回报结果");
+        }
+
+        try {
+            applyConfigUpdate(fileName, configContent);
+            sendConfigUpdateResponse(requestId, true, null);
+        } catch (IOException | RuntimeException e) {
+            // RuntimeException 也接：JsonParser 解析畸形 configData 抛的是它，
+            // 过去这类失败会一路冒到 handleInboundMessage 的 catch，记成
+            // 「处理消息类型 update_config 时发生错误」而面板永远等不到回复。
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    String.format("应用配置更新失败（文件: %s）: %s", fileName, e.getMessage()), e);
+            sendConfigUpdateResponse(requestId, false, e.getMessage());
+        }
+    }
+
+    /** {@code server_properties} 走独立管理器，不是一个真正的配置文件路径。 */
+    private static final String SERVER_PROPERTIES_FILE = "server_properties";
+
+    /** 读一个可能缺失、也可能是 JSON null 的字符串字段。 */
+    private static String readString(JsonObject data, String field) {
+        return (data.has(field) && !data.get(field).isJsonNull())
+                ? data.get(field).getAsString() : null;
+    }
+
+    /**
+     * 取配置内容，优先 {@code data.configData}。
+     *
+     * <p>{@code data.config} 是本方法过去唯一读的字段，但在树内找不到任何生产者——
+     * 面板一直发的是 {@code configData}。保留它只是为了兼容可能存在的第三方面板，
+     * 读到就记废弃日志。
+     */
+    private static String readConfigContent(JsonObject data) {
+        String configData = readString(data, "configData");
+        if (configData != null) {
+            return configData;
+        }
+        String legacy = readString(data, "config");
+        if (legacy != null) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "update_config 使用了已废弃的 data.config 字段，请改用 data.configData");
+        }
+        return legacy;
+    }
+
+    /**
+     * 按 {@code fileName} 决定写到哪里。
+     *
+     * <p>三条分支对应三种载荷形状，这是原来「fileName 从不读」掩盖掉的东西：
+     * {@code server_properties} 是一份扁平的属性表，交给专用管理器；
+     * 指定了文件名就是那一个配置文件自己的 {@code {配置项: 值}}；
+     * 没有文件名才是 {@link com.ultikits.ultitools.manager.ConfigManager#toJson()}
+     * 那种全量嵌套结构。
+     */
+    private static void applyConfigUpdate(String fileName, String configContent) throws IOException {
+        if (SERVER_PROPERTIES_FILE.equals(fileName)) {
+            ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
+            if (spm == null) {
+                throw new IOException("ServerPropertiesManager is not available");
+            }
+            JsonObject spData = new JsonObject();
+            spData.addProperty("action", "set_all");
+            spData.add("values", com.google.gson.JsonParser.parseString(configContent).getAsJsonObject());
+            spm.handleServerProperties(spData);
+            return;
+        }
+        if (fileName == null || fileName.trim().isEmpty()) {
+            ConfigEditorUtils.updateConfigMap(configContent);
+            return;
+        }
+        ConfigEditorUtils.updateConfigMap(fileName, configContent);
+    }
+
+    /**
+     * 回一条 {@code config_update_response}。
+     *
+     * <p>载荷放在 {@code data} 里，与其余所有 插件→Worker 的消息一致
+     * （见 {@code CommandExecutionManager.sendCommandResult}）。此前这一条是扁平写法，
+     * 字段直接挂在顶层；Worker 侧两种都读（ultipanel-api-worker#30），所以这次改动
+     * 不需要和面板同时上线。
+     */
+    private static void sendConfigUpdateResponse(String requestId, boolean success, String error) {
+        if (requestId == null || panelWS == null) {
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("requestId", requestId);
+        payload.addProperty("status", success ? "success" : "error");
+        if (error != null) {
+            payload.addProperty("error", error);
+        }
+
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "config_update_response");
+        response.add("data", payload);
+        response.addProperty("serverId", panelWS.getServerId());
+        panelWS.sendMessage(response);
     }
     
     // ========== 系统基础消息处理器 ==========

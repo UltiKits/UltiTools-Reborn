@@ -55,4 +55,26 @@ public class ConfigEditorUtils {
         ConfigManager configManager = UltiTools.getInstance().getConfigManager();
         configManager.loadFromJson(configMapString);
     }
+
+    /**
+     * Update a single configuration file from a JSON string.
+     * <br>
+     * 从JSON字符串更新单个配置文件。
+     *
+     * <p>面板按文件名下发配置时走这条：{@code configMapString} 是该文件自己的
+     * {@code {配置项: 值}}，而不是 {@link #updateConfigMap(String)} 那种
+     * {@code {插件名: {配置路径: {...}}}} 的全量结构。两种形状对应面板上两个不同的入口，
+     * 混用会写不进去且不报错——见 issue #236。
+     *
+     * @param fileName        config file path as registered, e.g. {@code config/lang.yml}
+     *                        <br> 注册时使用的配置文件路径
+     * @param configMapString JSON string containing that file's entries <br> 该文件配置项的JSON字符串
+     * @throws IOException if the file is unknown or ambiguous, or the update fails
+     *                     <br> 如果文件找不到、跨插件重名或更新失败
+     * @since 6.2.5
+     */
+    protected static void updateConfigMap(String fileName, String configMapString) throws IOException {
+        ConfigManager configManager = UltiTools.getInstance().getConfigManager();
+        configManager.loadFromJson(fileName, configMapString);
+    }
 }
