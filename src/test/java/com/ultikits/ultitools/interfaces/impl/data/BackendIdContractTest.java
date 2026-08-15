@@ -92,8 +92,6 @@ class BackendIdContractTest {
         // 刻意不调用 setPassword：内存库首次连接时就以「无口令」创建，
         // 传一个空字符串反而会被静态分析当成硬编码口令（Codacy/Opengrep 的
         // Semgrep_java_password_rule-HardcodePassword）。这里没有凭据可言。
-        // 顺带说明：别的测试类里那条 `// nosemgrep: java.lang.security.audit.hardcoded-password`
-        // 其实抑制不了它，规则 id 对不上——只是存量问题不进 PR diff 所以没人发现。
         dataSource = new HikariDataSource(config);
     }
 
