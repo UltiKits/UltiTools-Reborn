@@ -2,13 +2,21 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.ArgumentCaptor;
 
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
@@ -52,6 +61,10 @@ class DataStoreManagerTest {
     @AfterEach
     void tearDown() {
         clearDataMap();
+        // 下面有用例会把 i18n 打成返回 null / 抛异常的桩，并发布到 UltiTools 的静态单例上。
+        // 这个字段不会被 safeUnmock 清掉，所以这里换回一个行为正常的 mock，
+        // 免得污染同一个 JVM fork 里后面跑的测试类。
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
@@ -581,6 +594,169 @@ class DataStoreManagerTest {
             // Act & Assert
             assertThat(DataStoreManager.getDatastore("mysql")).isEqualTo(mysqlStore);
             assertThat(DataStoreManager.getDatastore("sqlite")).isEqualTo(sqliteStore);
+        }
+    }
+
+    /**
+     * 后端降级诊断测试。
+     * <p>
+     * 这些用例守的是 issue #183：配置要 mysql、实际跑在空 JSON 存储上，过去一条日志都没有。
+     */
+    @Nested
+    @DisplayName("reportBackendSelection 测试")
+    class ReportBackendSelectionTests {
+
+        /**
+         * 收集这次调用打出的所有 SEVERE 消息。不写死条数，免得改一句文案就要改测试。
+         */
+        private List<String> severeMessages(Logger logger) {
+            ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+            verify(logger, atLeastOnce()).log(eq(Level.SEVERE), captor.capture());
+            return captor.getAllValues();
+        }
+
+        @Test
+        @DisplayName("mysql.enable 为 false 时应该打 SEVERE 并点名实际后端")
+        void mysqlDisabledShouldReportSevere() {
+            // Arrange
+            Logger logger = mock(Logger.class);
+
+            // Act - 配置要 mysql，但 mysql.enable 是 false，实际落到 json
+            DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
+
+            // Assert
+            List<String> messages = severeMessages(logger);
+            assertThat(messages).anyMatch(msg -> msg.contains("json"));
+            assertThat(messages).anyMatch(msg -> msg.contains("mysql.enable"));
+            assertThat(messages).anyMatch(msg -> msg.contains("datasource.type"));
+        }
+
+        @Test
+        @DisplayName("mysql 不可达时应该打 SEVERE 并点名实际后端")
+        void mysqlUnreachableShouldReportSevere() {
+            // Arrange
+            Logger logger = mock(Logger.class);
+
+            // Act - mysql.enable 为 true，但连不上，数据源没建起来
+            DataStoreManager.reportBackendSelection(logger, "mysql", true, false, "json");
+
+            // Assert
+            List<String> messages = severeMessages(logger);
+            assertThat(messages).anyMatch(msg -> msg.contains("json"));
+            assertThat(messages).anyMatch(msg -> msg.contains("连接失败"));
+            // 这条分支的原因和 mysql.enable 那条必须能区分开，否则运维者不知道该改哪里
+            assertThat(messages).noneMatch(msg -> msg.contains("mysql.enable"));
+        }
+
+        @Test
+        @DisplayName("配置了未知类型时应该打 SEVERE 并原样引出配置值")
+        void unknownTypeShouldReportSevere() {
+            // Arrange
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "postgres", false, false, "json");
+
+            // Assert
+            List<String> messages = severeMessages(logger);
+            assertThat(messages).anyMatch(msg -> msg.contains("'postgres'"));
+            assertThat(messages).anyMatch(msg -> msg.contains("没有已注册的数据存储提供该类型"));
+        }
+
+        @Test
+        @DisplayName("大小写写错也应该被报出来")
+        void wrongCaseShouldReportSevere() {
+            // Arrange - 类型是逐字比对的，MySQL 匹配不上 mysql
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "MySQL", true, true, "json");
+
+            // Assert
+            List<String> messages = severeMessages(logger);
+            assertThat(messages).anyMatch(msg -> msg.contains("'MySQL'"));
+        }
+
+        @Test
+        @DisplayName("配置与实际一致时不应该打任何日志")
+        void matchingBackendShouldStaySilent() {
+            // Arrange
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "sqlite", false, false, "sqlite");
+
+            // Assert
+            verifyNoInteractions(logger);
+        }
+
+        @Test
+        @DisplayName("没配 datasource.type 且落到 json 时不应该打任何日志")
+        void missingConfigFallingBackToJsonShouldStaySilent() {
+            // Arrange - getDatastore 把 null 当 json，诊断必须用同一套口径
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, null, false, false, "json");
+
+            // Assert
+            verifyNoInteractions(logger);
+        }
+
+        @Test
+        @DisplayName("整段诊断里应该同时有配置后端、实际后端和数据不互通的提示")
+        void shouldNameBothBackends() {
+            // Arrange
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
+
+            // Assert
+            String allMessages = String.join(" | ", severeMessages(logger));
+            assertThat(allMessages).contains("'mysql'").contains("'json'").contains("不互通");
+        }
+
+        @Test
+        @DisplayName("配置的后端不存在时不应该暗示它那边有数据")
+        void unknownTypeShouldNotImplyItHasData() {
+            // Arrange - 'postgres' 这个后端压根不存在，说「和它的数据不互通」是在误导人
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "postgres", false, false, "json");
+
+            // Assert
+            assertThat(severeMessages(logger))
+                    .noneMatch(msg -> msg.contains("不互通") && msg.contains("'postgres'"));
+        }
+
+        @Test
+        @DisplayName("i18n 返回 null 时应该回落到原文")
+        void nullTranslationShouldFallBackToRawText() {
+            // Arrange - 打桩必须在发布到静态字段之前完成，见 TestHelper 的注释与 issue #250
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.i18n(anyString())).thenReturn(null));
+            Logger logger = mock(Logger.class);
+
+            // Act
+            DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
+
+            // Assert
+            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
+        }
+
+        @Test
+        @DisplayName("i18n 抛异常时不应该把诊断本身带崩")
+        void throwingTranslationShouldNotBreakDiagnostics() {
+            // Arrange
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.i18n(anyString())).thenThrow(new IllegalStateException("boom")));
+            Logger logger = mock(Logger.class);
+
+            // Act & Assert - 诊断跑在「已经出问题」的路径上，它自己不能再炸一次
+            assertDoesNotThrow(() -> DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json"));
+            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
         }
     }
 }

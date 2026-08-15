@@ -277,10 +277,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     private void initDataStore() {
         configManager = new ConfigManager();
-        if (getConfig().getBoolean("mysql.enable")) {
+        boolean mysqlEnabled = getConfig().getBoolean("mysql.enable");
+        boolean mysqlAvailable = false;
+        if (mysqlEnabled) {
             MysqlDataStore mysqlDataStore = new MysqlDataStore();
             if (mysqlDataStore.getDataSource() != null) {
                 DataStoreManager.register(mysqlDataStore);
+                mysqlAvailable = true;
             }
         }
         DataStoreManager.register(new SQLiteDataStore());
@@ -290,6 +293,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (dataStore == null) {
             dataStore = DataStoreManager.getDatastore("json");
         }
+        // 配置要的后端和实际拿到的后端可能不是一回事，而这个降级过去是完全静默的。见 issue #183。
+        DataStoreManager.reportBackendSelection(getLogger(), storeType, mysqlEnabled, mysqlAvailable,
+                dataStore.getStoreType());
     }
 
     private void initPluginModules() {
