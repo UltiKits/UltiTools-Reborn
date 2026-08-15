@@ -5,13 +5,16 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.Serializable;
 import java.io.Writer;
+import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,12 +29,14 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
 import com.ultikits.ultitools.utils.JsonPathUtil;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Simple Json data operator.
@@ -48,10 +53,20 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     private final String storeLocation;
     private final Class<T> type;
     private final Map<Object, T> cache = new ConcurrentHashMap<>();
+    /**
+     * SQL 列名（小写）→ Java 字段名。
+     * <p>
+     * 调用方一律用 {@code @Column} 里的 SQL 列名做查询（跨 17 个 Modules 共 52 处），
+     * 而 Gson 序列化出的 map 键是 Java 字段名，两者在 snake_case / camelCase 上对不上，
+     * 查询会静默零命中。这份映射把前者翻译成后者，做法与
+     * {@code AbstractRelationalDataOperator#getListHandler()} 的读路径一致。见 issue #176。
+     */
+    private final Map<String, String> columnToFieldName;
 
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
         this.type = type;
+        this.columnToFieldName = buildColumnToFieldName(type);
         File file = new File(storeLocation);
         File[] files = file.listFiles();
         if (files != null) {
@@ -64,6 +79,41 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 }
             });
         }
+    }
+
+    /**
+     * 从实体类上的 {@code @Column} 标注建立「SQL 列名 → Java 字段名」映射。
+     * 沿继承链收集，因此 {@code BaseDataEntity} 继承来的 {@code @Column("id")} 也在内。
+     *
+     * @param type 实体类型
+     * @return 不可变映射，键为小写化的 SQL 列名
+     */
+    private static Map<String, String> buildColumnToFieldName(Class<?> type) {
+        Map<String, String> mapping = new LinkedHashMap<>();
+        for (Field field : ReflectionUtil.getFields(type)) {
+            if (field.isAnnotationPresent(Column.class)) {
+                mapping.put(field.getAnnotation(Column.class).value().toLowerCase(), field.getName());
+            }
+        }
+        return Collections.unmodifiableMap(mapping);
+    }
+
+    /**
+     * 把调用方给的列名解析成 Gson 序列化后 map 里的键。
+     * <p>
+     * 命中 {@code @Column} 就换成对应的 Java 字段名；否则原样返回 —— 这样一来，
+     * 直接写 Java 字段名的旧调用、以及 {@link JsonPathUtil} 的点分隔嵌套路径（如
+     * {@code "a.b.c"}）都不受影响。
+     *
+     * @param column 调用方给的列名，可能是 SQL 列名、Java 字段名或嵌套路径
+     * @return 可直接交给 {@link JsonPathUtil} 的键或路径
+     */
+    private String resolveColumn(String column) {
+        if (column == null) {
+            return null;
+        }
+        String fieldName = columnToFieldName.get(column.toLowerCase());
+        return fieldName != null ? fieldName : column;
     }
 
     @Override
@@ -88,19 +138,29 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
+        // 空条件表示「不施加过滤」，先摘出去，免得它出现在第二个位置时中途返回全量。
+        List<WhereCondition> effective = new ArrayList<>();
+        for (WhereCondition condition : whereConditions) {
+            if (!condition.isEmpty()) {
+                effective.add(condition);
+            }
+        }
+        if (effective.isEmpty()) {
+            // 传了条件但全为空（含 getAll() 走的那条单空条件）返回全量；
+            // 一条都没传时保持历史行为返回空集 —— page() 与 exist() 都依赖它。
+            return whereConditions.length > 0 ? new ArrayList<>(cache.values()) : new ArrayList<>();
+        }
         List<T> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
-        for (WhereCondition condition : whereConditions) {
-            if (condition.isEmpty()) {
-                return new ArrayList<>(cache.values());
-            }
+        boolean firstCondition = true;
+        for (WhereCondition condition : effective) {
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new RuntimeException("Query value is not serializable");
             }
             List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, condition.getColumn());
+                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
                 if (byPath == null) {
                     continue;
                 }
@@ -108,8 +168,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(each);
             }
-            if (results.size() == 0) {
+            // 多条件是 AND：首个条件建立初始集合，其后一律求交，空集保持空集。
+            // 原先写的是「results 为空就 addAll」，于是首个条件零命中时会整体采信第二个
+            // 条件的命中集，AND 退化成 OR。见 issue #192。
+            if (firstCondition) {
                 results.addAll(collection);
+                firstCondition = false;
             } else {
                 results.removeIf(a -> !collection.contains(a));
             }
@@ -123,7 +187,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         for (T each : cache.values()) {
             Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
-            String byPath = JsonPathUtil.getStr(map, column);
+            String byPath = JsonPathUtil.getStr(map, resolveColumn(column));
             if (byPath == null) {
                 continue;
             }
@@ -171,8 +235,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
+        // 这里刻意不照搬 getAll 对空条件的处理：在查询侧「空条件 = 不过滤 = 返回全量」是合理的，
+        // 搬到删除侧就成了「删光全表」。空条件目前会在下面取 getValue() 时抛 NPE，难看但失败方向安全。
         Collection<Map.Entry<Object, T>> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+        boolean firstCondition = true;
         for (WhereCondition condition : whereConditions) {
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new RuntimeException("Query value is not serializable");
@@ -181,7 +248,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
             Set<Map.Entry<Object, T>> values = cache.entrySet();
             for (Map.Entry<Object, T> next : values) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(next.getValue()), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, condition.getColumn());
+                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
                 if (byPath == null) {
                     continue;
                 }
@@ -189,8 +256,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(next);
             }
-            if (results.size() == 0) {
+            // 与 getAll 同一处缺陷的复制品，同样改成真正的交集。在删除路径上，
+            // 原先的写法会在首个条件零命中时删掉第二个条件的全部命中行。见 issue #192。
+            if (firstCondition) {
                 results.addAll(collection);
+                firstCondition = false;
             } else {
                 results.removeIf(a -> !collection.contains(a));
             }
@@ -213,7 +283,8 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         T obj = cache.get(id);
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
-        JsonPathUtil.putByPath(map, column, value);
+        // 不解析列名的话，putByPath 会写进一个 Gson 反序列化时直接丢弃的新键 —— 静默丢写。
+        JsonPathUtil.putByPath(map, resolveColumn(column), value);
         T newObj = GSON.fromJson(GSON.toJson(map), type);
         cache.put(id, newObj);
     }
