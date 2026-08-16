@@ -105,7 +105,12 @@ public class PlayerEventManager implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        if (webSocketClient == null || !webSocketClient.isConnected()) {
+        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
+        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
+        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
+        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
             return;
         }
         
@@ -117,7 +122,7 @@ public class PlayerEventManager implements Listener {
         data.addProperty("join_message", event.getJoinMessage());
         data.addProperty("online_count", Bukkit.getOnlinePlayers().size());
         
-        sendPlayerEvent(data);
+        sendPlayerEvent(client, data);
         
         // 同时发送日志流消息
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
@@ -131,7 +136,12 @@ public class PlayerEventManager implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
-        if (webSocketClient == null || !webSocketClient.isConnected()) {
+        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
+        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
+        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
+        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
             return;
         }
         
@@ -143,7 +153,7 @@ public class PlayerEventManager implements Listener {
         data.addProperty("quit_message", event.getQuitMessage());
         data.addProperty("online_count", Math.max(0, Bukkit.getOnlinePlayers().size() - 1));
         
-        sendPlayerEvent(data);
+        sendPlayerEvent(client, data);
         
         // 同时发送日志流消息
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
@@ -157,7 +167,12 @@ public class PlayerEventManager implements Listener {
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChat(PlayerChatEvent event) {
-        if (webSocketClient == null || !webSocketClient.isConnected()) {
+        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
+        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
+        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
+        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
             return;
         }
         
@@ -169,7 +184,7 @@ public class PlayerEventManager implements Listener {
         data.addProperty("message", event.getMessage());
         data.addProperty("format", event.getFormat());
         
-        sendPlayerEvent(data);
+        sendPlayerEvent(client, data);
         
         // 同时发送日志流消息（聊天消息通常比较频繁，使用debug级别）
         UltiTools.getInstance().getLogStreamManager().sendCustomLog(
@@ -181,16 +196,22 @@ public class PlayerEventManager implements Listener {
     
     /**
      * 发送玩家事件到UltiPanel
+     * <p>
+     * 客户端由调用方传入，而不是在这里重新读 {@link #webSocketClient}：三个事件处理器各自
+     * 把那个 volatile 字段单次读进局部变量再一路传下来。否则「检查连接」与「真正发送」读到
+     * 的会是两个不同的值——{@code shutdown()} 恰好挤在中间的话，这里就是一个 NPE。
+     *
+     * @param client 事件处理器进入时读到的那个客户端
      * @param data 事件数据
      */
-    private void sendPlayerEvent(JsonObject data) {
+    private void sendPlayerEvent(UltiPanelWebSocketClient client, JsonObject data) {
         JsonObject message = new JsonObject();
         message.addProperty("type", "player_event");
         message.add("data", data);
         message.addProperty("timestamp", Instant.now().toEpochMilli());
-        message.addProperty("serverId", getServerId());
-        
-        webSocketClient.sendMessage(message);
+        message.addProperty("serverId", getServerId(client));
+
+        client.sendMessage(message);
     }
     
     /**
@@ -203,7 +224,7 @@ public class PlayerEventManager implements Listener {
      *
      * @return 服务器ID
      */
-    private String getServerId() {
-        return webSocketClient == null ? "unknown" : webSocketClient.getServerId();
+    private String getServerId(UltiPanelWebSocketClient client) {
+        return client == null ? "unknown" : client.getServerId();
     }
 }
