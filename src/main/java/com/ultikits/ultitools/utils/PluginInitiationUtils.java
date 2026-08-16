@@ -1136,12 +1136,8 @@ public class PluginInitiationUtils {
         //
         // 放在最前面之后，整个拆线期间任何提交都会被拒；调用方只要在拆线**之后**读一次
         // 凭证，看到的就是最终状态。
-        try {
-            CloudAuthManager.invalidateCredentialOperations();
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error invalidating in-flight credential operations: " + e.getMessage());
-        }
+        teardownStep("invalidating in-flight credential operations",
+            CloudAuthManager::invalidateCredentialOperations);
 
         cloudEnabled.set(false);
         reinitBackoff.reset();
@@ -1150,36 +1146,26 @@ public class PluginInitiationUtils {
         // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
         // （flushLogs 本身也已改成有界，两层都要有——顺序对了是让排队的日志还有机会送出去，
         //  有界是为了 socket 本来就断着的情况。）
-        try {
-            UltiTools.getInstance().getLogStreamManager().shutdown();
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error shutting down log stream manager: " + e.getMessage());
-        }
+        teardownStep("shutting down log stream manager",
+            () -> UltiTools.getInstance().getLogStreamManager().shutdown());
 
         // 停掉服务器监控。它自带一个 ScheduledExecutorService（每 5 秒 batch_update）
         // 外加两个主线程 Bukkit 定时任务（1Hz 的 TPS/CPU、5 秒一次的世界/玩家/插件快照）。
         // 在此之前 stopMonitoring() 在整个 src/main 里没有任何调用方：写好了、测过了，
         // 就是没接线。不停的话，「云功能已关闭」之后主线程仍在按 5 秒遍历所有世界和区块。
-        try {
+        teardownStep("stopping server monitor", () -> {
             if (UltiTools.getInstance().getServerMonitorManager() != null) {
                 UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
             }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error stopping server monitor: " + e.getMessage());
-        }
+        });
 
         // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
         // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
-        try {
+        teardownStep("shutting down player event manager", () -> {
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 UltiTools.getInstance().getPlayerEventManager().shutdown();
             }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error shutting down player event manager: " + e.getMessage());
-        }
+        });
 
         stopWebsocket();
         panelWS = null;
@@ -1188,21 +1174,31 @@ public class PluginInitiationUtils {
         // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
         token = null;
 
-        try {
-            CloudAuthManager.stopTokenRefreshScheduler();
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error stopping token refresh scheduler: " + e.getMessage());
-        }
+        teardownStep("stopping token refresh scheduler",
+            CloudAuthManager::stopTokenRefreshScheduler);
 
         // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
         // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
         // enableCloud() 加 initWebsocket()。
+        teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
+    }
+
+    /**
+     * 跑一步拆线动作，失败只记 FINE 不向外抛。
+     * <p>
+     * 拆线的每一步都必须尽力执行完：任何一步抛出去都会让它后面的步骤被跳过，而那些
+     * 步骤正是「云功能已关闭」这句话的组成部分。原先这是六段一模一样的 try/catch，
+     * 提取出来只是把那个不变量说清楚一次，行为不变。
+     *
+     * @param what 失败时写进日志的动作描述
+     * @param action 拆线动作
+     */
+    private static void teardownStep(String what, Runnable action) {
         try {
-            CloudAuthManager.stopPolling();
+            action.run();
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error stopping magic-link polling: " + e.getMessage());
+                "Error " + what + ": " + e.getMessage());
         }
     }
 
