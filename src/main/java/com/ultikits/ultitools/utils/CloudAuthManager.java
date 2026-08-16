@@ -200,6 +200,10 @@ public class CloudAuthManager {
      * Clear the saved token (logout).
      */
     public static synchronized void clearToken() throws IOException {
+        // 清凭证本身就意味着「此前的一切凭证操作作废」。再推一次代际是第二道关门：
+        // 拆线时推的那一次，与拆线中途才启动的生产者之间仍可能有缝，而这一次发生在
+        // 生产者全部停掉之后，任何仍在途的结果到这里都已过期。
+        credentialGeneration.incrementAndGet();
         currentToken = null;
         Map<String, Object> data = readDataFile();
         data.remove("cloud_token");
@@ -272,6 +276,11 @@ public class CloudAuthManager {
      * @return the magic link URL, or null on failure
      */
     public static String requestMagicLink(Consumer<String> errorCallback) {
+        // 代际必须在**这里**捕获，而不是等到 startPolling()。下面那次 POST 是阻塞的，
+        // logout 完全可以整个发生在它的往返期间；等 POST 回来才读代际的话，读到的是
+        // 已经递增过的那一代，这次登录于是"看起来是新的"，它后来拿到的 token 会被接受、
+        // activateCloudIfCurrent() 会把服务器重新连上——而这次 logout 从头到尾都没看见它。
+        final long generation = credentialGeneration.get();
         String apiUrl = HttpRequestUtils.getBaseUrl();
         if (apiUrl == null || apiUrl.trim().isEmpty()) {
             errorCallback.accept("API URL not configured");
@@ -309,7 +318,7 @@ public class CloudAuthManager {
                 String url = responseBody.has("url") ? responseBody.get("url").getAsString() : null;
                 if (url != null) {
                     // Store requestId for polling
-                    startPolling(requestId, null);
+                    startPolling(requestId, null, generation);
                     return url;
                 }
                 errorCallback.accept("Invalid response from API (missing url)");
@@ -331,13 +340,25 @@ public class CloudAuthManager {
      * @param onComplete called when auth succeeds (with the token), or null if no callback needed
      */
     public static void startPolling(String requestId, Consumer<TokenEntity> onComplete) {
+        startPolling(requestId, onComplete, credentialGeneration.get());
+    }
+
+    /**
+     * 带显式代际的轮询入口。
+     * <p>
+     * 代际由<b>发起整次登录的那一刻</b>决定，不能在这里就地读：调用方在到达这里之前
+     * 通常已经做过一次阻塞的 HTTP 请求，那段时间里发生的 logout 必须对这次登录可见。
+     *
+     * @param requestId magic-link 请求 ID
+     * @param onComplete 登录完成回调，可为 null
+     * @param generation 发起这次登录时的凭证代际
+     */
+    public static void startPolling(String requestId, Consumer<TokenEntity> onComplete,
+                                    final long generation) {
         stopPolling();
 
         pollExecutor = Executors.newSingleThreadScheduledExecutor();
         final int[] attempts = {0};
-        // 本次 magic-link 登录所属的代际。logout 推进代际之后，这一轮的结果一律作废——
-        // stopPolling() 的 cancel(false) 拦不住一个已经进了 HTTP 请求的轮询周期。
-        final long generation = credentialGeneration.get();
 
         pollTask = pollExecutor.scheduleWithFixedDelay(() -> {
             attempts[0]++;

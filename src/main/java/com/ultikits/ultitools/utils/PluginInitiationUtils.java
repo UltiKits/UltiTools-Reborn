@@ -1127,20 +1127,35 @@ public class PluginInitiationUtils {
 
     /** {@link #disableCloud()} 的实际拆线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
     private static void doDisableCloud() {
-        // 第一件事就让在途的凭证操作作废，而不是等拆线跑完。
+        // 前三步的顺序是这条方法里最容易写反的地方，写反了两个方向都会漏：
         //
-        // 拆线本身要关日志流、停监控、摘监听器、断 socket、停调度器，是个不短的过程；
-        // 把作废放在末尾的话，这段时间里一次在途的 magic-link 轮询完全可以先提交成功，
-        // 而后来的作废并不会删掉已经写进 data.json 的那份凭证。调用方（logout 命令）
-        // 也就跟着看到一份「拆线之前不存在、拆线之后存在」的凭证。
+        //   1. 关闸——cloudEnabled 置否，reinit 链不再产生新的刷新。
+        //   2. 停生产者——停掉刷新调度与 magic-link 轮询，不再有新任务被派出去。
+        //   3. 作废在途——推进凭证代际，让已经在 HTTP 请求里的那些结果一律过期。
         //
-        // 放在最前面之后，整个拆线期间任何提交都会被拒；调用方只要在拆线**之后**读一次
-        // 凭证，看到的就是最终状态。
-        teardownStep("invalidating in-flight credential operations",
-            CloudAuthManager::invalidateCredentialOperations);
-
+        // 作废**必须**排在停生产者之后。反过来（先作废再停）的话，两者之间启动的新任务
+        // 会快照到已经递增的那一代，于是它反而「合法」了，延迟返回的响应照样把凭证写回
+        // data.json——这正是把作废提到最前面时踩到的坑。
+        //
+        // 而作废也不能等到整个拆线跑完：拆线还要关日志流、停监控、摘监听器、断 socket，
+        // 是个不短的过程，这段时间里一次在途的轮询完全可以先提交成功，调用方（logout
+        // 命令）就会看到一份「拆线之前不存在、拆线之后存在」的凭证。
+        //
+        // 最后一道保险在 clearToken() 里：它自己也推进一次代际，那一次发生在生产者全部
+        // 停掉之后，任何仍在途的结果到那里都已过期。
         cloudEnabled.set(false);
         reinitBackoff.reset();
+
+        teardownStep("stopping token refresh scheduler",
+            CloudAuthManager::stopTokenRefreshScheduler);
+
+        // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
+        // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
+        // enableCloud() 加 initWebsocket()。
+        teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
+
+        teardownStep("invalidating in-flight credential operations",
+            CloudAuthManager::invalidateCredentialOperations);
 
         // 顺序有讲究：先关日志传输器，再断开 socket。
         // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
@@ -1173,14 +1188,6 @@ public class PluginInitiationUtils {
         // 清掉本类持有的 token。它与 CloudAuthManager 清掉的凭证是**两份**，
         // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
         token = null;
-
-        teardownStep("stopping token refresh scheduler",
-            CloudAuthManager::stopTokenRefreshScheduler);
-
-        // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
-        // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
-        // enableCloud() 加 initWebsocket()。
-        teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
     }
 
     /**
