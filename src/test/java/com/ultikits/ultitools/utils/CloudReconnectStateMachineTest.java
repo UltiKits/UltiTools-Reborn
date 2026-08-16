@@ -102,6 +102,36 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("预算耗尽进入终态时，拆线动作必须与 logout 一致")
+        void exhaustedBudgetTearsDownCloudResources() {
+            // 先让云侧真正接上线，否则下面断言的是一个空集合，测试等于什么都没测。
+            LogStreamManager manager = LogStreamManager.getInstance();
+            try {
+                manager.initialize(null);
+            } catch (Exception ignored) {
+                // 传 null 客户端时下游可能抛，但 handler 的挂载必须已经发生
+            }
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("前置条件：日志 handler 应当已挂在 root logger 上")
+                    .isEqualTo(1);
+
+            for (int i = 0; i < 15; i++) {
+                PluginInitiationUtils.reinitWebSocket();
+            }
+
+            assertThat(PluginInitiationUtils.isCloudEnabled())
+                    .as("预算耗尽之后必须进入 disabled 终态")
+                    .isFalse();
+
+            // 终态的日志原文是 "Cloud features are now idle"。只翻 cloudEnabled 标志的话，
+            // 日志传输器与 root logger handler、玩家事件监听器、token 刷新调度以及静态
+            // panelWS/token 引用会全部留着继续跑——那句话就成了谎。
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("既然已宣告 cloud features are now idle，root logger 就不该还挂着框架 handler")
+                    .isZero();
+        }
+
+        @Test
         @DisplayName("握手成功会把预算清零，使长期运行的服务器不会耗尽额度")
         void successfulHandshakeResetsBudget() {
             for (int i = 0; i < 5; i++) {
