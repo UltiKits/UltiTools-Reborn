@@ -28,6 +28,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * <p>全部用假时钟推进，不用 {@code Thread.sleep} —— 真等两个心跳周期是 120 秒。
  */
 @DisplayName("心跳存活判定")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // tearDown 需反射复位 UltiTools 单例（#250），与仓库其它测试类一致
 class HeartbeatLivenessTest {
 
     /** 假时钟，测试自己推进。 */
