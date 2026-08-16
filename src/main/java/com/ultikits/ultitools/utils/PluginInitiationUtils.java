@@ -1178,6 +1178,27 @@ public class PluginInitiationUtils {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Error stopping token refresh scheduler: " + e.getMessage());
         }
+
+        // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
+        // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
+        // enableCloud() 加 initWebsocket()。
+        try {
+            CloudAuthManager.stopPolling();
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error stopping magic-link polling: " + e.getMessage());
+        }
+
+        // 最后推进凭证代际，让一切**已经在途**的凭证操作作废。
+        // 上面那些 stop* 用的都是 cancel(false)，只承诺不再调度新的执行，拦不住一个已经
+        // 进了 HTTP 请求的任务；而刷新与轮询都会在返回前写 currentToken 与 data.json。
+        // 没有这一步，logout 会被一个迟到几秒的刷新原地撤销，重启后自动重连。
+        try {
+            CloudAuthManager.invalidateCredentialOperations();
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error invalidating in-flight credential operations: " + e.getMessage());
+        }
     }
 
     /**

@@ -50,6 +50,29 @@ public class CloudAuthManager {
     private static ScheduledFuture<?> refreshTask;
 
     /**
+     * 凭证的生命周期代际。
+     * <p>
+     * 存在的理由只有一句：<b>取消不等于失效。</b>{@link #stopTokenRefreshScheduler()} 与
+     * {@link #stopPolling()} 用的是 {@code cancel(false)} 加 {@code shutdown()}，两者都只
+     * 承诺不再调度新的执行，对一个已经进入 HTTP 请求的任务毫无约束——而
+     * {@link #refreshToken(String)} 在返回<b>之前</b>就 {@link #saveToken(TokenEntity)} 写盘。
+     * 于是这样的时序完全成立：
+     * <pre>
+     *   1. 刷新任务发出 HTTP 请求（网络往返，秒级）
+     *   2. 管理员 /ulticloud logout → 停调度器 → clearToken() 清掉 data.json
+     *   3. HTTP 返回 → saveToken() 把新凭证写回 data.json
+     *   4. 重启服务器 → 读到有效凭证 → 自动登录
+     * </pre>
+     * logout 于是成了一条没有效果的命令，而它恰恰是安全语义的。
+     * <p>
+     * 规则：一切在途的异步凭证操作出发时记下当时的代际，提交结果之前用
+     * {@link #commitTokenIfCurrent(TokenEntity, long)} 比对；拆线路径调
+     * {@link #invalidateCredentialOperations()} 推进代际，迟到的结果一律作废。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong credentialGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
      * Try to load a saved token from data.json on startup.
      * If the access token is expired but a refresh token exists, attempts automatic refresh.
      * Returns the token if valid, null otherwise.
@@ -108,6 +131,8 @@ public class CloudAuthManager {
      * @return a new TokenEntity with fresh access and refresh tokens, or null on failure
      */
     public static TokenEntity refreshToken(String refreshTokenValue) {
+        // 出发时记下代际。整个 HTTP 往返期间 logout 都可能发生，而下面的提交必须能看见。
+        final long generation = credentialGeneration.get();
         String apiUrl = HttpRequestUtils.getBaseUrl();
         if (apiUrl == null || apiUrl.trim().isEmpty()) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Cannot refresh token: API URL not configured");
@@ -133,7 +158,11 @@ public class CloudAuthManager {
                 TokenEntity newToken = GSON.fromJson(response.body(), TokenEntity.class);
                 if (newToken != null && newToken.getAccess_token() != null) {
                     newToken.decodeJwtPayload();
-                    saveToken(newToken);
+                    // 不能直接 saveToken：这次请求可能是在 logout 之前发出、logout 之后才回来的。
+                    // 直接写盘会把刚被 clearToken() 清掉的凭证原样填回 data.json，重启后自动重连。
+                    if (!commitTokenIfCurrent(newToken, generation)) {
+                        return null;
+                    }
                     return newToken;
                 }
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "Token refresh returned invalid token data");
@@ -170,11 +199,53 @@ public class CloudAuthManager {
     /**
      * Clear the saved token (logout).
      */
-    public static void clearToken() throws IOException {
+    public static synchronized void clearToken() throws IOException {
         currentToken = null;
         Map<String, Object> data = readDataFile();
         data.remove("cloud_token");
         writeDataFile(data);
+    }
+
+    /**
+     * 取当前的凭证代际。异步凭证操作在<b>出发时</b>调它记下自己那一代。
+     *
+     * @return 当前代际
+     */
+    public static long currentCredentialGeneration() {
+        return credentialGeneration.get();
+    }
+
+    /**
+     * 让一切在途的凭证操作作废。
+     * <p>
+     * 拆线路径（{@code disableCloud()} / {@code /ulticloud logout}）必须调它。只停调度器
+     * 是不够的——见 {@link #credentialGeneration} 上的说明。
+     */
+    public static synchronized void invalidateCredentialOperations() {
+        credentialGeneration.incrementAndGet();
+    }
+
+    /**
+     * 仅当代际未变时才提交凭证。
+     * <p>
+     * 与 {@link #invalidateCredentialOperations()} 和 {@link #clearToken()} 同步在类锁上，
+     * 因此「比对代际」与「写入」之间不存在窗口：拆线要么整个发生在提交之前（这次提交被
+     * 拒），要么整个发生在提交之后（拆线把刚写的清掉）。两种都是干净的。
+     *
+     * @param token 待提交的凭证
+     * @param generation 调用方出发时记下的代际
+     * @return 已提交返回 true；代际已变、结果被丢弃则返回 false
+     * @throws IOException 写入失败
+     */
+    public static synchronized boolean commitTokenIfCurrent(TokenEntity token, long generation)
+            throws IOException {
+        if (generation != credentialGeneration.get()) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Discarding a credential result that arrived after logout (generation changed)");
+            return false;
+        }
+        saveToken(token);
+        return true;
     }
 
     /**
@@ -264,6 +335,9 @@ public class CloudAuthManager {
 
         pollExecutor = Executors.newSingleThreadScheduledExecutor();
         final int[] attempts = {0};
+        // 本次 magic-link 登录所属的代际。logout 推进代际之后，这一轮的结果一律作废——
+        // stopPolling() 的 cancel(false) 拦不住一个已经进了 HTTP 请求的轮询周期。
+        final long generation = credentialGeneration.get();
 
         pollTask = pollExecutor.scheduleWithFixedDelay(() -> {
             attempts[0]++;
@@ -294,7 +368,13 @@ public class CloudAuthManager {
                             TokenEntity token = GSON.fromJson(tokenJson, TokenEntity.class);
                             if (token != null && token.getAccess_token() != null) {
                                 token.decodeJwtPayload();
-                                saveToken(token);
+                                // logout 可能发生在「本次轮询发出」与「本次轮询拿到 completed」之间。
+                                // 直接往下走的话，下面的 enableCloud() + initWebsocket() 会把服务器
+                                // 悄悄登回去——而 logout 刚刚才报告过云功能已停止。
+                                if (!commitTokenIfCurrent(token, generation)) {
+                                    stopPolling();
+                                    return;
+                                }
 
                                 UltiTools.getInstance().getLogger().log(Level.INFO,
                                     "UltiCloud login successful! Welcome, " +

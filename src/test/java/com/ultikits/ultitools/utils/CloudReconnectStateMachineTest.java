@@ -190,6 +190,21 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("disableCloud 会让在途的凭证操作作废")
+        void disableCloudInvalidatesInFlightCredentialOperations() {
+            // 只停调度器是不够的：stop* 用的都是 cancel(false)，拦不住一个已经进了 HTTP
+            // 请求的刷新或轮询，而两者都会在返回前写 currentToken 与 data.json。
+            // 没有这一步，logout 会被一个迟到几秒的刷新原地撤销。
+            long before = CloudAuthManager.currentCredentialGeneration();
+
+            PluginInitiationUtils.disableCloud();
+
+            assertThat(CloudAuthManager.currentCredentialGeneration())
+                    .as("拆线必须推进凭证代际，否则迟到的结果仍会被提交")
+                    .isGreaterThan(before);
+        }
+
+        @Test
         @DisplayName("disableCloud 会停掉服务器监控")
         void disableCloudStopsServerMonitor() {
             // ServerMonitorManager 自带一个 ScheduledExecutorService 加两个主线程 Bukkit
