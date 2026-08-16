@@ -352,6 +352,20 @@ class ServerMonitorSnapshotTest {
                     .isNull();
             assertThat(tpsField.get(manager)).isNull();
         }
+
+        @Test
+        @DisplayName("stopMonitoring 之后还能重新 startMonitoring")
+        void monitoringCanRestartAfterStop() {
+            manager.startMonitoring();
+            manager.stopMonitoring();
+
+            // ScheduledExecutorService 一经 shutdown 就永久失效，重启必须换一个新的。
+            // 否则「logout 之后再 login」这条完全正常的路径会在 scheduleAtFixedRate
+            // 上抛 RejectedExecutionException——而这正是把 stopMonitoring 接进
+            // disableCloud 拆线路径的前提。
+            org.assertj.core.api.Assertions.assertThatCode(manager::startMonitoring)
+                    .doesNotThrowAnyException();
+        }
     }
 
     @Nested

@@ -1120,6 +1120,19 @@ public class PluginInitiationUtils {
                 "Error shutting down log stream manager: " + e.getMessage());
         }
 
+        // 停掉服务器监控。它自带一个 ScheduledExecutorService（每 5 秒 batch_update）
+        // 外加两个主线程 Bukkit 定时任务（1Hz 的 TPS/CPU、5 秒一次的世界/玩家/插件快照）。
+        // 在此之前 stopMonitoring() 在整个 src/main 里没有任何调用方：写好了、测过了，
+        // 就是没接线。不停的话，「云功能已关闭」之后主线程仍在按 5 秒遍历所有世界和区块。
+        try {
+            if (UltiTools.getInstance().getServerMonitorManager() != null) {
+                UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error stopping server monitor: " + e.getMessage());
+        }
+
         // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
         // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
         try {
