@@ -70,8 +70,6 @@ public class CloudLoginCommand extends AbstractCommandExecutor {
         // 凭证的有效性不能作为生命周期拆解的门禁。改为看「有没有东西可清」：
         // 拆线无条件执行（disableCloud 的每一步对「本来就没起来」都幂等），
         // 清凭证只在确实存着凭证时做。
-        TokenEntity existing = CloudAuthManager.getCurrentToken();
-
         try {
             // 先拆状态机，再清凭证。
             //
@@ -79,6 +77,13 @@ public class CloudLoginCommand extends AbstractCommandExecutor {
             // 用已作废的凭证敲面板，401 循环照跑，实测只有重新 login 或重启服务器才停得下来。
             // 「Cloud features are now disabled」这句话此前是不成立的。见 issue #223。
             PluginInitiationUtils.disableCloud();
+
+            // 凭证必须在拆线**之后**读。拆线之前读的话拿到的是一份可能过时的快照：
+            // 一次在途的 magic-link 轮询完全可以在这中间提交成功，于是「拆线前没有凭证」
+            // 的判断把我们送进不清凭证的分支，而 data.json 里已经躺着一份可用的 token，
+            // 重启即自动重连。disableCloud() 第一件事就是作废在途操作，因此拆线返回之后
+            // 读到的就是最终状态。
+            TokenEntity existing = CloudAuthManager.getCurrentToken();
 
             if (existing == null) {
                 sender.sendMessage(ChatColor.YELLOW + "Not currently logged in to UltiCloud.");

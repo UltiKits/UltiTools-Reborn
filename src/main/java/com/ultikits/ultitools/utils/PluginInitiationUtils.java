@@ -1127,43 +1127,60 @@ public class PluginInitiationUtils {
 
     /** {@link #disableCloud()} 的实际拆线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
     private static void doDisableCloud() {
+        // 前三步的顺序是这条方法里最容易写反的地方，写反了两个方向都会漏：
+        //
+        //   1. 关闸——cloudEnabled 置否，reinit 链不再产生新的刷新。
+        //   2. 停生产者——停掉刷新调度与 magic-link 轮询，不再有新任务被派出去。
+        //   3. 作废在途——推进凭证代际，让已经在 HTTP 请求里的那些结果一律过期。
+        //
+        // 作废**必须**排在停生产者之后。反过来（先作废再停）的话，两者之间启动的新任务
+        // 会快照到已经递增的那一代，于是它反而「合法」了，延迟返回的响应照样把凭证写回
+        // data.json——这正是把作废提到最前面时踩到的坑。
+        //
+        // 而作废也不能等到整个拆线跑完：拆线还要关日志流、停监控、摘监听器、断 socket，
+        // 是个不短的过程，这段时间里一次在途的轮询完全可以先提交成功，调用方（logout
+        // 命令）就会看到一份「拆线之前不存在、拆线之后存在」的凭证。
+        //
+        // 最后一道保险在 clearToken() 里：它自己也推进一次代际，那一次发生在生产者全部
+        // 停掉之后，任何仍在途的结果到那里都已过期。
         cloudEnabled.set(false);
         reinitBackoff.reset();
+
+        teardownStep("stopping token refresh scheduler",
+            CloudAuthManager::stopTokenRefreshScheduler);
+
+        // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
+        // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
+        // enableCloud() 加 initWebsocket()。
+        teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
+
+        teardownStep("invalidating in-flight credential operations",
+            CloudAuthManager::invalidateCredentialOperations);
 
         // 顺序有讲究：先关日志传输器，再断开 socket。
         // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
         // （flushLogs 本身也已改成有界，两层都要有——顺序对了是让排队的日志还有机会送出去，
         //  有界是为了 socket 本来就断着的情况。）
-        try {
-            UltiTools.getInstance().getLogStreamManager().shutdown();
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error shutting down log stream manager: " + e.getMessage());
-        }
+        teardownStep("shutting down log stream manager",
+            () -> UltiTools.getInstance().getLogStreamManager().shutdown());
 
         // 停掉服务器监控。它自带一个 ScheduledExecutorService（每 5 秒 batch_update）
         // 外加两个主线程 Bukkit 定时任务（1Hz 的 TPS/CPU、5 秒一次的世界/玩家/插件快照）。
         // 在此之前 stopMonitoring() 在整个 src/main 里没有任何调用方：写好了、测过了，
         // 就是没接线。不停的话，「云功能已关闭」之后主线程仍在按 5 秒遍历所有世界和区块。
-        try {
+        teardownStep("stopping server monitor", () -> {
             if (UltiTools.getInstance().getServerMonitorManager() != null) {
                 UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
             }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error stopping server monitor: " + e.getMessage());
-        }
+        });
 
         // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
         // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
-        try {
+        teardownStep("shutting down player event manager", () -> {
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 UltiTools.getInstance().getPlayerEventManager().shutdown();
             }
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error shutting down player event manager: " + e.getMessage());
-        }
+        });
 
         stopWebsocket();
         panelWS = null;
@@ -1171,12 +1188,24 @@ public class PluginInitiationUtils {
         // 清掉本类持有的 token。它与 CloudAuthManager 清掉的凭证是**两份**，
         // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
         token = null;
+    }
 
+    /**
+     * 跑一步拆线动作，失败只记 FINE 不向外抛。
+     * <p>
+     * 拆线的每一步都必须尽力执行完：任何一步抛出去都会让它后面的步骤被跳过，而那些
+     * 步骤正是「云功能已关闭」这句话的组成部分。原先这是六段一模一样的 try/catch，
+     * 提取出来只是把那个不变量说清楚一次，行为不变。
+     *
+     * @param what 失败时写进日志的动作描述
+     * @param action 拆线动作
+     */
+    private static void teardownStep(String what, Runnable action) {
         try {
-            CloudAuthManager.stopTokenRefreshScheduler();
+            action.run();
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error stopping token refresh scheduler: " + e.getMessage());
+                "Error " + what + ": " + e.getMessage());
         }
     }
 
@@ -1188,6 +1217,41 @@ public class PluginInitiationUtils {
      */
     static void onWebSocketConnected() {
         reinitBackoff.reset();
+    }
+
+    /**
+     * 在云生命周期锁内，原子地「复查代际 → 开启状态机 → 建连 → 起刷新调度」。
+     * <p>
+     * 只让写凭证那一步对 logout 原子是不够的：magic-link 轮询在提交凭证之后还要做
+     * {@code enableCloud()} + {@code initWebsocket()} + {@code startTokenRefreshScheduler()}，
+     * 这一串才是真正把服务器连回去的动作。logout 挤在「提交成功」与「开始激活」之间的话，
+     * 拆线拆的是一个还没建起来的连接，随后轮询线程照样把它建起来——logout 于是被撤销。
+     * <p>
+     * 这里与 {@code disableCloud()} 抢同一把 {@link #cloudLifecycleLock}，因此二者只能整体
+     * 先后发生：要么先激活再被拆掉（干净），要么先拆线、本方法持锁复查代际时看到已变而
+     * 直接返回 false（也干净）。
+     * <p>
+     * 锁内刻意<b>不</b>做 {@code loginWithToken()} —— 那是一次 HTTP 往返，持锁做会让
+     * {@code /ulticloud logout} 在主线程上阻塞数秒。它只向面板注册服务器，不改本地状态，
+     * 放在锁外重复执行也无害。
+     *
+     * @param generation 调用方出发时记下的凭证代际
+     * @return 已激活返回 true；代际已变、激活被放弃则返回 false
+     * @throws IOException 建连失败
+     */
+    public static boolean activateCloudIfCurrent(long generation) throws IOException {
+        synchronized (cloudLifecycleLock) {
+            if (generation != CloudAuthManager.currentCredentialGeneration()) {
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                    "Cloud activation aborted — a logout happened while this login was completing");
+                return false;
+            }
+            // 显式开启：logout 之后重新 login 必须能把状态机拉回来。
+            enableCloud();
+            initWebsocket();
+            CloudAuthManager.startTokenRefreshScheduler();
+            return true;
+        }
     }
 
     /**
