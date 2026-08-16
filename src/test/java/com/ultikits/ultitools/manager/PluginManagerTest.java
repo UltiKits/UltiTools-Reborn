@@ -900,6 +900,39 @@ class PluginManagerTest {
         }
 
         @Test
+        @DisplayName("新模块 registerSelf 返回 false 时不得卸掉旧版本")
+        void failedRegisterSelfShouldNotUnregisterTheOlderVersion() throws Exception {
+            // 卸旧必须等到新版本真正激活成功。放在 registerSelf() 之前的话，一旦它返回
+            // false，旧版本已经被卸、新版本的 context 又被 close——这个模块两头落空，
+            // 而它原本是在正常运行的。
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            when(newer.isNewerVersionThan(older)).thenReturn(true);
+            when(newer.registerSelf()).thenReturn(false);
+            pluginManager.getPluginList().add(older);
+
+            boolean result = pluginManager.register(newer);
+
+            assertThat(result).isFalse();
+            verify(older, never()).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("新模块 registerSelf 抛异常时同样不得卸掉旧版本")
+        void throwingRegisterSelfShouldNotUnregisterTheOlderVersion() throws Exception {
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            when(newer.isNewerVersionThan(older)).thenReturn(true);
+            when(newer.registerSelf()).thenThrow(new java.io.IOException("激活失败"));
+            pluginManager.getPluginList().add(older);
+
+            boolean result = pluginManager.register(newer);
+
+            assertThat(result).isFalse();
+            verify(older, never()).unregisterSelf();
+        }
+
+        @Test
         @DisplayName("新模块因版本不兼容被拒时不应该顺手卸掉已加载的旧版本")
         void rejectedModuleShouldNotUnregisterTheLoadedOlderVersion() {
             // Arrange - 新版本更高但要求的 API 太新：拒它，同时不能动线上正在跑的那个
