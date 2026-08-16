@@ -347,8 +347,7 @@ class CloudReconnectStateMachineTest {
             // 这也正是真实场景的顺序——连着的时候日志积压，然后连接断掉，然后才 logout/关服。
             java.util.concurrent.atomic.AtomicBoolean connected =
                     new java.util.concurrent.atomic.AtomicBoolean(true);
-            com.ultikits.ultitools.websocket.UltiPanelWebSocketClient client =
-                    mock(com.ultikits.ultitools.websocket.UltiPanelWebSocketClient.class);
+            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
             lenient().when(client.isConnected()).thenAnswer(invocation -> connected.get());
 
             com.ultikits.ultitools.manager.UltiPanelLogTransmitter transmitter =
