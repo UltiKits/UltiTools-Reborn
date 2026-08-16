@@ -22,6 +22,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * 云连接重连状态机的行为：全局预算、logout 的终止语义、以及成功日志的位置。
@@ -396,6 +397,31 @@ class CloudReconnectStateMachineTest {
             PluginInitiationUtils.initializeManagers();
 
             Mockito.verify(UltiTools.getInstance(), Mockito.atLeastOnce()).getServerMonitorManager();
+        }
+
+        @Test
+        @DisplayName("拆线之后到达的握手回调不得踩空静态 panelWS")
+        void lateHandshakeDoesNotDereferenceClearedClient() {
+            // onOpen 是异步的：跑到回调里时 disableCloud() 可能已经把静态 panelWS 置空
+            //（logout，或重连预算耗尽——后者跑在 WebSocket 线程上）。回调若重读静态字段，
+            // subscribeToServer / uploadConfig / uploadServerProperties 三处都会 NPE；
+            // 只有 initializeManagers 有持锁复查护着，它前后的代码没有。
+            UltiPanelWebSocketClient handshakeClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(handshakeClient.getServerId()).thenReturn("srv-1");
+
+            PluginInitiationUtils.disableCloud();   // 静态 panelWS 变 null
+
+            try {
+                PluginInitiationUtils.onWebSocketOpened(handshakeClient);
+            } catch (Exception ignored) {
+                // 本测试环境没有 ConfigManager 之类的下游依赖，走到 uploadConfig 会失败。
+                // 那与本用例无关——要钉住的是引用来源，不是这条链能否跑完。
+            }
+
+            // 关键断言：若回调重读静态 panelWS，第一处解引用
+            // （panelWS.subscribeToServer(panelWS.getServerId())）就已经 NPE，
+            // 根本走不到这里。能验到调用，就说明用的是回调自己那个引用。
+            Mockito.verify(handshakeClient).subscribeToServer("srv-1");
         }
 
         @Test

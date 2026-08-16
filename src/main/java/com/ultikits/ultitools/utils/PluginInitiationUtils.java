@@ -148,40 +148,61 @@ public class PluginInitiationUtils {
         // 现在只有显式动作才开启：启动时的 UltiTools.onEnable、以及 magic-link 登录成功后
         // 的 CloudAuthManager，两处都调 enableCloud()。见 issue #223 的 PR 评审。
 
-        panelWS = getPanelWebsocketClient();
+        // 全程用局部引用挂接线，不要边写静态字段边读它：下面注册的回调是异步触发的，
+        // 触发时静态 panelWS 可能已经不是这一个了。
+        UltiPanelWebSocketClient client = getPanelWebsocketClient();
+        panelWS = client;
 
         // 设置消息处理器
-        panelWS.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
+        client.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
 
         // 设置连接成功处理器
-        panelWS.setOnConnectHandler(() -> {
-            UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
-
-            // 握手真正成功了，这里才是「重连成功」这句话唯一站得住的位置。
-            // 外层预算也只在这里清零——若在 reinitWebSocket 里清，「造出了一个客户端」
-            // 就会被当成成功，预算永远用不完。见 issue #181 / #223。
-            onWebSocketConnected();
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                "WebSocket connected to UltiPanel");
-
-            // 订阅当前服务器
-            panelWS.subscribeToServer(panelWS.getServerId());
-            
-            // 初始化所有管理器
-            initializeManagers();
-            
-            // 上传配置
-            uploadConfig();
-
-            // 上传服务器属性到云端
-            uploadServerProperties();
-        });
+        client.setOnConnectHandler(() -> onWebSocketOpened(client));
 
         // 设置重连耗尽处理器 — 尝试刷新令牌并重新建立连接
-        panelWS.setOnReconnectExhaustedHandler(PluginInitiationUtils::reinitWebSocket);
+        client.setOnReconnectExhaustedHandler(PluginInitiationUtils::reinitWebSocket);
 
         // 连接到WebSocket服务器
-        panelWS.connect();
+        client.connect();
+    }
+
+    /**
+     * 握手成功之后的接线动作。
+     * <p>
+     * <b>参数就是这次握手自己的客户端，方法体内绝不重读静态 {@code panelWS}。</b>
+     * onOpen 是异步回调：跑到这里时 {@code disableCloud()} 可能已经把静态字段置空
+     * （{@code /ulticloud logout}，或重连预算耗尽——后者跑在 WebSocket 线程上），
+     * 也可能 {@code reinitWebSocket} 已经把它换成了另一个实例。重读静态字段的话，
+     * {@code subscribeToServer} / {@code uploadConfig} / {@code uploadServerProperties}
+     * 三处都会踩空——{@link #initializeManagers()} 有持锁复查护着，它前后的代码没有。
+     * <p>
+     * 往一个已断开的客户端发消息是安全的：{@code sendMessage} 在未连接时打一条 WARNING
+     * 就返回。真正危险的是空引用，所以这里解决的是引用稳定性，不是连接状态。
+     * <p>
+     * 包级可见而非 private —— 只为可测。要在测试里触发它，否则得有真实的鉴权 token
+     * 与真实的 WebSocket 握手；与 {@link #handleInboundMessage} 同一处理。
+     */
+    static void onWebSocketOpened(UltiPanelWebSocketClient client) {
+        UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
+
+        // 握手真正成功了，这里才是「重连成功」这句话唯一站得住的位置。
+        // 外层预算也只在这里清零——若在 reinitWebSocket 里清，「造出了一个客户端」
+        // 就会被当成成功，预算永远用不完。见 issue #181 / #223。
+        onWebSocketConnected();
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+            "WebSocket connected to UltiPanel");
+
+        // 订阅当前服务器
+        client.subscribeToServer(client.getServerId());
+
+        // 初始化所有管理器
+        initializeManagers();
+
+        // 上传配置
+        uploadConfig(client);
+
+        // 上传服务器属性到云端
+        uploadServerProperties(client);
     }
     
     /**
@@ -937,7 +958,7 @@ public class PluginInitiationUtils {
     /**
      * 上传本地配置到服务器
      */
-    private static void uploadConfig() {
+    private static void uploadConfig(UltiPanelWebSocketClient client) {
         JsonObject configMessage = new JsonObject();
         configMessage.addProperty("type", "upload_config");
         
@@ -948,20 +969,20 @@ public class PluginInitiationUtils {
         data.addProperty("format", "yaml");                // 添加格式信息
         data.addProperty("backup", true);                  // 添加备份标志
         data.addProperty("comment", ConfigEditorUtils.getCommentMapString());
-        data.addProperty("serverId", panelWS.getServerId());
+        data.addProperty("serverId", client.getServerId());
         
         configMessage.add("data", data);
-        configMessage.addProperty("serverId", panelWS.getServerId());
+        configMessage.addProperty("serverId", client.getServerId());
         
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("正在上传本地配置..."));
-        panelWS.sendMessage(configMessage);
+        client.sendMessage(configMessage);
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("配置上传成功!"));
     }
 
     /**
      * Upload server.properties safe keys to cloud for panel editing.
      */
-    private static void uploadServerProperties() {
+    private static void uploadServerProperties(UltiPanelWebSocketClient client) {
         ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
         if (spm == null) return;
 
@@ -975,12 +996,12 @@ public class PluginInitiationUtils {
 
         JsonObject message = new JsonObject();
         message.addProperty("type", "server_properties_result");
-        message.addProperty("serverId", panelWS.getServerId());
+        message.addProperty("serverId", client.getServerId());
 
         message.add("data", propsJson);
 
         UltiTools.getInstance().getLogger().log(Level.FINE, "正在上传服务器属性配置...");
-        panelWS.sendMessage(message);
+        client.sendMessage(message);
         UltiTools.getInstance().getLogger().log(Level.FINE, "服务器属性配置上传成功!");
     }
 
