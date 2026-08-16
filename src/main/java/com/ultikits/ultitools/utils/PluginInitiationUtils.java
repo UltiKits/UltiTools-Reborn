@@ -1127,6 +1127,22 @@ public class PluginInitiationUtils {
 
     /** {@link #disableCloud()} 的实际拆线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
     private static void doDisableCloud() {
+        // 第一件事就让在途的凭证操作作废，而不是等拆线跑完。
+        //
+        // 拆线本身要关日志流、停监控、摘监听器、断 socket、停调度器，是个不短的过程；
+        // 把作废放在末尾的话，这段时间里一次在途的 magic-link 轮询完全可以先提交成功，
+        // 而后来的作废并不会删掉已经写进 data.json 的那份凭证。调用方（logout 命令）
+        // 也就跟着看到一份「拆线之前不存在、拆线之后存在」的凭证。
+        //
+        // 放在最前面之后，整个拆线期间任何提交都会被拒；调用方只要在拆线**之后**读一次
+        // 凭证，看到的就是最终状态。
+        try {
+            CloudAuthManager.invalidateCredentialOperations();
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error invalidating in-flight credential operations: " + e.getMessage());
+        }
+
         cloudEnabled.set(false);
         reinitBackoff.reset();
 
@@ -1188,17 +1204,6 @@ public class PluginInitiationUtils {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Error stopping magic-link polling: " + e.getMessage());
         }
-
-        // 最后推进凭证代际，让一切**已经在途**的凭证操作作废。
-        // 上面那些 stop* 用的都是 cancel(false)，只承诺不再调度新的执行，拦不住一个已经
-        // 进了 HTTP 请求的任务；而刷新与轮询都会在返回前写 currentToken 与 data.json。
-        // 没有这一步，logout 会被一个迟到几秒的刷新原地撤销，重启后自动重连。
-        try {
-            CloudAuthManager.invalidateCredentialOperations();
-        } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "Error invalidating in-flight credential operations: " + e.getMessage());
-        }
     }
 
     /**
@@ -1209,6 +1214,41 @@ public class PluginInitiationUtils {
      */
     static void onWebSocketConnected() {
         reinitBackoff.reset();
+    }
+
+    /**
+     * 在云生命周期锁内，原子地「复查代际 → 开启状态机 → 建连 → 起刷新调度」。
+     * <p>
+     * 只让写凭证那一步对 logout 原子是不够的：magic-link 轮询在提交凭证之后还要做
+     * {@code enableCloud()} + {@code initWebsocket()} + {@code startTokenRefreshScheduler()}，
+     * 这一串才是真正把服务器连回去的动作。logout 挤在「提交成功」与「开始激活」之间的话，
+     * 拆线拆的是一个还没建起来的连接，随后轮询线程照样把它建起来——logout 于是被撤销。
+     * <p>
+     * 这里与 {@code disableCloud()} 抢同一把 {@link #cloudLifecycleLock}，因此二者只能整体
+     * 先后发生：要么先激活再被拆掉（干净），要么先拆线、本方法持锁复查代际时看到已变而
+     * 直接返回 false（也干净）。
+     * <p>
+     * 锁内刻意<b>不</b>做 {@code loginWithToken()} —— 那是一次 HTTP 往返，持锁做会让
+     * {@code /ulticloud logout} 在主线程上阻塞数秒。它只向面板注册服务器，不改本地状态，
+     * 放在锁外重复执行也无害。
+     *
+     * @param generation 调用方出发时记下的凭证代际
+     * @return 已激活返回 true；代际已变、激活被放弃则返回 false
+     * @throws IOException 建连失败
+     */
+    public static boolean activateCloudIfCurrent(long generation) throws IOException {
+        synchronized (cloudLifecycleLock) {
+            if (generation != CloudAuthManager.currentCredentialGeneration()) {
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                    "Cloud activation aborted — a logout happened while this login was completing");
+                return false;
+            }
+            // 显式开启：logout 之后重新 login 必须能把状态机拉回来。
+            enableCloud();
+            initWebsocket();
+            CloudAuthManager.startTokenRefreshScheduler();
+            return true;
+        }
     }
 
     /**

@@ -389,11 +389,15 @@ public class CloudAuthManager {
 
                                 // Try to initialize cloud features
                                 try {
+                                    // 锁外：一次 HTTP 往返，只向面板注册服务器，不改本地状态。
                                     PluginInitiationUtils.loginWithToken(token);
-                                    // 显式开启：logout 之后重新 login 必须能把状态机拉回来。
-                                    PluginInitiationUtils.enableCloud();
-                                    PluginInitiationUtils.initWebsocket();
-                                    startTokenRefreshScheduler();
+                                    // 锁内：复查代际之后再开状态机、建连、起刷新调度。
+                                    // 提交凭证那一步对 logout 原子还不够——真正把服务器连回去的
+                                    // 是这一串，logout 挤在两者之间的话照样会被撤销。
+                                    if (!PluginInitiationUtils.activateCloudIfCurrent(generation)) {
+                                        stopPolling();
+                                        return;
+                                    }
                                 } catch (Exception e) {
                                     UltiTools.getInstance().getLogger().log(Level.WARNING,
                                         "Cloud features initialization failed: " + e.getMessage());

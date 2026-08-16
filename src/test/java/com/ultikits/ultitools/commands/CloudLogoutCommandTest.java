@@ -94,6 +94,34 @@ class CloudLogoutCommandTest {
         }
 
         @Test
+        @DisplayName("凭证必须在拆线之后读：在途登录刚提交的 token 也要被清掉")
+        void tokenCommittedDuringTeardownIsStillCleared() throws Exception {
+            CommandSender sender = mock(CommandSender.class);
+
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class);
+                 MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+
+                auth.when(CloudAuthManager::hasValidToken).thenReturn(false);
+
+                // 拆线之前没有凭证；拆线期间一次在途的 magic-link 轮询提交成功了。
+                // 若命令沿用拆线前的快照，就会走「未登录」分支而不清凭证，
+                // 于是 data.json 里留着一份可用 token，重启即自动重连。
+                java.util.concurrent.atomic.AtomicBoolean tornDown =
+                        new java.util.concurrent.atomic.AtomicBoolean(false);
+                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
+                    tornDown.set(true);
+                    return null;
+                });
+                auth.when(CloudAuthManager::getCurrentToken)
+                        .thenAnswer(invocation -> tornDown.get() ? validToken() : null);
+
+                new CloudLoginCommand().logout(sender);
+
+                auth.verify(CloudAuthManager::clearToken, times(1));
+            }
+        }
+
+        @Test
         @DisplayName("从未登录过时不必清凭证，但拆线仍是无害且必要的")
         void neverLoggedInStillStopsAnythingLeftRunning() throws Exception {
             CommandSender sender = mock(CommandSender.class);
