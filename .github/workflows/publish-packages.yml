@@ -70,7 +70,11 @@ jobs:
       # 仓库里曾经有一个更完整的 release.yml，但一次都没被跑过，也没能挡住
       # （已随 #231 删除）。所以这一层要放在不依赖记性的地方。
       #
-      # --clobber 让它幂等：入口脚本已经传过同名附件时覆盖，而不是报错退出。
+      # 幂等的做法是「已存在就跳过」，不是 --clobber 覆盖。release.sh 走的是「本地
+      # clean build → 校验 JAR 内容 → 打印 sha256 → 连附件一起 create」这条路，它
+      # 打印的 sha256 会被拿去送真机 UAT。本步骤跑在 release:published 上重新构建，
+      # 语义相同但 ZIP 时间戳不同，hash 必然对不上——覆盖等于让 UAT 手里的 sha256
+      # 失效，且分发出去的构件不再是本地校验通过的那一个。
       env:
         VERSION: ${{ needs.validate.outputs.version }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -85,7 +89,17 @@ jobs:
           echo "::error::构建完成但找不到 ${JAR}。"
           exit 1
         fi
-        gh release upload "${GITHUB_REF_NAME}" "$JAR" --clobber
+        ASSET="$(basename "$JAR")"
+        # 管道在 if 条件里，errexit/pipefail 不会让脚本直接退出；gh 查不到就当作
+        # 附件不存在，落到 else 去补传，这个降级方向是安全的。
+        if gh release view "${GITHUB_REF_NAME}" --json assets \
+             --jq '.assets[].name' | grep -qxF "$ASSET"; then
+          echo "✅ ${ASSET} 已是 release 附件，保留不动。"
+          echo "   它来自 release.sh 的本地构建，其 sha256 已用于真机 UAT。"
+        else
+          echo "▶ release 上没有 ${ASSET}，补传本次 CI 构建的产物。"
+          gh release upload "${GITHUB_REF_NAME}" "$JAR"
+        fi
 
     - name: 📦 Publish to GitHub Packages
       id: publish-ghp
