@@ -517,10 +517,17 @@ public class PluginInitiationUtils {
             if (spm == null) {
                 throw new IOException("ServerPropertiesManager is not available");
             }
-            JsonObject spData = new JsonObject();
-            spData.addProperty("action", "set_all");
-            spData.add("values", com.google.gson.JsonParser.parseString(configContent).getAsJsonObject());
-            spm.handleServerProperties(spData);
+            // 走 applySetAll 而不是 handleServerProperties，是为了拿到返回值。
+            // 后者是 void，于是这条路径过去只能无条件报成功——面板拿到的 status
+            // 表达的是「消息处理完了」，不是「配置生效了」，而这两件事在
+            // SAFE_KEYS 白名单挡下某个键时就分岔了。见 issue #281。
+            // 两条消息都还在发：applySetAll 自己发 server_properties_result，
+            // 这里抛出的异常由调用方转成 config_update_response 的 error。
+            ServerPropertiesManager.SetAllResult result = spm.applySetAll(
+                    com.google.gson.JsonParser.parseString(configContent).getAsJsonObject());
+            if (!result.isSuccess()) {
+                throw new IOException(result.describeFailure());
+            }
             return;
         }
         if (fileName == null || fileName.trim().isEmpty()) {
