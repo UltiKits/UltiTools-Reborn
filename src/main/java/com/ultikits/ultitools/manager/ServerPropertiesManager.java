@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.logging.Level;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -136,6 +137,7 @@ public class ServerPropertiesManager {
         private final List<String> rejected;
         private final List<String> failed;
         private final List<String> skipped;
+        private final List<String> malformed;
 
         /**
          * Public so callers outside this package can build one. Each list is copied before
@@ -145,11 +147,13 @@ public class ServerPropertiesManager {
          * 公开是为了包外也能构造。每个列表都先复制再包装 —— {@code unmodifiableList} 是视图，
          * 直接包装调用方的列表会让这个「不可变」对象仍能通过原引用被改。
          */
-        public SetAllResult(List<String> updated, List<String> rejected, List<String> failed, List<String> skipped) {
+        public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
+                            List<String> skipped, List<String> malformed) {
             this.updated = Collections.unmodifiableList(new ArrayList<>(updated));
             this.rejected = Collections.unmodifiableList(new ArrayList<>(rejected));
             this.failed = Collections.unmodifiableList(new ArrayList<>(failed));
             this.skipped = Collections.unmodifiableList(new ArrayList<>(skipped));
+            this.malformed = Collections.unmodifiableList(new ArrayList<>(malformed));
         }
 
         /** Keys written to disk. 已写入磁盘的键。 */
@@ -164,16 +168,27 @@ public class ServerPropertiesManager {
         /** Keys whose value was an explicit JSON null. 值为 JSON null 因而被跳过的键。 */
         public List<String> getSkipped() { return skipped; }
 
+        /** Keys whose value was not a JSON primitive. 值不是 JSON 原始值因而无法作为属性写入的键。 */
+        public List<String> getMalformed() { return malformed; }
+
         /** Every requested key was written. 要求写的键全部写成功。 */
         public boolean isSuccess() {
-            return rejected.isEmpty() && failed.isEmpty();
+            return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty();
         }
 
         /**
          * One line naming what went wrong, for a log record or an error response.
          * Returns {@code null} when nothing went wrong.
          * <p>
+         * The three categories stay separate because they need three different actions:
+         * a rejected key means stop asking for it, a failed key means look at the disk,
+         * and a malformed key means fix the payload. Collapsing them into one label would
+         * send the reader looking in the wrong place — which is the failure mode this
+         * whole change exists to remove.
+         * <p>
          * 一句话说明哪里没成，用于日志或错误响应；全部成功时返回 {@code null}。
+         * 三类分开写，是因为它们要三种不同的处置：被拒 = 别再要这个键，写入失败 = 去看磁盘，
+         * 畸形 = 去修载荷。合成一个标签会把人指向错误的方向，而那正是这次改动要消灭的失败形态。
          */
         public String describeFailure() {
             if (isSuccess()) return null;
@@ -183,6 +198,9 @@ public class ServerPropertiesManager {
             }
             if (!failed.isEmpty()) {
                 sb.append("；写入失败的键: ").append(String.join(", ", failed));
+            }
+            if (!malformed.isEmpty()) {
+                sb.append("；值不是字符串或数字因而无法写入的键: ").append(String.join(", ", malformed));
             }
             return sb.toString();
         }
@@ -266,13 +284,35 @@ public class ServerPropertiesManager {
         List<String> rejected = new ArrayList<>();
         List<String> failed = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
+        List<String> malformed = new ArrayList<>();
 
         for (String key : values.keySet()) {
-            if (values.get(key).isJsonNull()) {
+            JsonElement value = values.get(key);
+            if (value.isJsonNull()) {
                 skipped.add(key);
                 continue;
             }
-            switch (writeProperty(key, values.get(key).getAsString())) {
+            // server.properties is a flat string table, so anything that is not a JSON
+            // primitive is a malformed request rather than a value. Gson does not fail
+            // uniformly on those, which is why the guard has to come first:
+            // a JsonObject throws UnsupportedOperationException, an empty or multi-element
+            // JsonArray throws IllegalStateException, and a single-element JsonArray does
+            // not throw at all — it silently unwraps, so {"motd": ["Hello"]} would have
+            // been written as motd=Hello. One malformed key used to abort the whole batch
+            // before any response was built, which is the same "nobody can tell why"
+            // shape this issue is about.
+            //
+            // server.properties 是一张扁平的字符串表，所以非 JSON 原始值不是「值」而是畸形请求。
+            // 守卫必须放在取值之前，因为 Gson 的失败方式并不统一：JsonObject 抛
+            // UnsupportedOperationException，空数组和多元素数组抛 IllegalStateException，
+            // 而**单元素数组根本不抛** —— 它静默拆包，{"motd": ["Hello"]} 会被写成 motd=Hello。
+            // 而且过去一个畸形键就会在任何响应被构造之前中断整批，正是本 issue 说的那种
+            // 「没人查得到原因」的形状。
+            if (!value.isJsonPrimitive()) {
+                malformed.add(key);
+                continue;
+            }
+            switch (writeProperty(key, value.getAsString())) {
                 case WRITTEN:
                     updated.add(key);
                     break;
@@ -285,7 +325,7 @@ public class ServerPropertiesManager {
             }
         }
 
-        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped);
+        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed);
         warnIfIncomplete(result);
         sendResponse(buildSetAllResponse(result));
         return result;
@@ -301,6 +341,7 @@ public class ServerPropertiesManager {
         response.add("rejected", toJsonArray(result.getRejected()));
         response.add("failed", toJsonArray(result.getFailed()));
         response.add("skipped", toJsonArray(result.getSkipped()));
+        response.add("malformed", toJsonArray(result.getMalformed()));
         return response;
     }
 

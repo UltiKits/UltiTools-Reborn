@@ -353,7 +353,28 @@ class PluginInitiationUtilsConfigUpdateTest {
         private void stubSetAllResult(List<String> updated, List<String> rejected, List<String> failed) {
             lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
                     .thenReturn(new ServerPropertiesManager.SetAllResult(
-                            updated, rejected, failed, emptyList()));
+                            updated, rejected, failed, emptyList(), emptyList()));
+        }
+
+        /**
+         * 值不是 JSON 原始值时（对象、数组）同样让响应变成 error。这条与上面几条不同的地方在于
+         * 它在**取值之前**就分岔了：`getAsString()` 对 JsonObject 抛
+         * {@code UnsupportedOperationException}，对空数组和多元素数组抛
+         * {@code IllegalStateException}，而单元素数组根本不抛、静默拆包。
+         */
+        @Test
+        @DisplayName("值不是原始值的键让响应变成 error")
+        void malformedValuesMakeTheResponseAnError() throws Exception {
+            lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
+                    .thenReturn(new ServerPropertiesManager.SetAllResult(
+                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd")));
+
+            PluginInitiationUtils.handleConfigUpdate(
+                    panelMessage("server_properties", "{\"motd\":{}}", "req-13"));
+
+            JsonObject payload = capturedResponse().getAsJsonObject("data");
+            assertThat(payload.get("status").getAsString()).isEqualTo("error");
+            assertThat(payload.get("error").getAsString()).contains("motd");
         }
 
         @Test

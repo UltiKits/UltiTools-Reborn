@@ -227,6 +227,100 @@ class ServerPropertiesManagerTest {
             assertThat(stringsOf(message, "rejected")).containsExactly("rcon.password");
         }
 
+        /**
+         * 值不是 JSON 原始值时，`getAsString()` 在结果被构造之前就炸了，于是整批中断、
+         * 一条响应都发不出去——面板永远等不到回复。而 Gson 的失败方式并不统一，
+         * 所以三种载荷各测一次，实测（gson 2.8.9）：
+         *
+         * <pre>
+         * {}            → UnsupportedOperationException
+         * []            → IllegalStateException
+         * ["Hello"]     → 不抛，静默拆包成 "Hello"
+         * </pre>
+         *
+         * 最后一种最隐蔽：它不是崩溃，是畸形载荷被悄悄接受并写进磁盘。
+         */
+        @Test
+        @DisplayName("值是 JSON 对象：算 malformed，不中断整批，也不写磁盘")
+        void objectValuesAreMalformedNotFatal() {
+            UltiPanelWebSocketClient socket = attachSocket();
+            JsonObject payload = new JsonObject();
+            payload.add("motd", new JsonObject());
+            payload.addProperty("max-players", "64");
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "set_all");
+            data.add("values", payload);
+
+            manager.handleServerProperties(data);
+
+            JsonObject message = captureMessage(socket);
+            assertThat(message.get("success").getAsBoolean()).isFalse();
+            assertThat(stringsOf(message, "malformed")).containsExactly("motd");
+            // 后面的键仍然被处理了——一个畸形键不该毁掉整批。
+            assertThat(message.get("updated").getAsInt()).isEqualTo(1);
+            assertThat(manager.getSafeProperties().get("motd")).isEqualTo("A Minecraft Server");
+            assertThat(manager.getSafeProperties().get("max-players")).isEqualTo("64");
+        }
+
+        @Test
+        @DisplayName("值是空数组：算 malformed（Gson 这里抛的是另一种异常）")
+        void emptyArrayValuesAreMalformed() {
+            UltiPanelWebSocketClient socket = attachSocket();
+            JsonObject payload = new JsonObject();
+            payload.add("motd", new com.google.gson.JsonArray());
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "set_all");
+            data.add("values", payload);
+
+            manager.handleServerProperties(data);
+
+            assertThat(stringsOf(captureMessage(socket), "malformed")).containsExactly("motd");
+        }
+
+        @Test
+        @DisplayName("值是单元素数组：算 malformed，而不是被静默拆包写进去")
+        void singleElementArraysAreNotSilentlyUnwrapped() {
+            // 这一条是三种里唯一不抛异常的：Gson 的 JsonArray.getAsString() 在长度为 1 时
+            // 返回该元素的字符串。也就是说没有守卫的话，{"motd": ["Hello"]} 会被当成
+            // motd=Hello 写进磁盘——畸形载荷被悄悄接受，而不是被拒绝。
+            UltiPanelWebSocketClient socket = attachSocket();
+            com.google.gson.JsonArray wrapped = new com.google.gson.JsonArray();
+            wrapped.add("Hello");
+            JsonObject payload = new JsonObject();
+            payload.add("motd", wrapped);
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "set_all");
+            data.add("values", payload);
+
+            manager.handleServerProperties(data);
+
+            JsonObject message = captureMessage(socket);
+            assertThat(message.get("success").getAsBoolean()).isFalse();
+            assertThat(stringsOf(message, "malformed")).containsExactly("motd");
+            assertThat(manager.getSafeProperties().get("motd")).isEqualTo("A Minecraft Server");
+        }
+
+        @Test
+        @DisplayName("非字符串的原始值仍然可以写（数字、布尔）")
+        void nonStringPrimitivesStillWork() {
+            UltiPanelWebSocketClient socket = attachSocket();
+            JsonObject payload = new JsonObject();
+            payload.addProperty("max-players", 64);
+            payload.addProperty("pvp", false);
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "set_all");
+            data.add("values", payload);
+
+            manager.handleServerProperties(data);
+
+            // 负向对照：守卫拦的是「不是原始值」，不是「不是字符串」。
+            // 面板发数字和布尔是正常的，拦下它们会是一个新的回归。
+            JsonObject message = captureMessage(socket);
+            assertThat(message.get("success").getAsBoolean()).isTrue();
+            assertThat(manager.getSafeProperties().get("max-players")).isEqualTo("64");
+            assertThat(manager.getSafeProperties().get("pvp")).isEqualTo("false");
+        }
+
         @Test
         @DisplayName("没提供 values 时既不写也不回消息")
         void missingValuesIsNotARequest() {
