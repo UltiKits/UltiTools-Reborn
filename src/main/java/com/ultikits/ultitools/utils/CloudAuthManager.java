@@ -367,76 +367,91 @@ public class CloudAuthManager {
                 stopPolling();
                 return;
             }
-
-            try {
-                String apiUrl = HttpRequestUtils.getBaseUrl().trim();
-                Map<String, String> headers = new HashMap<>();
-                headers.put("Content-Type", "application/json");
-
-                SimpleHttpClient.Response response = SimpleHttpClient.get(
-                    apiUrl + "/auth/server-login/status?requestId=" + requestId,
-                    headers
-                );
-
-                if (response.isOk()) {
-                    JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
-                    String status = responseBody.has("status") ? responseBody.get("status").getAsString() : "pending";
-
-                    if ("completed".equals(status)) {
-                        // Extract token from response
-                        String tokenJson = responseBody.has("token") ? GSON.toJson(responseBody.getAsJsonObject("token")) : null;
-                        if (tokenJson != null) {
-                            TokenEntity token = GSON.fromJson(tokenJson, TokenEntity.class);
-                            if (token != null && token.getAccess_token() != null) {
-                                token.decodeJwtPayload();
-                                // logout 可能发生在「本次轮询发出」与「本次轮询拿到 completed」之间。
-                                // 直接往下走的话，下面的 enableCloud() + initWebsocket() 会把服务器
-                                // 悄悄登回去——而 logout 刚刚才报告过云功能已停止。
-                                if (!commitTokenIfCurrent(token, generation)) {
-                                    stopPolling();
-                                    return;
-                                }
-
-                                UltiTools.getInstance().getLogger().log(Level.INFO,
-                                    "UltiCloud login successful! Welcome, " +
-                                    (token.getUser_name() != null ? token.getUser_name() : "user") + "!");
-
-                                // Reset rate limiter on successful login
-                                ApiRateLimiter.reset("login");
-
-                                if (onComplete != null) {
-                                    onComplete.accept(token);
-                                }
-
-                                // Try to initialize cloud features
-                                try {
-                                    // 锁外：一次 HTTP 往返，只向面板注册服务器，不改本地状态。
-                                    PluginInitiationUtils.loginWithToken(token);
-                                    // 锁内：复查代际之后再开状态机、建连、起刷新调度。
-                                    // 提交凭证那一步对 logout 原子还不够——真正把服务器连回去的
-                                    // 是这一串，logout 挤在两者之间的话照样会被撤销。
-                                    if (!PluginInitiationUtils.activateCloudIfCurrent(generation)) {
-                                        stopPolling();
-                                        return;
-                                    }
-                                } catch (Exception e) {
-                                    UltiTools.getInstance().getLogger().log(Level.WARNING,
-                                        "Cloud features initialization failed: " + e.getMessage());
-                                }
-                            }
-                        }
-                        stopPolling();
-                    } else if ("expired".equals(status) || "error".equals(status)) {
-                        String error = responseBody.has("message") ? responseBody.get("message").getAsString() : "Unknown error";
-                        UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login failed: " + error);
-                        stopPolling();
-                    }
-                    // "pending" — keep polling
-                }
-            } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.FINE, "Magic link poll failed: " + e.getMessage());
-            }
+            pollLoginStatusOnce(requestId, onComplete, generation);
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** 查一次登录状态。任何异常都只记 FINE——轮询要继续，直到超时或拿到终态。 */
+    private static void pollLoginStatusOnce(String requestId, Consumer<TokenEntity> onComplete,
+                                            long generation) {
+        try {
+            String apiUrl = HttpRequestUtils.getBaseUrl().trim();
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/json");
+
+            SimpleHttpClient.Response response = SimpleHttpClient.get(
+                apiUrl + "/auth/server-login/status?requestId=" + requestId,
+                headers
+            );
+            if (!response.isOk()) {
+                return;
+            }
+
+            JsonObject responseBody = JsonParser.parseString(response.body()).getAsJsonObject();
+            String status = responseBody.has("status") ? responseBody.get("status").getAsString() : "pending";
+
+            if ("completed".equals(status)) {
+                completeMagicLinkLogin(responseBody, onComplete, generation);
+                stopPolling();
+            } else if ("expired".equals(status) || "error".equals(status)) {
+                String error = responseBody.has("message") ? responseBody.get("message").getAsString() : "Unknown error";
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Magic link login failed: " + error);
+                stopPolling();
+            }
+            // "pending" — keep polling
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE, "Magic link poll failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 处理一次拿到 {@code completed} 的登录：落凭证、再激活云功能。
+     * <p>
+     * 两步都要对 logout 设防，而且是两道不同的闸：
+     * {@link #commitTokenIfCurrent(TokenEntity, long)} 保证凭证不会在 logout 之后被写回；
+     * {@code activateCloudIfCurrent} 保证连接不会在 logout 之后被重新建起来。只有前者是
+     * 不够的——真正把服务器连回去的是后面那一串。
+     *
+     * @throws IOException 凭证落盘失败
+     */
+    private static void completeMagicLinkLogin(JsonObject responseBody,
+                                               Consumer<TokenEntity> onComplete,
+                                               long generation) throws IOException {
+        String tokenJson = responseBody.has("token") ? GSON.toJson(responseBody.getAsJsonObject("token")) : null;
+        if (tokenJson == null) {
+            return;
+        }
+        TokenEntity token = GSON.fromJson(tokenJson, TokenEntity.class);
+        if (token == null || token.getAccess_token() == null) {
+            return;
+        }
+        token.decodeJwtPayload();
+
+        // logout 可能发生在「本次登录发起」与「本次轮询拿到 completed」之间。
+        if (!commitTokenIfCurrent(token, generation)) {
+            return;
+        }
+
+        UltiTools.getInstance().getLogger().log(Level.INFO,
+            "UltiCloud login successful! Welcome, "
+                + (token.getUser_name() != null ? token.getUser_name() : "user") + "!");
+
+        // Reset rate limiter on successful login
+        ApiRateLimiter.reset("login");
+
+        if (onComplete != null) {
+            onComplete.accept(token);
+        }
+
+        try {
+            // 锁外：一次 HTTP 往返，只向面板注册服务器，不改本地状态。
+            PluginInitiationUtils.loginWithToken(token);
+            // 锁内：复查代际之后再开状态机、建连、起刷新调度。
+            PluginInitiationUtils.activateCloudIfCurrent(generation);
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Cloud features initialization failed: " + e.getMessage());
+        }
     }
 
     /**
