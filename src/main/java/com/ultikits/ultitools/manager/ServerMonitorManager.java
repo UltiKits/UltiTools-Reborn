@@ -26,7 +26,13 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public class ServerMonitorManager {
     private UltiPanelWebSocketClient webSocketClient;
-    private final ScheduledExecutorService scheduler;
+    /**
+     * 发送线程池。<b>不能是 final</b>：{@link #stopMonitoring()} 会 shutdown 它，而
+     * {@code ScheduledExecutorService} 一经 shutdown 就永久失效。logout 之后再 login
+     * 是一条完全正常的路径，那时 {@link #startMonitoring()} 必须拿到一个可用的池，
+     * 否则 {@code scheduleAtFixedRate} 直接抛 {@code RejectedExecutionException}。
+     */
+    private ScheduledExecutorService scheduler;
     private boolean isMonitoring = false;
     private int tickCount = 0;
 
@@ -122,6 +128,10 @@ public class ServerMonitorManager {
         }
         
         isMonitoring = true;
+        // 上一轮 stopMonitoring 把池关掉了就换一个新的——见字段上的说明。
+        if (scheduler == null || scheduler.isShutdown()) {
+            scheduler = Executors.newScheduledThreadPool(2);
+        }
         UltiTools.getInstance().getLogger().log(Level.INFO, "启动服务器状态监控");
         
         // 等待WebSocket连接建立后，立即发送初始状态

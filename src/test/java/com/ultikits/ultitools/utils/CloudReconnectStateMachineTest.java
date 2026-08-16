@@ -21,6 +21,7 @@ import org.mockito.Mockito;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.LogStreamManager;
+import com.ultikits.ultitools.manager.ServerMonitorManager;
 
 /**
  * 云连接重连状态机的行为：全局预算、logout 的终止语义、以及成功日志的位置。
@@ -35,13 +36,16 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 class CloudReconnectStateMachineTest {
 
     private Logger mockLogger;
+    private ServerMonitorManager mockMonitor;
 
     @BeforeEach
     void setUp() {
         mockLogger = mock(Logger.class);
+        mockMonitor = mock(ServerMonitorManager.class);
         // Consumer 重载：先打桩、后发布。见 TestHelper javadoc 与 issue #250。
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getServerMonitorManager()).thenReturn(mockMonitor);
             // 必须是惰性 answer，不能 thenReturn(LogStreamManager.getInstance())：
             // 这个回调跑在 mock 被发布**之前**（见 TestHelper javadoc），而
             // LogStreamManager 的构造函数会调 UltiTools.getInstance().getLogger()，
@@ -182,6 +186,18 @@ class CloudReconnectStateMachineTest {
             assertThat(countFrameworkHandlersOnRootLogger())
                     .as("「云功能已关闭」应当包含不再劫持 root logger")
                     .isZero();
+        }
+
+        @Test
+        @DisplayName("disableCloud 会停掉服务器监控")
+        void disableCloudStopsServerMonitor() {
+            // ServerMonitorManager 自带一个 ScheduledExecutorService 加两个主线程 Bukkit
+            // 定时任务。在此之前 stopMonitoring() 在整个 src/main 里没有调用方——写好了、
+            // 测过了、就是没接线，于是「云功能已关闭」之后主线程仍在按 5 秒遍历所有世界。
+            // 这里验证的是接线；停下来之后到底停了什么由 ServerMonitorSnapshotTest 覆盖。
+            PluginInitiationUtils.disableCloud();
+
+            Mockito.verify(mockMonitor).stopMonitoring();
         }
 
         @Test
@@ -363,7 +379,10 @@ class CloudReconnectStateMachineTest {
 
             PluginInitiationUtils.initializeManagers();
 
-            Mockito.verify(UltiTools.getInstance(), Mockito.never()).getServerMonitorManager();
+            // 断言接线动作本身没发生，而不是数 getServerMonitorManager() 被取过几次：
+            // 拆线路径现在也要取这个 manager 来 stopMonitoring，调用计数已不能区分两者。
+            Mockito.verify(mockMonitor, Mockito.never()).setWebSocketClient(Mockito.any());
+            Mockito.verify(mockMonitor).stopMonitoring();
             assertThat(loggedAt(Level.FINE))
                     .anySatisfy(line -> assertThat(line).contains("跳过管理器初始化"));
         }
