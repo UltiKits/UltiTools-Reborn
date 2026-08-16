@@ -10,6 +10,13 @@ import com.ultikits.ultitools.websocket.WebSocketMessageHandler;
  * <p>
  * 处理 pong/心跳响应消息的处理器。
  *
+ * <p><b>本类的能力已于 issue #235 全部搬进 {@code UltiPanelWebSocketClient} 的心跳路径</b>
+ * —— 延迟测量、最后一次 pong 时间、以及 {@code isAlive(long)} 存活判定都在那边了，并且
+ * 接上了「超过阈值未收到 pong 就主动重连」这条活路径（本类从来没有接线，见 #233）。
+ *
+ * <p>因此本类现在<b>可以被安全删除</b>，删除动作由 #233 执行。留着它只会造成
+ * 「registry 模式部分启用」的中间态。
+ *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0

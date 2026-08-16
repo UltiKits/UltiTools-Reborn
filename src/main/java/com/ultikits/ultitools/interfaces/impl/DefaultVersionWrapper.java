@@ -11,7 +11,7 @@ import com.ultikits.ultitools.interfaces.VersionWrapper;
  *
  * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} directly instead.
  */
-@Deprecated
+@Deprecated(since = "6.2.0", forRemoval = true)
 public class DefaultVersionWrapper implements VersionWrapper {
     // All methods use default implementations from VersionWrapper interface
     // which delegate to XVersionUtils

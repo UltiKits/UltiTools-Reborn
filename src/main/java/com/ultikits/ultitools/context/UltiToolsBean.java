@@ -8,8 +8,10 @@ import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Configuration;
+import org.jetbrains.annotations.ApiStatus;
 
 @Configuration
+@ApiStatus.Internal
 public class UltiToolsBean {
     @Bean
     public UltiTools getUltiTools() {
@@ -24,7 +26,7 @@ public class UltiToolsBean {
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
-    @Deprecated
+    @Deprecated(since = "6.2.0", forRemoval = true)
     @Bean
     public VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();

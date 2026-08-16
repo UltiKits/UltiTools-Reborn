@@ -113,7 +113,24 @@ public class CommandManager {
      *
      * @param plugin      UltiTools Plugin instance <br> 模块实例
      * @param packageName Package name <br> 包名
+     * @deprecated This overload casts every scanned class to {@link AbstractCommandExecutor},
+     *             which is itself scheduled for removal in 6.3.0. A command class written
+     *             against the current {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
+     *             does not extend that type, so the cast throws {@link ClassCastException} —
+     *             and the surrounding catch lists only the four reflective checked exceptions,
+     *             so it escapes. Use {@link #registerAll(UltiToolsPlugin)}, which resolves
+     *             command classes as beans from the plugin's container and performs no cast.
+     *             See issue #272.
+     *             <p>
+     *             这个重载把扫描到的每个类都强转为 {@link AbstractCommandExecutor}，
+     *             而后者本身已计划在 6.3.0 移除。按当前推荐写法继承
+     *             {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
+     *             的命令类不属于那个类型，强转必抛 {@link ClassCastException}，
+     *             且外层 catch 只列了四个反射类受检异常，异常会逃出去。
+     *             请改用 {@link #registerAll(UltiToolsPlugin)} —— 它从模块容器里按 bean
+     *             解析命令类，不做强转。见 issue #272。
      */
+    @Deprecated(since = "6.2.5", forRemoval = true)
     public void registerAll(UltiToolsPlugin plugin, String packageName) {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 CmdExecutor.class,
@@ -205,8 +222,11 @@ public class CommandManager {
      * @param permission      Permission <br> 权限
      * @param description     Description <br> 描述
      * @param aliases         Aliases <br> 别名
+     * @deprecated Use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
+     *             <p>
+     *             请改用 {@link #register(UltiToolsPlugin, Class, String, String, String...)}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
         command.setAliases(Arrays.asList(aliases));
@@ -222,8 +242,11 @@ public class CommandManager {
      * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class)}代替。
      *
      * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead.
+     *             <p>
+     *             请改用 {@link #register(UltiToolsPlugin, Class)}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
 

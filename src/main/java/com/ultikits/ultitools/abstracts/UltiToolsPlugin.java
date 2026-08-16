@@ -18,6 +18,7 @@ import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -69,7 +70,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Getter
     @Setter
     private String resourceFolderPath;
-    @Setter
     @Getter
     private SimpleContainer context;
 
@@ -164,8 +164,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
      * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
      * @param mainClass           the main class of the plugin <br> 插件的主类
+     * @deprecated Use the seven-argument constructor and pass {@code resourceFolderPath}
+     *             explicitly. This overload hard-codes it to
+     *             {@code <dataFolder>/pluginConfig/<pluginName>}.
+     *             <p>
+     *             请改用七参数构造函数并显式传入 {@code resourceFolderPath}。
+     *             此重载把它硬编码成了 {@code <dataFolder>/pluginConfig/<插件名>}。
      */
-    @Deprecated
+    @Deprecated(since = "6.0.8", forRemoval = true)
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
         this(pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass,
              UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + pluginName);
@@ -203,6 +209,37 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Injects the IoC container created for this plugin.
+     * <p>
+     * 注入为本插件创建的 IoC 容器。
+     * <p>
+     * Called by {@code PluginManager} while a module is being loaded, before
+     * {@code registerSelf()} runs. It is not part of the module-facing API — a
+     * module that calls it replaces the container the framework already wired up,
+     * losing every bean that was injected into it.
+     * <p>
+     * 由 {@code PluginManager} 在加载模块时调用，早于 {@code registerSelf()}。它不属于
+     * 面向模块的 API——模块自己调用它，等于把框架已经装配好的容器整个换掉，里面注入过的
+     * bean 全部丢失。
+     * <p>
+     * Deliberately still public: {@code PluginManager} lives in another package, so
+     * this cannot be narrowed to package-private, and deleting it outright would
+     * remove a public method, which the compatibility policy forbids in a PATCH
+     * release. The annotation is a signal to humans and IDEs; it enforces nothing
+     * at runtime.
+     * <p>
+     * 刻意保持 public：{@code PluginManager} 不在同一个包，降不成 package-private；
+     * 直接删掉则是移除一个 public 方法，兼容性策略不允许 PATCH 版本这么做。注解只是给人
+     * 和 IDE 看的信号，运行期不做任何强制。
+     *
+     * @param context the container created for this plugin <br> 为本插件创建的容器
+     */
+    @ApiStatus.Internal
+    public void setContext(SimpleContainer context) {
+        this.context = context;
+    }
+
+    /**
      * @return the config manager <br> 配置管理器
      */
     public static ConfigManager getConfigManager() {
@@ -234,7 +271,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @return the version wrapper <br> 版本包装器
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
-    @Deprecated
+    @Deprecated(since = "6.2.0", forRemoval = true)
     public static VersionWrapper getVersionWrapper() {
         return UltiTools.getInstance().getVersionWrapper();
     }

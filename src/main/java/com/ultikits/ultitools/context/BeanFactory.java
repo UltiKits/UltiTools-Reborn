@@ -1,10 +1,13 @@
 package com.ultikits.ultitools.context;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Simple bean factory to replace Spring's BeanFactory.
  * <br>
  * 简单的Bean工厂，用于替换Spring的BeanFactory。
  */
+@ApiStatus.Internal
 public class BeanFactory {
     private final SimpleContainer container;
 

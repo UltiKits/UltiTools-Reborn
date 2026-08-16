@@ -2,7 +2,13 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -11,6 +17,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -20,10 +29,14 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.InOrder;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.context.SimpleContainer;
 
+import org.bukkit.Bukkit;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 /**
@@ -45,11 +58,12 @@ class PluginManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         MockBukkit.mock(); // Server mock not stored as field - only used for initialization
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         pluginManager = new PluginManager();
     }
@@ -730,6 +744,209 @@ class PluginManagerTest {
 
             // Assert
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
+        }
+    }
+
+    /**
+     * 兼容性门禁的时序测试。
+     * <p>
+     * 守的是 issue #184：门禁原先跑在容器 refresh() 之后，于是「UltiTools 版本过旧」那句提示
+     * 在它唯一有意义的场景里（模块的 bean 引用了不存在的方法）永远说不出口——模块先死在
+     * refresh 里，被通用 catch 报成普通初始化失败。
+     * <p>
+     * 这里用 {@code register(UltiToolsPlugin)} 这条路径：实例由调用方给，容器由 PluginManager
+     * 现建，所以「有没有发生 bean 构造」可以直接用 {@code setContext} 有没有被调过来观测。
+     */
+    @Nested
+    @DisplayName("兼容性门禁时序测试")
+    class CompatibilityGateOrderingTests {
+
+        private static final int CURRENT_API_VERSION = 625;
+
+        private MockedStatic<UltiTools> ultiToolsStatic;
+        private final List<LogRecord> bukkitLogs = new ArrayList<>();
+        private Handler captureHandler;
+
+        @BeforeEach
+        void setUpGate() {
+            UltiTools ultiTools = mock(UltiTools.class);
+            DependenceManagers dependenceManagers = mock(DependenceManagers.class);
+            lenient().when(dependenceManagers.getContext()).thenReturn(new SimpleContainer());
+            lenient().when(ultiTools.getDependenceManagers()).thenReturn(dependenceManagers);
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+
+            // getPluginVersion() 走 getEnv() → getInstance().getTextResource("env.yml")，
+            // 而那个方法在 JavaPlugin 里是 protected，测试包里打不了桩，所以直接桩静态方法。
+            ultiToolsStatic = mockStatic(UltiTools.class);
+            ultiToolsStatic.when(UltiTools::getInstance).thenReturn(ultiTools);
+            ultiToolsStatic.when(UltiTools::getPluginVersion).thenReturn(CURRENT_API_VERSION);
+
+            bukkitLogs.clear();
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    bukkitLogs.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            Bukkit.getLogger().addHandler(captureHandler);
+        }
+
+        @AfterEach
+        void tearDownGate() {
+            Bukkit.getLogger().removeHandler(captureHandler);
+            if (ultiToolsStatic != null) {
+                ultiToolsStatic.close();
+            }
+        }
+
+        private UltiToolsPlugin modules(String name, String mainClass, String version, int minApiVersion) {
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            lenient().when(plugin.getPluginName()).thenReturn(name);
+            lenient().when(plugin.getMainClass()).thenReturn(mainClass);
+            lenient().when(plugin.getVersion()).thenReturn(version);
+            lenient().when(plugin.getMinUltiToolsVersion()).thenReturn(minApiVersion);
+            return plugin;
+        }
+
+        private String warnings() {
+            StringBuilder joined = new StringBuilder();
+            for (LogRecord record : bukkitLogs) {
+                if (Level.WARNING.equals(record.getLevel())) {
+                    joined.append(record.getMessage()).append('\n');
+                }
+            }
+            return joined.toString();
+        }
+
+        @Test
+        @DisplayName("声明了更高 API 版本的模块应该在任何 bean 被构造之前就被拒绝")
+        void incompatibleModuleShouldBeRejectedBeforeAnyBeanIsBuilt() throws Exception {
+            // Arrange - 针对未来 API 编译的模块，正是那种 bean 会引用不存在方法的模块
+            UltiToolsPlugin plugin = modules("FutureModule", "com.example.FutureModule",
+                    "1.0.0", CURRENT_API_VERSION + 1);
+
+            // Act
+            boolean result = pluginManager.register(plugin);
+
+            // Assert
+            assertThat(result).isFalse();
+            assertThat(warnings()).contains("UltiTools version is outdated");
+            verify(plugin, never()).setContext(any());
+            verify(plugin, never()).registerSelf();
+        }
+
+        @Test
+        @DisplayName("版本兼容的模块应该被放行去建容器")
+        void compatibleModuleShouldProceedToContextConstruction() throws Exception {
+            // Arrange
+            UltiToolsPlugin plugin = modules("OkModule", "com.example.OkModule",
+                    "1.0.0", CURRENT_API_VERSION);
+            when(plugin.registerSelf()).thenReturn(true);
+
+            // Act
+            boolean result = pluginManager.register(plugin);
+
+            // Assert
+            assertThat(result).isTrue();
+            verify(plugin).setContext(any());
+        }
+
+        @Test
+        @DisplayName("已经加载了更新版本时也应该在建容器之前拒绝")
+        void supersededModuleShouldBeRejectedBeforeContextConstruction() {
+            // Arrange
+            UltiToolsPlugin loaded = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            when(loaded.isNewerVersionThan(older)).thenReturn(true);
+            pluginManager.getPluginList().add(loaded);
+
+            // Act
+            boolean result = pluginManager.register(older);
+
+            // Assert
+            assertThat(result).isFalse();
+            assertThat(warnings()).contains("There is already a new version");
+            verify(older, never()).setContext(any());
+        }
+
+        @Test
+        @DisplayName("被取代的旧版本要等新模块初始化成功之后才卸载")
+        void olderVersionShouldBeUnregisteredOnlyAfterInitialization() throws Exception {
+            // Arrange
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            when(newer.isNewerVersionThan(older)).thenReturn(true);
+            when(newer.registerSelf()).thenReturn(true);
+            pluginManager.getPluginList().add(older);
+
+            // Act
+            boolean result = pluginManager.register(newer);
+
+            // Assert - 顺序要求：先把新的建起来，再卸旧的
+            assertThat(result).isTrue();
+            InOrder order = inOrder(newer, older);
+            order.verify(newer).setContext(any());
+            order.verify(older).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("新模块 registerSelf 返回 false 时不得卸掉旧版本")
+        void failedRegisterSelfShouldNotUnregisterTheOlderVersion() throws Exception {
+            // 卸旧必须等到新版本真正激活成功。放在 registerSelf() 之前的话，一旦它返回
+            // false，旧版本已经被卸、新版本的 context 又被 close——这个模块两头落空，
+            // 而它原本是在正常运行的。
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            when(newer.isNewerVersionThan(older)).thenReturn(true);
+            when(newer.registerSelf()).thenReturn(false);
+            pluginManager.getPluginList().add(older);
+
+            boolean result = pluginManager.register(newer);
+
+            assertThat(result).isFalse();
+            verify(older, never()).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("新模块 registerSelf 抛异常时同样不得卸掉旧版本")
+        void throwingRegisterSelfShouldNotUnregisterTheOlderVersion() throws Exception {
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
+            when(newer.isNewerVersionThan(older)).thenReturn(true);
+            when(newer.registerSelf()).thenThrow(new java.io.IOException("激活失败"));
+            pluginManager.getPluginList().add(older);
+
+            boolean result = pluginManager.register(newer);
+
+            assertThat(result).isFalse();
+            verify(older, never()).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("新模块因版本不兼容被拒时不应该顺手卸掉已加载的旧版本")
+        void rejectedModuleShouldNotUnregisterTheLoadedOlderVersion() {
+            // Arrange - 新版本更高但要求的 API 太新：拒它，同时不能动线上正在跑的那个
+            UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
+            UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION + 1);
+            lenient().when(newer.isNewerVersionThan(older)).thenReturn(true);
+            pluginManager.getPluginList().add(older);
+
+            // Act
+            boolean result = pluginManager.register(newer);
+
+            // Assert
+            assertThat(result).isFalse();
+            verify(older, never()).unregisterSelf();
         }
     }
 }

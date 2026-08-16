@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.logging.Logger;
@@ -105,7 +106,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         for (Field f : ReflectionUtil.getFields(type)) {
             if (f.isAnnotationPresent(Column.class)) {
                 Column col = f.getAnnotation(Column.class);
-                String sqlName = col.value().toLowerCase();
+                // Locale.ROOT：土耳其语/阿塞拜疆语 locale 下 'I' 会折成无点的 'ı'，
+                // 建映射与查映射只要有一边跟着系统 locale 走，列名就对不上。
+                String sqlName = col.value().toLowerCase(Locale.ROOT);
                 columnToFieldName.put(sqlName, f.getName());
                 if (f.getType() == boolean.class || f.getType() == Boolean.class) {
                     booleanColumns.put(sqlName, true);
@@ -120,7 +123,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             while (rs.next()) {
                 Map<String, Object> map = new LinkedHashMap<>();
                 for (int i = 1; i <= cols; i++) {
-                    String colName = meta.getColumnLabel(i).toLowerCase();
+                    String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
                     Object value = rs.getObject(i);
                     // SQLite stores BOOLEAN as INTEGER (0/1); convert for Gson compatibility
                     if (value instanceof Number && booleanColumns.containsKey(colName)) {

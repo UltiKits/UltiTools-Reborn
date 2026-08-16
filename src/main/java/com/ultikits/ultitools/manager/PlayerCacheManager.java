@@ -10,6 +10,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Manages automatic cleanup of @PlayerCache-annotated Map fields when players quit.
@@ -18,6 +19,7 @@ import com.ultikits.ultitools.annotations.PlayerCacheSaver;
  *
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class PlayerCacheManager {
 
     private static final Logger LOGGER = Logger.getLogger(PlayerCacheManager.class.getName());

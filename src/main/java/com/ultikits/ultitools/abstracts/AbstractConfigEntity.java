@@ -123,16 +123,29 @@ public abstract class AbstractConfigEntity {
      * <p>
      * 更新配置实体的属性。
      *
+     * <p>
+     * 字段的遍历方式与路径推导必须与 {@code init()} / {@code save()} / {@code reload()} 完全一致，
+     * 否则会出现「写进去了、其实没写」：这四个方法各自遍历 {@code @ConfigEntry} 字段，
+     * 而本方法过去两处都跟它们不一样 ——
+     * 用 {@code getDeclaredFields()} 而非 {@link ReflectionUtil#getFields(Class)}（漏掉父类字段），
+     * 且不把空的 {@code path} 归一到字段名。后者的后果最隐蔽：{@code @ConfigEntry} 不写
+     * {@code path} 是受支持的写法，{@code init}/{@code save} 会按字段名读写它，
+     * {@link #toJsonObject()} 也按字段名把它发给面板，而这里去 JSON 里找空字符串键，
+     * 永远找不到——字段被跳过，随后 {@code config.save} 照常执行，调用方收到成功。
+     *
      * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
      * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         Gson gson = new Gson();
-        for (Field field : this.getClass().getDeclaredFields()) {
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
                 String path = annotation.path();
+                if (path.isEmpty()) {
+                    path = field.getName();
+                }
                 if (jsonObject.has(path)) {
                     Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
                     if (configValue != null) {
@@ -174,11 +187,17 @@ public abstract class AbstractConfigEntity {
      */
     public JsonObject getComments() {
         JsonObject jsonObject = new JsonObject();
-        Field[] declaredFields = this.getClass().getDeclaredFields();
-        for (Field field : declaredFields) {
+        // 与 updateProperties 同样的两处对齐：走完整字段树、空 path 归一到字段名。
+        // 不归一的话，没写 path 的字段其注释会被塞在 "" 这个键下，而 toJsonObject()
+        // 是按字段名发值的，面板两边对不上，那条注释永远显示不出来。
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                jsonObject.addProperty(annotation.path(), annotation.comment());
+                String path = annotation.path();
+                if (path.isEmpty()) {
+                    path = field.getName();
+                }
+                jsonObject.addProperty(path, annotation.comment());
             }
         }
         return jsonObject;

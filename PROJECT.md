@@ -36,12 +36,12 @@
 
 **Two long-lived branches. Never commit to either directly.**
 
-- **`main` is the GitHub default branch** (`origin/HEAD` → `origin/main`). It is also the only branch
-  `maven-ci.yml` accepts pull requests into.
-- **`alpha` is a parallel long-lived branch**, not the default. The two have diverged, and the same change is
-  sometimes shipped to both as separate PRs (for example #166 → `main`, #167 → `alpha`).
-- **Ask which branch to target before starting.** Release-bound work goes to `main`; work coordinated with
-  the downstream module rollout has historically gone to `alpha`. Do not guess.
+- **`main` is the GitHub default branch** (`origin/HEAD` → `origin/main`). Scheduled workflow triggers
+  fire only for the copy of a workflow that lives here.
+- **`alpha` is the integration branch**, not the default. Day-to-day work targets `alpha`.
+- **A pull request into `main` may only come from `alpha`.** This is enforced by `pr-source-guard.yml`,
+  which is wired up as a required check — anything else has to integrate into `alpha` first. Target
+  `alpha` unless you have been told otherwise.
 - **Before editing, run `git branch --show-current`.** If it returns `main` or `alpha`, branch off first.
 - **Enforcement is configured through repository rulesets and branch protection, and it changes.** Do not
   assume a branch is locked just because this file says so — check the live state:
@@ -86,20 +86,27 @@ All commands run from the repository root.
 
 ## CI
 
-All jobs run on JDK 21 (temurin). Re-read the workflow files rather than trusting this table if behaviour
-surprises you.
+All jobs run on JDK 21 (temurin). **Workflow files change more often than this card does — read
+`.github/workflows/` rather than trusting the table below whenever behaviour surprises you.**
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `maven-ci.yml` | `push` on every branch, **and** `pull_request` into `main` only | `mvn -B test`, then `mvn -B package` |
+| `maven-ci.yml` | `push` on every branch, **and** `pull_request` into `main` or `alpha` | `mvn -B clean verify` plus JaCoCo reporting and a Codacy coverage upload. A second job builds a SNAPSHOT and runs only on `push` to `alpha`. |
+| `pr-source-guard.yml` | `pull_request` into `main` | Wired up as a required check. Rejects any pull request into `main` whose head branch is not `alpha`. |
 | `publish-packages.yml` | `release: [published]` — a published GitHub Release, **not** a tag push | Sets the version from the release tag, builds skipping tests and GPG, publishes to GitHub Packages under the lowercase id `ultitools-api`. A second `publish-central` job targets Maven Central but is gated behind the repository variable `PUBLISH_TO_CENTRAL == 'true'` — it does not run unless that variable is set. |
-| `release.yml` | `workflow_dispatch` only, with inputs `release_type`, `release_notes`, `dry_run` | Rejects versions containing `SNAPSHOT`, runs tests, builds package + javadoc, creates the GitHub Release, uploads javadoc over FTP |
+| `gpg-key-expiry.yml` | monthly `schedule`, `workflow_dispatch`, and pull requests touching its own script | Warns before the Maven Central signing key expires. Uses the public key only. `schedule` fires only for workflows living on the **default** branch. |
 
 Maven Central publishing goes through `central-publishing-maven-plugin` with server id `ultikits-sonatype`.
 
+Releases are cut from the maintainer's machine with `.github/scripts/release.sh`, which runs every check
+that has to happen **before** the tag exists (clean worktree, release branch, version format, tag not taken)
+and then creates the Release with the JAR attached. `publish-packages.yml` takes over from `release:
+published`. There is no `workflow_dispatch` release workflow — one existed, was never run once, and was
+removed in #231.
+
 The release path is shared with every downstream module repository — **get maintainer sign-off before
-changing `publish-packages.yml` or `release.yml`.** Verification-only changes to `maven-ci.yml` are made
-routinely.
+changing `publish-packages.yml` or `.github/scripts/release.sh`.** Verification-only changes to
+`maven-ci.yml` are made routinely.
 
 ## Scope Boundaries
 
@@ -143,10 +150,12 @@ If it is tracked, `git rm --cached data.json` and rebase onto the current defaul
    the classpath.
 2. **`UltiToolsPlugin` is not a Bukkit `Plugin`.** For scheduler tasks use
    `Bukkit.getPluginManager().getPlugin("UltiTools")`; do not cast it to `JavaPlugin`.
-3. **`BaseCommandExecutor` is not auto-registered.** `CommandManager`'s package scan casts discovered classes
-   to the legacy `AbstractCommandExecutor`, so a `BaseCommandExecutor` picked up by `@CmdExecutor` scanning
-   throws `ClassCastException` — which the surrounding catch swallows. Register it explicitly via
-   `CommandManager.register(plugin, Class)`.
+3. **`CommandManager.registerAll(plugin, packageName)` casts to the legacy `AbstractCommandExecutor`.**
+   `BaseCommandExecutor` does not extend it — it implements `TabExecutor` directly — so pointing that
+   overload at a package containing one throws `ClassCastException`. The surrounding `catch` lists only the
+   four reflective checked exceptions, so the CCE **propagates out of registration** rather than being
+   skipped. Use `CommandManager.register(plugin, Class)` for explicit registration, or the container-based
+   `registerAll(plugin)` overload, which resolves commands as `CommandExecutor` beans and does not cast.
 4. **Bukkit thread safety.** Anything reaching Bukkit from an async context must go through
    `Bukkit.getScheduler().runTask()`, or Paper's AsyncCatcher rejects it.
 5. **AOP uses CGLIB subclass proxies only.** `final` classes and methods cannot be proxied, and
@@ -165,7 +174,11 @@ Reading order for an agent starting work here:
 
 ## Last Verified
 
-- **Date:** 2026-08-10
-- **How:** every claim re-checked against `git`, `pom.xml`, `plugin.yml`, the workflow files, and the source
-  tree. Nothing was carried over on trust.
-- **Next verification due:** after the next release, or whenever `main` and `alpha` are reconciled.
+- **Date:** 2026-08-15, against `alpha`.
+- **How:** every claim re-checked against `git`, `pom.xml`, `plugin.yml`, `.github/workflows/`, and the
+  source tree. Nothing was carried over on trust.
+- **What this card is for:** the things that do not change — the annotation namespace, the base-class
+  traps, the credential hazard, the line-ending convention. Anything that is a snapshot of current state
+  (branch divergence, dependency versions, which jobs a workflow happens to have today) belongs in the
+  file that owns it, and this card points you at that file instead of copying the number.
+- **Next verification due:** after the next release, or whenever `.github/workflows/` changes shape.

@@ -3,12 +3,14 @@ package com.ultikits.ultitools.context;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Bean definition to hold metadata about a bean.
  * <br>
  * Bean定义类，用于保存Bean的元数据。
  */
+@ApiStatus.Internal
 public class BeanDefinition {
     private Class<?> beanClass;
     private String beanName;

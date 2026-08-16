@@ -424,6 +424,26 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * 验证参数数量。
      */
     protected boolean validateParameterCount(String[] args, String format, CommandSender sender, Command command) {
+        // 空 format 代表裸命令，期望零参数，必须在 split 之前短路。
+        // Java 的 "".split(" ") 返回长度为 1 的数组（内含一个空字符串），
+        // 因此下面两条比较都会读错：零参数时 1 != 0 判为参数不足，裸命令的方法体
+        // 一次也执行不到；带一个参数时 1 == 1 反而判为合法。
+        //
+        // An empty format is a bare command taking no arguments, and must short-circuit
+        // before the split: "".split(" ") returns a length-1 array holding one empty
+        // string, so both comparisons below read the wrong thing -- with no arguments it
+        // sees 1 != 0 and rejects, and with one argument it sees 1 == 1 and accepts.
+        // AbstractCommandExecutor.checkParameters carries the equivalent guard.
+        if (format.isEmpty()) {
+            if (args.length == 0) {
+                return true;
+            }
+            sender.sendMessage(String.format(
+                    UltiTools.getInstance().i18n("正确用法"),
+                    command.getName(), format));
+            return false;
+        }
+
         String[] formatArgs = format.split(" ");
         
         boolean hasVarargs = formatArgs.length > 0 && formatArgs[formatArgs.length - 1].endsWith("...>");

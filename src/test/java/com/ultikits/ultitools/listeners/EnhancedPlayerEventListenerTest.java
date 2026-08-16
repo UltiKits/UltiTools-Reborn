@@ -50,11 +50,12 @@ class EnhancedPlayerEventListenerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock ServerMonitorManager
         mockMonitorManager = mock(ServerMonitorManager.class);
-        when(UltiTools.getInstance().getServerMonitorManager()).thenReturn(mockMonitorManager);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getServerMonitorManager()).thenReturn(mockMonitorManager);
+        });
 
         listener = new EnhancedPlayerEventListener();
     }

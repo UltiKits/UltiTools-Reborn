@@ -13,12 +13,14 @@ import com.ultikits.ultitools.utils.VersionComparatorUtil;
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.platform.bukkit.BukkitAudiences;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Dependence managers.
  * <br>
  * 依赖管理器。
  */
+@ApiStatus.Internal
 public class DependenceManagers {
     @Getter
     private BukkitAudiences adventure;

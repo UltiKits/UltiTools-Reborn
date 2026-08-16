@@ -17,6 +17,7 @@ import org.bukkit.event.server.ServerLoadEvent;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 日志流管理器
@@ -25,6 +26,7 @@ import java.util.logging.Logger;
  * @author UltiKits
  * @version 2.0.0
  */
+@ApiStatus.Internal
 public class LogStreamManager implements Listener {
     
     private static LogStreamManager instance;
@@ -57,23 +59,41 @@ public class LogStreamManager implements Listener {
      * 初始化日志流管理器
      */
     public void initialize(UltiPanelWebSocketClient client) {
+        // 幂等：重复调用必须先拆掉上一轮留下的东西。
+        //
+        // 这个方法由 onConnectHandler 调用，而 onConnectHandler 在**每一次** onOpen 都会跑
+        // ——包括重连窗口内的 reconnect()，以及 reinitWebSocket 造出新客户端之后的那次。
+        // 原先它无条件 new 一个 UltiPanelLogTransmitter（起一条传输线程）并往 JVM root logger
+        // 挂一个新的 SystemLogHandler，而 removeHandler 只写在 shutdown() 里，shutdown() 的
+        // 唯一调用者是 onDisable。于是连接每抖动一次就泄漏一个 handler 加一条线程，
+        // 每行日志被重复发送 N 次。见 issue #181。
+        detachAllSystemLogHandlers();
+        if (logTransmitter != null) {
+            try {
+                logTransmitter.shutdown();
+            } catch (Exception e) {
+                UltiTools.getInstance().getLogger().warning(
+                    "[UltiPanel] Error shutting down previous log transmitter: " + e.getMessage());
+            }
+        }
+
         this.webSocketClient = client;
-        
+
         // 初始化日志传输器
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
-        
+
         // 从配置文件加载批量发送设置
         loadBatchConfiguration();
-        
+
         // 创建并配置系统日志处理器
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
         this.systemLogHandler.loadConfiguration();
-        
+
         // 添加系统日志处理器到根Logger
         Logger rootLogger = Logger.getLogger("");
         rootLogger.addHandler(systemLogHandler);
-        
+
         // 自动启动日志流（立即开始监控和发送日志）
         startLogStream("auto", "info");
         
@@ -448,15 +468,30 @@ public class LogStreamManager implements Listener {
         }
         
         // 从Bukkit的Logger中移除处理器
+        detachAllSystemLogHandlers();
+        
+        UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");
+    }
+
+    /**
+     * 摘掉 JVM root logger 上所有本框架的 {@link SystemLogHandler}。
+     * <p>
+     * 刻意按类型扫描并全部移除，而不是只移除 {@code this.systemLogHandler}：在本方法存在之前，
+     * 每次重连成功都会往 root logger 上多挂一个，字段里只留得住最后那一个，先前泄漏的那些
+     * 没有任何引用能指到、也就永远摘不掉。按类型扫一遍才能把历史欠账一并清干净，这也是
+     * 「handler 数量恒为 1」这条验收唯一能成立的写法。见 issue #181。
+     */
+    private void detachAllSystemLogHandlers() {
         try {
             Logger rootLogger = Logger.getLogger("");
-            if (systemLogHandler != null) {
-                rootLogger.removeHandler(systemLogHandler);
+            for (java.util.logging.Handler handler : rootLogger.getHandlers()) {
+                if (handler instanceof SystemLogHandler) {
+                    rootLogger.removeHandler(handler);
+                }
             }
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning("Error removing log handler: " + e.getMessage());
         }
-        
-        UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");
+        this.systemLogHandler = null;
     }
 }

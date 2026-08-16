@@ -78,13 +78,19 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
     <version>6.2.4</version>
+    <scope>provided</scope>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-implementation 'com.ultikits:UltiTools-API:6.2.4'
+compileOnly 'com.ultikits:UltiTools-API:6.2.4'
 ```
+
+> The scope matters. UltiTools-API is a shaded JAR published with a dependency-free POM, and the
+> UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it — a
+> `compile`/`implementation` scope pulls the whole framework (including the un-relocated XSeries)
+> into your own JAR.
 
 ### Option A: Write an UltiTools Module (Recommended)
 
@@ -199,10 +205,15 @@ public class HomeEntity extends BaseDataEntity<String> {
 // Write commands like controllers — auto-registered, auto-completed
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(alias = {"home"}, permission = "myplugin.home")
-public class HomeCommand extends AbstractCommandExecutor {
+public class HomeCommand extends BaseCommandExecutor {
 
     @Autowired
     private HomeService homeService;
+
+    @Override
+    protected void handleHelp(CommandSender sender) {
+        sender.sendMessage("/home tp <name> | set <name> | list");
+    }
 
     @CmdMapping(format = "tp <name>")
     public void teleport(@CmdSender Player player, @CmdParam("name") String name) {
@@ -278,6 +289,12 @@ public void pay(@CmdSender Player sender, @CmdParam("player") String target, @Cm
     // 'amount' is already a double — no manual parsing
 }
 ```
+
+> **Migrating from `AbstractCommandExecutor`.** The older base class is deprecated
+> (`forRemoval = true`, since 6.2.0) and is scheduled for removal in **6.3.0**. Extend
+> `abstracts.command.BaseCommandExecutor` instead; the only mandatory addition is the abstract
+> `handleHelp(CommandSender)`. Step-by-step instructions and the full list of what 6.3.0 removes
+> are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
 
 ### IoC Container with `@Autowired`
 Spring-like dependency injection with three-level cache for circular dependency resolution.
@@ -365,8 +382,10 @@ public class InterestService {
 
 @CmdExecutor(alias = {"warp"}, permission = "myplugin.warp")
 @ConditionalOnConfig(value = "config/config.yml", path = "enableWarp")
-public class WarpCommands extends AbstractCommandExecutor {
+public class WarpCommands extends BaseCommandExecutor {
     // Command doesn't exist if enableWarp: false
+    @Override
+    protected void handleHelp(CommandSender sender) { }
 }
 ```
 
@@ -446,7 +465,7 @@ UltiTools-Reborn/
 ├── src/main/java/com/ultikits/ultitools/
 │   ├── UltiTools.java           # Main plugin entry
 │   ├── api/                     # External Plugin API (UltiToolsAPI, ExternalPluginAdapter)
-│   ├── abstracts/               # Base classes (UltiToolsPlugin, AbstractCommandExecutor, etc.)
+│   ├── abstracts/               # Base classes (UltiToolsPlugin, BaseCommandExecutor, etc.)
 │   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Scheduled, etc.)
 │   │   └── config/              # Validation annotations (@Range, @NotEmpty, @Size, @Pattern)
 │   ├── aop/                     # AOP system (CglibProxyFactory, TransactionInterceptor)

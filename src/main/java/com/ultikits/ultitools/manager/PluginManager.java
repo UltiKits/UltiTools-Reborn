@@ -130,7 +130,11 @@ public class PluginManager {
             );
             return false;
         }
-        boolean result = invokeRegisterSelf(plugin);
+        // null 表示兼容性门禁拒了它，拒绝理由已经打过日志，这里不要再包一层通用错误。
+        if (plugin == null) {
+            return false;
+        }
+        boolean result = attemptPluginRegistration(plugin);
         if (result) {
             registerBukkit(plugin, true);
         }
@@ -173,7 +177,11 @@ public class PluginManager {
             );
             return false;
         }
-        boolean result = invokeRegisterSelf(plugin);
+        // 同上：null 是门禁拒绝，不是初始化失败。
+        if (plugin == null) {
+            return false;
+        }
+        boolean result = attemptPluginRegistration(plugin);
         if (result) {
             registerBukkit(plugin, false);
         }
@@ -185,6 +193,11 @@ public class PluginManager {
      * @return Register result <br> 注册结果
      */
     public boolean register(UltiToolsPlugin plugin) {
+        // 门禁先跑：这条路径的实例是调用方给的，容器还没建，被拒时一个 bean 都不会被构造。
+        // 见 issue #184。
+        if (!passesCompatibilityGates(plugin)) {
+            return false;
+        }
         try {
             SimpleContainer pluginContext = new SimpleContainer();
             plugin.setContext(pluginContext);
@@ -216,7 +229,7 @@ public class PluginManager {
             );
             return false;
         }
-        boolean result = invokeRegisterSelf(plugin);
+        boolean result = attemptPluginRegistration(plugin);
         if (result) {
             registerBukkit(plugin, false);
         }
@@ -427,23 +440,33 @@ public class PluginManager {
 
 
     /**
-     * Invoke registerSelf method.
+     * Compatibility gates that must run before the module's bean graph is built.
      * <br>
-     * 调用registerSelf方法。
+     * 必须跑在模块 bean 图构建之前的兼容性门禁。
+     * <p>
+     * 这两道门禁原先跑在 {@code initializePlugin} 之后，也就是容器 {@code refresh()}、整张
+     * bean 图连同 {@code @PostConstruct} 都已经跑完之后。倒置的后果正好落在它们唯一有意义的
+     * 场景上：针对更新 API 编译的模块，恰恰是那种 bean 会引用不存在方法的模块，它会先死在
+     * {@code refresh()} 里，被通用 catch 报成一条普通的初始化失败，而「UltiTools 版本过旧」
+     * 那句友好提示永远说不出口。见 issue #184。
+     * <p>
+     * 门禁只读 {@code plugin.yml} 里来的元数据（{@code api-version} / {@code main} /
+     * {@code version}），这些在实例构造完就已经就位，不需要容器。
      *
-     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
-     * @return Register result <br> 注册结果
+     * @param plugin freshly constructed plugin instance, context not yet attached <br> 刚构造出来、还没挂上容器的插件实例
+     * @return true if the module may proceed to context construction <br> 允许继续建容器则为 true
      */
-    private boolean invokeRegisterSelf(UltiToolsPlugin plugin) {
-        if (hasNewerVersionLoaded(plugin)) {
-            return false;
-        }
-        if (!isUltiToolsVersionCompatible(plugin)) {
-            return false;
-        }
-        return attemptPluginRegistration(plugin);
+    private boolean passesCompatibilityGates(UltiToolsPlugin plugin) {
+        return !hasNewerVersionLoaded(plugin) && isUltiToolsVersionCompatible(plugin);
     }
 
+    /**
+     * 判定是否已经加载了同一模块的更新版本。**只判定，不改动已加载的模块。**
+     * <p>
+     * 卸掉被本次加载取代的旧版本是另一件事，见 {@link #unregisterSupersededVersions}。
+     * 两者拆开是因为判定要提前到 bean 构造之前，而卸载不能——提前卸载会让「新版本初始化失败」
+     * 变成「服务器上两个版本都没有」。
+     */
     private boolean hasNewerVersionLoaded(UltiToolsPlugin plugin) {
         for (UltiToolsPlugin existing : pluginList) {
             if (!existing.getMainClass().equals(plugin.getMainClass())) {
@@ -452,20 +475,35 @@ public class PluginManager {
             if (existing.isNewerVersionThan(plugin)) {
                 Bukkit.getLogger().log(Level.WARNING,
                         String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
-                plugin.getContext().close();
                 return true;
-            } else if (plugin.isNewerVersionThan(existing)) {
-                existing.unregisterSelf();
             }
         }
         return false;
+    }
+
+    /**
+     * 卸掉被本次加载取代的旧版本。
+     * <p>
+     * <b>只能在新模块的 {@code registerSelf()} 返回 true 之后调用</b>——不是「容器建好之后」。
+     * 两者差着一步：容器建好只说明 bean 图能构造，模块尚未激活；而 {@code registerSelf()}
+     * 返回 false 或抛异常时，调用方会关掉新容器。若旧版本已经在此之前被卸，这个模块就
+     * 两头落空，而它原本正在正常运行。
+     */
+    private void unregisterSupersededVersions(UltiToolsPlugin plugin) {
+        for (UltiToolsPlugin existing : pluginList) {
+            if (!existing.getMainClass().equals(plugin.getMainClass())) {
+                continue;
+            }
+            if (plugin.isNewerVersionThan(existing)) {
+                existing.unregisterSelf();
+            }
+        }
     }
 
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(Level.WARNING,
                     String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
-            plugin.getContext().close();
             return false;
         }
         return true;
@@ -475,6 +513,14 @@ public class PluginManager {
         try {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
+                // 卸旧只能放在这里：容器建好了不等于模块活了，registerSelf() 才是模块
+                // 宣告自己激活成功的那一步。放在它之前的话，registerSelf 返回 false 或
+                // 抛异常时，旧版本已经被卸、新版本的 context 又被 close——这个模块两头
+                // 落空，而它原本正在正常运行。
+                //
+                // 放这里不会与旧版本抢命令：真正注册 Bukkit 命令的 registerBukkit() 在
+                // 本方法返回之后才被调用，此刻新版本一条命令都还没注册。
+                unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
                 plugin.getContext().close();
@@ -543,21 +589,17 @@ public class PluginManager {
      * @param classLoader     Class loader <br> 类加载器
      * @param pluginClass     Plugin class <br> 插件类
      * @param constructorArgs Constructor arguments <br> 构造器参数
-     * @return UltiTools plugin instance <br> UltiTools模块实例
+     * @return the initialized module, or {@code null} if a compatibility gate rejected it
+     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
         // 验证构造器参数安全性
         if (!validateConstructorArgs(constructorArgs)) {
             throw new SecurityException("Invalid constructor arguments provided");
         }
-        
-        SimpleContainer pluginContext = new SimpleContainer();
-        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
-        pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(classLoader);
+
+        UltiToolsPlugin plugin;
         try {
-            UltiToolsPlugin plugin;
-            
             if (constructorArgs.length == 0) {
                 // 使用默认构造器
                 Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
@@ -570,17 +612,31 @@ public class PluginManager {
                         throw new SecurityException("Null constructor argument not allowed at index: " + i);
                     }
                     paramTypes[i] = constructorArgs[i].getClass();
-                    
+
                     // 验证参数类型是否安全
                     if (!isSafeParameterType(paramTypes[i])) {
                         throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
                     }
                 }
-                
+
                 Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
                 plugin = constructor.newInstance(constructorArgs);
             }
-            
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+
+        // 门禁跑在建容器之前。它读的元数据在实例构造完就已经就位，而 refresh() 之后才检查
+        // 等于先让不兼容的 bean 图跑一遍——那正是它会炸的地方。见 passesCompatibilityGates。
+        if (!passesCompatibilityGates(plugin)) {
+            return null;
+        }
+
+        SimpleContainer pluginContext = new SimpleContainer();
+        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        pluginContext.registerShutdownHook();
+        pluginContext.setClassLoader(classLoader);
+        try {
             pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
             // Register plugin as UltiToolsPlugin type so services can inject it via constructor
             pluginContext.registerType(UltiToolsPlugin.class, plugin);

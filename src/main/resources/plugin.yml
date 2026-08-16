@@ -14,6 +14,12 @@ libraries:
   - com.google.code.gson:gson:2.10.1
   - commons-dbutils:commons-dbutils:1.8.1
   - com.mysql:mysql-connector-j:8.3.0
+  # 显式钉版本，不是新依赖：mysql-connector-j 8.3.0 传递引入的是 protobuf-java
+  # 3.25.1，带 GHSA-735f-pc8j-v9w8（解析畸形 protobuf 输入时 DoS，high）。
+  # 直接条目深度为 1，按 Maven 的 nearest-wins 会压过深度 2 的传递解析。
+  # 升 connector 才是根治，但 8.4.0 带的仍是 3.25.1，要跳到 9.x——那是驱动
+  # 大版本变更，需要真机 MySQL 回归，单独处理。见 issue #220。
+  - com.google.protobuf:protobuf-java:3.25.5
   - org.java-websocket:Java-WebSocket:1.5.4
   - cglib:cglib-nodep:3.3.0
   - org.slf4j:slf4j-api:1.8.0-beta4

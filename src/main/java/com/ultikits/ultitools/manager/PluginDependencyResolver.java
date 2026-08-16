@@ -14,6 +14,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Plugin dependency resolver using Kahn's algorithm for topological sorting.
@@ -25,6 +26,7 @@ import com.ultikits.ultitools.annotations.PluginDependency;
  * @author wisdomme
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class PluginDependencyResolver {
 
     /**

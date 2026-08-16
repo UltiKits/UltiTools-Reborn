@@ -305,4 +305,55 @@ public class ConfigManager {
             }
         }
     }
+
+    /**
+     * Load a single config file from a JSON string.
+     * <br>
+     * 从JSON字符串加载单个配置文件
+     *
+     * <p>{@link #loadFromJson(String)} 接受的是 {@code {插件名: {配置路径: {配置项: 值}}}}
+     * 这样的全量嵌套结构，也就是 {@link #toJson()} 的产物。本方法接受的是最里面那一层
+     * ——某一个配置文件自己的 {@code {配置项: 值}}——由 {@code configFilePath} 指定写到哪。
+     * 面板按文件名下发单个配置时用的是后一种形状，见 issue #236。
+     *
+     * <p>配置路径在单个插件内唯一（{@code pluginConfigMap} 的内层 key 就是它），
+     * 跨插件则可能重名。找不到和命中多个都抛异常而不是静默跳过：
+     * 「调用方以为写了、实际什么也没发生」正是这条链路上原来的毛病。
+     *
+     * @param configFilePath config file path as registered, e.g. {@code config/lang.yml}
+     *                       <br> 注册时使用的配置文件路径
+     * @param json           JSON object of that file's entries <br> 该文件配置项的JSON对象
+     * @throws IOException if the path is blank, unknown, ambiguous, or the JSON is not an object,
+     *                     or if saving fails <br> 路径为空、找不到、跨插件重名、JSON不是对象或保存失败
+     * @since 6.2.5
+     */
+    public final void loadFromJson(String configFilePath, String json) throws IOException {
+        if (configFilePath == null || configFilePath.trim().isEmpty()) {
+            throw new IOException("Config file path is required");
+        }
+        JsonObject properties;
+        try {
+            properties = new Gson().fromJson(json, JsonObject.class);
+        } catch (RuntimeException e) {
+            throw new IOException("Config content is not valid JSON: " + configFilePath, e);
+        }
+        if (properties == null) {
+            throw new IOException("Config content is not a JSON object: " + configFilePath);
+        }
+
+        List<AbstractConfigEntity> matches = new ArrayList<>();
+        for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
+            AbstractConfigEntity entity = configMap.get(configFilePath);
+            if (entity != null) {
+                matches.add(entity);
+            }
+        }
+        if (matches.isEmpty()) {
+            throw new IOException("No registered config matches path: " + configFilePath);
+        }
+        if (matches.size() > 1) {
+            throw new IOException("Config path is ambiguous across plugins: " + configFilePath);
+        }
+        matches.get(0).updateProperties(properties);
+    }
 }

@@ -25,8 +25,11 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: 🧪 Run Tests with Coverage
-      run: mvn -B clean test
+    - name: 🧪 Build & Test with Coverage
+      # verify 而不是 test：shade 过滤器、资源过滤、jar 打包与 javadoc 生成都绑定在
+      # package 阶段，只跑 test 的话这些在合并之后才第一次执行。
+      # 不需要关签名：maven-gpg-plugin 只在 release profile 里，默认不激活。
+      run: mvn -B clean verify
       
     - name: 📊 Generate JaCoCo Coverage Report
       run: mvn -B jacoco:report
@@ -100,7 +103,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # alpha 是开发主干，SNAPSHOT 构件对它才有意义；main 上的正式产物由
+    # publish-packages.yml 在 release 时产出。
+    if: github.event_name == 'push' && github.ref == 'refs/heads/alpha'
     
     steps:
     - name: 📥 Checkout code

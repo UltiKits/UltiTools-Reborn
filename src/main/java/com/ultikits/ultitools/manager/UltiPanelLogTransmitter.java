@@ -17,6 +17,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * UltiPanel日志传输器
@@ -25,6 +26,7 @@ import lombok.Setter;
  * @author UltiKits
  * @version 1.0.0
  */
+@ApiStatus.Internal
 public class UltiPanelLogTransmitter {
 
     private static final int MAX_QUEUE_SIZE = 1000;
@@ -343,7 +345,24 @@ public class UltiPanelLogTransmitter {
     public void flushLogs() {
         boolean wasExternalDrain = externalDrainMode.getAndSet(false);
         try {
+            // 必须以「队列真的变短了」作为继续的条件，不能只看队列非空。
+            //
+            // sendBatch() 在 WebSocket 未连接时会直接 return 且**不消费任何队列元素**
+            // （见 sendBatch 里的 isConnected 判断）。原先写成 while (!logQueue.isEmpty())
+            // 就是死循环——而「面板连不上、队列积压、socket 已断」恰恰是最容易命中的场景：
+            // 管理员之所以要 logout 或关服，通常正是因为面板连不上。
+            //
+            // 这个死循环在 disableCloud() 出现之前就存在（onDisable 也会走到这条路径），
+            // 但那时只在关服时触发；现在 logout 在命令线程上也会走到，会直接卡住服务器。
+            // 见 issue #181 / #223 的 PR 评审。
+            int previousSize = -1;
             while (!logQueue.isEmpty()) {
+                int currentSize = logQueue.size();
+                if (currentSize == previousSize) {
+                    // 上一轮一个都没送出去，再转多少次也不会有进展
+                    break;
+                }
+                previousSize = currentSize;
                 sendBatch();
             }
         } finally {

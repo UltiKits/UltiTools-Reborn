@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -25,7 +26,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
@@ -53,11 +53,12 @@ class ConfigManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         MockBukkit.mock(); // Server mock not stored as field - only used for initialization
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
 
         // Mock plugin
         mockPlugin = mock(UltiToolsPlugin.class);
@@ -834,6 +835,94 @@ class ConfigManagerTest {
             
             // Assert
             assertThat(config.getNumber()).isEqualTo(42);
+        }
+    }
+
+    /**
+     * {@code loadFromJson(configFilePath, json)} —— 面板按文件名下发单个配置时走的入口。
+     *
+     * <p>与单参重载的区别是载荷形状：单参吃的是 {@code toJson()} 那种
+     * {@code {插件名: {配置路径: {...}}}} 全量结构，双参吃的是最里面那一层。两种形状对应
+     * 面板上两个不同的入口，混用会写不进去且不报错——issue #236 的一半就是这个。
+     *
+     * <p>所以这里重点钉的是<b>失败必须响亮</b>：找不到、跨插件重名、载荷不是 JSON 对象，
+     * 三种都抛异常。静默跳过会让调用方以为写成功了，那正是要修的病。
+     */
+    @Nested
+    @DisplayName("loadFromJson(单个文件) 测试")
+    class LoadSingleConfigFileTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> configMap() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            return (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+        }
+
+        private AbstractConfigEntity register(UltiToolsPlugin plugin, String path) throws Exception {
+            AbstractConfigEntity entity = mock(AbstractConfigEntity.class);
+            Map<String, AbstractConfigEntity> entities = new HashMap<>();
+            entities.put(path, entity);
+            configMap().put(plugin, entities);
+            return entity;
+        }
+
+        @Test
+        @DisplayName("命中唯一配置时把解析后的属性交给它")
+        void appliesPropertiesToTheOnlyMatch() throws Exception {
+            AbstractConfigEntity entity = register(mockPlugin, "config/lang.yml");
+
+            configManager.loadFromJson("config/lang.yml", "{\"language\":\"zh\"}");
+
+            org.mockito.ArgumentCaptor<com.google.gson.JsonObject> captor =
+                    org.mockito.ArgumentCaptor.forClass(com.google.gson.JsonObject.class);
+            verify(entity).updateProperties(captor.capture());
+            assertThat(captor.getValue().get("language").getAsString()).isEqualTo("zh");
+        }
+
+        @Test
+        @DisplayName("路径找不到时抛异常，而不是什么也不做")
+        void unknownPathThrows() throws Exception {
+            register(mockPlugin, "config/lang.yml");
+
+            assertThatThrownBy(() -> configManager.loadFromJson("config/nope.yml", "{}"))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("config/nope.yml");
+        }
+
+        @Test
+        @DisplayName("同一路径出现在多个插件下时抛异常，而不是随便挑一个")
+        void ambiguousPathThrows() throws Exception {
+            // 配置路径只在单个插件内唯一（pluginConfigMap 的内层 key 就是它），
+            // 跨插件完全可能重名，而面板下发的 fileName 是不带插件名的裸路径。
+            UltiToolsPlugin otherPlugin = mock(UltiToolsPlugin.class);
+            when(otherPlugin.getPluginName()).thenReturn("OtherPlugin");
+            register(mockPlugin, "config/config.yml");
+            register(otherPlugin, "config/config.yml");
+
+            assertThatThrownBy(() -> configManager.loadFromJson("config/config.yml", "{}"))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("ambiguous");
+        }
+
+        @Test
+        @DisplayName("路径为空时抛异常")
+        void blankPathThrows() {
+            assertThatThrownBy(() -> configManager.loadFromJson("   ", "{}"))
+                    .isInstanceOf(IOException.class);
+            assertThatThrownBy(() -> configManager.loadFromJson(null, "{}"))
+                    .isInstanceOf(IOException.class);
+        }
+
+        @Test
+        @DisplayName("载荷不是 JSON 对象时抛异常，且不碰任何配置")
+        void nonObjectPayloadThrows() throws Exception {
+            AbstractConfigEntity entity = register(mockPlugin, "config/lang.yml");
+
+            assertThatThrownBy(() -> configManager.loadFromJson("config/lang.yml", "not json"))
+                    .isInstanceOf(IOException.class);
+
+            verify(entity, org.mockito.Mockito.never()).updateProperties(any());
         }
     }
 }

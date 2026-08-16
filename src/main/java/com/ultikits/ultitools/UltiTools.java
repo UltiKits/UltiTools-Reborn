@@ -87,9 +87,31 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
      */
-    @Deprecated
-    @Getter
+    @Deprecated(since = "6.2.0", forRemoval = true)
     private VersionWrapper versionWrapper;
+
+    /**
+     * 手写而不是用 Lombok 的 {@code @Getter}。Lombok 会把 {@code @Deprecated} 复制到生成的
+     * accessor 上，但<b>丢掉 {@code since} 与 {@code forRemoval} 两个元素</b>，编译产物里只剩一个
+     * 裸 {@code @Deprecated}。而 javac 的 {@code -Xlint:removal} 自 JDK 9 起默认开启、
+     * {@code -Xlint:deprecation} 默认关闭，所以下游用默认参数编译时收不到点名的移除警告，
+     * 只会看到一句不含 API 名的笼统提示。字段上标了 {@code forRemoval} 不解决问题 ——
+     * 对外的入口是这个 getter，标注必须落在它身上。改回 {@code @Getter} 会让
+     * COMPATIBILITY.md 的移除清单对这一项失真。
+     *
+     * <p>Hand-written rather than Lombok's {@code @Getter}: Lombok copies
+     * {@code @Deprecated} onto the generated accessor but drops the {@code since}
+     * and {@code forRemoval} elements, so downstream compiling with default flags
+     * never sees the named {@code [removal]} warning for this API.
+     *
+     * @return the version wrapper <br> 版本适配器
+     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     */
+    @Deprecated(since = "6.2.0", forRemoval = true)
+    public VersionWrapper getVersionWrapper() {
+        return versionWrapper;
+    }
+
     @Getter
     private Language language;
     @Getter
@@ -213,6 +235,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
+            // 显式开启云连接状态机。initWebsocket() 自己不再置位 —— 它被 reinitWebSocket
+            // 复用，在那里置位会让一个正在途中的重连把 logout 关掉的状态机重新拉起来。
+            PluginInitiationUtils.enableCloud();
             initWebSocket();
             CloudAuthManager.startTokenRefreshScheduler();
         }
@@ -252,10 +277,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     private void initDataStore() {
         configManager = new ConfigManager();
-        if (getConfig().getBoolean("mysql.enable")) {
+        boolean mysqlEnabled = getConfig().getBoolean("mysql.enable");
+        boolean mysqlAvailable = false;
+        if (mysqlEnabled) {
             MysqlDataStore mysqlDataStore = new MysqlDataStore();
             if (mysqlDataStore.getDataSource() != null) {
                 DataStoreManager.register(mysqlDataStore);
+                mysqlAvailable = true;
             }
         }
         DataStoreManager.register(new SQLiteDataStore());
@@ -265,6 +293,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (dataStore == null) {
             dataStore = DataStoreManager.getDatastore("json");
         }
+        // 配置要的后端和实际拿到的后端可能不是一回事，而这个降级过去是完全静默的。见 issue #183。
+        DataStoreManager.reportBackendSelection(getLogger(), storeType, mysqlEnabled, mysqlAvailable,
+                dataStore.getStoreType());
     }
 
     private void initPluginModules() {

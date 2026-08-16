@@ -116,6 +116,43 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!--
+                Animal Sniffer — 看守 Java 8 API 边界。
+                编译用的是 source/target 1.8 而不是 <release>8</release>，所以 javac
+                链接的是 JDK 21 的类库：误用 Java 9+ 的 API（String.strip、List.of、
+                Map.entry 等）能编译通过，直到在真 Java 8 上运行才抛 NoSuchMethodError。
+                这里在字节码层比对 java18 签名，把那个缺口补上。
+
+                不要改用 <release>8</release> —— 它会拒绝本项目已在使用的
+                @Deprecated(since=, forRemoval=)，而那些元数据是废弃契约的一部分。
+
+                Animal Sniffer — guards the Java 8 API boundary.
+                The build uses source/target 1.8 rather than <release>8</release>, so
+                javac links against the JDK 21 class library and Java 9+ API calls
+                compile cleanly, only failing with NoSuchMethodError on a real Java 8
+                runtime. This checks the emitted bytecode against the java18 signature.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.27</version>
+                <configuration>
+                    <signature>
+                        <groupId>org.codehaus.mojo.signature</groupId>
+                        <artifactId>java18</artifactId>
+                        <version>1.0</version>
+                    </signature>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>check-java18-api</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -316,20 +353,6 @@
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-gpg-plugin</artifactId>
-                <version>1.6</version>
-                <executions>
-                    <execution>
-                        <id>sign-artifacts</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <version>3.6.3</version>
                 <configuration>
@@ -424,6 +447,24 @@
             <version>1.18.38</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+            JetBrains @ApiStatus —— 只用来标 API 稳定性边界，是给人和 IDE 看的信号，
+            不产生任何运行期约束。全系注解都是 RetentionPolicy.CLASS，运行时不需要
+            这个 jar：所以 scope 用 provided、plugin.yml 的 libraries: 不加条目、
+            shaded JAR 里也不该出现 org/jetbrains/**。这三件事是一套的，动一个要一起动。
+
+            JetBrains @ApiStatus — used only to mark API stability boundaries. It is a
+            signal for humans and IDEs, and enforces nothing at runtime. Every annotation
+            in the family is RetentionPolicy.CLASS, so the jar is not needed at runtime:
+            hence provided scope, no plugin.yml libraries: entry, and no org/jetbrains/**
+            inside the shaded JAR. Those three facts move together.
+        -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>26.0.2</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.github.MilkBowl</groupId>
             <artifactId>VaultAPI</artifactId>
@@ -451,6 +492,18 @@
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>8.3.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+            protobuf-java —— 不是本项目直接用的库，是 mysql-connector-j 的传递依赖。
+            显式声明只为把版本从 3.25.1 抬到 3.25.5，规避 GHSA-735f-pc8j-v9w8。
+            provided 作用域与 plugin.yml 的 libraries: 对应（Paper 在运行时下载）。
+            删掉这一条会静默退回 3.25.1，因为传递解析还在。见 issue #220。
+        -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>3.25.5</version>
             <scope>provided</scope>
         </dependency>
         <!-- Java-WebSocket - Paper libraries 自动下载 -->
@@ -580,4 +633,43 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
+
+    <profiles>
+        <!--
+            发布 profile：GPG 签名只在这里激活，别处一律不签。
+            只有 Maven Central 需要签名产物，而私钥只存在于发布环境。
+            把 maven-gpg-plugin 无条件绑在 verify 上，会让任何没有私钥的人
+            跑 mvn verify 或 mvn install 都失败，CI 也得处处传 gpg.skip 才能绕开。
+            发布时漏掉 -P release 的后果是产物没有签名、被 Central 的校验直接拒绝，
+            是一次响亮的失败，而不是静默发出未签名产物。
+
+            Release-only profile: GPG signing is activated here and nowhere else.
+            Only Maven Central needs signed artifacts, and the private key exists
+            only in the release environment. Binding maven-gpg-plugin to verify
+            unconditionally breaks mvn verify and mvn install for everyone without
+            a key. Forgetting -P release fails loudly at Central's validation
+            instead of silently publishing unsigned artifacts.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

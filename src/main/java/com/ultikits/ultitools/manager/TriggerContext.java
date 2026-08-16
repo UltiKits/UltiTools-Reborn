@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Immutable context describing what triggered an error.
@@ -10,6 +11,7 @@ import org.bukkit.entity.Player;
  *
  * @since 6.2.3
  */
+@ApiStatus.Internal
 public final class TriggerContext {
 
     /**

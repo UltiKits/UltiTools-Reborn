@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -41,7 +42,6 @@ import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -68,15 +68,21 @@ class LogStreamManagerTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         // Mock config with detailed configuration
         mockConfig = mock(FileConfiguration.class);
-        when(UltiTools.getInstance().getConfig()).thenReturn(mockConfig);
+
+        // getLogger()/getConfig() 的桩必须在 mock 被写进 UltiTools 的静态单例字段之前打完。
+        // 一旦发布出去，任何还活着的后台线程都能通过 UltiTools.getInstance() 调到它，
+        // 而 Mockito 的 invocationForStubbing 是 per-mock 的共享可变状态，被插一脚就会
+        // 把 answer 绑到别的方法上。见 issue #250。
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(mockConfig);
+        });
 
         // Mock WebSocket client
         mockWebSocketClient = mock(UltiPanelWebSocketClient.class);
@@ -127,8 +133,35 @@ class LogStreamManagerTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        // 必须调 shutdown()。initialize() 做了两件会活过本测试的事：
+        //   1. 把 SystemLogHandler 挂到 JVM 的 root logger 上（Logger.getLogger("")）
+        //   2. 起一条 "UltiPanel-LogTransmitter" 调度线程
+        // 只 resetSingleton() 是把静态引用置 null，被丢掉的那个实例带着这两样继续活着。
+        // surefire 这里是单 fork 跑全部 4172 个测试，于是之后每个测试类打的每一条日志
+        // 都会重新进到 UltiTools 的代码里，可能在别人打桩的中途调到那个 mock。见 issue #250。
+        if (logStreamManager != null) {
+            try {
+                logStreamManager.shutdown();
+            } catch (Exception ignored) {
+                // shutdown 自己会写日志，mock 环境下失败无所谓；关键是下面把 handler 摘干净
+            }
+        }
+        removeLeakedSystemLogHandlers();
         resetSingleton();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * 兜底清理：shutdown() 只摘得掉它自己字段里记着的那一个 handler 实例。
+     * root logger 是 JVM 全局的，漏一个就污染整个 fork，所以这里按类型全扫一遍。
+     */
+    private void removeLeakedSystemLogHandlers() {
+        Logger rootLogger = Logger.getLogger("");
+        for (java.util.logging.Handler handler : rootLogger.getHandlers()) {
+            if (handler instanceof SystemLogHandler) {
+                rootLogger.removeHandler(handler);
+            }
+        }
     }
 
     // ==================== 单例模式测试 ====================

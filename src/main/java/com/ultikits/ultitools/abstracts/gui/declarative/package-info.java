@@ -4,6 +4,27 @@
  * 本框架基于 Flutter 的设计理念，提供声明式的 UI 构建方式。
  * 核心理念：<b>UI = f(state)</b>
  * <p>
+ * <h2>⚠ 当前状态（6.2.5）</h2>
+ * <p>
+ * <b>本包及其子包标记为 {@code @ApiStatus.Experimental}，API 可能在任何版本发生不兼容变动。</b>
+ * <p>
+ * <b>状态驱动的重绘尚未实现。</b>{@code UI = f(state)} 是本框架的设计目标，但渲染引擎的三个接缝
+ * 目前都还没接上：{@code build(BuildContext)} 只在 {@code onOpen} 中被调用一次；
+ * {@code Element.update()} 不置脏标记；{@code State.setState} 的信号沿 Element 树上溯到根节点后
+ * 静默终止，进不了调度器。因此下面「主要特性」中的 <i>setState 触发局部重建</i> 目前不生效，
+ * 依赖 {@code setState} 的导航子系统（{@code Navigator.push} / {@code pop}）同样惰性。
+ * 现阶段可靠可用的是<b>静态页面</b>：build 一次、渲染一次。
+ * <p>
+ * <b>State-driven repaint is not implemented yet.</b> {@code UI = f(state)} is the design
+ * goal, but all three rendering seams are still open: {@code build(BuildContext)} is called
+ * exactly once from {@code onOpen}; {@code Element.update()} never marks anything dirty; and
+ * the {@code State.setState} signal walks up the element tree and stops silently at the root
+ * without reaching the scheduler. The <i>setState triggers a partial rebuild</i> bullet below
+ * therefore does not hold today, and the navigation subsystem is inert for the same reason.
+ * What works today is the <b>static page</b>: build once, render once.
+ * <p>
+ * 修复排期见 <a href="https://github.com/UltiKits/UltiTools-Reborn/issues/200">issue #200</a>（6.3.0）。
+ *
  * <h2>主要特性：</h2>
  * <ul>
  *   <li>Widget 树描述 UI 结构</li>
@@ -108,4 +129,7 @@
  * @see com.ultikits.ultitools.abstracts.gui.declarative.core.Widget
  * @see com.ultikits.ultitools.abstracts.gui.declarative.core.StatefulWidget
  */
+@ApiStatus.Experimental
 package com.ultikits.ultitools.abstracts.gui.declarative;
+
+import org.jetbrains.annotations.ApiStatus;

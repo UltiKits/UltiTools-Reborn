@@ -17,11 +17,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 文件操作管理器
  * 负责处理来自WebSocket的文件操作请求
  */
+@ApiStatus.Internal
 public class FileOperationManager {
     private UltiPanelWebSocketClient webSocketClient;
     private final File serverRoot;

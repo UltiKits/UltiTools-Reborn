@@ -336,4 +336,107 @@ class AbstractConfigEntityTest {
             this.nonAnnotatedField = nonAnnotatedField;
         }
     }
+
+    // ==================== 四个遍历方法必须对得上 ====================
+    //
+    // init() / save() / reload() / updateProperties() 各自遍历 @ConfigEntry 字段。
+    // 只要它们对「遍历哪些字段」或「path 怎么推导」的答案不一致，就会出现
+    // 「更新成功但值没变」——updateProperties 跳过字段之后 config.save() 照常执行，
+    // 调用方拿不到任何失败信号。面板下发配置正是走这条路（issue #236）。
+
+    /** 不写 path 的 @ConfigEntry —— 受支持的写法，路径归一到字段名。 */
+    private static class DefaultPathConfigEntity extends AbstractConfigEntity {
+        @ConfigEntry(comment = "No explicit path")
+        private String implicitPath = "default";
+
+        public DefaultPathConfigEntity(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public String getImplicitPath() {
+            return implicitPath;
+        }
+    }
+
+    /** @ConfigEntry 字段声明在父类上。 */
+    private static class InheritedFieldConfigEntity extends DefaultPathConfigEntity {
+        @ConfigEntry(path = "child.value", comment = "Declared on the subclass")
+        private String childValue = "child-default";
+
+        public InheritedFieldConfigEntity(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public String getChildValue() {
+            return childValue;
+        }
+    }
+
+    @Test
+    @DisplayName("没写 path 的字段，updateProperties 也要按字段名认得出来")
+    void updatePropertiesHonoursTheDefaultPath() throws IOException {
+        DefaultPathConfigEntity entity = new DefaultPathConfigEntity("default-path.yml");
+        entity.init(mockPlugin);
+
+        // init/save 按字段名写盘，toJsonObject 也按字段名发给面板，所以面板回来的
+        // 就是这个键。updateProperties 过去找的是空字符串键，永远找不到。
+        JsonObject json = new JsonObject();
+        json.addProperty("implicitPath", "updated");
+
+        entity.updateProperties(json);
+
+        assertThat(entity.getImplicitPath()).isEqualTo("updated");
+        assertThat(YamlConfiguration.loadConfiguration(new File(tempDir.toFile(), "default-path.yml"))
+                .getString("implicitPath")).isEqualTo("updated");
+    }
+
+    @Test
+    @DisplayName("toJsonObject 发出去的键，updateProperties 必须原样收得回来")
+    void theJsonRoundTripIsClosed() throws IOException {
+        DefaultPathConfigEntity entity = new DefaultPathConfigEntity("round-trip.yml");
+        entity.init(mockPlugin);
+
+        // 这条断言的是「发出去什么、就能收回什么」，而不是某个具体键名——
+        // #236 那一族缺陷全都长在两条路径对同一个名字的理解不一致上。
+        JsonObject emitted = entity.toJsonObject();
+        assertThat(emitted.keySet()).contains("implicitPath");
+
+        emitted.addProperty("implicitPath", "round-tripped");
+        entity.updateProperties(emitted);
+
+        assertThat(entity.getImplicitPath()).isEqualTo("round-tripped");
+    }
+
+    @Test
+    @DisplayName("父类上声明的 @ConfigEntry 字段同样可更新")
+    void updatePropertiesCoversInheritedFields() throws IOException {
+        InheritedFieldConfigEntity entity = new InheritedFieldConfigEntity("inherited.yml");
+        entity.init(mockPlugin);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("implicitPath", "from-parent");
+        json.addProperty("child.value", "from-child");
+
+        entity.updateProperties(json);
+
+        // init/save/reload 走的是完整字段树，updateProperties 过去只走
+        // getDeclaredFields()，于是父类字段读得出、写不进。
+        assertThat(entity.getImplicitPath()).isEqualTo("from-parent");
+        assertThat(entity.getChildValue()).isEqualTo("from-child");
+    }
+
+    @Test
+    @DisplayName("getComments 的键要和 toJsonObject 的键对得上")
+    void commentKeysMatchValueKeys() throws IOException {
+        InheritedFieldConfigEntity entity = new InheritedFieldConfigEntity("comments.yml");
+        entity.init(mockPlugin);
+
+        JsonObject comments = entity.getComments();
+
+        assertThat(comments.keySet())
+                .as("没写 path 的字段，注释不能被塞在空字符串键下")
+                .doesNotContain("")
+                .contains("implicitPath", "child.value");
+        assertThat(entity.toJsonObject().keySet()).containsAll(comments.keySet());
+    }
 }

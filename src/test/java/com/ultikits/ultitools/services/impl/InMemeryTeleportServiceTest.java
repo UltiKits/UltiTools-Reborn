@@ -2,6 +2,7 @@ package com.ultikits.ultitools.services.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -22,7 +23,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -44,15 +44,19 @@ class InMemeryTeleportServiceTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock logger
         Logger mockLogger = mock(Logger.class);
-        when(UltiTools.getInstance().getLogger()).thenReturn(mockLogger);
 
         // Mock VersionWrapper
         VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
-        when(UltiTools.getInstance().getVersionWrapper()).thenReturn(mockVersionWrapper);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
+            // i18n 原先在 6 个用例里各打一遍、内容完全相同。提到发布之前既消掉重复，
+            // 也让这 6 处不再在「mock 已全进程可见」的窗口里打桩。见 issue #256。
+            lenient().when(ultiTools.i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
+        });
         when(mockVersionWrapper.getSound(any())).thenReturn(Sound.ENTITY_ENDERMAN_TELEPORT);
 
         teleportService = new InMemeryTeleportService();
@@ -305,8 +309,6 @@ class InMemeryTeleportServiceTest {
             World world = player.getWorld();
             Location targetLocation = new Location(world, 100, 64, 100);
             
-            // Mock i18n
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act
             teleportService.delayTeleport(player, targetLocation, 3);
@@ -326,8 +328,6 @@ class InMemeryTeleportServiceTest {
             PlayerMock player = server.addPlayer();
             World world = player.getWorld();
             Location targetLocation = new Location(world, 100, 64, 100);
-            
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act
             teleportService.delayTeleport(player, targetLocation, 0);
@@ -588,8 +588,6 @@ class InMemeryTeleportServiceTest {
             Location targetLocation = new Location(world, 100, 64, 100);
             InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), false);
 
-            // Mock i18n
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act
             InMemeryTeleportService.DelayTeleportResult result = 
@@ -608,8 +606,6 @@ class InMemeryTeleportServiceTest {
             Location targetLocation = new Location(world, 100, 64, 100);
             InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), true);
 
-            // Mock i18n
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act
             InMemeryTeleportService.DelayTeleportResult result = 
@@ -629,8 +625,6 @@ class InMemeryTeleportServiceTest {
             Location targetLocation = new Location(world, 100, 64, 100);
             InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), true);
 
-            // Mock i18n
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act
             InMemeryTeleportService.DelayTeleportResult result = 
@@ -650,8 +644,6 @@ class InMemeryTeleportServiceTest {
             Location targetLocation = new Location(world, 100, 64, 100);
             InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), true);
 
-            // Mock i18n
-            when(UltiTools.getInstance().i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
 
             // Act - time = 4.0 应该显示标题 (4.0 / 0.5 = 8, 8 % 2 = 0)
             InMemeryTeleportService.DelayTeleportResult result = 

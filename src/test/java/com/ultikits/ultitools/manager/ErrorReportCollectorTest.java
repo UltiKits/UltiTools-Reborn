@@ -39,12 +39,13 @@ class ErrorReportCollectorTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
 
         // Mock serverMonitorManager
         ServerMonitorManager mockSmm = mock(ServerMonitorManager.class);
         when(mockSmm.getCurrentTPS()).thenReturn(20.0);
-        when(UltiTools.getInstance().getServerMonitorManager()).thenReturn(mockSmm);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getServerMonitorManager()).thenReturn(mockSmm);
+        });
 
         collector = new ErrorReportCollector();
         // Don't call init() — avoid scheduler thread in tests. Set enabled directly.
