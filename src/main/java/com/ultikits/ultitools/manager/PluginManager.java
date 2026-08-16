@@ -482,7 +482,12 @@ public class PluginManager {
     }
 
     /**
-     * 卸掉被本次加载取代的旧版本。必须等新模块初始化成功之后才调用。
+     * 卸掉被本次加载取代的旧版本。
+     * <p>
+     * <b>只能在新模块的 {@code registerSelf()} 返回 true 之后调用</b>——不是「容器建好之后」。
+     * 两者差着一步：容器建好只说明 bean 图能构造，模块尚未激活；而 {@code registerSelf()}
+     * 返回 false 或抛异常时，调用方会关掉新容器。若旧版本已经在此之前被卸，这个模块就
+     * 两头落空，而它原本正在正常运行。
      */
     private void unregisterSupersededVersions(UltiToolsPlugin plugin) {
         for (UltiToolsPlugin existing : pluginList) {
@@ -505,11 +510,17 @@ public class PluginManager {
     }
 
     private boolean attemptPluginRegistration(UltiToolsPlugin plugin) {
-        // 到这一步新模块已经初始化成功，可以安全地把它取代掉的旧版本卸下来了。
-        unregisterSupersededVersions(plugin);
         try {
             boolean registerSelf = plugin.registerSelf();
             if (registerSelf) {
+                // 卸旧只能放在这里：容器建好了不等于模块活了，registerSelf() 才是模块
+                // 宣告自己激活成功的那一步。放在它之前的话，registerSelf 返回 false 或
+                // 抛异常时，旧版本已经被卸、新版本的 context 又被 close——这个模块两头
+                // 落空，而它原本正在正常运行。
+                //
+                // 放这里不会与旧版本抢命令：真正注册 Bukkit 命令的 registerBukkit() 在
+                // 本方法返回之后才被调用，此刻新版本一条命令都还没注册。
+                unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
                 plugin.getContext().close();
