@@ -44,6 +44,7 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * 「WebSocket消息解析失败」——而解析是成功的，于是消息被静默丢弃且诊断指错方向。
  */
 @DisplayName("PluginInitiationUtils 入站消息守卫")
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // tearDown 需反射复位 UltiTools 单例（#250），与仓库其它测试类一致
 class PluginInitiationUtilsInboundMessageTest {
 
     private Logger mockLogger;

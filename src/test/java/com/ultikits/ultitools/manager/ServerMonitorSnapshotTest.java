@@ -44,7 +44,12 @@ import org.mockbukkit.mockbukkit.ServerMock;
  */
 @DisplayName("服务器状态采样的线程契约")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 测试需要反射读任务句柄，与仓库其它测试类一致
+@SuppressWarnings({
+        "PMD.AvoidAccessibilityAlteration", // 测试需要反射读任务句柄，与仓库其它测试类一致
+        // PMD 只认 assert*/fail* 这类方法名，识别不了 AssertJ 的流式断言
+        // （doesNotSampleWithoutClient 断的是 assertThatCode(...).doesNotThrowAnyException()）。
+        "PMD.JUnitTestsShouldIncludeAssert"
+})
 class ServerMonitorSnapshotTest {
 
     private ServerMock server;
