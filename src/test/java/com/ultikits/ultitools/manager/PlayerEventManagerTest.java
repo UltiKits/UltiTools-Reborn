@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -110,6 +111,48 @@ class PlayerEventManagerTest {
             assertThat(initMethod).isNotNull();
             // Verify client mock was created successfully
             assertThat(client).isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("拆线与在途事件的竞态")
+    class ShutdownRace {
+
+        /**
+         * 精确复现竞态窗口：{@code isConnected()} 返回 true 之后、真正发送之前，另一条线程
+         * 走完了 {@code shutdown()} 并把 {@code webSocketClient} 置空。
+         * <p>
+         * 真实触发路径是重连预算耗尽——{@code disableCloud()} 跑在 WebSocket 线程上，
+         * 而事件处理器跑在 Bukkit 主线程。{@code HandlerList.unregisterAll()} 只拦得住
+         * 未来的派发，拦不住已经在栈上跑着的这一次。
+         */
+        private void shutdownDuringConnectivityCheck() {
+            when(mockWebSocketClient.isConnected()).thenAnswer(invocation -> {
+                playerEventManager.shutdown();
+                return true;
+            });
+        }
+
+        @Test
+        @DisplayName("join：检查通过之后被 shutdown，不得抛 NPE")
+        void joinSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerJoinEvent event = new PlayerJoinEvent(player, "joined");
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerJoin(event))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("quit：检查通过之后被 shutdown，不得抛 NPE")
+        void quitSurvivesConcurrentShutdown() {
+            PlayerMock player = server.addPlayer();
+            PlayerQuitEvent event = new PlayerQuitEvent(player, "left");
+            shutdownDuringConnectivityCheck();
+
+            assertThatCode(() -> playerEventManager.onPlayerQuit(event))
+                    .doesNotThrowAnyException();
         }
     }
 
@@ -225,7 +268,10 @@ class PlayerEventManagerTest {
         @DisplayName("应该能够通过反射调用私有方法")
         void shouldCallPrivateMethod() throws Exception {
             // Arrange
-            Method method = PlayerEventManager.class.getDeclaredMethod("sendPlayerEvent", JsonObject.class);
+            // 客户端现在由调用方传入：三个事件处理器各自把 volatile 字段单次读进局部
+            // 变量再一路传下来，避免检查与发送之间被 shutdown() 置空。
+            Method method = PlayerEventManager.class.getDeclaredMethod(
+                    "sendPlayerEvent", UltiPanelWebSocketClient.class, JsonObject.class);
             method.setAccessible(true);
 
             JsonObject data = new JsonObject();
@@ -233,7 +279,7 @@ class PlayerEventManagerTest {
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             // Act
-            method.invoke(playerEventManager, data);
+            method.invoke(playerEventManager, mockWebSocketClient, data);
 
             // Assert
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
@@ -332,11 +378,12 @@ class PlayerEventManagerTest {
         @DisplayName("应该能够调用私有方法")
         void shouldCallPrivateMethod() throws Exception {
             // Arrange
-            Method method = PlayerEventManager.class.getDeclaredMethod("getServerId");
+            Method method = PlayerEventManager.class.getDeclaredMethod(
+                    "getServerId", UltiPanelWebSocketClient.class);
             method.setAccessible(true);
 
             // Act
-            String result = (String) method.invoke(playerEventManager);
+            String result = (String) method.invoke(playerEventManager, mockWebSocketClient);
 
             // Assert
             assertThat(result).isNotNull();
@@ -346,11 +393,12 @@ class PlayerEventManagerTest {
         @DisplayName("应该返回非空字符串")
         void shouldReturnNonEmptyString() throws Exception {
             // Arrange
-            Method method = PlayerEventManager.class.getDeclaredMethod("getServerId");
+            Method method = PlayerEventManager.class.getDeclaredMethod(
+                    "getServerId", UltiPanelWebSocketClient.class);
             method.setAccessible(true);
 
             // Act
-            String result = (String) method.invoke(playerEventManager);
+            String result = (String) method.invoke(playerEventManager, mockWebSocketClient);
 
             // Assert
             assertThat(result).isNotBlank();
