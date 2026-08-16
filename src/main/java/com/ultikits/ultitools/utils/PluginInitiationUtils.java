@@ -1005,11 +1005,21 @@ public class PluginInitiationUtils {
         // 闸门二：全局预算。客户端自身的 5 次上限是每实例的，而这里每次都造新实例，
         // 所以那个上限对整体等于不存在。见 issue #181。
         if (!reinitBackoff.shouldContinue()) {
-            cloudEnabled.set(false);
+            // 先把话说完再拆线：下面的 disableCloud() 会关掉日志上传通道，这句得赶在那之前发出去。
             UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
                 "WebSocket re-initialization gave up after %d attempts. Cloud features are now idle. "
                     + "Run /ulticloud login to retry, or restart the server.",
                 MAX_REINIT_ATTEMPTS));
+            // 「now idle」必须是真的。曾经这里只有一句 cloudEnabled.set(false)：状态机确实停了，
+            // 但心跳线程、日志传输器与 root logger handler、玩家事件监听器、token 刷新调度
+            // 以及静态 panelWS/token 引用全都留着继续跑——日志宣告空转，实际在漏。
+            // 终态与 logout 是同一件事，就该走同一条拆线路径。
+            //
+            // 复用 disableCloud() 是安全的：它第一件事就是把 cloudEnabled 置否，所以其中的
+            // stopWebsocket() 即使触发 onClose→重连链，也会被本方法开头的闸门一挡回去；
+            // 它顺带做的 reinitBackoff.reset() 同样无害——闸门一已经拦死，预算再也消耗不到，
+            // 而恢复只能靠 /ulticloud login，那条路本来就会 reset。
+            disableCloud();
             return;
         }
 
