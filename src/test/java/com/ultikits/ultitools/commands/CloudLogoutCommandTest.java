@@ -28,6 +28,10 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  */
 @DisplayName("ulticloud logout 的拆线语义")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+// 本类断言的是「拆线动作有没有被调用」，用的是 MockedStatic.verify 而不是 assert*；
+// PMD 只按 assert*/fail* 的方法名识别断言，认不出这种形式。与仓库其它 verify-only
+// 测试的处理一致。
+@SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
 class CloudLogoutCommandTest {
 
     /** 造一个已过期的 token：有 access_token，但 {@code hasValidToken()} 会判否。 */
