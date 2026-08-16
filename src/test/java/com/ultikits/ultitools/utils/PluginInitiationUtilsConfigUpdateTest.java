@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -292,16 +294,87 @@ class PluginInitiationUtilsConfigUpdateTest {
         @Test
         @DisplayName("带内容时转成 set_all 交给专用管理器，不走配置文件那条路")
         void contentIsForwardedAsSetAll() throws Exception {
+            stubSetAllResult(singletonList("max-players"), emptyList(), emptyList());
+
             PluginInitiationUtils.handleConfigUpdate(
                     panelMessage("server_properties", "{\"max-players\":\"30\"}", "req-9"));
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockServerProperties).handleServerProperties(captor.capture());
-            JsonObject forwarded = captor.getValue();
-            assertThat(forwarded.get("action").getAsString()).isEqualTo("set_all");
-            assertThat(forwarded.getAsJsonObject("values").get("max-players").getAsString()).isEqualTo("30");
+            verify(mockServerProperties).applySetAll(captor.capture());
+            assertThat(captor.getValue().get("max-players").getAsString()).isEqualTo("30");
 
             verify(mockConfigManager, never()).loadFromJson(anyString(), anyString());
+        }
+
+        /**
+         * issue #281：这条路径此前必报成功。{@code applyConfigUpdate} 调的是 {@code void} 的
+         * {@code handleServerProperties}，真相在调用链上根本没有返回路径，于是面板拿到的
+         * {@code status} 表达的是「消息处理完了」而不是「配置生效了」——而这两件事在
+         * 白名单挡下某个键时就分岔了。
+         */
+        @Test
+        @DisplayName("白名单挡下键时回 error，并点名是哪个键")
+        void rejectedKeysMakeTheResponseAnError() throws Exception {
+            stubSetAllResult(emptyList(), singletonList("rcon.password"), emptyList());
+
+            PluginInitiationUtils.handleConfigUpdate(
+                    panelMessage("server_properties", "{\"rcon.password\":\"hacked\"}", "req-10"));
+
+            JsonObject payload = capturedResponse().getAsJsonObject("data");
+            assertThat(payload.get("status").getAsString()).isEqualTo("error");
+            assertThat(payload.get("error").getAsString()).contains("rcon.password");
+        }
+
+        @Test
+        @DisplayName("全部生效时才回 success")
+        void fullyAppliedBatchReportsSuccess() throws Exception {
+            stubSetAllResult(singletonList("motd"), emptyList(), emptyList());
+
+            PluginInitiationUtils.handleConfigUpdate(
+                    panelMessage("server_properties", "{\"motd\":\"hi\"}", "req-11"));
+
+            JsonObject payload = capturedResponse().getAsJsonObject("data");
+            assertThat(payload.get("status").getAsString()).isEqualTo("success");
+        }
+
+        @Test
+        @DisplayName("写入失败的键同样让响应变成 error")
+        void writeFailuresMakeTheResponseAnError() throws Exception {
+            stubSetAllResult(emptyList(), emptyList(), singletonList("motd"));
+
+            PluginInitiationUtils.handleConfigUpdate(
+                    panelMessage("server_properties", "{\"motd\":\"hi\"}", "req-12"));
+
+            JsonObject payload = capturedResponse().getAsJsonObject("data");
+            assertThat(payload.get("status").getAsString()).isEqualTo("error");
+            assertThat(payload.get("error").getAsString()).contains("motd");
+        }
+
+        private void stubSetAllResult(List<String> updated, List<String> rejected, List<String> failed) {
+            lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
+                    .thenReturn(new ServerPropertiesManager.SetAllResult(
+                            updated, rejected, failed, emptyList(), emptyList()));
+        }
+
+        /**
+         * 值不是 JSON 原始值时（对象、数组）同样让响应变成 error。这条与上面几条不同的地方在于
+         * 它在**取值之前**就分岔了：`getAsString()` 对 JsonObject 抛
+         * {@code UnsupportedOperationException}，对空数组和多元素数组抛
+         * {@code IllegalStateException}，而单元素数组根本不抛、静默拆包。
+         */
+        @Test
+        @DisplayName("值不是原始值的键让响应变成 error")
+        void malformedValuesMakeTheResponseAnError() throws Exception {
+            lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
+                    .thenReturn(new ServerPropertiesManager.SetAllResult(
+                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd")));
+
+            PluginInitiationUtils.handleConfigUpdate(
+                    panelMessage("server_properties", "{\"motd\":{}}", "req-13"));
+
+            JsonObject payload = capturedResponse().getAsJsonObject("data");
+            assertThat(payload.get("status").getAsString()).isEqualTo("error");
+            assertThat(payload.get("error").getAsString()).contains("motd");
         }
 
         @Test
