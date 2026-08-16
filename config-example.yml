@@ -1,24 +1,30 @@
-# UltiPanel 日志与错误上报配置示例
-# 在 config.yml 中添加以下配置
+# UltiPanel logging and error-reporting configuration example
+# Add the following to your config.yml.
 #
-# 这里列出的每一个键都能在 src/main/java 里找到读取它的代码。
-# 没有被读取的键写进 config.yml 不会有任何效果，所以本文件不再收录它们。
+# Every key listed here has code in src/main/java that reads it. Keys that are
+# not read have no effect when written to config.yml, so they are not listed.
 #
-# 说明：error-reporting 一段随框架的默认 config.yml 一起发布，通常已经在你的配置里了；
-# 列在这里是为了让 ultipanel 段的全貌集中在一处。其余几段默认 config.yml 没有，需要自己加。
+# Note: the error-reporting block ships with the framework's default config.yml
+# and is normally already present in your configuration. It is repeated here so
+# that the whole ultipanel section is visible in one place. The other blocks are
+# not in the default config.yml and have to be added by hand.
+#
+# 中文说明：本文件是 UltiPanel 日志与错误上报的配置示例，键的含义见每行注释。
+# error-reporting 一段随框架默认 config.yml 一起发布，通常已在你的配置里；
+# 其余几段需要自己加。
 
-# UltiPanel 配置
 ultipanel:
-  # 日志传输配置
   logging:
-    # 要传输的日志级别
+    # Log levels to transmit.
+    # 要传输的日志级别。
     levels:
       - "info"
       - "warning"
       - "error"
-      # - "debug"  # 调试日志默认禁用，生产环境不建议启用
+      # - "debug"  # Disabled by default; not recommended in production.
 
-    # 排除的记录器（避免传输过多日志）
+    # Loggers to exclude, to avoid transmitting excessive volume.
+    # 排除的记录器，避免传输过多日志。
     excluded-loggers:
       - "com.mojang.authlib"
       - "net.minecraft.network"
@@ -26,21 +32,29 @@ ultipanel:
       - "com.zaxxer.hikari"
       - "org.eclipse.jetty"
 
-    # 批量发送配置
+    # Batched delivery.
+    # 批量发送。
     batch:
       enabled: true
-      size: 10          # 批量大小（条数）
-      interval: 5000    # 发送间隔（毫秒）
+      size: 10          # Entries per batch. 批量大小（条数）
+      interval: 5000    # Send interval in milliseconds. 发送间隔（毫秒）
 
-    # 错误自动上报配置
+    # Automatic error reporting.
+    # 错误自动上报。
     error-reporting:
-      # 是否启用错误自动上报到 UltiPanel
+      # Whether to report errors to UltiPanel automatically.
+      # 是否启用错误自动上报到 UltiPanel。
       enabled: true
-      # 去重窗口时间（秒），同一错误在此时间内只上报一次
+      # Deduplication window in seconds: the same error is reported at most once
+      # within this window.
+      # 去重窗口（秒），同一错误在此时间内只上报一次。
       dedup-window-seconds: 300
-      # 每个批次最多上报的错误数量
+      # Maximum number of errors reported per batch.
+      # 每个批次最多上报的错误数量。
       max-errors-per-batch: 10
-      # 同一错误累计超过此次数后开始采样
+      # Start sampling once the same error has occurred more than this many times.
+      # 同一错误累计超过此次数后开始采样。
       sample-after-count: 10
-      # 采样率（0.1 = 10%）
+      # Sampling rate (0.1 = 10%).
+      # 采样率（0.1 = 10%）。
       sample-rate: 0.1
