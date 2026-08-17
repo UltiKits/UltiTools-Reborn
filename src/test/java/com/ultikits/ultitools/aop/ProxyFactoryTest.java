@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -234,6 +235,23 @@ class ProxyFactoryTest {
 
             // equals is forwarded, so proxy.equals(target) evaluates target.equals(target)
             assertTrue(proxy.equals(target));
+        }
+
+        @Test
+        @DisplayName("Should not override clone() (regression: InaccessibleObjectException on JDK 17+)")
+        void shouldNotOverrideClone() {
+            // clone() is a protected member of java.lang.Object. If the method matcher ever
+            // picks it up again, the handler's method.setAccessible(true) throws
+            // InaccessibleObjectException because module java.base does not open java.lang
+            // to the unnamed module on JDK 17+.
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            boolean declaresClone = Arrays.stream(proxy.getClass().getDeclaredMethods())
+                    .anyMatch(m -> m.getName().equals("clone"));
+            assertFalse(declaresClone, "Proxy class must not declare an overriding clone() method");
         }
     }
 }

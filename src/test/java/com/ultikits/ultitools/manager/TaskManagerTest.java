@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.plugin.java.JavaPlugin;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.aop.ProxyFactory;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -194,6 +196,23 @@ class TaskManagerTest {
             taskManager.registerScheduledMethods(mockUltiPlugin, bean2);
 
             assertEquals(3, taskManager.getTaskCount(mockUltiPlugin));
+        }
+
+        @Test
+        @DisplayName("Should discover @Scheduled methods on a ByteBuddy-proxied bean (regression for #188)")
+        void shouldRegisterScheduledMethodsOnProxiedBean() {
+            // Overriding methods do not inherit annotations, so if TaskManager fails to unwrap
+            // the proxy back to the original class, getDeclaredMethods() finds no @Scheduled
+            // methods at all and this silently registers zero tasks instead of throwing.
+            ServiceWithScheduled target = new ServiceWithScheduled();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+            ServiceWithScheduled proxy = proxyFactory.createProxy(target);
+
+            taskManager.registerScheduledMethods(mockUltiPlugin, proxy);
+
+            assertEquals(2, taskManager.getTaskCount(mockUltiPlugin),
+                    "TaskManager must unwrap ByteBuddy proxies via ProxyFactory.isProxyClass() "
+                            + "to find @Scheduled methods on the proxied bean");
         }
     }
 

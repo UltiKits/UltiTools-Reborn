@@ -281,6 +281,17 @@ The migration period runs in two steps:
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
 
+### Recorded instance: AOP proxy class naming (6.3.0)
+
+The AOP engine switched from CGLIB to ByteBuddy in 6.3.0 (see [AOP](#aop) above). Public method
+signatures on proxied beans are unchanged, but the class name ByteBuddy generates for a proxy
+differs from CGLIB's: `Foo$$EnhancerByCGLIB$$xxxx` became `Foo$ByteBuddy$xxxx`. The exact shape of
+a generated proxy class name was never part of the documented contract, so this falls under "no
+migration period" above — but it is worth recording because it is real breakage for any downstream
+code that detected a proxy by pattern-matching the class name, the way this framework's own
+`TaskManager` used to. Code doing that must switch to the supported check,
+`com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
@@ -717,7 +728,7 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 ### AOP
 
-| 类型 / 成员 | 宣布移除于 | 替代 | 下游引用（仅供参考） |
+| 类型 / 成员 | 移除预告发自 | 替代方案 | 下游引用（参考） |
 |---|---|---|---|
 | `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器与 `createProxy` 签名完全相同 | 0 |
 
@@ -814,6 +825,15 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 这一节的写法参考了 [PEP 387](https://peps.python.org/pep-0387/)，
 核心是同一条：**先让人知道自己踩在了哪块地板上，再抽走它。**
+
+### 已记录的实例：AOP 代理类命名（6.3.0）
+
+6.3.0 把 AOP 引擎从 CGLIB 换成了 ByteBuddy（见上文 [AOP](#aop)）。被代理 Bean 的公开方法签名
+没有变化，但 ByteBuddy 生成的代理类名和 CGLIB 的不一样：`Foo$$EnhancerByCGLIB$$xxxx` 变成了
+`Foo$ByteBuddy$xxxx`。生成的代理类名具体长什么样从来没有写进过文档承诺的契约，所以按上面的
+分类属于「不需要迁移期」——但值得单独记一笔，因为它对任何用类名模式匹配来识别代理的下游代码
+都是真实的破坏，框架自己的 `TaskManager` 以前就是这么做的。这样的代码必须改用受支持的判断
+方式：`com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`。
 
 ## 移除清单覆盖不到的二进制不兼容
 

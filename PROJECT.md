@@ -7,7 +7,7 @@
 ## Identity
 
 - **What it is:** `UltiTools-API` — an annotation-driven plugin framework for Minecraft **Paper** servers.
-  It ships its own IoC container, CGLIB-based AOP, an ORM over MySQL/SQLite/JSON, a declarative reactive
+  It ships its own IoC container, ByteBuddy-based AOP, an ORM over MySQL/SQLite/JSON, a declarative reactive
   GUI layer, a module EventBus, and a WebSocket client for remote server management.
 - **Maven coordinates:** `com.ultikits:UltiTools-API` — read the current version from `pom.xml`;
   `main` and `alpha` do not always carry the same one. Produces a shaded JAR via maven-shade-plugin.
@@ -158,7 +158,7 @@ If it is tracked, `git rm --cached data.json` and rebase onto the current defaul
    `registerAll(plugin)` overload, which resolves commands as `CommandExecutor` beans and does not cast.
 4. **Bukkit thread safety.** Anything reaching Bukkit from an async context must go through
    `Bukkit.getScheduler().runTask()`, or Paper's AsyncCatcher rejects it.
-5. **AOP uses CGLIB subclass proxies only.** `final` classes and methods cannot be proxied, and
+5. **AOP uses ByteBuddy subclass proxies only.** `final` classes and methods cannot be proxied, and
    self-invocation (`this.method()`) bypasses the interceptor chain.
 6. **Event listeners need the framework's `@EventListener`**, not just Bukkit's `Listener` interface.
 
