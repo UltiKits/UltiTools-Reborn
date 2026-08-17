@@ -14,7 +14,7 @@ import java.util.logging.Logger;
 /**
  * BeanPostProcessor that creates AOP proxies for beans that need interception.
  * <p>
- * This processor checks each bean during initialization and creates a CGLIB proxy
+ * This processor checks each bean during initialization and creates a proxy
  * if any registered {@link AopAdvisor} matches the bean's methods.
  * <p>
  * Usage example:
@@ -91,7 +91,7 @@ public class AopProxyBeanPostProcessor implements BeanPostProcessor {
                 applicableInterceptors.size() + " interceptors");
 
         try {
-            CglibProxyFactory factory = new CglibProxyFactory(applicableInterceptors);
+            ProxyFactory factory = new ProxyFactory(applicableInterceptors);
             return factory.createProxy(bean);
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Failed to create AOP proxy for bean '" + beanName + "'", e);

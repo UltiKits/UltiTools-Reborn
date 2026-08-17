@@ -20,7 +20,6 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -237,11 +236,10 @@ class AopProxyBeanPostProcessorTest {
         }
     }
 
-    // Integration tests require CGLIB to work properly.
-    // On Java 17+, they need --add-opens java.base/java.lang=ALL-UNNAMED JVM argument.
+    // Integration tests exercise real proxy creation. Since issue #188 they need no
+    // JVM arguments: the engine is ByteBuddy, not CGLIB.
     @Nested
-    @DisplayName("Integration Tests (requires CGLIB)")
-    @Disabled("CGLIB requires --add-opens JVM args on Java 17+")
+    @DisplayName("Integration Tests")
     class IntegrationTests {
 
         @Test
