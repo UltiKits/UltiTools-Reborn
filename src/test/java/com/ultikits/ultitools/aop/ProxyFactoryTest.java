@@ -197,4 +197,43 @@ class ProxyFactoryTest {
             assertEquals("method3", proxy.method3());
         }
     }
+
+    @Nested
+    @DisplayName("Object Method Forwarding Tests")
+    class ObjectMethodForwardingTests {
+
+        @Test
+        @DisplayName("Should forward hashCode to target")
+        void shouldForwardHashCodeToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            assertEquals(target.hashCode(), proxy.hashCode());
+        }
+
+        @Test
+        @DisplayName("Should forward toString to target")
+        void shouldForwardToStringToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            assertEquals(target.toString(), proxy.toString());
+        }
+
+        @Test
+        @DisplayName("Should forward equals to target")
+        void shouldForwardEqualsToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            // equals is forwarded, so proxy.equals(target) evaluates target.equals(target)
+            assertTrue(proxy.equals(target));
+        }
+    }
 }
