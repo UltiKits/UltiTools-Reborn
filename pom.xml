@@ -618,13 +618,6 @@
             <version>2.2.224</version>
             <scope>test</scope>
         </dependency>
-        <!-- CGLIB for AOP proxy support - Paper libraries 自动下载 -->
-        <dependency>
-            <groupId>cglib</groupId>
-            <artifactId>cglib-nodep</artifactId>
-            <version>3.3.0</version>
-            <scope>provided</scope>
-        </dependency>
         <!-- ByteBuddy for AOP proxy support - Paper libraries 自动下载 -->
         <dependency>
             <groupId>net.bytebuddy</groupId>

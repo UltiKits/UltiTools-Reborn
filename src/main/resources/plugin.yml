@@ -21,7 +21,7 @@ libraries:
   # 大版本变更，需要真机 MySQL 回归，单独处理。见 issue #220。
   - com.google.protobuf:protobuf-java:3.25.5
   - org.java-websocket:Java-WebSocket:1.5.4
-  - cglib:cglib-nodep:3.3.0
+  - net.bytebuddy:byte-buddy:1.18.3
   - org.slf4j:slf4j-api:1.8.0-beta4
   - com.sun.mail:javax.mail:1.6.2
   - net.kyori:adventure-platform-bukkit:4.3.2
