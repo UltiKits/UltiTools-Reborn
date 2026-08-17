@@ -171,6 +171,18 @@ version was never released" from the tag list produces a wrong conclusion in thi
 reassess.** The reference counts in the tables are not the basis for removal, and do not support a
 conclusion that nobody is using something.
 
+### AOP
+
+| Type / member | Removal announced in | Replacement | Downstream references (informational) |
+|---|---|---|---|
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` — identical constructor and `createProxy` signatures | 0 |
+
+This entry is removed in the same release that announces it, which the policy above normally
+does not allow. The justification is that the type could not work on any supported server: it
+requires `--add-opens java.base/java.lang=ALL-UNNAMED`, a flag a Paper server does not set and
+a plugin cannot add. Keeping it through a deprecation cycle would preserve an API that throws
+`ExceptionInInitializerError` on first use. It had no downstream references. See issue #188.
+
 ## Migrating off `AbstractCommandExecutor`
 
 `abstracts.AbstractCommandExecutor` is the only entry on the list with real downstream users
@@ -268,6 +280,17 @@ The migration period runs in two steps:
 
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
+
+### Recorded instance: AOP proxy class naming (6.3.0)
+
+The AOP engine switched from CGLIB to ByteBuddy in 6.3.0 (see [AOP](#aop) above). Public method
+signatures on proxied beans are unchanged, but the class name ByteBuddy generates for a proxy
+differs from CGLIB's: `Foo$$EnhancerByCGLIB$$xxxx` became `Foo$ByteBuddy$xxxx`. The exact shape of
+a generated proxy class name was never part of the documented contract, so this falls under "no
+migration period" above — but it is worth recording because it is real breakage for any downstream
+code that detected a proxy by pattern-matching the class name, the way this framework's own
+`TaskManager` used to. Code doing that must switch to the supported check,
+`com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`.
 
 ## Binary incompatibilities the removal list cannot cover
 
@@ -523,7 +546,7 @@ UniversalScheduler (scheduling). Everything else is not in the JAR and arrives b
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, CGLIB |
+| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, ByteBuddy |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
@@ -703,6 +726,17 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 **若你的模块引用了其中任何一项，请在 6.3.0 发布前提 issue，我们会重新评估。**
 上表的引用量不是移除依据，也不构成「没人在用」的结论。
 
+### AOP
+
+| 类型 / 成员 | 移除预告发自 | 替代方案 | 下游引用（参考） |
+|---|---|---|---|
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器与 `createProxy` 签名完全相同 | 0 |
+
+本条在宣布移除的同一个版本里就被移除，这不符合上面的常规策略。理由是该类型在任何受支持的
+服务器上都无法工作：它需要 `--add-opens java.base/java.lang=ALL-UNNAMED`，而 Paper 服务器
+不会设置这个参数，插件也无法自行添加。让它走完废弃周期，只会保留一个首次使用就抛
+`ExceptionInInitializerError` 的 API。它没有任何下游引用。详见 issue #188。
+
 ## `AbstractCommandExecutor` 的迁移
 
 `abstracts.AbstractCommandExecutor` 是清单里唯一有真实下游用户的类型（实测 15 个文件）。
@@ -791,6 +825,15 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 这一节的写法参考了 [PEP 387](https://peps.python.org/pep-0387/)，
 核心是同一条：**先让人知道自己踩在了哪块地板上，再抽走它。**
+
+### 已记录的实例：AOP 代理类命名（6.3.0）
+
+6.3.0 把 AOP 引擎从 CGLIB 换成了 ByteBuddy（见上文 [AOP](#aop)）。被代理 Bean 的公开方法签名
+没有变化，但 ByteBuddy 生成的代理类名和 CGLIB 的不一样：`Foo$$EnhancerByCGLIB$$xxxx` 变成了
+`Foo$ByteBuddy$xxxx`。生成的代理类名具体长什么样从来没有写进过文档承诺的契约，所以按上面的
+分类属于「不需要迁移期」——但值得单独记一笔，因为它对任何用类名模式匹配来识别代理的下游代码
+都是真实的破坏，框架自己的 `TaskManager` 以前就是这么做的。这样的代码必须改用受支持的判断
+方式：`com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`。
 
 ## 移除清单覆盖不到的二进制不兼容
 
@@ -1007,7 +1050,7 @@ Java 是惰性解析的，所以「装上去能起来」不构成证据——不
 
 | 投送方式 | 版本由谁决定 | 例子 |
 |---|---|---|
-| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、CGLIB |
+| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、ByteBuddy |
 | Paper 服务端自身携带 | **服主所装的 Paper 版本** | log4j、Paper 内部实现 `libraries:` 用的 Maven resolver 及其依赖 |
 
 这条分界决定了第三方安全告警该由谁修。命中第一类的，在本仓库钉版本是有效的修复；

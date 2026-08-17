@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,7 +14,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -22,20 +22,18 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
- * Unit tests for CglibProxyFactory.
- * 
- * Note: Tests that require actual CGLIB proxies are disabled by default because
- * CGLIB requires --add-opens JVM arguments on Java 17+. These tests can be enabled
- * by running with appropriate JVM args.
+ * Tests for ProxyFactory.
+ * <p>
+ * Unlike the CGLIB implementation these tests replaced, none of them require
+ * --add-opens JVM arguments. See issue #188 for the decision record.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("CglibProxyFactory Tests")
-class CglibProxyFactoryTest {
+@DisplayName("ProxyFactory Tests")
+class ProxyFactoryTest {
 
     @Mock
     private MethodInterceptor mockInterceptor;
 
-    // Test classes
     public static class SimpleTarget {
         public String getValue() {
             return "original";
@@ -72,27 +70,25 @@ class CglibProxyFactoryTest {
         @DisplayName("Should create factory with interceptors")
         void shouldCreateFactoryWithInterceptors() {
             List<MethodInterceptor> interceptors = Collections.singletonList(mockInterceptor);
-            
-            CglibProxyFactory factory = new CglibProxyFactory(interceptors);
-            
+
+            ProxyFactory factory = new ProxyFactory(interceptors);
+
             assertNotNull(factory);
         }
 
         @Test
         @DisplayName("Should create factory with empty interceptor list")
         void shouldCreateFactoryWithEmptyInterceptorList() {
-            List<MethodInterceptor> interceptors = Collections.emptyList();
-            
-            CglibProxyFactory factory = new CglibProxyFactory(interceptors);
-            
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
             assertNotNull(factory);
         }
 
         @Test
         @DisplayName("Should create factory with null interceptor list")
         void shouldCreateFactoryWithNullInterceptorList() {
-            CglibProxyFactory factory = new CglibProxyFactory(null);
-            
+            ProxyFactory factory = new ProxyFactory(null);
+
             assertNotNull(factory);
         }
 
@@ -102,10 +98,10 @@ class CglibProxyFactoryTest {
             MethodInterceptor interceptor1 = mock(MethodInterceptor.class);
             MethodInterceptor interceptor2 = mock(MethodInterceptor.class);
             MethodInterceptor interceptor3 = mock(MethodInterceptor.class);
-            
+
             List<MethodInterceptor> interceptors = Arrays.asList(interceptor1, interceptor2, interceptor3);
-            CglibProxyFactory factory = new CglibProxyFactory(interceptors);
-            
+            ProxyFactory factory = new ProxyFactory(interceptors);
+
             assertNotNull(factory);
         }
     }
@@ -117,8 +113,8 @@ class CglibProxyFactoryTest {
         @Test
         @DisplayName("Should have createProxy with target method")
         void shouldHaveCreateProxyWithTargetMethod() throws NoSuchMethodException {
-            Method method = CglibProxyFactory.class.getMethod("createProxy", Object.class);
-            
+            Method method = ProxyFactory.class.getMethod("createProxy", Object.class);
+
             assertNotNull(method);
             assertEquals(Object.class, method.getReturnType());
         }
@@ -126,28 +122,22 @@ class CglibProxyFactoryTest {
         @Test
         @DisplayName("Should have createProxy with class and target method")
         void shouldHaveCreateProxyWithClassAndTargetMethod() throws NoSuchMethodException {
-            Method method = CglibProxyFactory.class.getMethod("createProxy", Class.class, Object.class);
-            
+            Method method = ProxyFactory.class.getMethod("createProxy", Class.class, Object.class);
+
             assertNotNull(method);
             assertEquals(Object.class, method.getReturnType());
         }
     }
 
-    // The following tests require CGLIB to work properly.
-    // On Java 17+, they need --add-opens java.base/java.lang=ALL-UNNAMED JVM argument.
-    // These tests are disabled by default.
-    
     @Nested
-    @DisplayName("Proxy Creation Tests (requires CGLIB)")
-    @Disabled("CGLIB requires --add-opens JVM args on Java 17+")
+    @DisplayName("Proxy Creation Tests")
     class ProxyCreationTests {
 
         @Test
         @DisplayName("Should create proxy from target object")
         void shouldCreateProxyFromTargetObject() {
             SimpleTarget target = new SimpleTarget();
-            List<MethodInterceptor> interceptors = Collections.singletonList(mockInterceptor);
-            CglibProxyFactory proxyFactory = new CglibProxyFactory(interceptors);
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
 
             SimpleTarget proxy = proxyFactory.createProxy(target);
 
@@ -159,8 +149,7 @@ class CglibProxyFactoryTest {
         @DisplayName("Should proxy be instance of target class")
         void shouldProxyBeInstanceOfTargetClass() {
             SimpleTarget target = new SimpleTarget();
-            List<MethodInterceptor> interceptors = Collections.singletonList(mockInterceptor);
-            CglibProxyFactory proxyFactory = new CglibProxyFactory(interceptors);
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
 
             SimpleTarget proxy = proxyFactory.createProxy(target);
 
@@ -171,19 +160,98 @@ class CglibProxyFactoryTest {
         @DisplayName("Should intercept method calls")
         void shouldInterceptMethodCalls() throws Throwable {
             SimpleTarget target = new SimpleTarget();
-            
+
             when(mockInterceptor.invoke(any(MethodInvocation.class))).thenAnswer(invocation -> {
                 MethodInvocation mi = invocation.getArgument(0);
                 return "intercepted:" + mi.proceed();
             });
 
-            List<MethodInterceptor> interceptors = Collections.singletonList(mockInterceptor);
-            CglibProxyFactory proxyFactory = new CglibProxyFactory(interceptors);
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
             SimpleTarget proxy = proxyFactory.createProxy(target);
 
             String result = proxy.getValue();
 
             assertEquals("intercepted:original", result);
+        }
+
+        @Test
+        @DisplayName("Should pass primitive arguments and return values through")
+        void shouldPassPrimitivesThrough() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            assertEquals(5, proxy.calculate(2, 3));
+        }
+
+        @Test
+        @DisplayName("Should proxy class with multiple methods")
+        void shouldProxyClassWithMultipleMethods() {
+            TargetWithMultipleMethods target = new TargetWithMultipleMethods();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            TargetWithMultipleMethods proxy = proxyFactory.createProxy(target);
+
+            assertEquals("method1", proxy.method1());
+            assertEquals("method2", proxy.method2());
+            assertEquals("method3", proxy.method3());
+        }
+    }
+
+    @Nested
+    @DisplayName("Object Method Forwarding Tests")
+    class ObjectMethodForwardingTests {
+
+        @Test
+        @DisplayName("Should forward hashCode to target")
+        void shouldForwardHashCodeToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            assertEquals(target.hashCode(), proxy.hashCode());
+        }
+
+        @Test
+        @DisplayName("Should forward toString to target")
+        void shouldForwardToStringToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            assertEquals(target.toString(), proxy.toString());
+        }
+
+        @Test
+        @DisplayName("Should forward equals to target")
+        void shouldForwardEqualsToTarget() {
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            // equals is forwarded, so proxy.equals(target) evaluates target.equals(target)
+            assertTrue(proxy.equals(target));
+        }
+
+        @Test
+        @DisplayName("Should not override clone() (regression: InaccessibleObjectException on JDK 17+)")
+        void shouldNotOverrideClone() {
+            // clone() is a protected member of java.lang.Object. If the method matcher ever
+            // picks it up again, the handler's method.setAccessible(true) throws
+            // InaccessibleObjectException because module java.base does not open java.lang
+            // to the unnamed module on JDK 17+.
+            SimpleTarget target = new SimpleTarget();
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            SimpleTarget proxy = proxyFactory.createProxy(target);
+
+            boolean declaresClone = Arrays.stream(proxy.getClass().getDeclaredMethods())
+                    .anyMatch(m -> m.getName().equals("clone"));
+            assertFalse(declaresClone, "Proxy class must not declare an overriding clone() method");
         }
     }
 }

@@ -1,0 +1,113 @@
+package com.ultikits.ultitools.aop;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.Collections;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Regression tests for proxying a class that lives in a foreign class loader.
+ * <p>
+ * At runtime, module beans are loaded by the UltiTools URLClassLoader over
+ * plugins/*.jar while the framework itself is loaded by Paper's plugin loader,
+ * so the proxy factory must work across that boundary. This scenario was never
+ * covered before issue #188 and is the reason the AOP engine went unverified.
+ */
+@DisplayName("ProxyFactory Cross-ClassLoader Tests")
+class ProxyFactoryIsolationTest {
+
+    /**
+     * Loads IsolatedProxyTarget in a class loader that does NOT delegate to the
+     * application class loader, so the returned Class is distinct from the one
+     * this test class was compiled against.
+     */
+    private URLClassLoader newIsolatedLoader() throws Exception {
+        URL classesRoot = IsolatedProxyTarget.class
+                .getProtectionDomain().getCodeSource().getLocation();
+        return new URLClassLoader(new URL[]{classesRoot},
+                ClassLoader.getSystemClassLoader().getParent());
+    }
+
+    @Test
+    @DisplayName("Should load target in a genuinely separate class loader")
+    void shouldLoadTargetInSeparateClassLoader() throws Exception {
+        try (URLClassLoader isolated = newIsolatedLoader()) {
+            Class<?> isolatedClass = isolated.loadClass(IsolatedProxyTarget.class.getName());
+
+            // Same name, different Class object - proves the isolation is real.
+            assertEquals(IsolatedProxyTarget.class.getName(), isolatedClass.getName());
+            assertNotSame(IsolatedProxyTarget.class, isolatedClass);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("Should proxy a class loaded by a foreign class loader")
+    void shouldProxyClassFromForeignClassLoader() throws Exception {
+        try (URLClassLoader isolated = newIsolatedLoader()) {
+            Class<Object> isolatedClass =
+                    (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
+            Object target = isolatedClass.getDeclaredConstructor().newInstance();
+
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Object proxy = factory.createProxy(isolatedClass, target);
+
+            assertNotNull(proxy);
+            assertNotSame(target, proxy);
+            assertTrue(isolatedClass.isInstance(proxy));
+
+            Object value = isolatedClass.getMethod("getValue").invoke(proxy);
+            assertEquals("original", value);
+
+            Object sum = isolatedClass.getMethod("calculate", int.class, int.class)
+                    .invoke(proxy, 2, 3);
+            assertEquals(5, sum);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("Should intercept package-private methods across class loaders")
+    void shouldInterceptPackagePrivateAcrossClassLoaders() throws Exception {
+        try (URLClassLoader isolated = newIsolatedLoader()) {
+            Class<Object> isolatedClass =
+                    (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
+            Object target = isolatedClass.getDeclaredConstructor().newInstance();
+
+            MethodInterceptor prefixing = invocation -> "intercepted:" + invocation.proceed();
+
+            ProxyFactory factory = new ProxyFactory(Collections.singletonList(prefixing));
+            Object proxy = factory.createProxy(isolatedClass, target);
+
+            // The INJECTION strategy puts the proxy in the target's own loader, so a
+            // package-private method is overridable and therefore interceptable.
+            Method pkgMethod = isolatedClass.getDeclaredMethod("packagePrivateMethod");
+            pkgMethod.setAccessible(true);
+            assertEquals("intercepted:pkg-original", pkgMethod.invoke(proxy));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("Should inject proxy into the target's own class loader")
+    void shouldInjectProxyIntoTargetClassLoader() throws Exception {
+        try (URLClassLoader isolated = newIsolatedLoader()) {
+            Class<Object> isolatedClass =
+                    (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
+            Object target = isolatedClass.getDeclaredConstructor().newInstance();
+
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Object proxy = factory.createProxy(isolatedClass, target);
+
+            assertEquals(isolatedClass.getClassLoader(), proxy.getClass().getClassLoader());
+        }
+    }
+}

@@ -45,7 +45,7 @@ import java.lang.annotation.Target;
  * <ul>
  *   <li>Self-invocation (calling a @Transactional method from within the same class) bypasses the proxy</li>
  *   <li>Only public methods can be transactional</li>
- *   <li>The class must not be final (CGLIB limitation)</li>
+ *   <li>The class must not be final (subclass proxy limitation)</li>
  * </ul>
  *
  * @author wisdomme
