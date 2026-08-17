@@ -171,6 +171,18 @@ version was never released" from the tag list produces a wrong conclusion in thi
 reassess.** The reference counts in the tables are not the basis for removal, and do not support a
 conclusion that nobody is using something.
 
+### AOP
+
+| Type / member | Removal announced in | Replacement | Downstream references (informational) |
+|---|---|---|---|
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` — identical constructor and `createProxy` signatures | 0 |
+
+This entry is removed in the same release that announces it, which the policy above normally
+does not allow. The justification is that the type could not work on any supported server: it
+requires `--add-opens java.base/java.lang=ALL-UNNAMED`, a flag a Paper server does not set and
+a plugin cannot add. Keeping it through a deprecation cycle would preserve an API that throws
+`ExceptionInInitializerError` on first use. It had no downstream references. See issue #188.
+
 ## Migrating off `AbstractCommandExecutor`
 
 `abstracts.AbstractCommandExecutor` is the only entry on the list with real downstream users
@@ -523,7 +535,7 @@ UniversalScheduler (scheduling). Everything else is not in the JAR and arrives b
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, CGLIB |
+| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, ByteBuddy |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
@@ -702,6 +714,17 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 **若你的模块引用了其中任何一项，请在 6.3.0 发布前提 issue，我们会重新评估。**
 上表的引用量不是移除依据，也不构成「没人在用」的结论。
+
+### AOP
+
+| 类型 / 成员 | 宣布移除于 | 替代 | 下游引用（仅供参考） |
+|---|---|---|---|
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器与 `createProxy` 签名完全相同 | 0 |
+
+本条在宣布移除的同一个版本里就被移除，这不符合上面的常规策略。理由是该类型在任何受支持的
+服务器上都无法工作：它需要 `--add-opens java.base/java.lang=ALL-UNNAMED`，而 Paper 服务器
+不会设置这个参数，插件也无法自行添加。让它走完废弃周期，只会保留一个首次使用就抛
+`ExceptionInInitializerError` 的 API。它没有任何下游引用。详见 issue #188。
 
 ## `AbstractCommandExecutor` 的迁移
 
@@ -1007,7 +1030,7 @@ Java 是惰性解析的，所以「装上去能起来」不构成证据——不
 
 | 投送方式 | 版本由谁决定 | 例子 |
 |---|---|---|
-| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、CGLIB |
+| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、ByteBuddy |
 | Paper 服务端自身携带 | **服主所装的 Paper 版本** | log4j、Paper 内部实现 `libraries:` 用的 Maven resolver 及其依赖 |
 
 这条分界决定了第三方安全告警该由谁修。命中第一类的，在本仓库钉版本是有效的修复；
