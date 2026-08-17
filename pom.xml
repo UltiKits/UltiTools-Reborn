@@ -625,6 +625,13 @@
             <version>3.3.0</version>
             <scope>provided</scope>
         </dependency>
+        <!-- ByteBuddy for AOP proxy support - Paper libraries 自动下载 -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.18.3</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- JavaMail for email service - Paper libraries 自动下载 -->
         <dependency>
             <groupId>com.sun.mail</groupId>
