@@ -390,7 +390,7 @@ public class WarpCommands extends BaseCommandExecutor {
 ```
 
 ### AOP Proxies
-`@Transactional` and `@ExceptionCatch` via CGLIB runtime proxies — no boilerplate try/catch.
+`@Transactional` and `@ExceptionCatch` via ByteBuddy runtime proxies — no boilerplate try/catch.
 
 ```java
 @Service
@@ -468,7 +468,7 @@ UltiTools-Reborn/
 │   ├── abstracts/               # Base classes (UltiToolsPlugin, BaseCommandExecutor, etc.)
 │   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Scheduled, etc.)
 │   │   └── config/              # Validation annotations (@Range, @NotEmpty, @Size, @Pattern)
-│   ├── aop/                     # AOP system (CglibProxyFactory, TransactionInterceptor)
+│   ├── aop/                     # AOP system (ProxyFactory, TransactionInterceptor)
 │   ├── context/                 # IoC container (SimpleContainer, ComponentScanner)
 │   ├── events/                  # Module EventBus (EventBus, ModuleEvent, EventPriority, Cancellable)
 │   ├── manager/                 # Core managers (Command, Listener, Config, Plugin, Task)
