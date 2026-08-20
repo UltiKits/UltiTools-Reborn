@@ -411,21 +411,64 @@ public final class ReflectionUtil {
      * two cases so they are never collapsed together; overridable methods keep the plain
      * name+parameters key so the subclass's override still wins.
      * <p>
+     * Package-private methods sit in between. Per JLS 8.4.8.1, a package-private method <em>is</em>
+     * overridden by a same-signature method in a subclass in the <b>same</b> package, but a
+     * same-signature package-private method in a subclass in a <em>different</em> package is a
+     * distinct method, exactly like the private/static case above. The declaring class's
+     * <b>package</b> - not its full name - is folded into the key for package-private methods: two
+     * hierarchy levels in the same package still collapse to one (the subclass's override wins, as
+     * for any other override), while a same-named method reappearing in a different package's
+     * subclass is kept as its own entry instead of silently displacing the parent's.
+     * <p>
+     * Public so that other JLS-8.4.8.1-sensitive scanners can ask "is this method declaration the
+     * same overridable slot as that one" without re-deriving the rule -
+     * {@link com.ultikits.ultitools.context.FinalContractValidator} compares two
+     * {@code signatureOf} results for exactly that reason, rather than matching on name and
+     * parameter types alone the way this method's callers here do.
+     * <p>
      * {@code private} 和 {@code static} 方法无法被覆盖——JVM 用 {@code invokespecial} /
      * {@code invokestatic} 分派它们，都不查子类——所以另一层级上同名同参数的方法是一个独立的
      * 方法，而不是同一个方法的重复声明。为这两种情况把声明类并入 key，避免被误合并；可覆盖的
      * 方法仍用纯名称+参数的 key，保证子类的覆盖版本胜出。
+     * <p>
+     * 包私有（default）方法介于二者之间。根据 JLS 8.4.8.1，包私有方法只会被<b>同一个包</b>内
+     * 签名相同的子类方法覆盖；不同包的子类中出现的同名同参数包私有方法则是一个独立的方法，和
+     * 上面 private/static 的情形一样。为包私有方法把声明类所在的<b>包</b>（而非完整类名）并入
+     * key：同包内的多个层级依然会合并成一个（子类的覆盖版本胜出，与其他可覆盖方法一致），而
+     * 不同包的子类中出现的同名方法则各自保留，不会悄悄顶替父类的那一个。
+     *
+     * @param method the method to build a key for
+     * @return the signature key
      */
-    private static String signatureOf(Method method) {
+    public static String signatureOf(Method method) {
         StringBuilder signature = new StringBuilder();
         int modifiers = method.getModifiers();
         if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)) {
             signature.append(method.getDeclaringClass().getName()).append('#');
+        } else if (isPackagePrivate(modifiers)) {
+            signature.append(packageNameOf(method.getDeclaringClass())).append('#');
         }
         signature.append(method.getName());
         for (Class<?> parameterType : method.getParameterTypes()) {
             signature.append('|').append(parameterType.getName());
         }
         return signature.toString();
+    }
+
+    /**
+     * True for default (package-private) access: neither {@code public}, {@code protected}, nor
+     * {@code private}.
+     */
+    private static boolean isPackagePrivate(int modifiers) {
+        return !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers)
+                && !Modifier.isPrivate(modifiers);
+    }
+
+    /**
+     * The class's package name, or the empty string for the unnamed package.
+     */
+    private static String packageNameOf(Class<?> clazz) {
+        Package pkg = clazz.getPackage();
+        return pkg == null ? "" : pkg.getName();
     }
 }
