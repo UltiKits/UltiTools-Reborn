@@ -14,10 +14,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,6 +60,10 @@ class ReflectiveMethodInvocationTest {
 
         public String noArgs() {
             return "noArgs";
+        }
+
+        public String getValue() {
+            return "original";
         }
     }
 
@@ -456,7 +464,7 @@ class ReflectiveMethodInvocationTest {
         @DisplayName("Should be stateful - proceed can only be called properly in sequence")
         void shouldMaintainInterceptorIndex() throws Throwable {
             Object[] args = {"test"};
-            
+
             MethodInterceptor countingInterceptor = mock(MethodInterceptor.class);
             when(countingInterceptor.invoke(any(MethodInvocation.class))).thenAnswer(inv -> {
                 return ((MethodInvocation) inv.getArgument(0)).proceed();
@@ -468,9 +476,77 @@ class ReflectiveMethodInvocationTest {
             );
 
             Object result1 = invocation.proceed();
-            
+
             assertEquals("processed:test", result1);
             verify(countingInterceptor, times(1)).invoke(any(MethodInvocation.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("Super-call chain tail (inheritance-based proxy)")
+    class SuperCallTail {
+
+        @Test
+        @DisplayName("Should invoke superCall instead of reflecting on target when provided")
+        void shouldInvokeSuperCallWhenProvided() throws Throwable {
+            TestTarget target = new TestTarget();
+            Method method = TestTarget.class.getMethod("getValue");
+            AtomicBoolean superCallInvoked = new AtomicBoolean(false);
+            Callable<Object> superCall = () -> {
+                superCallInvoked.set(true);
+                return "from-super";
+            };
+
+            ReflectiveMethodInvocation invocation = new ReflectiveMethodInvocation(
+                    target, method, new Object[0], Collections.emptyList(), superCall);
+
+            Object result = invocation.proceed();
+
+            assertTrue(superCallInvoked.get(), "superCall must be used as the chain tail");
+            assertEquals("from-super", result);
+        }
+
+        @Test
+        @DisplayName("Should still reflect on target when superCall is absent")
+        void shouldReflectWhenSuperCallAbsent() throws Throwable {
+            TestTarget target = new TestTarget();
+            Method method = TestTarget.class.getMethod("getValue");
+
+            ReflectiveMethodInvocation invocation = new ReflectiveMethodInvocation(
+                    target, method, new Object[0], Collections.emptyList());
+
+            assertEquals("original", invocation.proceed());
+        }
+
+        @Test
+        @DisplayName("Should run interceptors before reaching superCall")
+        void shouldRunInterceptorsBeforeSuperCall() throws Throwable {
+            TestTarget target = new TestTarget();
+            Method method = TestTarget.class.getMethod("getValue");
+            List<String> order = new ArrayList<>();
+            MethodInterceptor first = inv -> { order.add("first"); return inv.proceed(); };
+            MethodInterceptor second = inv -> { order.add("second"); return inv.proceed(); };
+            Callable<Object> superCall = () -> { order.add("super"); return "done"; };
+
+            ReflectiveMethodInvocation invocation = new ReflectiveMethodInvocation(
+                    target, method, new Object[0], Arrays.asList(first, second), superCall);
+
+            assertEquals("done", invocation.proceed());
+            assertEquals(Arrays.asList("first", "second", "super"), order);
+        }
+
+        @Test
+        @DisplayName("Should propagate checked exceptions from superCall unwrapped")
+        void shouldPropagateCheckedExceptionUnwrapped() throws Throwable {
+            TestTarget target = new TestTarget();
+            Method method = TestTarget.class.getMethod("getValue");
+            Callable<Object> superCall = () -> { throw new IOException("checked-boom"); };
+
+            ReflectiveMethodInvocation invocation = new ReflectiveMethodInvocation(
+                    target, method, new Object[0], Collections.emptyList(), superCall);
+
+            IOException thrown = assertThrows(IOException.class, invocation::proceed);
+            assertEquals("checked-boom", thrown.getMessage());
         }
     }
 }
