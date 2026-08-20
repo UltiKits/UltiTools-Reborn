@@ -10,6 +10,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -31,7 +32,11 @@ public class PlayerCacheManager {
      */
     public void registerBean(Object bean) {
         List<TrackedField> fields = new ArrayList<>();
-        for (Field field : bean.getClass().getDeclaredFields()) {
+        // Walk the class hierarchy: getDeclaredFields() skips inherited fields, so a
+        // @PlayerCache field on a superclass was never tracked. This also covers beans that
+        // the container hands out as AOP proxies, whose declared fields are the generated
+        // subclass's own. See issue #190.
+        for (Field field : ReflectionUtil.getFields(bean.getClass())) {
             PlayerCache annotation = field.getAnnotation(PlayerCache.class);
             if (annotation != null && Map.class.isAssignableFrom(field.getType())) {
                 field.setAccessible(true); // NOPMD

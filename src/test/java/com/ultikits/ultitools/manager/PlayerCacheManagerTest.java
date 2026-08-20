@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,6 +43,16 @@ class PlayerCacheManagerTest {
             saveCalled = true;
             savedPlayer = playerId;
         }
+    }
+
+    static class BaseWithCache {
+        @PlayerCache
+        protected final Map<UUID, String> inheritedCache = new HashMap<>();
+    }
+
+    static class ChildBean extends BaseWithCache {
+        @PlayerCache
+        protected final Map<UUID, String> ownCache = new HashMap<>();
     }
 
     @Nested
@@ -123,6 +134,35 @@ class PlayerCacheManagerTest {
 
             manager.unregisterBean(service);
             assertThat(manager.getTrackedBeanCount()).isEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("Inherited field scanning")
+    class InheritedFields {
+
+        @Test
+        @DisplayName("Should track @PlayerCache fields declared on a superclass")
+        void shouldTrackInheritedField() {
+            PlayerCacheManager testManager = new PlayerCacheManager();
+            ChildBean bean = new ChildBean();
+            UUID player = UUID.randomUUID();
+            bean.inheritedCache.put(player, "inherited");
+            bean.ownCache.put(player, "own");
+
+            testManager.registerBean(bean);
+            testManager.onPlayerQuit(player);
+
+            assertThat(bean.ownCache).isEmpty();
+            assertThat(bean.inheritedCache).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Should count a bean once even when fields come from several levels")
+        void shouldCountBeanOnce() {
+            PlayerCacheManager testManager = new PlayerCacheManager();
+            testManager.registerBean(new ChildBean());
+            assertThat(testManager.getTrackedBeanCount()).isEqualTo(1);
         }
     }
 }
