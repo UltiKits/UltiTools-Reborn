@@ -22,6 +22,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.testfixtures.overrideslots.pkgx.PackagePrivateSlotBase;
+import com.ultikits.testfixtures.overrideslots.pkgx.SamePackageWideningMiddle;
+import com.ultikits.testfixtures.overrideslots.pkgy.CrossPackageWideningChild;
+import com.ultikits.testfixtures.overrideslots.pkgy.TransitiveWideningLeaf;
+
 /**
  * ReflectionUtil 测试类
  */
@@ -631,6 +636,39 @@ class ReflectionUtilTest {
         public void own() { }
     }
 
+    // 用于 getAllMethods "不可覆盖的声明各自成槽" 用例的辅助类：父子两层各自声明同名同参数的
+    // private / static 方法。二者都不参与覆盖，因此两层都必须保留——这是防止修复过度合并的护栏。
+    // 与上面的 GetAllMethodsBase 同理，必须声明在顶层类下而不是 @Nested 测试类里。
+    //
+    // Fixtures for the "non-overridable declarations each get their own slot" cases: a parent and a
+    // child each declaring a same-name, same-parameter private (resp. static) method. Neither
+    // participates in overriding, so both levels must survive - a guard against an over-collapsing
+    // fix. Declared at the top level for the same source-1.8 reason as GetAllMethodsBase above.
+    // 参数列表不同 -> 必然不是覆盖。Used by the overrides() signature-mismatch test.
+    public static class DifferentParamsBase {
+        public void slot(String value) { }
+    }
+
+    public static class DifferentParamsChild extends DifferentParamsBase {
+        public void slot() { }
+    }
+
+    public static class PrivateSlotBase {
+        private void slot() { }
+    }
+
+    public static class PrivateSlotChild extends PrivateSlotBase {
+        private void slot() { }
+    }
+
+    public static class StaticSlotBase {
+        public static void slot() { }
+    }
+
+    public static class StaticSlotChild extends StaticSlotBase {
+        public static void slot() { }
+    }
+
     public static class GetAllMethodsGenericBase<T> {
         public T id(T value) { return value; }
     }
@@ -651,6 +689,16 @@ class ReflectionUtilTest {
             }
             java.util.Collections.sort(names);
             return names;
+        }
+
+        private java.util.List<Method> named(java.util.List<Method> methods, String name) {
+            java.util.List<Method> matches = new ArrayList<>();
+            for (Method method : methods) {
+                if (name.equals(method.getName())) {
+                    matches.add(method);
+                }
+            }
+            return matches;
         }
 
         @Test
@@ -717,9 +765,228 @@ class ReflectionUtilTest {
         }
 
         @Test
+        @DisplayName("Should collapse a package-private method widened to public by a same-package "
+                + "subclass into one entry")
+        void shouldCollapseSamePackageWidening() {
+            // JLS 8.4.8.1: a package-private method IS overridden by a same-signature method in a
+            // same-package subclass, and nothing there constrains the OVERRIDING method's access -
+            // widening to public is permitted and leaves the override relation intact. See issue
+            // #190: a symmetric name-based key gives the two declarations different keys (one
+            // carries the package, the other does not) and lets both survive.
+            java.util.List<Method> slots =
+                    named(ReflectionUtil.getAllMethods(SamePackageWideningMiddle.class), "slot");
+
+            assertEquals(1, slots.size(),
+                    "a public override of a same-package package-private method is still an "
+                            + "override and must collapse to one entry: " + slots);
+            assertEquals(SamePackageWideningMiddle.class, slots.get(0).getDeclaringClass(),
+                    "the subclass's override must win, so its annotations are the ones seen");
+        }
+
+        @Test
+        @DisplayName("Should collapse a three-level transitively overridden method into one entry")
+        void shouldCollapseTransitiveOverride() {
+            // pkgx.PackagePrivateSlotBase (package-private) <- pkgx.SamePackageWideningMiddle
+            // (public, same package: overrides) <- pkgy.TransitiveWideningLeaf (public, different
+            // package: overrides the middle, not the root, directly). Overriding is transitive per
+            // JLS 8.4.8.1, so all three are one slot. A de-dup that compares each candidate only
+            // against the surviving representative keeps the root as a second entry.
+            java.util.List<Method> slots =
+                    named(ReflectionUtil.getAllMethods(TransitiveWideningLeaf.class), "slot");
+
+            assertEquals(1, slots.size(),
+                    "overriding is transitive: the leaf overrides the middle, which overrides the "
+                            + "root, so all three declarations are one slot: " + slots);
+            assertEquals(TransitiveWideningLeaf.class, slots.get(0).getDeclaringClass(),
+                    "the most derived declaration must win");
+        }
+
+        @Test
+        @DisplayName("Should keep a cross-package package-private method separate from a subclass's "
+                + "public method of the same signature")
+        void shouldKeepCrossPackageWideningSeparate() {
+            // Guard against an over-collapsing fix. With no same-package intermediate to bridge
+            // them, pkgy.CrossPackageWideningChild.slot() does not override pkgx's package-private
+            // slot() - the parent's is not even accessible here - so both must survive.
+            java.util.List<Method> slots =
+                    named(ReflectionUtil.getAllMethods(CrossPackageWideningChild.class), "slot");
+
+            assertEquals(2, slots.size(),
+                    "a package-private method is overridden only from the same package "
+                            + "(JLS 8.4.8.1), and there is no same-package intermediate here: "
+                            + slots);
+            assertTrue(slots.get(0).getDeclaringClass() == CrossPackageWideningChild.class,
+                    "subclass declarations must still come first: " + slots);
+            assertTrue(slots.get(1).getDeclaringClass() == PackagePrivateSlotBase.class,
+                    "the parent's distinct method must still be present: " + slots);
+        }
+
+        @Test
+        @DisplayName("Should keep same-signature private methods on two levels separate")
+        void shouldKeepPrivateMethodsSeparate() {
+            // Guard against an over-collapsing fix. private methods are dispatched with
+            // invokespecial and never participate in overriding (JLS 8.4.8.1), so these are two
+            // distinct methods that merely share a name.
+            java.util.List<Method> slots =
+                    named(ReflectionUtil.getAllMethods(PrivateSlotChild.class), "slot");
+
+            assertEquals(2, slots.size(),
+                    "private methods cannot override one another, so both must survive: " + slots);
+        }
+
+        @Test
+        @DisplayName("Should keep same-signature static methods on two levels separate")
+        void shouldKeepStaticMethodsSeparate() {
+            // Guard against an over-collapsing fix. A static method hides, rather than overrides,
+            // the one above it - a different relation, and two distinct methods.
+            java.util.List<Method> slots =
+                    named(ReflectionUtil.getAllMethods(StaticSlotChild.class), "slot");
+
+            assertEquals(2, slots.size(),
+                    "static methods hide rather than override, so both must survive: " + slots);
+        }
+
+        @Test
         @DisplayName("Should return an empty list for null")
         void shouldHandleNull() {
             assertTrue(ReflectionUtil.getAllMethods(null).isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("overrides")
+    class Overrides {
+
+        private Method declared(Class<?> owner, String name) {
+            try {
+                return owner.getDeclaredMethod(name);
+            } catch (NoSuchMethodException e) {
+                throw new AssertionError("fixture is missing " + owner.getName() + "#" + name, e);
+            }
+        }
+
+        @Test
+        @DisplayName("Should hold when a same-package subclass widens a package-private method to "
+                + "public")
+        void shouldHoldForSamePackageWidening() {
+            // JLS 8.4.8.1 places no condition on the OVERRIDING method's access.
+            assertTrue(ReflectionUtil.overrides(
+                    declared(SamePackageWideningMiddle.class, "slot"),
+                    declared(PackagePrivateSlotBase.class, "slot")));
+        }
+
+        @Test
+        @DisplayName("Should not hold in the reverse direction")
+        void shouldNotHoldReversed() {
+            // Overriding is directional - the whole reason a symmetric key cannot express it.
+            assertFalse(ReflectionUtil.overrides(
+                    declared(PackagePrivateSlotBase.class, "slot"),
+                    declared(SamePackageWideningMiddle.class, "slot")));
+        }
+
+        @Test
+        @DisplayName("Should not hold across packages with no same-package intermediate")
+        void shouldNotHoldAcrossPackages() {
+            assertFalse(ReflectionUtil.overrides(
+                    declared(CrossPackageWideningChild.class, "slot"),
+                    declared(PackagePrivateSlotBase.class, "slot")));
+        }
+
+        @Test
+        @DisplayName("Should not hold directly for a transitively overridden ancestor")
+        void shouldNotHoldDirectlyForTransitiveAncestor() {
+            // The leaf overrides the root only THROUGH the middle declaration. overrides() states
+            // the direct rule; getAllMethods is what composes it into transitive slots.
+            assertFalse(ReflectionUtil.overrides(
+                    declared(TransitiveWideningLeaf.class, "slot"),
+                    declared(PackagePrivateSlotBase.class, "slot")));
+            assertTrue(ReflectionUtil.overrides(
+                    declared(TransitiveWideningLeaf.class, "slot"),
+                    declared(SamePackageWideningMiddle.class, "slot")));
+        }
+
+        @Test
+        @DisplayName("Should not hold for private or static declarations")
+        void shouldNotHoldForNonOverridable() {
+            assertFalse(ReflectionUtil.overrides(
+                    declared(PrivateSlotChild.class, "slot"),
+                    declared(PrivateSlotBase.class, "slot")));
+            assertFalse(ReflectionUtil.overrides(
+                    declared(StaticSlotChild.class, "slot"),
+                    declared(StaticSlotBase.class, "slot")));
+        }
+
+        @Test
+        @DisplayName("Should not hold for a declaration against itself")
+        void shouldNotHoldForSameDeclaration() {
+            // The supertype must be PROPER: a class does not override its own method.
+            Method slot = declared(SamePackageWideningMiddle.class, "slot");
+            assertFalse(ReflectionUtil.overrides(slot, slot));
+        }
+
+        @Test
+        @DisplayName("Should not hold when names or parameter types differ")
+        void shouldNotHoldForDifferentSignatures() throws Exception {
+            Method inherited = GetAllMethodsBase.class.getDeclaredMethod("inherited");
+            Method overridden = GetAllMethodsChild.class.getDeclaredMethod("overridden");
+            assertFalse(ReflectionUtil.overrides(overridden, inherited), "different names");
+
+            Method noParams = DifferentParamsChild.class.getDeclaredMethod("slot");
+            Method withParam = DifferentParamsBase.class.getDeclaredMethod("slot", String.class);
+            assertFalse(ReflectionUtil.overrides(noParams, withParam), "different parameter lists");
+        }
+
+        @Test
+        @DisplayName("Should return false for null arguments")
+        void shouldHandleNulls() {
+            Method slot = declared(SamePackageWideningMiddle.class, "slot");
+            assertFalse(ReflectionUtil.overrides(null, slot));
+            assertFalse(ReflectionUtil.overrides(slot, null));
+            assertFalse(ReflectionUtil.overrides(null, null));
+        }
+    }
+
+    @Nested
+    @DisplayName("signatureOf")
+    class SignatureOf {
+
+        @Test
+        @DisplayName("Should give the same key to an override that does not change visibility")
+        void shouldMatchForPlainOverride() throws Exception {
+            assertEquals(
+                    ReflectionUtil.signatureOf(
+                            GetAllMethodsChild.class.getDeclaredMethod("overridden")),
+                    ReflectionUtil.signatureOf(
+                            GetAllMethodsBase.class.getDeclaredMethod("overridden")));
+        }
+
+        @Test
+        @DisplayName("Should give different keys to a package-private method and the public "
+                + "override that widens it")
+        void shouldBeAsymmetricForWidening() throws Exception {
+            // Documents the limitation the javadoc warns about, so that anyone tempted to use this
+            // key as an override test has the counter-example in front of them: these two ARE the
+            // same method per JLS 8.4.8.1, and their keys differ. Use overrides(Method, Method).
+            assertFalse(ReflectionUtil.signatureOf(
+                            SamePackageWideningMiddle.class.getDeclaredMethod("slot"))
+                    .equals(ReflectionUtil.signatureOf(
+                            PackagePrivateSlotBase.class.getDeclaredMethod("slot"))),
+                    "if this ever becomes true, signatureOf changed - re-check its javadoc");
+            assertTrue(ReflectionUtil.overrides(
+                            SamePackageWideningMiddle.class.getDeclaredMethod("slot"),
+                            PackagePrivateSlotBase.class.getDeclaredMethod("slot")),
+                    "...while the real relation does hold");
+        }
+
+        @Test
+        @DisplayName("Should keep private and static declarations on different levels distinct")
+        void shouldSeparateNonOverridableDeclarations() throws Exception {
+            assertFalse(ReflectionUtil.signatureOf(PrivateSlotChild.class.getDeclaredMethod("slot"))
+                    .equals(ReflectionUtil.signatureOf(
+                            PrivateSlotBase.class.getDeclaredMethod("slot"))));
+            assertFalse(ReflectionUtil.signatureOf(StaticSlotChild.class.getDeclaredMethod("slot"))
+                    .equals(ReflectionUtil.signatureOf(
+                            StaticSlotBase.class.getDeclaredMethod("slot"))));
         }
     }
 }

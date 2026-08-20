@@ -53,6 +53,28 @@ class SimpleContainerLifecycleDedupTest {
         private void init() { privateInitCount++; }
     }
 
+    /**
+     * A package-private {@code @PostConstruct} method widened to {@code public} by a subclass in
+     * the <b>same</b> package - both classes are nested in this test, so both live in
+     * {@code com.ultikits.ultitools.context}. Per JLS 8.4.8.1 that is a genuine override (nothing
+     * there constrains the overriding method's own access), so the callback must fire exactly once.
+     * <p>
+     * 同包内把包私有的 {@code @PostConstruct} 方法放宽为 {@code public}。根据 JLS 8.4.8.1 这是真正的
+     * 覆盖，回调必须只触发一次。
+     */
+    public static class PkgPrivateWideningBase {
+        public static int wideningInitCount;
+
+        @PostConstruct
+        void init() { wideningInitCount++; }
+    }
+
+    public static class PkgPrivateWideningChild extends PkgPrivateWideningBase {
+        @Override
+        @PostConstruct
+        public void init() { super.init(); }
+    }
+
     @Test
     @DisplayName("Should invoke both private @PostConstruct methods when parent and child each declare one")
     void shouldInvokeBothPrivatePostConstructMethods() {
@@ -86,6 +108,25 @@ class SimpleContainerLifecycleDedupTest {
                 "a package-private method is overridden only by a subclass in the SAME package "
                         + "(JLS 8.4.8.1); the parent's and the child's init() live in different "
                         + "packages, so they are distinct methods and must both fire");
+    }
+
+    @Test
+    @DisplayName("Should invoke @PostConstruct once when a same-package subclass widens a "
+            + "package-private callback to public")
+    void shouldInvokePostConstructOnceForSamePackageWidening() {
+        // The manifestation-1 shape of issue #190: the parent's callback is package-private and the
+        // child's override is public, so a symmetric name-based de-dup key gives them different
+        // keys and BOTH methods are invoked on the same bean. Per JLS 8.4.8.1 the child's
+        // declaration overrides the parent's - one method, one invocation.
+        PkgPrivateWideningBase.wideningInitCount = 0;
+        SimpleContainer container = new SimpleContainer();
+        container.registerBean(PkgPrivateWideningChild.class);
+        container.refresh();
+        container.getBean(PkgPrivateWideningChild.class);
+
+        assertEquals(1, PkgPrivateWideningBase.wideningInitCount,
+                "widening a package-private method to public in the same package is still an "
+                        + "override (JLS 8.4.8.1), so the callback must fire exactly once");
     }
 
     @Test

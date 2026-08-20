@@ -118,17 +118,24 @@ public final class FinalContractValidator {
      * or cross-package package-private method in {@code clazz} that merely shares a signature with
      * an ancestor's {@code @Final} method is not an override at all per JLS 8.4.8.1, and reporting
      * it as one would reject a module that never actually did the thing {@code @Final} forbids.
-     * {@link ReflectionUtil#signatureOf(Method)} already encodes that exact rule for
-     * {@link ReflectionUtil#getAllMethods(Class)}'s own override collapsing, so it is reused here
-     * rather than re-derived - the two checks now agree by construction instead of by two people
-     * independently getting the same JLS rule right.
+     * Nor is it enough to compare a symmetric signature key: overriding is directional, so a key
+     * comparison misses the mirror-image case - a subclass in the same package widening an
+     * ancestor's package-private {@code @Final} method to {@code public}, which is a real override
+     * and precisely what {@code @Final} exists to forbid.
+     * <p>
+     * {@link ReflectionUtil#overrides(Method, Method)} is the single implementation of that rule,
+     * shared with {@link ReflectionUtil#getAllMethods(Class)}'s own override collapsing, so the two
+     * checks agree by construction rather than by two people independently getting the same JLS
+     * rule right. See issue #190.
      * <p>
      * 按名称加参数类型匹配是不够的：{@code clazz} 中与祖先类的 {@code @Final} 方法签名相同的
-     * {@code private}、{@code static} 或跨包包私有方法，根据 JLS 8.4.8.1 根本不构成重写。这里复用
-     * {@link ReflectionUtil#signatureOf(Method)} 而不是重新实现同一条规则，让两处检查天然一致。
+     * {@code private}、{@code static} 或跨包包私有方法，根据 JLS 8.4.8.1 根本不构成重写。比较对称
+     * 的签名 key 同样不够：覆盖是有方向的，key 比较会漏掉镜像的那一半——同包子类把祖先的包私有
+     * {@code @Final} 方法放宽为 {@code public}，那是真正的覆盖，也正是 {@code @Final} 要禁止的。
+     * 这里改用 {@link ReflectionUtil#overrides(Method, Method)}——该规则的唯一实现，与
+     * {@link ReflectionUtil#getAllMethods(Class)} 共用，让两处检查天然一致。
      */
     private static Method findOverriddenSealedMethod(Class<?> clazz, Method method) {
-        String methodSignature = ReflectionUtil.signatureOf(method);
         for (Class<?> current = clazz.getSuperclass();
              current != null && current != Object.class;
              current = current.getSuperclass()) {
@@ -136,7 +143,7 @@ public final class FinalContractValidator {
                 Method candidate = current.getDeclaredMethod(method.getName(),
                         method.getParameterTypes());
                 if (candidate.isAnnotationPresent(Final.class)
-                        && methodSignature.equals(ReflectionUtil.signatureOf(candidate))) {
+                        && ReflectionUtil.overrides(method, candidate)) {
                     return candidate;
                 }
             } catch (NoSuchMethodException ignored) {

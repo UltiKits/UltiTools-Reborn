@@ -7,9 +7,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 /**
  * 反射工具类
@@ -360,14 +360,26 @@ public final class ReflectionUtil {
 
     /**
      * Collects every method visible on the given class, walking the hierarchy and keeping only the
-     * most specific override of each signature.
+     * most specific declaration of each overridable method.
      * <p>
      * {@code Class.getDeclaredMethods()} returns only the methods a class declares itself, and
      * {@code Class.getMethods()} returns only public ones. Neither is right for annotation scanning
      * on a bean that may be an AOP proxy: the proxy declares overrides only for intercepted
      * methods, so scanning it directly loses every annotation on the rest. Walking the hierarchy
-     * recovers them, and de-duplicating by signature keeps a callback from firing once per level
-     * when an override repeats its parent's annotation.
+     * recovers them, and collapsing overrides keeps a callback from firing once per level when an
+     * override repeats its parent's annotation.
+     * <p>
+     * Declarations are grouped into <em>slots</em> using {@link #overrides(Method, Method)}, and
+     * each slot contributes exactly one entry: the most derived declaration, which is the one whose
+     * annotations a scanner should see. A slot remembers <b>every</b> declaration folded into it,
+     * not just that representative, because overriding is transitive (JLS 8.4.8.1): in
+     * {@code x.A.m()} (package-private) &rarr; {@code x.B.m()} (public) &rarr; {@code y.C.m()}
+     * (public), the leaf does not directly override the root - different packages - but does so
+     * through the middle declaration, and all three are one method. Testing a candidate only
+     * against the surviving representative would keep the root as a spurious second entry.
+     * <p>
+     * {@code private} and {@code static} methods never participate in overriding, so a same-named,
+     * same-parameter declaration at another level always starts its own slot and both survive.
      * <p>
      * Bridge and synthetic methods are skipped: they carry no author-written annotations and, being
      * compiler artifacts, are never the method a scanner means to find.
@@ -376,7 +388,9 @@ public final class ReflectionUtil {
      * <p>
      * {@code getDeclaredMethods()} 只返回类自己声明的方法，{@code getMethods()} 只返回 public
      * 方法，两者都不适合在可能是 AOP 代理的 bean 上做注解扫描：代理只为被拦截的方法声明覆盖，
-     * 直接扫它会丢掉其余方法上的全部注解。见 issue #190。
+     * 直接扫它会丢掉其余方法上的全部注解。见 issue #190。合并覆盖时以
+     * {@link #overrides(Method, Method)} 判定，并保留每个槽内的<b>全部</b>声明而不只是代表——
+     * 因为覆盖具有传递性，只与代表比较会漏掉链条最上游的那条声明。
      *
      * @param clazz the class to scan, may be null
      * @return the methods, subclass overrides first; empty if clazz is null
@@ -386,56 +400,150 @@ public final class ReflectionUtil {
         if (clazz == null) {
             return result;
         }
-        Set<String> seenSignatures = new HashSet<>();
+        // Slots are bucketed by name + parameter count purely to keep the scan cheap: two
+        // declarations differing on either can never be the same method, so they never need to be
+        // compared. All correctness lives in overrides(...).
+        Map<String, List<List<Method>>> slotsByKey = new HashMap<>();
         for (Class<?> current = clazz; current != null && current != Object.class;
              current = current.getSuperclass()) {
             for (Method method : current.getDeclaredMethods()) {
                 if (method.isBridge() || method.isSynthetic()) {
                     continue;
                 }
-                if (seenSignatures.add(signatureOf(method))) {
+                String key = method.getName() + '/' + method.getParameterTypes().length;
+                List<List<Method>> bucket = slotsByKey.get(key);
+                if (bucket == null) {
+                    bucket = new ArrayList<>();
+                    slotsByKey.put(key, bucket);
+                }
+                List<Method> slot = findSlotOverriding(bucket, method);
+                if (slot == null) {
+                    // Nothing already collected overrides this declaration, so it is a method in
+                    // its own right. The walk runs subclass-first, so the first declaration to
+                    // open a slot is also the most derived one - it becomes the representative.
+                    slot = new ArrayList<>();
+                    bucket.add(slot);
                     result.add(method);
                 }
+                slot.add(method);
             }
         }
         return result;
     }
 
     /**
-     * Builds a signature key that is equal for a method and the override that hides it.
+     * Finds the slot in {@code bucket} whose declarations override {@code candidate}, or
+     * {@code null} if none does.
      * <p>
-     * {@code private} and {@code static} methods cannot be overridden - the JVM dispatches them
-     * with {@code invokespecial} / {@code invokestatic}, neither of which consults a subclass - so
-     * a same-named, same-parameter-list method at another hierarchy level is a distinct method, not
-     * a duplicate declaration of the same one. The declaring class is folded into the key for those
-     * two cases so they are never collapsed together; overridable methods keep the plain
-     * name+parameters key so the subclass's override still wins.
+     * Every declaration in a slot is tested, not just its representative - see
+     * {@link #getAllMethods(Class)} for why transitivity makes that necessary.
+     *
+     * @param bucket    the slots sharing {@code candidate}'s name and parameter count
+     * @param candidate the declaration being placed
+     * @return the slot {@code candidate} belongs to, or null if it opens a new one
+     */
+    private static List<Method> findSlotOverriding(List<List<Method>> bucket, Method candidate) {
+        for (List<Method> slot : bucket) {
+            for (Method member : slot) {
+                if (overrides(member, candidate)) {
+                    return slot;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether {@code sub} overrides {@code sup} per JLS 8.4.8.1.
      * <p>
-     * Package-private methods sit in between. Per JLS 8.4.8.1, a package-private method <em>is</em>
-     * overridden by a same-signature method in a subclass in the <b>same</b> package, but a
-     * same-signature package-private method in a subclass in a <em>different</em> package is a
-     * distinct method, exactly like the private/static case above. The declaring class's
-     * <b>package</b> - not its full name - is folded into the key for package-private methods: two
-     * hierarchy levels in the same package still collapse to one (the subclass's override wins, as
-     * for any other override), while a same-named method reappearing in a different package's
-     * subclass is kept as its own entry instead of silently displacing the parent's.
+     * Overriding is <b>directional</b> and is not an equivalence relation, so it cannot be
+     * expressed as equality of any symmetric key - which is why this predicate exists rather than a
+     * comparison of two {@link #signatureOf(Method)} results. All of the following must hold:
+     * <ol>
+     *   <li>same name and same parameter types, in order;</li>
+     *   <li>{@code sup}'s declaring class is a <em>proper</em> supertype of {@code sub}'s;</li>
+     *   <li>neither declaration is {@code private} or {@code static} - {@code private} methods are
+     *       dispatched with {@code invokespecial} and are not even inherited, and {@code static}
+     *       methods are <em>hidden</em> rather than overridden;</li>
+     *   <li>if {@code sup} is package-private, the two declaring classes are in the same package.
+     *       A {@code public} or {@code protected} {@code sup} carries no package condition.</li>
+     * </ol>
+     * There is deliberately no condition on {@code sub}'s own access: Java permits an override to
+     * widen access, and a package-private method widened to {@code public} by a same-package
+     * subclass is a genuine override.
      * <p>
-     * Public so that other JLS-8.4.8.1-sensitive scanners can ask "is this method declaration the
-     * same overridable slot as that one" without re-deriving the rule -
-     * {@link com.ultikits.ultitools.context.FinalContractValidator} compares two
-     * {@code signatureOf} results for exactly that reason, rather than matching on name and
-     * parameter types alone the way this method's callers here do.
+     * Public so that {@link com.ultikits.ultitools.context.FinalContractValidator} shares this one
+     * implementation instead of re-deriving the rule - two independent copies are how the two
+     * consumers drifted apart in the first place (issue #190).
      * <p>
-     * {@code private} 和 {@code static} 方法无法被覆盖——JVM 用 {@code invokespecial} /
-     * {@code invokestatic} 分派它们，都不查子类——所以另一层级上同名同参数的方法是一个独立的
-     * 方法，而不是同一个方法的重复声明。为这两种情况把声明类并入 key，避免被误合并；可覆盖的
-     * 方法仍用纯名称+参数的 key，保证子类的覆盖版本胜出。
+     * Packages are compared by name, matching how the rest of this class treats them; two
+     * same-named packages defined by different class loaders are distinct runtime packages to the
+     * JVM, a distinction this check does not make.
      * <p>
-     * 包私有（default）方法介于二者之间。根据 JLS 8.4.8.1，包私有方法只会被<b>同一个包</b>内
-     * 签名相同的子类方法覆盖；不同包的子类中出现的同名同参数包私有方法则是一个独立的方法，和
-     * 上面 private/static 的情形一样。为包私有方法把声明类所在的<b>包</b>（而非完整类名）并入
-     * key：同包内的多个层级依然会合并成一个（子类的覆盖版本胜出，与其他可覆盖方法一致），而
-     * 不同包的子类中出现的同名方法则各自保留，不会悄悄顶替父类的那一个。
+     * 覆盖关系是<b>有方向</b>的，也不是等价关系，因此无法用任何对称的 key 相等来表达——这正是
+     * 这里提供谓词而不是比较两个 {@link #signatureOf(Method)} 结果的原因。判定条件见上方英文列表。
+     * 注意对 {@code sub} 自身的访问级别<b>不设</b>任何条件：Java 允许覆盖时放宽访问权限，同包子类
+     * 把包私有方法放宽为 {@code public} 仍是真正的覆盖。包按名称比较，不区分不同类加载器下的同名包。
+     *
+     * @param sub the potentially overriding declaration, may be null
+     * @param sup the potentially overridden declaration, may be null
+     * @return true if {@code sub} overrides {@code sup}; false if either is null
+     */
+    public static boolean overrides(Method sub, Method sup) {
+        if (sub == null || sup == null) {
+            return false;
+        }
+        if (!sub.getName().equals(sup.getName())
+                || !Arrays.equals(sub.getParameterTypes(), sup.getParameterTypes())) {
+            return false;
+        }
+        int subModifiers = sub.getModifiers();
+        int supModifiers = sup.getModifiers();
+        if (Modifier.isPrivate(subModifiers) || Modifier.isPrivate(supModifiers)
+                || Modifier.isStatic(subModifiers) || Modifier.isStatic(supModifiers)) {
+            return false;
+        }
+        Class<?> subClass = sub.getDeclaringClass();
+        Class<?> supClass = sup.getDeclaringClass();
+        if (subClass == supClass || !supClass.isAssignableFrom(subClass)) {
+            return false;
+        }
+        return !isPackagePrivate(supModifiers)
+                || packageNameOf(supClass).equals(packageNameOf(subClass));
+    }
+
+    /**
+     * Builds a coarse de-duplication key for a method declaration.
+     * <p>
+     * <b>This key does not answer "are these two declarations the same overridable method".</b>
+     * Overriding is directional and not an equivalence relation, so no symmetric key can express
+     * it; use {@link #overrides(Method, Method)} for the real relation. Two concrete ways this key
+     * misleads: it is <em>asymmetric</em> for a visibility-widening override - a package-private
+     * {@code m()} and the {@code public m()} that a same-package subclass overrides it with produce
+     * <b>different</b> keys, because only the package-private one carries its package - and it
+     * cannot see transitivity, so a declaration reached through an intermediate override is never
+     * recognised either.
+     * <p>
+     * What it does give, cheaply, is a key that never collapses two declarations that are certainly
+     * distinct methods: {@code private} and {@code static} declarations fold in their declaring
+     * class (neither can be overridden - the JVM dispatches them with {@code invokespecial} /
+     * {@code invokestatic}, neither of which consults a subclass), package-private declarations
+     * fold in their declaring class's package, and everything else uses the plain name+parameters
+     * key. It is safe as a pre-filter or a logging/diagnostic label; it is not safe as an override
+     * test.
+     * <p>
+     * Kept public because it is part of this branch's published surface. Nothing in the framework
+     * relies on it for override detection any more - {@link #getAllMethods(Class)} and
+     * {@link com.ultikits.ultitools.context.FinalContractValidator} both route through
+     * {@link #overrides(Method, Method)} instead (issue #190).
+     * <p>
+     * <b>这个 key 不能用来判断"两条声明是否属于同一个可覆盖的方法"。</b>覆盖是有方向的、不是等价
+     * 关系，任何对称的 key 都无法表达它；真正的判定请用 {@link #overrides(Method, Method)}。它至少
+     * 在两处会误导：对放宽访问权限的覆盖它是<em>不对称</em>的——包私有的 {@code m()} 与同包子类用
+     * {@code public m()} 覆盖它时，两者的 key <b>不同</b>，因为只有包私有那条带上了包名；它也看不见
+     * 传递性，经由中间声明才产生的覆盖关系同样识别不出来。它能廉价提供的只是"绝不会把两个确定不同
+     * 的方法合并到一起"：private/static 并入声明类，包私有并入声明类所在的包，其余用纯名称+参数。
+     * 作预筛选或日志标签是安全的，作覆盖判定则不然。
      *
      * @param method the method to build a key for
      * @return the signature key

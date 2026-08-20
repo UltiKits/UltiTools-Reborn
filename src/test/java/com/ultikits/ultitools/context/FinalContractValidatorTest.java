@@ -23,6 +23,7 @@ import com.ultikits.testfixtures.finalviolation.validator.IllegalSubclassWithMis
 import com.ultikits.testfixtures.finalviolation.validator.OpenBase;
 import com.ultikits.testfixtures.finalviolation.validator.PackagePrivateSealedBase;
 import com.ultikits.testfixtures.finalviolation.validator.SealedBase;
+import com.ultikits.testfixtures.finalviolation.validator.WideningOverrideOfSealedPackageMethod;
 import com.ultikits.testfixtures.missingdependency.HasMethodReferencingMissingType;
 import com.ultikits.testfixtures.missingdependency.MissingDependencyType;
 import com.ultikits.ultitools.annotations.Final;
@@ -156,6 +157,24 @@ class FinalContractValidatorTest {
         // (JLS 8.4.8.1); CrossPackageShadowsSealedMethod is in a different package than
         // PackagePrivateSealedBase, so its own sealedPackageMethod() is an unrelated method.
         assertTrue(FinalContractValidator.validate(CrossPackageShadowsSealedMethod.class).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should reject widening a @Final package-private method to public from the same "
+            + "package")
+    void shouldRejectSamePackageWideningOfSealedPackageMethod() {
+        // JLS 8.4.8.1 puts no condition on the OVERRIDING method's access: a same-package subclass
+        // may widen a package-private method to public, and that is still an override - exactly
+        // what @Final forbids. Comparing the two declarations by a symmetric name-based key gives
+        // them different keys (the package-private one carries its package, the public one does
+        // not), so the violation used to walk straight through. See issue #190.
+        List<String> violations =
+                FinalContractValidator.validate(WideningOverrideOfSealedPackageMethod.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("sealedPackageMethod"), violations.get(0));
+        assertTrue(violations.get(0).contains(PackagePrivateSealedBase.class.getName()),
+                violations.get(0));
     }
 
     @Test
