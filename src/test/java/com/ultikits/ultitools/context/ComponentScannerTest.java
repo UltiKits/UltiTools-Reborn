@@ -44,13 +44,9 @@ class ComponentScannerTest {
     @Test
     @DisplayName("Should handle multiple package scan")
     void testMultiplePackageScan() {
-        // Scans com.ultikits.ultitools.context.scan rather than the whole context package: the
-        // latter also holds FinalContractValidatorTest's intentional @Final violation fixtures,
-        // which now correctly abort a scan (see ComponentScannerFinalContractTest). This test is
-        // only about the multi-package loop, so it uses a subpackage that stays violation-free.
         // When - should not throw exception
         assertDoesNotThrow(() -> scanner.scanPackages(
-            "com.ultikits.ultitools.context.scan",
+            "com.ultikits.ultitools.context",
             "com.nonexistent.package"
         ));
     }

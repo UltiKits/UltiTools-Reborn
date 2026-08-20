@@ -9,33 +9,26 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.annotations.Final;
+import com.ultikits.testfixtures.finalviolation.validator.IllegalOverride;
+import com.ultikits.testfixtures.finalviolation.validator.IllegalSubclass;
+import com.ultikits.testfixtures.finalviolation.validator.OpenBase;
+import com.ultikits.testfixtures.finalviolation.validator.SealedBase;
 import com.ultikits.ultitools.aop.ProxyFactory;
 
 @DisplayName("FinalContractValidator Tests")
 class FinalContractValidatorTest {
 
-    @Final
-    public static class SealedBase {
-        public void ok() { }
-    }
-
-    public static class OpenBase {
-        @Final
-        public void sealedMethod() { }
-        public void openMethod() { }
-    }
-
-    public static class IllegalSubclass extends SealedBase { }
+    // SealedBase, OpenBase, IllegalSubclass and IllegalOverride are not nested here: they are
+    // real, live @Final violations, and this test class lives in com.ultikits.ultitools.context -
+    // a package other tests scan broadly (ComponentScannerTest, ContextConfigTest). A violation
+    // compiled into this package would trip those unrelated scans for a reason that has nothing to
+    // do with what they're testing. See com.ultikits.testfixtures.finalviolation.validator's
+    // package-info for the full story (issue #190). LegalSubclass and Unrelated below never
+    // violate anything, so they can stay colocated with the tests that use them as usual.
 
     public static class LegalSubclass extends OpenBase {
         @Override
         public void openMethod() { }
-    }
-
-    public static class IllegalOverride extends OpenBase {
-        @Override
-        public void sealedMethod() { }
     }
 
     public static class Unrelated { }
