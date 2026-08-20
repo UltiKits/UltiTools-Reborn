@@ -8,7 +8,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -90,13 +89,17 @@ public class AopProxyBeanPostProcessor implements BeanPostProcessor {
         LOGGER.fine("Creating AOP proxy for bean '" + beanName + "' with " +
                 applicableInterceptors.size() + " interceptors");
 
-        try {
-            ProxyFactory factory = new ProxyFactory(applicableInterceptors);
-            return factory.createProxy(bean);
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to create AOP proxy for bean '" + beanName + "'", e);
-            return bean;
-        }
+        // ProxyFactory.createProxy(Object) was removed when the proxy engine became
+        // inheritance-based (issue #190): a proxy is now instantiated fresh as a subclass,
+        // which a post-processor running after the bean already exists cannot retrofit onto
+        // it. This class is superseded by AopProxyResolver, which resolves the proxy class
+        // before the container instantiates the bean, and is deleted along with this method's
+        // body in Task 4 of the #190 plan. Left as a documented no-op for one commit so the
+        // tree keeps compiling.
+        LOGGER.warning("Bean '" + beanName + "' needs an AOP proxy, but " +
+                "AopProxyBeanPostProcessor can no longer create one after construction " +
+                "(see issue #190); it will run unproxied.");
+        return bean;
     }
 
     /**

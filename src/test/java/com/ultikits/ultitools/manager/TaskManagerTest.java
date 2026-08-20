@@ -4,7 +4,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.plugin.java.JavaPlugin;
@@ -200,13 +203,17 @@ class TaskManagerTest {
 
         @Test
         @DisplayName("Should discover @Scheduled methods on a ByteBuddy-proxied bean (regression for #188)")
-        void shouldRegisterScheduledMethodsOnProxiedBean() {
+        void shouldRegisterScheduledMethodsOnProxiedBean() throws Exception {
             // Overriding methods do not inherit annotations, so if TaskManager fails to unwrap
             // the proxy back to the original class, getDeclaredMethods() finds no @Scheduled
             // methods at all and this silently registers zero tasks instead of throwing.
-            ServiceWithScheduled target = new ServiceWithScheduled();
             ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
-            ServiceWithScheduled proxy = proxyFactory.createProxy(target);
+            Set<Method> intercepted = new LinkedHashSet<>(Arrays.asList(
+                    ServiceWithScheduled.class.getMethod("syncTask"),
+                    ServiceWithScheduled.class.getMethod("asyncTask")));
+            ServiceWithScheduled proxy = proxyFactory
+                    .createProxyClass(ServiceWithScheduled.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
 
             taskManager.registerScheduledMethods(mockUltiPlugin, proxy);
 
