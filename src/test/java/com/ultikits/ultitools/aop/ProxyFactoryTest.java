@@ -112,6 +112,18 @@ class ProxyFactoryTest {
         public String checked() throws IOException { throw new IOException("checked-boom"); }
     }
 
+    public static class GenericBase<T> {
+        public T identity(T value) { return value; }
+    }
+
+    // Overriding a generic supertype method with a concrete type parameter makes javac emit a
+    // synthetic bridge method (Object identity(Object)) alongside the real one - reflection APIs
+    // like getMethods() return both. See shouldIgnoreBridgeMethods below.
+    public static class StringIdentityTarget extends GenericBase<String> {
+        @Override
+        public String identity(String value) { return value; }
+    }
+
     @Nested
     @DisplayName("Constructor Tests")
     class ConstructorTests {
@@ -231,6 +243,25 @@ class ProxyFactoryTest {
         }
 
         @Test
+        @DisplayName("Should ignore bridge methods even when passed in interceptedMethods (regression)")
+        void shouldIgnoreBridgeMethods() throws Exception {
+            Set<Method> allMethods = new LinkedHashSet<>(
+                    Arrays.asList(StringIdentityTarget.class.getMethods()));
+            assertTrue(allMethods.stream().anyMatch(Method::isBridge),
+                    "test fixture must actually produce a bridge method, or this test proves nothing");
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            // MethodCall.invoke(bridgeMethod).onSuper() throws IllegalStateException at build
+            // time if bridge methods aren't filtered out before generating trampolines - this must
+            // not throw, and the real (non-bridge) method must still work normally.
+            StringIdentityTarget bean = factory
+                    .createProxyClass(StringIdentityTarget.class, allMethods)
+                    .getDeclaredConstructor().newInstance();
+
+            assertEquals("hello", bean.identity("hello"));
+        }
+
+        @Test
         @DisplayName("Should leave methods outside the intercepted set untouched")
         void shouldNotInterceptUnlistedMethods() throws Exception {
             List<String> log = new ArrayList<>();
@@ -280,6 +311,7 @@ class ProxyFactoryTest {
 
             assertNotNull(proxy);
             assertNotEquals(SimpleTarget.class, proxy.getClass());
+            assertTrue(ProxyFactory.isProxyClass(proxy.getClass()));
         }
 
         @Test

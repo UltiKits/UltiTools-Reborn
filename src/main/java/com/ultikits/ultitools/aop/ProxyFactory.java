@@ -12,9 +12,12 @@ import net.bytebuddy.matcher.ElementMatchers;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Factory for creating inheritance-based subclass proxies.
@@ -42,8 +45,9 @@ import java.util.concurrent.Callable;
  * same-signature "trampoline" method per intercepted method, invoked reflectively by name from the
  * dispatcher - see {@link #trampolineName(Method)}.
  * <p>
- * <b>Limitations</b> (all reported at startup rather than silently skipped, see
- * {@link AopEligibility}):
+ * <b>Limitations</b> (surfaced as a {@link RuntimeException} naming the target class rather than a
+ * bare ByteBuddy exception or a silent skip; a startup-time eligibility pre-check is planned as
+ * {@code AopEligibility}):
  * <ul>
  *   <li>Cannot subclass final classes</li>
  *   <li>Cannot override final, private or static methods</li>
@@ -95,36 +99,68 @@ public class ProxyFactory {
      *
      * @param targetClass        the class to subclass
      * @param interceptedMethods the exact methods to intercept; methods outside this set keep the
-     *                           original body and the original annotations
+     *                           original body and the original annotations. Bridge and synthetic
+     *                           methods are always ignored even if present in this set - they are
+     *                           compiler artifacts of implementing a generic supertype or interface
+     *                           (a raw-erasure overload calling the real method), and generating a
+     *                           super-call trampoline for one throws at build time
      * @param <T>                the target type
      * @return the generated subclass
+     * @throws NullPointerException if {@code interceptedMethods} is null
+     * @throws RuntimeException     if the proxy cannot be generated; see the class javadoc's
+     *                               Limitations section
      */
     public <T> Class<? extends T> createProxyClass(Class<T> targetClass,
                                                    Set<Method> interceptedMethods) {
-        DynamicType.Builder<T> builder = new ByteBuddy()
-                .subclass(targetClass)
-                // Type annotations are not @Inherited; copy them or every class-level scan breaks.
-                .annotateType(targetClass.getAnnotations());
+        Objects.requireNonNull(interceptedMethods, "interceptedMethods");
 
-        // One same-signature trampoline per intercepted method, calling straight to super. This is
-        // the hand-rolled equivalent of @SuperCall's auto-generated accessor - see the class javadoc
-        // for why @SuperCall itself is not an option here.
+        // ByteBuddy's own method matcher already excludes synthetic methods by default, so a
+        // bridge method (e.g. the raw Object overload the compiler adds alongside a generic
+        // supertype's typed override) could never actually be intercepted - but
+        // MethodCall.invoke(bridgeMethod).onSuper() still throws IllegalStateException at build
+        // time if we try to generate a trampoline for one. Drop them up front.
+        Set<Method> methodsToIntercept = new LinkedHashSet<>();
         for (Method method : interceptedMethods) {
-            builder = builder
-                    .defineMethod(trampolineName(method), method.getReturnType(), Visibility.PUBLIC)
-                    .withParameters(method.getParameterTypes())
-                    .throwing(method.getExceptionTypes())
-                    .intercept(MethodCall.invoke(method).onSuper().withAllArguments());
+            if (!method.isBridge() && !method.isSynthetic()) {
+                methodsToIntercept.add(method);
+            }
         }
 
-        return builder
-                .method(ElementMatchers.anyOf(interceptedMethods.toArray(new Method[0])))
-                .intercept(InvocationHandlerAdapter.of(new InterceptorDispatcher(interceptors)))
-                // Overriding methods do not inherit annotations; copy them for the same reason.
-                .attribute(MethodAttributeAppender.ForInstrumentedMethod.INCLUDING_RECEIVER)
-                .make()
-                .load(targetClass.getClassLoader(), ClassLoadingStrategy.Default.INJECTION)
-                .getLoaded();
+        try {
+            DynamicType.Builder<T> builder = new ByteBuddy()
+                    .subclass(targetClass)
+                    // Type annotations are not @Inherited; copy them or every class-level scan breaks.
+                    .annotateType(targetClass.getAnnotations());
+
+            // One same-signature trampoline per intercepted method, calling straight to super.
+            // This is the hand-rolled equivalent of @SuperCall's auto-generated accessor - see the
+            // class javadoc for why @SuperCall itself is not an option here. Package-private
+            // visibility keeps it out of the bean's public API: nothing but this factory's own
+            // InterceptorDispatcher (via setAccessible) ever needs to call it, and a public
+            // trampoline would let any caller bypass the interceptor chain - @Transactional,
+            // @ExceptionCatch, permission checks - by calling it directly.
+            for (Method method : methodsToIntercept) {
+                builder = builder
+                        .defineMethod(trampolineName(method), method.getReturnType(),
+                                Visibility.PACKAGE_PRIVATE)
+                        .withParameters(method.getParameterTypes())
+                        .throwing(method.getExceptionTypes())
+                        .intercept(MethodCall.invoke(method).onSuper().withAllArguments());
+            }
+
+            return builder
+                    .method(ElementMatchers.anyOf(methodsToIntercept.toArray(new Method[0])))
+                    .intercept(InvocationHandlerAdapter.of(new InterceptorDispatcher(interceptors)))
+                    // Overriding methods do not inherit annotations; copy them for the same reason.
+                    .attribute(MethodAttributeAppender.ForInstrumentedMethod.INCLUDING_RECEIVER)
+                    .make()
+                    .load(targetClass.getClassLoader(), ClassLoadingStrategy.Default.INJECTION)
+                    .getLoaded();
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create a proxy for " + targetClass.getName() +
+                    ". Common causes: the class is final, has no constructor reachable by the " +
+                    "container, or one of the intercepted methods cannot be overridden.", e);
+        }
     }
 
     /**
@@ -153,6 +189,14 @@ public class ProxyFactory {
 
         private final List<MethodInterceptor> interceptors;
 
+        /**
+         * Caches the trampoline {@link Method} per intercepted method. Safe to key on the method
+         * alone: one dispatcher instance is bound to exactly one generated class (see
+         * {@link #createProxyClass}), so {@code proxy.getClass()} is invariant across every call
+         * this instance ever handles.
+         */
+        private final ConcurrentHashMap<Method, Method> trampolineCache = new ConcurrentHashMap<>();
+
         InterceptorDispatcher(List<MethodInterceptor> interceptors) {
             this.interceptors = interceptors;
         }
@@ -160,7 +204,13 @@ public class ProxyFactory {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             Object[] arguments = args != null ? args : new Object[0];
-            Callable<Object> superCall = () -> invokeTrampoline(proxy, method, arguments);
+
+            // Resolved eagerly, before the interceptor chain is touched: a missing trampoline is a
+            // ProxyFactory bug, not a target-method failure, and must not be catchable by
+            // @ExceptionCatch (its default value() is {Exception.class}, which a plain
+            // NoSuchMethodException would match, and silent=true would swallow it outright).
+            Method trampoline = resolveTrampoline(proxy.getClass(), method);
+            Callable<Object> superCall = () -> invokeTrampoline(trampoline, proxy, arguments);
 
             if (interceptors == null || interceptors.isEmpty()) {
                 return superCall.call();
@@ -171,17 +221,27 @@ public class ProxyFactory {
             return invocation.proceed();
         }
 
+        private Method resolveTrampoline(Class<?> proxyClass, Method method) {
+            return trampolineCache.computeIfAbsent(method, m -> {
+                try {
+                    Method trampoline = proxyClass.getDeclaredMethod(
+                            trampolineName(m), m.getParameterTypes());
+                    trampoline.setAccessible(true);
+                    return trampoline;
+                } catch (NoSuchMethodException e) {
+                    throw new IllegalStateException("BUG: ProxyFactory generated no trampoline for "
+                            + "intercepted method " + m + " on " + proxyClass.getName(), e);
+                }
+            });
+        }
+
         /**
-         * Invokes the trampoline that {@link #createProxyClass} generated for {@code method}, and
-         * unwraps {@link InvocationTargetException} so checked exceptions reach the caller as their
-         * original type rather than wrapped - matching what a direct {@code super.method()} call
-         * would have thrown.
+         * Invokes an already-resolved trampoline, and unwraps {@link InvocationTargetException} so
+         * checked exceptions reach the caller as their original type rather than wrapped - matching
+         * what a direct {@code super.method()} call would have thrown.
          */
-        private static Object invokeTrampoline(Object proxy, Method method, Object[] arguments)
+        private static Object invokeTrampoline(Method trampoline, Object proxy, Object[] arguments)
                 throws Exception {
-            Method trampoline = proxy.getClass()
-                    .getDeclaredMethod(trampolineName(method), method.getParameterTypes());
-            trampoline.setAccessible(true);
             try {
                 return trampoline.invoke(proxy, arguments);
             } catch (InvocationTargetException e) {
