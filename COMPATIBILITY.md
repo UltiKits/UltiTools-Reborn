@@ -292,6 +292,31 @@ code that detected a proxy by pattern-matching the class name, the way this fram
 `TaskManager` used to. Code doing that must switch to the supported check,
 `com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`.
 
+### Recorded instance: `@CmdMapping` methods on a command executor's superclass are now registered (6.3.0)
+
+Before 6.3.0, `BaseCommandExecutor.scanCommandMappings()` and the deprecated
+`AbstractCommandExecutor.scanCommandMappings()` scanned only `this.getClass().getDeclaredMethods()`,
+so a `@CmdMapping` method declared on a command executor's **superclass** was silently never
+registered — the subcommand simply did not exist. 6.3.0 fixes this as part of the AOP proxy work
+(issue #190: an inheritance-based proxy only overrides the methods it intercepts, so any consumer
+that scanned `getDeclaredMethods()` directly lost annotations on the rest of the class). The fix
+walks the full hierarchy, so a `@CmdMapping` method on a superclass is now registered like any
+other.
+
+Method signatures are unchanged, so `japicmp` cannot detect this. It is recorded here because it is
+real behavioral breakage for a downstream module that (knowingly or not) relied on a base-class
+`@CmdMapping` method staying unregistered — for example, an abstract command base class shared
+across modules that declares a subcommand meant to be opt-in per subclass. Such a module must
+remove or rename that method before upgrading to 6.3.0, or it will start responding to a subcommand
+it previously ignored. This framework's own command classes (`PluginInstallCommands`,
+`UltiToolsCommands`, `CloudLoginCommand`) were checked and are unaffected: none of their
+superclasses declare their own `@CmdMapping`.
+
+This falls under "no migration period" above: the previous behaviour — a declared `@CmdMapping`
+method silently not being registered — was never a documented contract, so there is no default or
+timing to phase out. It is recorded for the same reason as the AOP proxy naming change above: real
+breakage for code that depended on the gap, even though the gap itself was never guaranteed.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
@@ -834,6 +859,26 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 分类属于「不需要迁移期」——但值得单独记一笔，因为它对任何用类名模式匹配来识别代理的下游代码
 都是真实的破坏，框架自己的 `TaskManager` 以前就是这么做的。这样的代码必须改用受支持的判断
 方式：`com.ultikits.ultitools.aop.ProxyFactory.isProxyClass(Class<?>)`。
+
+### 已记录的实例：命令执行器父类上的 `@CmdMapping` 方法现在会被注册（6.3.0）
+
+6.3.0 之前，`BaseCommandExecutor.scanCommandMappings()` 和已废弃的
+`AbstractCommandExecutor.scanCommandMappings()` 只扫描 `this.getClass().getDeclaredMethods()`，
+所以声明在命令执行器**父类**上的 `@CmdMapping` 方法会被静默漏掉——那个子命令根本不存在。
+6.3.0 作为 AOP 代理工作的一部分修复了这个问题（issue #190：继承式代理只覆盖被拦截的方法，
+任何直接扫 `getDeclaredMethods()` 的消费方都会丢掉类上其余方法的注解）。修法是遍历完整继承链，
+所以父类上的 `@CmdMapping` 方法现在会和其他方法一样被注册。
+
+方法签名没有变化，`japicmp` 抓不到这个变更。之所以记在这里，是因为它对某个依赖（有意或无意）
+基类 `@CmdMapping` 方法保持未注册状态的下游模块是真实的行为破坏——例如多个模块共用的抽象命令
+基类上声明了一个本意是「子类按需启用」的子命令。这样的模块升级到 6.3.0 前必须移除或改名该方法，
+否则会开始响应此前从未响应过的子命令。本框架自身的命令类（`PluginInstallCommands`、
+`UltiToolsCommands`、`CloudLoginCommand`）已核实不受影响：它们的父类都没有声明自己的
+`@CmdMapping`。
+
+按上面的分类，这属于「不需要迁移期」：此前「声明了 `@CmdMapping` 却被静默漏注册」从来不是
+文档承诺的契约，没有默认值或时机需要逐步淘汰。记录它的理由与上面的 AOP 代理类命名变更一致：
+对依赖了这个缺口的代码是真实破坏，尽管这个缺口本身从未被保证过。
 
 ## 移除清单覆盖不到的二进制不兼容
 

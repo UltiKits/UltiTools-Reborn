@@ -4,6 +4,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -326,6 +327,12 @@ public final class ReflectionUtil {
     
     /**
      * 获取满足条件的方法
+     * <p>
+     * Delegates to {@link #getAllMethods(Class)} so callers get the same de-duplicated,
+     * bridge/synthetic-free view of the hierarchy - a raw {@code getDeclaredMethods()} walk here
+     * would double-count an overridden method (or, once a bean is AOP-proxied, could return both
+     * the proxy's intercepted override and the original method as separate hits for the same
+     * logical method).
      *
      * @param clazz  类
      * @param filter 过滤条件
@@ -333,13 +340,10 @@ public final class ReflectionUtil {
      */
     public static java.lang.reflect.Method[] getMethods(Class<?> clazz, java.util.function.Predicate<java.lang.reflect.Method> filter) {
         java.util.List<java.lang.reflect.Method> result = new ArrayList<>();
-        while (clazz != null && clazz != Object.class) {
-            for (java.lang.reflect.Method method : clazz.getDeclaredMethods()) {
-                if (filter == null || filter.test(method)) {
-                    result.add(method);
-                }
+        for (Method method : getAllMethods(clazz)) {
+            if (filter == null || filter.test(method)) {
+                result.add(method);
             }
-            clazz = clazz.getSuperclass();
         }
         return result.toArray(new java.lang.reflect.Method[0]);
     }
@@ -399,9 +403,26 @@ public final class ReflectionUtil {
 
     /**
      * Builds a signature key that is equal for a method and the override that hides it.
+     * <p>
+     * {@code private} and {@code static} methods cannot be overridden - the JVM dispatches them
+     * with {@code invokespecial} / {@code invokestatic}, neither of which consults a subclass - so
+     * a same-named, same-parameter-list method at another hierarchy level is a distinct method, not
+     * a duplicate declaration of the same one. The declaring class is folded into the key for those
+     * two cases so they are never collapsed together; overridable methods keep the plain
+     * name+parameters key so the subclass's override still wins.
+     * <p>
+     * {@code private} 和 {@code static} 方法无法被覆盖——JVM 用 {@code invokespecial} /
+     * {@code invokestatic} 分派它们，都不查子类——所以另一层级上同名同参数的方法是一个独立的
+     * 方法，而不是同一个方法的重复声明。为这两种情况把声明类并入 key，避免被误合并；可覆盖的
+     * 方法仍用纯名称+参数的 key，保证子类的覆盖版本胜出。
      */
     private static String signatureOf(Method method) {
-        StringBuilder signature = new StringBuilder(method.getName());
+        StringBuilder signature = new StringBuilder();
+        int modifiers = method.getModifiers();
+        if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)) {
+            signature.append(method.getDeclaringClass().getName()).append('#');
+        }
+        signature.append(method.getName());
         for (Class<?> parameterType : method.getParameterTypes()) {
             signature.append('|').append(parameterType.getName());
         }

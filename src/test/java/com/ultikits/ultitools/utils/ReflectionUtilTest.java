@@ -377,6 +377,25 @@ class ReflectionUtilTest {
             assertThat(java.util.Arrays.stream(methods).map(Method::getName))
                 .contains("parentMethod");
         }
+
+        @Test
+        @DisplayName("应该按名称过滤时排除覆盖泛型接口方法产生的桥接方法重复项")
+        void shouldNotDoubleCountBridgeMethodFromGenericInterfaceOverride() {
+            // ComparableFixture.compareTo(ComparableFixture) overrides Comparable<T>.compareTo(T),
+            // which the compiler backs with a synthetic bridge compareTo(Object) on the same class.
+            // Comparable is an interface, so getAllMethods' superclass walk never sees a second,
+            // independently-erased declaration to worry about de-duplicating - this isolates the
+            // bridge-skip behavior from the separate (and out of scope) question of recognizing an
+            // override across generic-erasure boundaries between two *classes*. A raw
+            // getDeclaredMethods() walk returns both the real method and the bridge as separate
+            // "compareTo" hits - the shape that let AbstractCommandExecutor#getMethod invoke every
+            // hit and produce a duplicate tab-completion entry for an overridden generic method.
+            Predicate<Method> filter = m -> m.getName().equals("compareTo");
+            Method[] methods = ReflectionUtil.getMethods(ComparableFixture.class, filter);
+
+            assertThat(methods).hasSize(1);
+            assertThat(methods[0].isBridge()).isFalse();
+        }
     }
 
     @Nested
@@ -572,6 +591,21 @@ class ReflectionUtilTest {
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
         public IncompatibleClass(List<String> items) {}
+    }
+
+    // 用于 getMethods 桥接方法去重测试的辅助类。实现 Comparable<T> 让编译器为
+    // compareTo(ComparableFixture) 生成一个同类内的合成桥接方法 compareTo(Object)。
+    //
+    // Used by the getMethods bridge-de-duplication test. Implementing Comparable<T> makes the
+    // compiler emit a synthetic bridge compareTo(Object) alongside compareTo(ComparableFixture) on
+    // this same class.
+    static class ComparableFixture implements Comparable<ComparableFixture> {
+        private final int value;
+
+        ComparableFixture(int value) { this.value = value; }
+
+        @Override
+        public int compareTo(ComparableFixture other) { return Integer.compare(value, other.value); }
     }
 
     // 用于 getAllMethods 测试的辅助类。

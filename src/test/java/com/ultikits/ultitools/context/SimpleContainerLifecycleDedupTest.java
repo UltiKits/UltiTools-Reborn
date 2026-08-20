@@ -33,6 +33,38 @@ class SimpleContainerLifecycleDedupTest {
         public void shutdown() { super.shutdown(); }
     }
 
+    /**
+     * A parent and a child each declaring their own private {@code @PostConstruct} method named
+     * {@code init}. Private methods cannot be overridden (invokespecial dispatch, not vtable), so
+     * these are two distinct methods that happen to share a name and signature - not one method
+     * repeated on two hierarchy levels. Both must fire.
+     */
+    public static class PrivateInitBase {
+        public static int privateInitCount;
+
+        @PostConstruct
+        private void init() { privateInitCount++; }
+    }
+
+    public static class PrivateInitChild extends PrivateInitBase {
+        @PostConstruct
+        private void init() { privateInitCount++; }
+    }
+
+    @Test
+    @DisplayName("Should invoke both private @PostConstruct methods when parent and child each declare one")
+    void shouldInvokeBothPrivatePostConstructMethods() {
+        PrivateInitBase.privateInitCount = 0;
+        SimpleContainer container = new SimpleContainer();
+        container.registerBean(PrivateInitChild.class);
+        container.refresh();
+        container.getBean(PrivateInitChild.class);
+
+        assertEquals(2, PrivateInitBase.privateInitCount,
+                "private methods cannot override one another, so the parent's and the child's "
+                        + "init() are distinct methods and must both fire, not be merged into one");
+    }
+
     @Test
     @DisplayName("Should invoke @PostConstruct once when an override repeats the annotation")
     void shouldInvokePostConstructOnce() {
