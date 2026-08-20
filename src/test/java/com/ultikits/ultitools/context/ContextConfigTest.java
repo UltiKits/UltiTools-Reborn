@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
 import java.lang.reflect.Constructor;
+import java.net.URL;
+import java.net.URLClassLoader;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -94,9 +97,19 @@ class ContextConfigTest {
 
     @Test
     @DisplayName("Should be usable with SimpleContainer")
-    void testUsageWithSimpleContainer() {
+    void testUsageWithSimpleContainer() throws Exception {
         // Given
         SimpleContainer container = new SimpleContainer();
+        // ContextConfig's @ComponentScan targets the whole "com.ultikits.ultitools" tree. On the
+        // real classpath that means the framework's compiled classes only; on the merged
+        // test+main classpath used by default in this test JVM, the same package name also
+        // resolves test fixtures scattered across the suite - including
+        // FinalContractValidatorTest's intentional @Final violation fixtures, which now correctly
+        // abort a scan (see ComponentScannerFinalContractTest). Scope resource lookups to
+        // target/classes so this test scans what a production module load actually would.
+        File classesDir = new File("target/classes");
+        URL[] classpath = {classesDir.toURI().toURL()};
+        container.setClassLoader(new ClassesOnlyClassLoader(classpath, getClass().getClassLoader()));
 
         // When
         container.processConfigurationClass(ContextConfig.class);
@@ -104,6 +117,28 @@ class ContextConfigTest {
         // Then
         // Should not throw any exceptions
         assertNotNull(container);
+    }
+
+    /**
+     * A {@link URLClassLoader} that answers {@link #getResource(String)} from its own URLs first,
+     * falling back to the parent only when its own classpath has no match. Plain
+     * {@code URLClassLoader} delegates parent-first, so restricting its URL list alone does not
+     * stop a package-root lookup like {@code "com/ultikits/ultitools"} from resolving through the
+     * parent to whatever the merged test+main classpath finds first - see
+     * {@link #testUsageWithSimpleContainer()}. Actual class loading still delegates to the parent
+     * normally, which is what lets the loaded framework classes resolve their own dependencies
+     * (Bukkit, etc.) that do not exist under {@code target/classes} alone.
+     */
+    private static final class ClassesOnlyClassLoader extends URLClassLoader {
+        ClassesOnlyClassLoader(URL[] urls, ClassLoader parent) {
+            super(urls, parent);
+        }
+
+        @Override
+        public URL getResource(String name) {
+            URL local = findResource(name);
+            return local != null ? local : super.getResource(name);
+        }
     }
 
     @Test
