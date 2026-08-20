@@ -40,6 +40,19 @@ public final class AopEligibility {
     }
 
     /**
+     * The annotations that request interception.
+     * <p>
+     * Exposed so that wiring code can prove every one of them is either served by an advisor or
+     * explicitly declared unavailable. Without that check, an annotation nobody wired up fails
+     * silently on beans that also carry an annotation that <em>is</em> wired. See issue #190.
+     *
+     * @return an unmodifiable view of the recognised AOP annotations
+     */
+    public static List<Class<? extends Annotation>> getAopAnnotations() {
+        return AOP_ANNOTATIONS;
+    }
+
+    /**
      * Collects the methods of the given class that request interception.
      * <p>
      * A class-level AOP annotation applies to every declared method, matching what

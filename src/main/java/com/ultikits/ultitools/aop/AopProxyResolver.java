@@ -55,6 +55,41 @@ public class AopProxyResolver {
     }
 
     /**
+     * Verifies that every recognised AOP annotation is accounted for.
+     * <p>
+     * Each annotation must either have a registered advisor that can intercept it, or be declared
+     * unavailable so that beans using it are rejected outright. An annotation that is neither is
+     * the silent-failure case this framework is removing: beans carrying it would be proxied for
+     * their <em>other</em> annotations while this one quietly does nothing.
+     *
+     * @throws ContainerException if any recognised annotation is neither served nor declared
+     */
+    public void validateAnnotationCoverage() {
+        List<String> uncovered = new ArrayList<>();
+        for (Class<? extends Annotation> annotation : AopEligibility.getAopAnnotations()) {
+            if (unavailableAnnotations.containsKey(annotation)) {
+                continue;
+            }
+            boolean served = false;
+            for (AopAdvisor advisor : advisors) {
+                if (annotation.equals(advisor.getAnnotationType())) {
+                    served = true;
+                    break;
+                }
+            }
+            if (!served) {
+                uncovered.add(annotation.getName());
+            }
+        }
+        if (!uncovered.isEmpty()) {
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "AOP annotations recognised by AopEligibility but neither served by an advisor "
+                            + "nor declared unavailable: " + uncovered
+                            + ". Register an advisor for each, or call addUnavailableAnnotation.");
+        }
+    }
+
+    /**
      * Adds an advisor to be considered during proxy resolution.
      *
      * @param advisor the advisor to add

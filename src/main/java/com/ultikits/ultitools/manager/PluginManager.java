@@ -6,6 +6,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
@@ -26,8 +27,13 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
+import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopProxyResolver;
+import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
@@ -205,6 +211,7 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
+            wireAop(pluginContext);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
@@ -582,6 +589,46 @@ public class PluginManager {
     }
 
     /**
+     * Attaches AOP to a plugin container.
+     * <p>
+     * Must be called before {@link SimpleContainer#refresh()}: the resolver participates in bean
+     * instantiation, so beans created earlier are never proxied.
+     * <p>
+     * Only {@code @ExceptionCatch} is wired in this release. {@code @Transactional} is declared
+     * unavailable rather than silently inert: the framework has no reachable
+     * {@code TransactionManager} today, because {@code DataStore} does not expose its
+     * {@code DataSource} and the default SQLite backend opens one connection pool per entity class
+     * against a per-plugin {@code .db} file. Tracked in issues #195 and #196.
+     * <p>
+     * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
+     * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
+     *
+     * @param context the plugin container, before refresh
+     */
+    static void wireAop(SimpleContainer context) {
+        AopProxyResolver resolver = new AopProxyResolver();
+
+        // The interceptor resolves @ExceptionCatch(handler = "...") beans from THIS container.
+        // Reading the global ContextHolder instead would let the last plugin to initialise
+        // overwrite every earlier plugin's handler lookup. See issue #190.
+        ExceptionInterceptor exceptionInterceptor =
+                new ExceptionInterceptor(Collections.emptyList(), context);
+        resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, exceptionInterceptor, 200));
+
+        resolver.addUnavailableAnnotation(Transactional.class,
+                "@Transactional needs a TransactionManager bound to a DataSource. The framework "
+                        + "cannot provide one yet: DataStore does not expose its DataSource, and "
+                        + "the default SQLite backend opens one connection pool per entity class, "
+                        + "so a single .db file would have several unrelated transaction managers. "
+                        + "Tracked in issues #195 and #196. Until then use "
+                        + "DataOperator.transaction(Callable) explicitly.");
+
+        resolver.validateAnnotationCoverage();
+
+        context.setAopProxyResolver(resolver);
+    }
+
+    /**
      * Initialize module.
      * <br>
      * 初始化模块。
@@ -662,6 +709,7 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
+            wireAop(pluginContext);
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -853,6 +901,7 @@ public class PluginManager {
         }
 
         // 3. Refresh container to instantiate beans
+        wireAop(context);
         context.refresh();
         adapter.setContext(context);
 

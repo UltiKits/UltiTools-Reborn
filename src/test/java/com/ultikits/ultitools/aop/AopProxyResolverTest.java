@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.aop;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Final;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.exceptions.ContainerException;
@@ -194,6 +196,33 @@ class AopProxyResolverTest {
             AopProxyResolver bare = new AopProxyResolver();
             bare.addUnavailableAnnotation(Transactional.class, "unavailable");
             assertSame(Plain.class, bare.resolve(Plain.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("validateAnnotationCoverage")
+    class Coverage {
+
+        @Test
+        @DisplayName("Should reject when a recognised annotation is neither served nor declared unavailable")
+        void shouldRejectUncoveredAnnotation() {
+            AopProxyResolver bare = new AopProxyResolver();
+            bare.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, MethodInvocation::proceed, 200));
+            // Transactional is registered by neither an advisor nor addUnavailableAnnotation.
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    bare::validateAnnotationCoverage);
+            assertTrue(thrown.getMessage().contains("Transactional"), thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("Should pass when every recognised annotation is served or declared unavailable")
+        void shouldAcceptFullCoverage() {
+            AopProxyResolver bare = new AopProxyResolver();
+            bare.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, MethodInvocation::proceed, 200));
+            bare.addUnavailableAnnotation(Transactional.class, "see #195/#196");
+
+            assertDoesNotThrow(bare::validateAnnotationCoverage);
         }
     }
 }
