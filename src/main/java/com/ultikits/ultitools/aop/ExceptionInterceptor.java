@@ -143,15 +143,31 @@ public class ExceptionInterceptor implements MethodInterceptor {
         }
 
         // Try custom handler first
-        if (!annotation.handler().isEmpty() && context != null) {
-            try {
-                Object handlerBean = context.getBean(annotation.handler());
-                if (handlerBean instanceof ExceptionHandler) {
-                    return ((ExceptionHandler) handlerBean).handleException(
-                            e, invocation.getTarget(), method, invocation.getArguments());
+        if (!annotation.handler().isEmpty()) {
+            if (context == null) {
+                // The author named a handler explicitly; saying nothing here would make a
+                // configuration mistake indistinguishable from a handler that ran and returned
+                // the default value.
+                LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                        + method.getDeclaringClass().getName() + "#" + method.getName()
+                        + " cannot be resolved: this interceptor has no container. "
+                        + "Falling back to the default value.");
+            } else {
+                try {
+                    Object handlerBean = context.getBean(annotation.handler());
+                    if (handlerBean instanceof ExceptionHandler) {
+                        return ((ExceptionHandler) handlerBean).handleException(
+                                e, invocation.getTarget(), method, invocation.getArguments());
+                    }
+                    LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                            + method.getDeclaringClass().getName() + "#" + method.getName()
+                            + " resolved to a bean of type "
+                            + (handlerBean == null ? "null" : handlerBean.getClass().getName())
+                            + ", which does not implement ExceptionHandler. "
+                            + "Falling back to the default value.");
+                } catch (Exception handlerException) {
+                    LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
                 }
-            } catch (Exception handlerException) {
-                LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
             }
         }
 

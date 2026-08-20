@@ -51,7 +51,9 @@ class ExceptionInterceptorTest {
     @Mock
     private SimpleContainer mockContext;
 
-    // Test classes with annotations
+    // Test fixtures hoisted to top level because Java 8 forbids static members in
+    // non-static inner classes (including @Nested test classes). These are used by
+    // InjectedContainerResolution test group below.
     public static class RecordingHandler implements ExceptionHandler {
         static String lastMessage;
         @Override
@@ -533,6 +535,44 @@ class ExceptionInterceptorTest {
             when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
 
             assertNull(interceptor.invoke(invocation));
+        }
+
+        @Test
+        @DisplayName("Should log warning and fall back when named handler cannot be resolved due to missing container")
+        void shouldLogAndFallBackWhenContainerMissing() throws Throwable {
+            // The handler name is explicitly specified but container is null,
+            // which is a configuration mistake that should be logged.
+            ExceptionInterceptor interceptor =
+                    new ExceptionInterceptor(Collections.emptyList(), null);
+
+            MethodInvocation invocation = mock(MethodInvocation.class);
+            Method method = HandlerTarget.class.getMethod("boom");
+            when(invocation.getMethod()).thenReturn(method);
+            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+            // Should return default value, not throw
+            Object result = interceptor.invoke(invocation);
+            assertNull(result);
+        }
+
+        @Test
+        @DisplayName("Should log warning and fall back when handler bean is not an ExceptionHandler")
+        void shouldLogAndFallBackWhenHandlerWrongType() throws Throwable {
+            // The named handler exists in the container but is not an ExceptionHandler.
+            SimpleContainer context = new SimpleContainer();
+            context.registerSingleton("recordingHandler", "not-a-handler"); // String instead of ExceptionHandler
+
+            ExceptionInterceptor interceptor =
+                    new ExceptionInterceptor(Collections.emptyList(), context);
+
+            MethodInvocation invocation = mock(MethodInvocation.class);
+            Method method = HandlerTarget.class.getMethod("boom");
+            when(invocation.getMethod()).thenReturn(method);
+            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+            // Should return default value, not throw
+            Object result = interceptor.invoke(invocation);
+            assertNull(result);
         }
     }
 
