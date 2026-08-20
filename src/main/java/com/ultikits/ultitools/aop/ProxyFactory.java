@@ -47,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * <b>Limitations</b> (surfaced as a {@link RuntimeException} naming the target class rather than a
  * bare ByteBuddy exception or a silent skip; a startup-time eligibility pre-check is planned as
- * {@code AopEligibility}):
+ * {@link AopEligibility}):
  * <ul>
  *   <li>Cannot subclass final classes</li>
  *   <li>Cannot override final, private or static methods</li>
