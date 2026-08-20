@@ -28,6 +28,19 @@
  * package an integration test scans wholesale avoids the coupling entirely. Each subpackage's own
  * {@code package-info} explains its specific constraint.
  * <p>
+ * <b>Rule: this package itself must never directly hold a fixture class, and no test may scan it
+ * directly.</b> {@code ComponentScanner#scanDirectory} recurses into subdirectories:
+ * <pre>{@code
+ * if (file.isDirectory()) {
+ *     scanDirectory(file, packageName + "." + file.getName(), classLoader);
+ * }
+ * }</pre>
+ * so scanning {@code com.ultikits.testfixtures.finalviolation} itself would walk straight into
+ * both {@code validator/} and {@code scanner/} and pick up every violation in both - silently
+ * undoing the split this javadoc just explained, with the package name now looking isolated even
+ * though it no longer is. Only ever scan (or import from) a named subpackage; keep this package
+ * itself to nothing but this file.
+ * <p>
  * <b>Adding a new intentionally-violating fixture?</b> Put it under
  * {@code com.ultikits.testfixtures} (this family or a sibling of it), never under
  * {@code com.ultikits.ultitools}. If it will be reached by a whole-package scan, give it its own
@@ -53,6 +66,13 @@
  * {@code FinalContractValidatorTest} 从不整包扫描（它逐个类调用 {@code validate(Class)}），所以它
  * 的 fixture 本没有这层约束——但把它们移出集成测试整包扫描的那个包，能彻底避免这种耦合。各子包
  * 各自的 package-info 说明了自己的具体约束。
+ * <p>
+ * <b>规则：本包直属不得放任何类，任何测试也不得直接扫描本包本身。</b>
+ * {@code ComponentScanner#scanDirectory} 会递归下探子目录，所以扫描
+ * {@code com.ultikits.testfixtures.finalviolation} 本身会一路递归进
+ * {@code validator/} 和 {@code scanner/} 两个子包，把两边的违规全部收进来——悄无声息地推翻本文档
+ * 刚解释过的拆分，而包名看起来却仍像是隔离的。永远只扫描（或 import）某个具名子包，本包本身
+ * 除这份文档外不得有其他内容。
  * <p>
  * 之后再新增故意违规的 fixture，请放进 {@code com.ultikits.testfixtures} 下（本包族或其同级），
  * 不要放进 {@code com.ultikits.ultitools}；如果它会被整包扫描触及，给它单独开一个子包，不要并入
