@@ -2,6 +2,9 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -11,6 +14,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -568,5 +572,120 @@ class ReflectionUtilTest {
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
         public IncompatibleClass(List<String> items) {}
+    }
+
+    // 用于 getAllMethods 测试的辅助类。
+    // 必须声明为 ReflectionUtilTest（顶层类）的静态嵌套类，而不是 @Nested 测试类 GetAllMethods
+    // 内部——JLS 在 source 1.8 下禁止在非静态内部类（@Nested 类正是这种）里声明静态成员
+    // （staticMethod() 除外无法绕开：它本身就是本用例要覆盖的场景）。
+    //
+    // Declared as static nested classes of ReflectionUtilTest (the top-level class) rather than
+    // inside the @Nested test class GetAllMethods: under source 1.8, the JLS forbids a static
+    // member declaration inside a non-static inner class (which @Nested classes are), and
+    // staticMethod() below is exactly the case this test needs to cover.
+    public static class GetAllMethodsBase {
+        public void inherited() { }
+        public void overridden() { }
+        public final void finalMethod() { }
+        private void privateMethod() { }
+        public static void staticMethod() { }
+    }
+
+    public static class GetAllMethodsChild extends GetAllMethodsBase {
+        @Override
+        public void overridden() { }
+        public void own() { }
+    }
+
+    public static class GetAllMethodsGenericBase<T> {
+        public T id(T value) { return value; }
+    }
+
+    public static class GetAllMethodsStringChild extends GetAllMethodsGenericBase<String> {
+        @Override
+        public String id(String value) { return value; }
+    }
+
+    @Nested
+    @DisplayName("getAllMethods")
+    class GetAllMethods {
+
+        private java.util.List<String> namesOf(java.util.List<Method> methods) {
+            java.util.List<String> names = new ArrayList<>();
+            for (Method method : methods) {
+                names.add(method.getName());
+            }
+            java.util.Collections.sort(names);
+            return names;
+        }
+
+        @Test
+        @DisplayName("Should include methods declared on superclasses")
+        void shouldIncludeInherited() {
+            assertTrue(namesOf(ReflectionUtil.getAllMethods(GetAllMethodsChild.class)).contains("inherited"));
+        }
+
+        @Test
+        @DisplayName("Should include private, final and static methods from the hierarchy")
+        void shouldIncludeNonOverridableMethods() {
+            java.util.List<String> names = namesOf(ReflectionUtil.getAllMethods(GetAllMethodsChild.class));
+            assertTrue(names.contains("finalMethod"), names.toString());
+            assertTrue(names.contains("privateMethod"), names.toString());
+            assertTrue(names.contains("staticMethod"), names.toString());
+        }
+
+        @Test
+        @DisplayName("Should return an overridden method exactly once")
+        void shouldDedupeOverride() {
+            int count = 0;
+            for (Method method : ReflectionUtil.getAllMethods(GetAllMethodsChild.class)) {
+                if ("overridden".equals(method.getName())) {
+                    count++;
+                }
+            }
+            assertEquals(1, count, "an overridden signature must appear once, not once per level");
+        }
+
+        @Test
+        @DisplayName("Should keep the most specific override")
+        void shouldKeepMostSpecific() {
+            for (Method method : ReflectionUtil.getAllMethods(GetAllMethodsChild.class)) {
+                if ("overridden".equals(method.getName())) {
+                    assertEquals(GetAllMethodsChild.class, method.getDeclaringClass(),
+                            "the subclass's override must win, so its annotations are the ones seen");
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("Should skip bridge and synthetic methods")
+        void shouldSkipBridgeMethods() {
+            boolean fixtureHasBridge = false;
+            for (Method method : GetAllMethodsStringChild.class.getDeclaredMethods()) {
+                if (method.isBridge()) {
+                    fixtureHasBridge = true;
+                    break;
+                }
+            }
+            assertTrue(fixtureHasBridge,
+                    "precondition: the fixture must actually produce a bridge method");
+
+            for (Method method : ReflectionUtil.getAllMethods(GetAllMethodsStringChild.class)) {
+                assertFalse(method.isBridge(), "bridge method leaked: " + method);
+                assertFalse(method.isSynthetic(), "synthetic method leaked: " + method);
+            }
+        }
+
+        @Test
+        @DisplayName("Should not include Object's methods")
+        void shouldStopBeforeObject() {
+            assertFalse(namesOf(ReflectionUtil.getAllMethods(GetAllMethodsChild.class)).contains("wait"));
+        }
+
+        @Test
+        @DisplayName("Should return an empty list for null")
+        void shouldHandleNull() {
+            assertTrue(ReflectionUtil.getAllMethods(null).isEmpty());
+        }
     }
 }

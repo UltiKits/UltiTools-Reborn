@@ -3,9 +3,12 @@ package com.ultikits.ultitools.utils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 反射工具类
@@ -349,5 +352,59 @@ public final class ReflectionUtil {
      */
     public static java.lang.reflect.Method[] getMethods(Class<?> clazz) {
         return getMethods(clazz, null);
+    }
+
+    /**
+     * Collects every method visible on the given class, walking the hierarchy and keeping only the
+     * most specific override of each signature.
+     * <p>
+     * {@code Class.getDeclaredMethods()} returns only the methods a class declares itself, and
+     * {@code Class.getMethods()} returns only public ones. Neither is right for annotation scanning
+     * on a bean that may be an AOP proxy: the proxy declares overrides only for intercepted
+     * methods, so scanning it directly loses every annotation on the rest. Walking the hierarchy
+     * recovers them, and de-duplicating by signature keeps a callback from firing once per level
+     * when an override repeats its parent's annotation.
+     * <p>
+     * Bridge and synthetic methods are skipped: they carry no author-written annotations and, being
+     * compiler artifacts, are never the method a scanner means to find.
+     * <p>
+     * {@code Object}'s own methods are excluded.
+     * <p>
+     * {@code getDeclaredMethods()} 只返回类自己声明的方法，{@code getMethods()} 只返回 public
+     * 方法，两者都不适合在可能是 AOP 代理的 bean 上做注解扫描：代理只为被拦截的方法声明覆盖，
+     * 直接扫它会丢掉其余方法上的全部注解。见 issue #190。
+     *
+     * @param clazz the class to scan, may be null
+     * @return the methods, subclass overrides first; empty if clazz is null
+     */
+    public static List<Method> getAllMethods(Class<?> clazz) {
+        List<Method> result = new ArrayList<>();
+        if (clazz == null) {
+            return result;
+        }
+        Set<String> seenSignatures = new HashSet<>();
+        for (Class<?> current = clazz; current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (method.isBridge() || method.isSynthetic()) {
+                    continue;
+                }
+                if (seenSignatures.add(signatureOf(method))) {
+                    result.add(method);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Builds a signature key that is equal for a method and the override that hides it.
+     */
+    private static String signatureOf(Method method) {
+        StringBuilder signature = new StringBuilder(method.getName());
+        for (Class<?> parameterType : method.getParameterTypes()) {
+            signature.append('|').append(parameterType.getName());
+        }
+        return signature.toString();
     }
 }

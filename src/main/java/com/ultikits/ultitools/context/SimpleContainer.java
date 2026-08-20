@@ -20,6 +20,7 @@ import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
@@ -817,20 +818,19 @@ public class SimpleContainer {
      * @param bean the bean instance <br> Bean实例
      */
     private void invokePostConstructMethods(Object bean) {
-        Class<?> clazz = bean.getClass();
-        while (clazz != null && clazz != Object.class) {
-            for (Method method : clazz.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(PostConstruct.class)) {
-                    try {
-                        method.setAccessible(true);
-                        method.invoke(bean);
-                        LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
-                    }
+        // Walk the hierarchy with override de-duplication. Iterating getDeclaredMethods() level by
+        // level fires the callback once per level when an override repeats the annotation, and on
+        // an AOP proxy that is the normal case rather than the exception. See issue #190.
+        for (Method method : ReflectionUtil.getAllMethods(bean.getClass())) {
+            if (method.isAnnotationPresent(PostConstruct.class)) {
+                try {
+                    method.setAccessible(true);
+                    method.invoke(bean);
+                    LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
                 }
             }
-            clazz = clazz.getSuperclass();
         }
     }
 
@@ -842,20 +842,17 @@ public class SimpleContainer {
      * @param bean the bean instance <br> Bean实例
      */
     private void invokePreDestroyMethods(Object bean) {
-        Class<?> clazz = bean.getClass();
-        while (clazz != null && clazz != Object.class) {
-            for (Method method : clazz.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(PreDestroy.class)) {
-                    try {
-                        method.setAccessible(true);
-                        method.invoke(bean);
-                        LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
-                    } catch (Throwable e) { // NOPMD - must catch Error (e.g. NoClassDefFoundError when dependency plugins unload first)
-                        LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
-                    }
+        // Same hierarchy walk and de-dup as invokePostConstructMethods; see the comment there.
+        for (Method method : ReflectionUtil.getAllMethods(bean.getClass())) {
+            if (method.isAnnotationPresent(PreDestroy.class)) {
+                try {
+                    method.setAccessible(true);
+                    method.invoke(bean);
+                    LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
+                } catch (Throwable e) { // NOPMD - must catch Error (e.g. NoClassDefFoundError when dependency plugins unload first)
+                    LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
                 }
             }
-            clazz = clazz.getSuperclass();
         }
     }
 

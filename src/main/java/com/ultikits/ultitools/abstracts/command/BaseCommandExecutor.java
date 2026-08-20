@@ -39,6 +39,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import lombok.Getter;
 
@@ -125,10 +126,17 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * 扫描方法以获取命令映射。
      */
     private void scanCommandMappings() {
-        for (Method method : this.getClass().getDeclaredMethods()) {
+        // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
+        // overrides, so scanning it directly would drop every other @CmdMapping on the class and
+        // silently disable those subcommands. See issue #190.
+        // getAllMethods() lists subclass overrides before the methods they hide, so the first
+        // insertion for a given format is always the most specific one. putIfAbsent (rather than
+        // put) keeps that first entry: if a subclass declares its own @CmdMapping method reusing a
+        // parent's format string, the subclass's method wins, matching normal override semantics.
+        for (Method method : ReflectionUtil.getAllMethods(this.getClass())) {
             if (method.isAnnotationPresent(CmdMapping.class)) {
                 CmdMapping mapping = method.getAnnotation(CmdMapping.class);
-                mappings.put(mapping.format(), method);
+                mappings.putIfAbsent(mapping.format(), method);
             }
         }
     }
