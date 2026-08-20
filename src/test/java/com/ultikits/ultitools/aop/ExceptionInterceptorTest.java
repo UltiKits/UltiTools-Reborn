@@ -14,12 +14,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -542,37 +547,95 @@ class ExceptionInterceptorTest {
         void shouldLogAndFallBackWhenContainerMissing() throws Throwable {
             // The handler name is explicitly specified but container is null,
             // which is a configuration mistake that should be logged.
-            ExceptionInterceptor interceptor =
-                    new ExceptionInterceptor(Collections.emptyList(), null);
+            Logger exceptionInterceptorLogger = Logger.getLogger(ExceptionInterceptor.class.getName());
+            List<LogRecord> capturedLogs = new ArrayList<>();
+            Handler testHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    capturedLogs.add(record);
+                }
+                @Override
+                public void flush() {}
+                @Override
+                public void close() {}
+            };
 
-            MethodInvocation invocation = mock(MethodInvocation.class);
-            Method method = HandlerTarget.class.getMethod("boom");
-            when(invocation.getMethod()).thenReturn(method);
-            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+            exceptionInterceptorLogger.addHandler(testHandler);
+            try {
+                ExceptionInterceptor interceptor =
+                        new ExceptionInterceptor(Collections.emptyList(), null);
 
-            // Should return default value, not throw
-            Object result = interceptor.invoke(invocation);
-            assertNull(result);
+                MethodInvocation invocation = mock(MethodInvocation.class);
+                Method method = HandlerTarget.class.getMethod("boom");
+                when(invocation.getMethod()).thenReturn(method);
+                when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+                // Should return default value, not throw
+                Object result = interceptor.invoke(invocation);
+                assertNull(result);
+
+                // Verify the warning was logged with the handler name
+                List<LogRecord> warnings = new ArrayList<>();
+                for (LogRecord record : capturedLogs) {
+                    if (Level.WARNING.equals(record.getLevel())) {
+                        warnings.add(record);
+                    }
+                }
+                assertTrue(warnings.size() >= 1, "Expected at least one WARNING log");
+                assertTrue(warnings.stream().anyMatch(r -> r.getMessage().contains("recordingHandler")),
+                        "Expected log message to contain handler name 'recordingHandler'");
+            } finally {
+                exceptionInterceptorLogger.removeHandler(testHandler);
+            }
         }
 
         @Test
         @DisplayName("Should log warning and fall back when handler bean is not an ExceptionHandler")
         void shouldLogAndFallBackWhenHandlerWrongType() throws Throwable {
             // The named handler exists in the container but is not an ExceptionHandler.
-            SimpleContainer context = new SimpleContainer();
-            context.registerSingleton("recordingHandler", "not-a-handler"); // String instead of ExceptionHandler
+            Logger exceptionInterceptorLogger = Logger.getLogger(ExceptionInterceptor.class.getName());
+            List<LogRecord> capturedLogs = new ArrayList<>();
+            Handler testHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    capturedLogs.add(record);
+                }
+                @Override
+                public void flush() {}
+                @Override
+                public void close() {}
+            };
 
-            ExceptionInterceptor interceptor =
-                    new ExceptionInterceptor(Collections.emptyList(), context);
+            exceptionInterceptorLogger.addHandler(testHandler);
+            try {
+                SimpleContainer context = new SimpleContainer();
+                context.registerSingleton("recordingHandler", "not-a-handler"); // String instead of ExceptionHandler
 
-            MethodInvocation invocation = mock(MethodInvocation.class);
-            Method method = HandlerTarget.class.getMethod("boom");
-            when(invocation.getMethod()).thenReturn(method);
-            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+                ExceptionInterceptor interceptor =
+                        new ExceptionInterceptor(Collections.emptyList(), context);
 
-            // Should return default value, not throw
-            Object result = interceptor.invoke(invocation);
-            assertNull(result);
+                MethodInvocation invocation = mock(MethodInvocation.class);
+                Method method = HandlerTarget.class.getMethod("boom");
+                when(invocation.getMethod()).thenReturn(method);
+                when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+                // Should return default value, not throw
+                Object result = interceptor.invoke(invocation);
+                assertNull(result);
+
+                // Verify the warning was logged with the type mismatch
+                List<LogRecord> warnings = new ArrayList<>();
+                for (LogRecord record : capturedLogs) {
+                    if (Level.WARNING.equals(record.getLevel())) {
+                        warnings.add(record);
+                    }
+                }
+                assertTrue(warnings.size() >= 1, "Expected at least one WARNING log");
+                assertTrue(warnings.stream().anyMatch(r -> r.getMessage().contains("java.lang.String")),
+                        "Expected log message to contain actual bean type 'java.lang.String'");
+            } finally {
+                exceptionInterceptorLogger.removeHandler(testHandler);
+            }
         }
     }
 
