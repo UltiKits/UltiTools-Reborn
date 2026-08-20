@@ -66,7 +66,15 @@ class AopActivationTest {
         @ExceptionCatch(silent = true)
         public String guardedSelfCall() { return inner(); }
 
-        @ExceptionCatch(silent = true)
+        // defaultValue makes the outcome distinguishable from guardedSelfCall()'s own default
+        // (null): if self-invocation actually routes through the proxy, inner()'s own
+        // interceptor returns "intercepted" and guardedSelfCall() passes that straight back. If
+        // self-invocation instead bypasses the proxy (the delegating-proxy failure mode this test
+        // exists to catch), inner() throws uncaught into guardedSelfCall()'s body, and it is
+        // guardedSelfCall()'s own @ExceptionCatch(silent = true) - with no defaultValue - that
+        // catches it and returns null instead. Two default values that differ is what makes the
+        // assertion below discriminate; two methods that both defaulted to null would not.
+        @ExceptionCatch(silent = true, defaultValue = "intercepted")
         public String inner() { throw new IllegalStateException("inner-boom"); }
 
         public String collaborate() { return collaborator.name(); }
@@ -138,8 +146,9 @@ class AopActivationTest {
     @Test
     @DisplayName("Self-invocation must be intercepted")
     void shouldInterceptSelfInvocation() {
-        assertEquals(null, wiredContainer().getBean(KitchenSink.class).guardedSelfCall(),
-                "inner() is reached through this.inner(); a delegating proxy would miss it");
+        assertEquals("intercepted", wiredContainer().getBean(KitchenSink.class).guardedSelfCall(),
+                "inner() is reached through this.inner(); a delegating proxy would miss it and "
+                        + "the outer @ExceptionCatch would return its own default (null) instead");
     }
 
     @Test
@@ -153,9 +162,14 @@ class AopActivationTest {
     void shouldKeepTypeAnnotations() {
         Class<?> beanClass = wiredContainer().getBean(KitchenSink.class).getClass();
         assertNotNull(beanClass.getAnnotation(Service.class),
-                "@Service is not @Inherited; without copying, component scanning breaks");
+                "@Service is not @Inherited; ComponentScanner itself is shielded because it "
+                        + "scans the class before any proxy exists, but this still guards the "
+                        + "annotateType contract that @ContextEntry and @CmdExecutor/@CmdTarget "
+                        + "rely on when they read getClass() directly with no such fallback");
         assertNotNull(beanClass.getAnnotation(EventListener.class),
-                "@EventListener is not @Inherited; without copying, listener registration breaks");
+                "@EventListener is not @Inherited; ListenerManager itself is shielded because "
+                        + "AnnotationUtils.findAnnotation walks the superclass chain on its own, "
+                        + "but this still guards the same annotateType contract");
     }
 
     @Test
@@ -188,7 +202,10 @@ class AopActivationTest {
         assertTrue(ProxyFactory.isProxyClass(tick.getDeclaringClass()),
                 "precondition: tick must actually be overridden");
         assertNotNull(tick.getAnnotation(Scheduled.class),
-                "TaskManager unwraps the proxy class, but the copied annotation must also survive");
+                "no current production consumer actually reads this specific copy - "
+                        + "TaskManager.getTargetClass unwraps back to the original class first - "
+                        + "but this still guards the general method-annotation-copying contract "
+                        + "that @EventHandler and @ModuleEventHandler above depend on directly");
     }
 
     @Test
@@ -203,12 +220,15 @@ class AopActivationTest {
         manager.onPlayerQuit(player);
 
         assertTrue(bean.cache.isEmpty(),
-                "a delegating proxy would clean a second object's map and leave this one populated");
+                "@PlayerCache is declared on KitchenSink, not on the proxy subclass; if "
+                        + "PlayerCacheManager only scanned bean.getClass().getDeclaredFields() it "
+                        + "would never find the field on this proxied instance and this map would "
+                        + "stay populated");
     }
 
     @Test
-    @DisplayName("The constructor must run exactly once")
-    void shouldConstructOnce() {
+    @DisplayName("The container must return the same singleton instance on every lookup")
+    void shouldReturnSameInstanceOnEveryLookup() {
         SimpleContainer context = wiredContainer();
         assertSame(context.getBean(KitchenSink.class), context.getBean(KitchenSink.class));
     }
