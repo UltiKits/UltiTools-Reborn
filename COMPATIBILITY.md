@@ -175,13 +175,27 @@ conclusion that nobody is using something.
 
 | Type / member | Removal announced in | Replacement | Downstream references (informational) |
 |---|---|---|---|
-| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` — identical constructor and `createProxy` signatures | 0 |
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` — same constructor shape (a list of interceptors); its `createProxy` methods have no direct replacement, see the next two rows | 0 |
+| `aop.ProxyFactory.createProxy(T)` and `createProxy(Class<T>, T)` | 6.3.0 | `aop.ProxyFactory.createProxyClass(Class<T>, Set<Method>)`, used through the container. Proxy creation moved to *before* the bean is constructed (issue #190: a `BeanPostProcessor` only ever sees an already-built instance, which is structurally too late) | 0 |
+| `aop.AopProxyBeanPostProcessor` | 6.3.0 | `aop.AopProxyResolver`, consulted by the container before construction instead of after | 0 |
 
-This entry is removed in the same release that announces it, which the policy above normally
-does not allow. The justification is that the type could not work on any supported server: it
-requires `--add-opens java.base/java.lang=ALL-UNNAMED`, a flag a Paper server does not set and
-a plugin cannot add. Keeping it through a deprecation cycle would preserve an API that throws
-`ExceptionInInitializerError` on first use. It had no downstream references. See issue #188.
+All three entries above are removed in the same release that announces them, which the policy
+above normally does not allow, and for two different reasons:
+
+- `aop.CglibProxyFactory` could not work on any supported server: it requires
+  `--add-opens java.base/java.lang=ALL-UNNAMED`, a flag a Paper server does not set and a plugin
+  cannot add. Keeping it through a deprecation cycle would preserve an API that throws
+  `ExceptionInInitializerError` on first use. See issue #188.
+- `aop.ProxyFactory.createProxy(T)`/`createProxy(Class<T>, T)` and `aop.AopProxyBeanPostProcessor`
+  are a different case: both worked, but neither was ever published. `aop.ProxyFactory` itself was
+  added after 6.2.5, within this same still-unreleased 6.3.0 development cycle (PR #305), so its
+  `createProxy` methods never reached a tagged release. `AopProxyBeanPostProcessor` is older
+  (`@since 6.2.0`, and it did ship in 6.2.1 through 6.2.5), but it was never wired into the
+  container — `addBeanPostProcessor` had zero callers in `src/main` — so removing it breaks no
+  working integration. Both were superseded within this cycle by `AopProxyResolver`, which resolves
+  the proxy class before the bean is constructed; a `BeanPostProcessor` cannot do that by interface
+  contract, since both of its callbacks take an already-built instance. Neither had any downstream
+  references. See issue #190.
 
 ## Migrating off `AbstractCommandExecutor`
 
@@ -316,6 +330,46 @@ This falls under "no migration period" above: the previous behaviour — a decla
 method silently not being registered — was never a documented contract, so there is no default or
 timing to phase out. It is recorded for the same reason as the AOP proxy naming change above: real
 breakage for code that depended on the gap, even though the gap itself was never guaranteed.
+
+### Recorded instance: `@Transactional` now refuses to load a module (6.3.0)
+
+Before 6.3.0, `@Transactional` was recognised by the framework's annotations but never wired to
+anything: there was no AOP container integration at all, so a bean carrying `@Transactional`
+loaded normally and ran completely untransacted, with no warning that the annotation had done
+nothing. 6.3.0 wires AOP into the container as part of issue #190, and `PluginManager.wireAop`
+declares `@Transactional` explicitly **unavailable** rather than leave it silently inert now that
+AOP itself works: `AopProxyResolver.rejectUnavailableAnnotations` throws a `ContainerException`
+for any container-created bean that carries it, which propagates through `createBean` →
+`refresh()` → `initializePlugin` → `register(...)`. `register` catches it, logs a WARNING, and
+returns `false` — **the module does not load at all.**
+
+Method signatures are unchanged, so `japicmp` cannot detect this. It is recorded here because it
+is real, immediate breakage for a module that declares `@Transactional` today: before 6.3.0 the
+module loaded, just without the transaction it asked for; from 6.3.0 it does not load. The
+framework's own 17 in-house Modules were measured and use `@Transactional` zero times, but that
+measurement is about this organization's own code, not about third-party modules — exactly the
+audience this file exists to warn.
+
+The reason is that the framework has no `TransactionManager` to give `@Transactional` real
+meaning: `DataStore` does not expose its `DataSource`, and the default SQLite backend opens one
+connection pool per entity class, so a single `.db` file would need several unrelated transaction
+managers before this could work correctly. Rather than continue running such beans untransacted —
+the exact silent-degradation failure mode this whole branch exists to close — 6.3.0 rejects them
+outright. Tracked in issues **#195** and **#196**; once the framework can supply a real
+`TransactionManager`, `@Transactional` will move from "unavailable" to "wired," which will be
+recorded here in its own right when it happens.
+
+If your module declares `@Transactional` anywhere, before upgrading to 6.3.0 you must either:
+
+- remove the annotation, or
+- call `DataOperator.transaction(Callable)` explicitly instead.
+
+This falls under "moving from silent degradation to failure" in the table above, which normally
+asks for the two-step migration period described there. There is no safe intermediate step to walk
+through here: the "old behaviour" being phased out is a bean running without the transaction
+guarantee its own annotation promises, and continuing to allow that for one more release — even
+with a louder warning — is exactly the risk this document exists to flag, not something worth
+preserving a little longer.
 
 ## Binary incompatibilities the removal list cannot cover
 
@@ -755,12 +809,24 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 | 类型 / 成员 | 移除预告发自 | 替代方案 | 下游引用（参考） |
 |---|---|---|---|
-| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器与 `createProxy` 签名完全相同 | 0 |
+| `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器形状相同（都接收拦截器列表）；其 `createProxy` 方法没有直接替代，见下两行 | 0 |
+| `aop.ProxyFactory.createProxy(T)` 与 `createProxy(Class<T>, T)` | 6.3.0 | `aop.ProxyFactory.createProxyClass(Class<T>, Set<Method>)`，经容器间接使用。代理创建时机提前到 bean 构造*之前*（issue #190：`BeanPostProcessor` 拿到的永远是已经造好的实例，结构上就晚了） | 0 |
+| `aop.AopProxyBeanPostProcessor` | 6.3.0 | `aop.AopProxyResolver`，由容器在构造前而非构造后咨询 | 0 |
 
-本条在宣布移除的同一个版本里就被移除，这不符合上面的常规策略。理由是该类型在任何受支持的
-服务器上都无法工作：它需要 `--add-opens java.base/java.lang=ALL-UNNAMED`，而 Paper 服务器
-不会设置这个参数，插件也无法自行添加。让它走完废弃周期，只会保留一个首次使用就抛
-`ExceptionInInitializerError` 的 API。它没有任何下游引用。详见 issue #188。
+以上三条都在宣布移除的同一个版本里被移除，这不符合上面的常规策略，理由分两类：
+
+- `aop.CglibProxyFactory` 在任何受支持的服务器上都无法工作：它需要
+  `--add-opens java.base/java.lang=ALL-UNNAMED`，而 Paper 服务器不会设置这个参数，插件也无法
+  自行添加。让它走完废弃周期，只会保留一个首次使用就抛 `ExceptionInInitializerError` 的 API。
+  详见 issue #188。
+- `aop.ProxyFactory.createProxy(T)`/`createProxy(Class<T>, T)` 和 `aop.AopProxyBeanPostProcessor`
+  是另一类情况：两者都能正常工作，只是都从未真正发布过。`aop.ProxyFactory` 本身是在 6.2.5 之后、
+  在这个尚未发布的 6.3.0 开发周期内才新增的（PR #305），它的 `createProxy` 方法从未进入过任何
+  已发布版本。`AopProxyBeanPostProcessor` 则更早（`@since 6.2.0`，且确实在 6.2.1 到 6.2.5 中发布
+  过），但它从未真正接入容器——`addBeanPostProcessor` 在 `src/main` 里的调用方为零——所以移除它
+  不会破坏任何真正在工作的集成。二者都在本周期内被 `AopProxyResolver` 取代：它在 bean 构造之前
+  就解析出代理类，而 `BeanPostProcessor` 按接口约定拿到的两个回调都只能是已构造好的实例，结构上
+  做不到这一点。两者都没有任何下游引用。详见 issue #190。
 
 ## `AbstractCommandExecutor` 的迁移
 
@@ -879,6 +945,38 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 按上面的分类，这属于「不需要迁移期」：此前「声明了 `@CmdMapping` 却被静默漏注册」从来不是
 文档承诺的契约，没有默认值或时机需要逐步淘汰。记录它的理由与上面的 AOP 代理类命名变更一致：
 对依赖了这个缺口的代码是真实破坏，尽管这个缺口本身从未被保证过。
+
+### 已记录的实例：`@Transactional` 现在会直接拒绝加载模块（6.3.0）
+
+6.3.0 之前，框架的注解体系认得 `@Transactional`，但它没有接到任何东西上——AOP 完全没有接入
+容器，所以带 `@Transactional` 的 bean 照常加载、完全不受事务保护地运行，也没有任何警告提示
+这个注解其实什么都没做。6.3.0 作为 issue #190 的一部分把 AOP 接入了容器，`PluginManager.wireAop`
+把 `@Transactional` 显式声明为**不可用**，而不是在 AOP 真正生效后仍然让它静默失效：
+`AopProxyResolver.rejectUnavailableAnnotations` 会为任何带有该注解的、由容器构造的 bean 抛出
+`ContainerException`，一路传播到 `createBean` → `refresh()` → `initializePlugin` →
+`register(...)`。`register` 捕获它、打一条 WARNING、返回 `false`——**模块完全不加载。**
+
+方法签名没有变化，`japicmp` 抓不到这个变更。之所以记在这里，是因为它对今天声明了
+`@Transactional` 的模块是真实且立即的破坏：6.3.0 之前模块能加载（只是拿不到它要的事务保护），
+6.3.0 起直接不加载。本组织自己的 17 个 Modules 已核实 `@Transactional` 使用次数为零，但这只说明
+本组织自己的代码，说明不了第三方模块——而后者正是本文件要提醒的对象。
+
+原因是框架目前没有能让 `@Transactional` 真正生效的 TransactionManager：`DataStore` 不暴露自己的
+`DataSource`，默认的 SQLite 后端又是每个实体类开一个独立连接池，同一个 `.db` 文件底下会出现好几个
+互不相干的事务管理器，这个前提不解决就没法正确工作。与其让这样的 bean 继续静默地不受事务保护地
+运行——这正是本分支存在的目的所要消灭的那种静默失效——6.3.0 选择直接拒绝加载。跟踪于 issue
+**#195** 与 **#196**；等框架能提供真正的 TransactionManager，`@Transactional` 会从「不可用」变为
+「已接线」，届时会作为它自己的一条记录写在这里。
+
+如果你的模块任何地方声明了 `@Transactional`，升级到 6.3.0 之前必须二选一：
+
+- 移除该注解；或
+- 改为显式调用 `DataOperator.transaction(Callable)`。
+
+按上面的分类，这属于「从静默降级改成失败」，通常需要走那里描述的两步迁移期。但这里没有安全的
+中间态可走：要逐步淘汰的「旧行为」本身就是一个 bean 在没有它自己注解承诺的事务保护下运行，哪怕
+只是多打一条更响的警告、再多放行一个版本，都正是本文件存在的目的要拦下的那种风险，不值得再多
+保留一会儿。
 
 ## 移除清单覆盖不到的二进制不兼容
 
