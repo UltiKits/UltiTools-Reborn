@@ -289,6 +289,10 @@ public class ExternalPluginIntegrationTest {
             pm.registerExternal(adapter);
 
             assertThat(adapter.getContext()).isNotNull();
+            // Pins call site 3 (registerExternal): if PluginManager.wireAop(context) is ever
+            // removed from that path, external plugins silently lose @ExceptionCatch/@Transactional
+            // again while modules keep it, breaking the parity this task establishes. See issue #190.
+            assertThat(adapter.getContext().getAopProxyResolver()).isNotNull();
         }
 
         @Test

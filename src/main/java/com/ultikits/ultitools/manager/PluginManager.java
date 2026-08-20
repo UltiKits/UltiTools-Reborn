@@ -232,7 +232,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", plugin.getPluginName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", plugin.getPluginName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -600,8 +601,31 @@ public class PluginManager {
      * {@code DataSource} and the default SQLite backend opens one connection pool per entity class
      * against a per-plugin {@code .db} file. Tracked in issues #195 and #196.
      * <p>
+     * <b>Scope limit 1 — {@code registerSingleton} bypasses this entirely.</b> Only beans the
+     * container constructs itself (through {@code registerBean} or component scanning) are ever
+     * offered to the resolver, because {@link AopProxyResolver#resolve(Class)} only runs on the
+     * constructor branch of bean creation. The plugin instance itself, an {@code @ContextEntry}
+     * bean (built by hand with reflection), and config entities are all registered with
+     * {@code registerSingleton} instead, so none of them ever reach it:
+     * {@code @ExceptionCatch} on such a class stays a no-op, and {@code @Transactional} on it is
+     * silently allowed to run rather than rejected. The "beans using it are rejected" promise
+     * above only reaches beans built through a bean definition.
+     * <p>
+     * <b>Scope limit 2 — inherited annotations are invisible.</b> Annotation lookup only scans
+     * methods declared directly on the bean's own class ({@code Class#getDeclaredMethods()}), and
+     * neither {@code @Transactional} nor {@code @ExceptionCatch} carries {@code @Inherited}. An
+     * annotation declared on a superclass is invisible to a subclass bean: it is neither
+     * intercepted nor rejected.
+     * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
+     * <p>
+     * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
+     * {@code @ContextEntry} bean（反射手工构造）、config 实体都是这样注册的，它们上面的
+     * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
+     * 只会静默地不受事务保护地运行。
+     * 范围限制二：注解识别只看类自身声明的方法（getDeclaredMethods），且两个注解都没有
+     * {@code @Inherited}，父类上声明的注解对子类 bean 同样不可见——既不拦截也不拒绝。
      *
      * @param context the plugin container, before refresh
      */

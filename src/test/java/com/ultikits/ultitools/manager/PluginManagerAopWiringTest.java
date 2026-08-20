@@ -6,18 +6,24 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mockStatic;
 
+import java.lang.annotation.Annotation;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopEligibility;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.ContainerException;
 
 @DisplayName("PluginManager AOP wiring")
 class PluginManagerAopWiringTest {
@@ -47,6 +53,8 @@ class PluginManagerAopWiringTest {
         List<AopAdvisor> advisors = resolver.getAdvisors();
         assertEquals(1, advisors.size(),
                 "@Transactional is declared unavailable this release, so only one advisor");
+        assertEquals(ExceptionCatch.class, advisors.get(0).getAnnotationType(),
+                "the one registered advisor must actually be the one that serves @ExceptionCatch");
     }
 
     @Test
@@ -105,6 +113,28 @@ class PluginManagerAopWiringTest {
         PluginManager.wireAop(context);
 
         assertDoesNotThrow(() -> context.getAopProxyResolver().validateAnnotationCoverage());
+    }
+
+    @Test
+    @DisplayName("Should actually invoke validateAnnotationCoverage, not merely leave it callable")
+    void shouldInvokeAnnotationCoverageValidation() {
+        // AopEligibility.getAopAnnotations() is stubbed to report a third, hypothetical AOP
+        // annotation that wireAop does not know about (neither an advisor nor
+        // addUnavailableAnnotation covers it). If PluginManager.wireAop ever stops calling
+        // resolver.validateAnnotationCoverage() before returning, this stays silent instead of
+        // throwing here -- deleting that one call line leaves every other test in this file green.
+        try (MockedStatic<AopEligibility> eligibility = mockStatic(AopEligibility.class)) {
+            List<Class<? extends Annotation>> withHypotheticalThirdAnnotation =
+                    Arrays.asList(Transactional.class, ExceptionCatch.class, Deprecated.class);
+            eligibility.when(AopEligibility::getAopAnnotations)
+                    .thenReturn(withHypotheticalThirdAnnotation);
+
+            SimpleContainer context = new SimpleContainer();
+
+            ContainerException thrown =
+                    assertThrows(ContainerException.class, () -> PluginManager.wireAop(context));
+            assertTrue(thrown.getMessage().contains("Deprecated"), thrown.getMessage());
+        }
     }
 
     private static String rootMessage(Throwable t) {
