@@ -458,7 +458,7 @@ public final class ReflectionUtil {
      * <p>
      * Overriding is <b>directional</b> and is not an equivalence relation, so it cannot be
      * expressed as equality of any symmetric key - which is why this predicate exists rather than a
-     * comparison of two {@link #signatureOf(Method)} results. All of the following must hold:
+     * comparison against a symmetric signature key. All of the following must hold:
      * <ol>
      *   <li>same name and same parameter types, in order;</li>
      *   <li>{@code sup}'s declaring class is a <em>proper</em> supertype of {@code sub}'s;</li>
@@ -468,6 +468,17 @@ public final class ReflectionUtil {
      *   <li>if {@code sup} is package-private, the two declaring classes are in the same package.
      *       A {@code public} or {@code protected} {@code sup} carries no package condition.</li>
      * </ol>
+     * <b>The first condition is signature equality (JLS 8.4.2), not the subsignature relation that
+     * JLS 8.4.8.1 actually requires.</b> Parameter types are compared as erased {@code Class}
+     * objects, so a generic declaration and an override that matches only its erasure are treated
+     * as distinct methods, even though a subsignature comparison - and javac - accept them as one:
+     * <pre>{@code
+     * class GenBase<T>                        { public void take(T t) { } }   // erases to take(Object)
+     * class GenChild extends GenBase<String>  { @Override public void take(String t) { } }
+     * }</pre>
+     * {@code overrides(GenChild.take, GenBase.take)} returns {@code false} here, and the two are
+     * reported as distinct methods even though javac accepts the {@code @Override}.
+     * <p>
      * There is deliberately no condition on {@code sub}'s own access: Java permits an override to
      * widen access, and a package-private method widened to {@code public} by a same-package
      * subclass is a genuine override.
@@ -481,9 +492,13 @@ public final class ReflectionUtil {
      * JVM, a distinction this check does not make.
      * <p>
      * 覆盖关系是<b>有方向</b>的，也不是等价关系，因此无法用任何对称的 key 相等来表达——这正是
-     * 这里提供谓词而不是比较两个 {@link #signatureOf(Method)} 结果的原因。判定条件见上方英文列表。
+     * 这里提供谓词而不是比较对称签名 key 的原因。判定条件见上方英文列表。
      * 注意对 {@code sub} 自身的访问级别<b>不设</b>任何条件：Java 允许覆盖时放宽访问权限，同包子类
      * 把包私有方法放宽为 {@code public} 仍是真正的覆盖。包按名称比较，不区分不同类加载器下的同名包。
+     * <p>
+     * 需要说明的是，上面第一条判定的其实是 JLS 8.4.2 的签名相等，而不是 JLS 8.4.8.1 真正要求的
+     * 子签名（subsignature）关系：参数类型按擦除后的 {@code Class} 对象比较，因此泛型声明与仅靠
+     * 擦除匹配的重写会被当成两个不同方法，即便子签名判定和 javac 都认可它们其实是同一个方法。
      *
      * @param sub the potentially overriding declaration, may be null
      * @param sup the potentially overridden declaration, may be null
@@ -510,57 +525,6 @@ public final class ReflectionUtil {
         }
         return !isPackagePrivate(supModifiers)
                 || packageNameOf(supClass).equals(packageNameOf(subClass));
-    }
-
-    /**
-     * Builds a coarse de-duplication key for a method declaration.
-     * <p>
-     * <b>This key does not answer "are these two declarations the same overridable method".</b>
-     * Overriding is directional and not an equivalence relation, so no symmetric key can express
-     * it; use {@link #overrides(Method, Method)} for the real relation. Two concrete ways this key
-     * misleads: it is <em>asymmetric</em> for a visibility-widening override - a package-private
-     * {@code m()} and the {@code public m()} that a same-package subclass overrides it with produce
-     * <b>different</b> keys, because only the package-private one carries its package - and it
-     * cannot see transitivity, so a declaration reached through an intermediate override is never
-     * recognised either.
-     * <p>
-     * What it does give, cheaply, is a key that never collapses two declarations that are certainly
-     * distinct methods: {@code private} and {@code static} declarations fold in their declaring
-     * class (neither can be overridden - the JVM dispatches them with {@code invokespecial} /
-     * {@code invokestatic}, neither of which consults a subclass), package-private declarations
-     * fold in their declaring class's package, and everything else uses the plain name+parameters
-     * key. It is safe as a pre-filter or a logging/diagnostic label; it is not safe as an override
-     * test.
-     * <p>
-     * Kept public because it is part of this branch's published surface. Nothing in the framework
-     * relies on it for override detection any more - {@link #getAllMethods(Class)} and
-     * {@link com.ultikits.ultitools.context.FinalContractValidator} both route through
-     * {@link #overrides(Method, Method)} instead (issue #190).
-     * <p>
-     * <b>这个 key 不能用来判断"两条声明是否属于同一个可覆盖的方法"。</b>覆盖是有方向的、不是等价
-     * 关系，任何对称的 key 都无法表达它；真正的判定请用 {@link #overrides(Method, Method)}。它至少
-     * 在两处会误导：对放宽访问权限的覆盖它是<em>不对称</em>的——包私有的 {@code m()} 与同包子类用
-     * {@code public m()} 覆盖它时，两者的 key <b>不同</b>，因为只有包私有那条带上了包名；它也看不见
-     * 传递性，经由中间声明才产生的覆盖关系同样识别不出来。它能廉价提供的只是"绝不会把两个确定不同
-     * 的方法合并到一起"：private/static 并入声明类，包私有并入声明类所在的包，其余用纯名称+参数。
-     * 作预筛选或日志标签是安全的，作覆盖判定则不然。
-     *
-     * @param method the method to build a key for
-     * @return the signature key
-     */
-    public static String signatureOf(Method method) {
-        StringBuilder signature = new StringBuilder();
-        int modifiers = method.getModifiers();
-        if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)) {
-            signature.append(method.getDeclaringClass().getName()).append('#');
-        } else if (isPackagePrivate(modifiers)) {
-            signature.append(packageNameOf(method.getDeclaringClass())).append('#');
-        }
-        signature.append(method.getName());
-        for (Class<?> parameterType : method.getParameterTypes()) {
-            signature.append('|').append(parameterType.getName());
-        }
-        return signature.toString();
     }
 
     /**

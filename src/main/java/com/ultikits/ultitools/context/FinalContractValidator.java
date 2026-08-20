@@ -31,6 +31,21 @@ import java.util.logging.Logger;
  * A plugin module's class is unchecked if it sits outside whichever package that module's own scan
  * actually reaches; a framework class is unchecked unconditionally today.
  * <p>
+ * The method-level check is also deliberately <b>non-transitive</b>: it walks from {@code clazz}
+ * straight to each ancestor's own declaration and stops at the first ancestor whose declaration is
+ * {@code @Final}, so a widening override interposed between them can defeat it. Concretely, if
+ * {@code x.A} declares a package-private {@code @Final m()}, a same-package {@code x.B} widens it
+ * to {@code public m()} (a genuine override), and {@code y.C} overrides {@code B.m()}, then
+ * {@code validate(C)} walks past {@code B.m()} - it is not {@code @Final} - reaches {@code A.m()},
+ * and {@code ReflectionUtil.overrides(C.m(), A.m())} is {@code false} because {@code C} and
+ * {@code A} are in different packages, so no violation is reported for {@code C}. This is
+ * acceptable because the gap can only exist once {@code @Final} has already been bypassed one class
+ * earlier: for {@code B} to widen {@code A}'s method at all, {@code B} must sit in {@code A}'s own
+ * package, and {@code validate(B)} - run whenever {@code B} is inside the scanned package set -
+ * already catches that direct override, since {@code B} and {@code A} share a package and
+ * {@code ReflectionUtil.overrides(B.m(), A.m())} is {@code true} there. {@code C} is only ever
+ * downstream of a bypass that {@code validate(B)} already reported.
+ * <p>
  * 该校验在类加载期恢复 {@code @Final} 的约束。框架加载全部模块，因此跨模块有效。
  * 但它不在编译期生效；覆盖范围严格等于组件扫描实际走到的类。对插件模块而言，这个范围来自
  * {@code PluginManager#getPluginScanPackages} 的三层回退：模块声明的
@@ -41,6 +56,18 @@ import java.util.logging.Logger;
  * {@code SimpleContainer#processConfigurationClass}，在 {@code src/main} 里没有任何调用方——
  * 只有测试（{@code ContextConfigTest}、{@code ScanTest}）会调用它。对插件模块而言，类只要落在
  * 自己扫描实际到达的包之外就不受检查；而框架自身的类，目前无条件地不受检查。
+ * <p>
+ * 方法级检查同样刻意<b>不具备传递性</b>：它从 {@code clazz} 直接走到每一层祖先自己的声明，遇到
+ * 第一个声明为 {@code @Final} 的祖先方法就停下，中间插入一次放宽访问权限的重写就能绕过它。具体
+ * 来说：若 {@code x.A} 声明包私有的 {@code @Final m()}，同包的 {@code x.B} 把它放宽为
+ * {@code public m()}（这是一次真正的重写），而 {@code y.C} 又重写了 {@code B.m()}，那么
+ * {@code validate(C)} 会跳过非 {@code @Final} 的 {@code B.m()}，一路走到 {@code A.m()}，此时
+ * {@code ReflectionUtil.overrides(C.m(), A.m())} 因为 {@code C} 与 {@code A} 不同包而返回
+ * {@code false}，于是不会为 {@code C} 报告任何违规。这是可以接受的：这个空子只有在 {@code @Final}
+ * 已经在上一层被绕过之后才存在——{@code B} 要放宽 {@code A} 的方法，前提就是 {@code B} 与
+ * {@code A} 同包，而只要 {@code B} 落在被扫描的包范围内，{@code validate(B)} 就已经会直接抓到这次
+ * 重写本身（{@code B} 与 {@code A} 同包，{@code ReflectionUtil.overrides(B.m(), A.m())} 为
+ * {@code true}）。{@code C} 只是绕在一次早已被 {@code validate(B)} 报告过的违规下游而已。
  *
  * @author wisdomme
  * @since 6.3.0

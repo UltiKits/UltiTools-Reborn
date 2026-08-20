@@ -945,48 +945,4 @@ class ReflectionUtilTest {
             assertFalse(ReflectionUtil.overrides(null, null));
         }
     }
-
-    @Nested
-    @DisplayName("signatureOf")
-    class SignatureOf {
-
-        @Test
-        @DisplayName("Should give the same key to an override that does not change visibility")
-        void shouldMatchForPlainOverride() throws Exception {
-            assertEquals(
-                    ReflectionUtil.signatureOf(
-                            GetAllMethodsChild.class.getDeclaredMethod("overridden")),
-                    ReflectionUtil.signatureOf(
-                            GetAllMethodsBase.class.getDeclaredMethod("overridden")));
-        }
-
-        @Test
-        @DisplayName("Should give different keys to a package-private method and the public "
-                + "override that widens it")
-        void shouldBeAsymmetricForWidening() throws Exception {
-            // Documents the limitation the javadoc warns about, so that anyone tempted to use this
-            // key as an override test has the counter-example in front of them: these two ARE the
-            // same method per JLS 8.4.8.1, and their keys differ. Use overrides(Method, Method).
-            assertFalse(ReflectionUtil.signatureOf(
-                            SamePackageWideningMiddle.class.getDeclaredMethod("slot"))
-                    .equals(ReflectionUtil.signatureOf(
-                            PackagePrivateSlotBase.class.getDeclaredMethod("slot"))),
-                    "if this ever becomes true, signatureOf changed - re-check its javadoc");
-            assertTrue(ReflectionUtil.overrides(
-                            SamePackageWideningMiddle.class.getDeclaredMethod("slot"),
-                            PackagePrivateSlotBase.class.getDeclaredMethod("slot")),
-                    "...while the real relation does hold");
-        }
-
-        @Test
-        @DisplayName("Should keep private and static declarations on different levels distinct")
-        void shouldSeparateNonOverridableDeclarations() throws Exception {
-            assertFalse(ReflectionUtil.signatureOf(PrivateSlotChild.class.getDeclaredMethod("slot"))
-                    .equals(ReflectionUtil.signatureOf(
-                            PrivateSlotBase.class.getDeclaredMethod("slot"))));
-            assertFalse(ReflectionUtil.signatureOf(StaticSlotChild.class.getDeclaredMethod("slot"))
-                    .equals(ReflectionUtil.signatureOf(
-                            StaticSlotBase.class.getDeclaredMethod("slot"))));
-        }
-    }
 }
