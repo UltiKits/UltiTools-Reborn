@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,13 +27,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import com.ultikits.ultitools.annotations.ExceptionCatch;
-import com.ultikits.ultitools.context.ContextHolder;
 import com.ultikits.ultitools.context.SimpleContainer;
 
 /**
@@ -55,6 +52,21 @@ class ExceptionInterceptorTest {
     private SimpleContainer mockContext;
 
     // Test classes with annotations
+    public static class RecordingHandler implements ExceptionHandler {
+        static String lastMessage;
+        @Override
+        public Object handleException(Throwable exception, Object target, Method method,
+                                      Object[] args) throws Throwable {
+            lastMessage = exception.getMessage();
+            return "handled-by-injected";
+        }
+    }
+
+    public static class HandlerTarget {
+        @ExceptionCatch(handler = "recordingHandler")
+        public String boom() { return null; }
+    }
+
     public static class ServiceWithExceptionCatch {
 
         @ExceptionCatch(value = {IllegalArgumentException.class})
@@ -424,45 +436,43 @@ class ExceptionInterceptorTest {
         @Test
         @DisplayName("Should use custom handler when specified")
         void shouldUseCustomHandlerWhenSpecified() throws Throwable {
-            try (MockedStatic<ContextHolder> contextHolderMock = mockStatic(ContextHolder.class)) {
-                ExceptionHandler customHandler = mock(ExceptionHandler.class);
-                when(customHandler.handleException(any(), any(), any(), any())).thenReturn("custom handled");
+            ExceptionHandler customHandler = mock(ExceptionHandler.class);
+            when(customHandler.handleException(any(), any(), any(), any())).thenReturn("custom handled");
 
-                contextHolderMock.when(ContextHolder::getContext).thenReturn(mockContext);
-                when(mockContext.getBean("customHandler")).thenReturn(customHandler);
+            when(mockContext.getBean("customHandler")).thenReturn(customHandler);
 
-                Method method = ServiceWithExceptionCatch.class.getMethod("methodWithCustomHandler");
-                Object target = new ServiceWithExceptionCatch();
+            ExceptionInterceptor interceptor = new ExceptionInterceptor(Collections.emptyList(), mockContext);
 
-                when(mockInvocation.getMethod()).thenReturn(method);
-                when(mockInvocation.getTarget()).thenReturn(target);
-                when(mockInvocation.getArguments()).thenReturn(new Object[0]);
-                when(mockInvocation.proceed()).thenThrow(new RuntimeException("Test error"));
+            Method method = ServiceWithExceptionCatch.class.getMethod("methodWithCustomHandler");
+            Object target = new ServiceWithExceptionCatch();
 
-                Object result = interceptor.invoke(mockInvocation);
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.getTarget()).thenReturn(target);
+            when(mockInvocation.getArguments()).thenReturn(new Object[0]);
+            when(mockInvocation.proceed()).thenThrow(new RuntimeException("Test error"));
 
-                assertEquals("custom handled", result);
-            }
+            Object result = interceptor.invoke(mockInvocation);
+
+            assertEquals("custom handled", result);
         }
 
         @Test
         @DisplayName("Should fallback when custom handler not found")
         void shouldFallbackWhenCustomHandlerNotFound() throws Throwable {
-            try (MockedStatic<ContextHolder> contextHolderMock = mockStatic(ContextHolder.class)) {
-                contextHolderMock.when(ContextHolder::getContext).thenReturn(mockContext);
-                when(mockContext.getBean("customHandler")).thenThrow(new RuntimeException("Bean not found"));
+            when(mockContext.getBean("customHandler")).thenThrow(new RuntimeException("Bean not found"));
 
-                Method method = ServiceWithExceptionCatch.class.getMethod("methodWithCustomHandler");
-                Object target = new ServiceWithExceptionCatch();
+            ExceptionInterceptor interceptor = new ExceptionInterceptor(Collections.emptyList(), mockContext);
 
-                when(mockInvocation.getMethod()).thenReturn(method);
-                when(mockInvocation.getTarget()).thenReturn(target);
-                when(mockInvocation.proceed()).thenThrow(new RuntimeException("Test error"));
+            Method method = ServiceWithExceptionCatch.class.getMethod("methodWithCustomHandler");
+            Object target = new ServiceWithExceptionCatch();
 
-                Object result = interceptor.invoke(mockInvocation);
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.getTarget()).thenReturn(target);
+            when(mockInvocation.proceed()).thenThrow(new RuntimeException("Test error"));
 
-                assertNull(result); // Falls back to default value
-            }
+            Object result = interceptor.invoke(mockInvocation);
+
+            assertNull(result); // Falls back to default value
         }
     }
 
@@ -483,6 +493,46 @@ class ExceptionInterceptorTest {
             Object result = interceptor.invoke(mockInvocation);
 
             assertNull(result);
+        }
+    }
+
+    @Nested
+    @DisplayName("Handler resolution uses the injected container")
+    class InjectedContainerResolution {
+
+        @Test
+        @DisplayName("Should resolve the named handler from the injected container")
+        void shouldResolveFromInjectedContainer() throws Throwable {
+            SimpleContainer context = new SimpleContainer();
+            context.registerSingleton("recordingHandler", new RecordingHandler());
+            RecordingHandler.lastMessage = null;
+
+            ExceptionInterceptor interceptor =
+                    new ExceptionInterceptor(Collections.emptyList(), context);
+
+            MethodInvocation invocation = mock(MethodInvocation.class);
+            Method method = HandlerTarget.class.getMethod("boom");
+            when(invocation.getMethod()).thenReturn(method);
+            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+            Object result = interceptor.invoke(invocation);
+
+            assertEquals("handled-by-injected", result);
+            assertEquals("boom-message", RecordingHandler.lastMessage);
+        }
+
+        @Test
+        @DisplayName("Should fall back to the default value when no container is injected")
+        void shouldFallBackWithoutContainer() throws Throwable {
+            ExceptionInterceptor interceptor =
+                    new ExceptionInterceptor(Collections.emptyList(), null);
+
+            MethodInvocation invocation = mock(MethodInvocation.class);
+            Method method = HandlerTarget.class.getMethod("boom");
+            when(invocation.getMethod()).thenReturn(method);
+            when(invocation.proceed()).thenThrow(new IllegalStateException("boom-message"));
+
+            assertNull(interceptor.invoke(invocation));
         }
     }
 
