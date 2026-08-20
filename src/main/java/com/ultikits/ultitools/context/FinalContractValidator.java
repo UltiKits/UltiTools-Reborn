@@ -15,13 +15,16 @@ import java.util.List;
  * framework loads every module, the check is effective across module boundaries, which a
  * compile-time annotation processor could not achieve.
  * <p>
- * <b>Known gaps.</b> The check is not compile-time, so an IDE will not flag a violation. It also
- * inherits the scan ceiling in {@code PluginManager}: a JAR with more than 1000 classes is only
- * partially scanned, so violations past the ceiling go unreported. That ceiling is tracked
- * separately in issue #206.
+ * <b>Known gaps.</b> The check is not compile-time, so an IDE will not flag a violation. Its
+ * coverage is exactly the set of classes {@link ComponentScanner} walks: everything under a
+ * module's declared {@code @UltiToolsModule(scanBasePackages)}. A class that ships in the same
+ * module JAR but sits outside those declared packages is never scanned and therefore never
+ * checked.
  * <p>
  * 该校验在类加载期恢复 {@code @Final} 的约束。框架加载全部模块，因此跨模块有效。
- * 但它不在编译期生效，且受 PluginManager 的 1000 类扫描上限影响。
+ * 但它不在编译期生效；覆盖范围严格等于组件扫描实际走到的类，即
+ * {@code @UltiToolsModule(scanBasePackages)} 声明的包——声明包之外的类即使同在模块 JAR 中，
+ * 也不会被扫描、因而不会被检查。
  *
  * @author wisdomme
  * @since 6.3.0

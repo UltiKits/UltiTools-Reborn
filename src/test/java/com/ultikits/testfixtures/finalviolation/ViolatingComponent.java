@@ -1,4 +1,4 @@
-package com.ultikits.ultitools.context.finalviolation;
+package com.ultikits.testfixtures.finalviolation;
 
 /**
  * Test-only fixture for {@code ComponentScannerFinalContractTest}: illegally extends
