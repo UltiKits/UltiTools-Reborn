@@ -605,27 +605,43 @@ public class PluginManager {
      * container constructs itself (through {@code registerBean} or component scanning) are ever
      * offered to the resolver, because {@link AopProxyResolver#resolve(Class)} only runs on the
      * constructor branch of bean creation. The plugin instance itself, an {@code @ContextEntry}
-     * bean (built by hand with reflection), and config entities are all registered with
+     * bean (built by hand with reflection), config entities, {@code @Configuration} classes, and
+     * the beans their {@code @Bean} methods produce are all registered with
      * {@code registerSingleton} instead, so none of them ever reach it:
      * {@code @ExceptionCatch} on such a class stays a no-op, and {@code @Transactional} on it is
-     * silently allowed to run rather than rejected. The "beans using it are rejected" promise
-     * above only reaches beans built through a bean definition.
+     * silently allowed to run rather than rejected. Unlike the first three, {@code @Configuration}
+     * classes and {@code @Bean} methods are written by module authors rather than the framework,
+     * and they are also constructed before {@code wireAop} runs in {@code initializePlugin}, an
+     * independent second reason they can never be proxied. The "beans using it are rejected"
+     * promise above only reaches beans built through a bean definition.
      * <p>
      * <b>Scope limit 2 — inherited annotations are invisible.</b> Annotation lookup only scans
      * methods declared directly on the bean's own class ({@code Class#getDeclaredMethods()}), and
      * neither {@code @Transactional} nor {@code @ExceptionCatch} carries {@code @Inherited}. An
      * annotation declared on a superclass is invisible to a subclass bean: it is neither
-     * intercepted nor rejected.
+     * intercepted nor rejected. The same gap has a second shape: even a class-level annotation
+     * declared directly on the bean's own class is invisible if that class declares no methods of
+     * its own — {@link AopProxyResolver#collectInterceptedMethods(Class)} also scans only
+     * {@code getDeclaredMethods()}, so a bean whose methods are all inherited from its superclass
+     * yields an empty intercepted set and is returned unproxied with no error, exactly like the
+     * inherited-annotation case above.
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
      * <p>
      * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
-     * {@code @ContextEntry} bean（反射手工构造）、config 实体都是这样注册的，它们上面的
+     * {@code @ContextEntry} bean（反射手工构造）、config 实体、{@code @Configuration} 类
+     * 及其 {@code @Bean} 方法产出的 bean 都是这样注册的，它们上面的
      * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
-     * 只会静默地不受事务保护地运行。
+     * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
+     * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
+     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。
      * 范围限制二：注解识别只看类自身声明的方法（getDeclaredMethods），且两个注解都没有
      * {@code @Inherited}，父类上声明的注解对子类 bean 同样不可见——既不拦截也不拒绝。
+     * 同样的缺口还有第二种形态：即便注解直接写在 bean 自己的类上，只要这个类没有自己声明的
+     * 方法（全部继承自父类），也会不可见——{@code AopProxyResolver#collectInterceptedMethods}
+     * 同样只扫描 {@code getDeclaredMethods()}，得到的拦截方法集合为空，{@code resolve()}
+     * 就会原样返回未被代理的类，不会有任何报错，和上面「注解声明在父类」的情形结果相同。
      *
      * @param context the plugin container, before refresh
      */
