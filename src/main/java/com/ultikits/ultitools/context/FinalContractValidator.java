@@ -16,15 +16,23 @@ import java.util.List;
  * compile-time annotation processor could not achieve.
  * <p>
  * <b>Known gaps.</b> The check is not compile-time, so an IDE will not flag a violation. Its
- * coverage is exactly the set of classes {@link ComponentScanner} walks: everything under a
- * module's declared {@code @UltiToolsModule(scanBasePackages)}. A class that ships in the same
- * module JAR but sits outside those declared packages is never scanned and therefore never
- * checked.
+ * coverage is exactly the set of classes {@link ComponentScanner} walks, and for a plugin module
+ * that set comes from {@code PluginManager#getPluginScanPackages}'s three-level fallback: a
+ * module's declared {@code @UltiToolsModule(scanBasePackages)}, else a {@code @ComponentScan} on
+ * the plugin class, else the plugin class's own package. A module that declares neither annotation
+ * is still checked - it falls back to its own package rather than dropping out of scanning
+ * entirely. The framework's own classes take a separate path: {@code ContextConfig}'s
+ * {@code @ComponentScan("com.ultikits.ultitools")}. A class is unchecked only if it sits outside
+ * whichever of these packages actually ends up scanned.
  * <p>
  * 该校验在类加载期恢复 {@code @Final} 的约束。框架加载全部模块，因此跨模块有效。
- * 但它不在编译期生效；覆盖范围严格等于组件扫描实际走到的类，即
- * {@code @UltiToolsModule(scanBasePackages)} 声明的包——声明包之外的类即使同在模块 JAR 中，
- * 也不会被扫描、因而不会被检查。
+ * 但它不在编译期生效；覆盖范围严格等于组件扫描实际走到的类。对插件模块而言，这个范围来自
+ * {@code PluginManager#getPluginScanPackages} 的三层回退：模块声明的
+ * {@code @UltiToolsModule(scanBasePackages)}，其次插件类上的 {@code @ComponentScan}，都未声明
+ * 则默认扫插件类自己所在的包——两个注解都不声明的模块依然会被检查，只是回退到自己的包，而不是
+ * 完全跳出扫描。框架自身的类走另一条独立路径：{@code ContextConfig} 的
+ * {@code @ComponentScan("com.ultikits.ultitools")}。只有当类落在上述这些实际被扫描到的包之外时，
+ * 才不会被检查。
  *
  * @author wisdomme
  * @since 6.3.0
