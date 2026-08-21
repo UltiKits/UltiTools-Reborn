@@ -613,18 +613,17 @@ public class PluginManager {
      * classes and {@code @Bean} methods are written by module authors rather than the framework,
      * and they are also constructed before {@code wireAop} runs in {@code initializePlugin}, an
      * independent second reason they can never be proxied. The "beans using it are rejected"
-     * promise above only reaches beans built through a bean definition.
+     * promise above only reaches beans built through a bean definition. Tracked in issue #308.
      * <p>
-     * <b>Scope limit 2 — inherited annotations are invisible.</b> Annotation lookup only scans
-     * methods declared directly on the bean's own class ({@code Class#getDeclaredMethods()}), and
-     * neither {@code @Transactional} nor {@code @ExceptionCatch} carries {@code @Inherited}. An
-     * annotation declared on a superclass is invisible to a subclass bean: it is neither
-     * intercepted nor rejected. The same gap has a second shape: even a class-level annotation
-     * declared directly on the bean's own class is invisible if that class declares no methods of
-     * its own — {@link AopProxyResolver#collectInterceptedMethods(Class)} also scans only
-     * {@code getDeclaredMethods()}, so a bean whose methods are all inherited from its superclass
-     * yields an empty intercepted set and is returned unproxied with no error, exactly like the
-     * inherited-annotation case above.
+     * <b>Scope limit 2 — class-level coverage skips some methods silently.</b> Annotation
+     * lookup walks the whole inheritance hierarchy, so an annotation on a superclass method is
+     * found. A class-level annotation covers that hierarchy too, minus two sets: methods no
+     * inheritance-based proxy can intercept ({@code private}, {@code static}, {@code final}),
+     * and {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where
+     * swallowing an exception would replace it with a silent wrong answer. Both skips are
+     * silent by deliberate choice, so a class-level annotation that appears not to apply to one
+     * inherited method leaves no diagnostic. A method-level annotation is never skipped: an
+     * unproxyable one fails the module load instead. See issue #309.
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
@@ -635,13 +634,14 @@ public class PluginManager {
      * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
      * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
      * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
-     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。
-     * 范围限制二：注解识别只看类自身声明的方法（getDeclaredMethods），且两个注解都没有
-     * {@code @Inherited}，父类上声明的注解对子类 bean 同样不可见——既不拦截也不拒绝。
-     * 同样的缺口还有第二种形态：即便注解直接写在 bean 自己的类上，只要这个类没有自己声明的
-     * 方法（全部继承自父类），也会不可见——{@code AopProxyResolver#collectInterceptedMethods}
-     * 同样只扫描 {@code getDeclaredMethods()}，得到的拦截方法集合为空，{@code resolve()}
-     * 就会原样返回未被代理的类，不会有任何报错，和上面「注解声明在父类」的情形结果相同。
+     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。见 issue #308。
+     * 范围限制二：注解识别现在走整个继承层级，父类方法上的注解能被找到。
+     * 类级注解同样覆盖整个层级，但减去两类：继承式代理无法拦截的方法
+     * （{@code private}、{@code static}、{@code final}），以及 {@code equals(Object)} /
+     * {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的异常会把一个可见的异常
+     * 换成一个静默的错误结果。两类跳过均为有意静默，因此类级注解对某个继承方法
+     * 看似未生效时不会留下任何排查线索。方法级注解从不被跳过：不可代理时直接让模块
+     * 加载失败。见 issue #309。
      *
      * @param context the plugin container, before refresh
      */
