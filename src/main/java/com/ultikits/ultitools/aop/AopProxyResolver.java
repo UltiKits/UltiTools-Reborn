@@ -2,6 +2,7 @@ package com.ultikits.ultitools.aop;
 
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -186,9 +187,14 @@ public class AopProxyResolver {
         if (beanClass.isAnnotationPresent(type)) {
             return beanClass.getName();
         }
-        for (Method method : beanClass.getDeclaredMethods()) {
+        // Walks the hierarchy: neither @Transactional nor @ExceptionCatch is @Inherited, so an
+        // annotation on a superclass method is invisible to getDeclaredMethods() and the refusal
+        // below would never fire for it. See issue #309.
+        for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
             if (!method.isSynthetic() && method.isAnnotationPresent(type)) {
-                return beanClass.getName() + "#" + method.getName();
+                // The declaring class, not the bean: the method may come from a superclass, and
+                // naming the bean would point the author at a file with no such annotation.
+                return method.getDeclaringClass().getName() + "#" + method.getName();
             }
         }
         return null;

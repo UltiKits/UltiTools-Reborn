@@ -49,6 +49,14 @@ class AopProxyResolverTest {
         public String work() { return "ok"; }
     }
 
+    public static class TransactionalBase {
+        @Transactional
+        public void transactionalOnBase() { }
+    }
+
+    /** Inherits the annotated method without declaring anything of its own. */
+    public static class InheritsTransactional extends TransactionalBase { }
+
     @BeforeEach
     void setUp() {
         log = new ArrayList<>();
@@ -224,5 +232,21 @@ class AopProxyResolverTest {
 
             assertDoesNotThrow(bare::validateAnnotationCoverage);
         }
+    }
+    // Before this change the refusal only saw getDeclaredMethods(), so an author who factored a
+    // @Transactional method into an abstract base class got neither interception nor refusal:
+    // the module loaded and the annotation did nothing, which is the exact failure the refusal
+    // exists to prevent. See issue #309.
+    @Test
+    @DisplayName("Should refuse a bean whose @Transactional method is declared on a superclass")
+    void shouldRefuseInheritedTransactional() {
+        AopProxyResolver bare = new AopProxyResolver();
+        bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
+
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> bare.resolve(InheritsTransactional.class));
+        assertTrue(thrown.getMessage().contains("transactionalOnBase"),
+                "the message must name the offending method, not just the bean: "
+                        + thrown.getMessage());
     }
 }
