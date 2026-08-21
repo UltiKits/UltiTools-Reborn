@@ -631,8 +631,10 @@ public class PluginManager {
      * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where swallowing an
      * exception would replace it with a silent wrong answer - Lombok emits all three onto the
      * annotated class itself, so class-level scope does not keep them out. Both skips are silent
-     * by deliberate choice and leave no diagnostic. A method-level annotation is never skipped:
-     * an unproxyable one fails the module load by name instead. See issue #309.
+     * by deliberate choice and leave no diagnostic. A method-level annotation is skipped only
+     * when the proxy cannot reach the method at all, and never quietly: it is named in a
+     * startup warning, the way Spring ignores an annotation on a method it cannot advise. The
+     * one thing that still fails the load is a final class, which cannot be subclassed at all.
      * <p>
      * <b>Scope limit 3 - two kinds of annotation are never seen.</b> Neither is fixed here, and
      * both behave the same way on 6.2.x.
@@ -667,8 +669,9 @@ public class PluginManager {
      * 以及被桥接方法遮蔽的泛型覆写擦除另一半。其二是 {@code equals(Object)} /
      * {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的异常会把一个可见的异常换成
      * 一个静默的错误结果；Lombok 把这三个生成在被注解类自己身上，类级作用域挡不住它们。
-     * 两类跳过均为有意静默，不留任何排查线索。方法级注解从不被跳过：不可代理时直接点名
-     * 该方法并让模块加载失败。见 issue #309。
+     * 两类跳过均为有意静默，不留任何排查线索。方法级注解只在代理根本够不着该方法时才被跳过，
+     * 且绝不悄悄跳过：会以启动期警告点名，这与 Spring 对「织不进去的方法上的注解」的处理一致。
+     * 唯一仍会让加载失败的是 final 类——它根本无法被继承。见 issue #309。
      * 范围限制三：仍有两类注解完全看不见，本批均未修复，在 6.2.x 上行为相同。
      * 一是<b>接口 default 方法</b>上的注解——扫描只走 {@code getSuperclass()}，
      * {@code @ExceptionCatch} 在那里静默失效，{@code @Transactional} 连拒绝都不会触发。

@@ -140,16 +140,35 @@ public class AopProxyResolver {
             return beanClass;
         }
 
+        Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(beanClass);
         Set<Method> intercepted = collectInterceptedMethods(beanClass);
-        if (intercepted.isEmpty()) {
-            return beanClass;
+        boolean interceptionRequested = !intercepted.isEmpty() || !annotated.isEmpty();
+
+        // One case is fatal and the rest are not, and the line between them is whether the author
+        // is being told about a method or about the class. A final class cannot be subclassed, so
+        // no proxy exists at all and nothing the author writes elsewhere will change that - Spring
+        // throws AopConfigException for the same shape. Every other problem is a single method the
+        // proxy cannot reach; Spring ignores those, and so does this, because failing the load
+        // stopped whoever extended a class rather than whoever wrote the annotation, and the
+        // remedy named a file they may not own. Ignoring is not the same as silence: each one is
+        // named in a warning, since an annotation that quietly does nothing is exactly what left
+        // @ExceptionCatch inert from 6.2.0 to 6.3.0. See issue #309.
+        List<AopEligibility.Problem> blocking = new ArrayList<>();
+        for (AopEligibility.Problem problem : AopEligibility.check(beanClass, annotated)) {
+            if (problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS) {
+                blocking.add(problem);
+            } else {
+                LOGGER.warning("AOP annotation ignored on " + beanClass.getName()
+                        + ": " + problem + " The annotation has no effect; the module still loads.");
+            }
+        }
+        if (!blocking.isEmpty() && interceptionRequested) {
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    buildMessage(beanClass, blocking));
         }
 
-        List<AopEligibility.Problem> problems =
-                AopEligibility.check(beanClass, AopEligibility.findAopAnnotatedMethods(beanClass));
-        if (!problems.isEmpty()) {
-            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
-                    buildMessage(beanClass, problems));
+        if (intercepted.isEmpty()) {
+            return beanClass;
         }
 
         LOGGER.fine("Creating AOP proxy class for " + beanClass.getName()
@@ -220,8 +239,8 @@ public class AopProxyResolver {
     private Set<Method> collectInterceptedMethods(Class<?> beanClass) {
         Set<Method> result = new LinkedHashSet<>();
         // No synthetic filter here: ReflectionUtil.getAllMethods already drops bridge and
-        // synthetic declarations. AopEligibility.isShadowed deliberately does scan them, and a
-        // redundant guard here would blur that contrast for the next reader.
+        // synthetic declarations. AopEligibility's shadowing rule deliberately does scan them,
+        // and a redundant guard here would blur that contrast for the next reader.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
             for (AopAdvisor advisor : advisors) {
                 if (!advisor.matches(method, beanClass)) {
@@ -229,11 +248,10 @@ public class AopProxyResolver {
                 }
                 Class<? extends Annotation> type = advisor.getAnnotationType();
                 if (type != null && method.isAnnotationPresent(type)) {
-                    // Method-level: an explicit request, added even when unproxyable so that
-                    // AopEligibility.check fails the load naming the method. Shadowed methods are
-                    // the one exception: check deliberately does not report those, so adding one
-                    // would reach the proxy factory and throw without naming anything.
-                    if (!AopEligibility.isShadowed(method, beanClass)) {
+                    // Method-level: an explicit request, but still only collected when the proxy
+                    // can actually reach it. resolve() warns about the ones dropped here, using
+                    // AopEligibility.check for the reason and the remedy.
+                    if (AopEligibility.isProxyable(method, beanClass)) {
                         result.add(method);
                     }
                     break;

@@ -17,21 +17,25 @@ import java.util.Set;
 /**
  * Decides whether a class can be proxied, and explains why not when it cannot.
  * <p>
- * Two audiences, two answers. {@link #check(Class, Set)} serves methods the author named with a
- * method-level annotation: every rejection there becomes an explicit startup failure naming the
- * class and method, because a silently unproxied bean is the failure mode that left
- * {@code @Transactional} inert since 6.2.0. {@link #isProxyable(Method, Class)} serves class-level
- * coverage, which the author never vetted method by method: it filters silently rather than
- * failing a module over a method nobody named. See issue #309.
+ * Diagnosis, not policy. {@link #check(Class, Set)} names every reason a class or one of its
+ * annotated methods cannot be proxied, with a remedy for each; {@code AopProxyResolver} decides
+ * what to do with them. Today it fails the load for {@code FINAL_CLASS} - nothing can subclass it,
+ * so no proxy exists at all - and warns for the rest, which are single methods the proxy cannot
+ * reach. That split follows Spring, which throws for a final class and ignores an annotation on a
+ * method it cannot advise. Ignoring is not silence: every one is named in a warning, because an
+ * annotation that quietly does nothing is what left {@code @ExceptionCatch} inert from 6.2.0 to
+ * 6.3.0. {@link #isProxyable(Method, Class)} is the same rule set as a plain predicate, used to
+ * decide what actually goes into the proxy. See issue #309.
  * <p>
  * {@code private} and {@code static} methods are not a capability gap but a usage error. The JVM
  * dispatches them with {@code invokespecial} and {@code invokestatic}, neither of which consults
  * the subclass, so no inheritance-based AOP framework can intercept them.
  * <p>
- * 两种受众，两种答案。check 服务于作者用方法级注解点名的方法：那里的每一条拒绝都会变成一次
- * 点名到类和方法的启动期失败，因为静默地不代理正是让 @Transactional 自 6.2.0 起长期失效的
- * 那种失败方式。isProxyable 服务于类级覆盖——作者从未逐个过目——它静默过滤，而不是为了一个
- * 没人点名的方法让整个模块加载失败。见 issue #309。
+ * 这里只做诊断，不做决策。check 列出每一条不可代理的原因与补救说明，由 AopProxyResolver 决定
+ * 如何处置：final 类让加载失败（根本无法生成子类），其余每一条都是「某个方法够不着」，改为忽略
+ * 并打警告。这与 Spring 一致——它对 final 类抛异常，对织不进去的方法上的注解则忽略。忽略不等于
+ * 静默：每一条都会被点名，因为一个悄悄不起作用的注解，正是让 @ExceptionCatch 从 6.2.0 到
+ * 6.3.0 长期失效的那种失败方式。isProxyable 是同一组规则的纯谓词形式。见 issue #309。
  *
  * @author wisdomme
  * @since 6.3.0
@@ -244,21 +248,16 @@ public final class AopEligibility {
      * {@code super}-invokable. Bridge and synthetic declarations are deliberately included in the
      * scan here, because they are exactly what does the shadowing.
      * <p>
-     * Public because it is the one unproxyability rule {@link #check(Class, Set)} deliberately
-     * does <b>not</b> report. The other four become load failures, so a caller may add such a
-     * method to the intercepted set and rely on the load failing first. A shadowed one reaches the
-     * proxy factory instead, which throws without naming it, so callers must filter it themselves.
      * <p>
      * 泛型覆写的擦除另一半：编译器为 Child 生成桥接方法 take(Object)，getAllMethods 会跳过桥接
      * 且按擦除参数比较，于是父类的 take(Object) 作为独立方法返回，但它已不可 super 调用。
-     * 此处有意连桥接与合成方法一起扫描，因为遮蔽正是它们造成的。这是 check 唯一有意不报告的
-     * 一条规则，因此调用方必须自己过滤——其余四条都会先让加载失败，走不到代理生成。
+     * 此处有意连桥接与合成方法一起扫描，因为遮蔽正是它们造成的。
      *
      * @param method    the method to test
      * @param beanClass the class the proxy will extend
      * @return true if a nearer declaration makes it unreachable through {@code super}
      */
-    public static boolean isShadowed(Method method, Class<?> beanClass) {
+    private static boolean isShadowed(Method method, Class<?> beanClass) {
         if (method == null || beanClass == null) {
             return false;
         }

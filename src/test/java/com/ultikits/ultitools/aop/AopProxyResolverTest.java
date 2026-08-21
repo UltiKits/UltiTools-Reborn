@@ -477,15 +477,46 @@ class AopProxyResolverTest {
         assertFalse(declares(resolved, "packagePrivateHelper"));
     }
 
-    // The class-level path skips silently; the method-level path must fail the load instead, and
-    // must name the method rather than letting ByteBuddy throw a message that names none.
+    // An annotation on a method no proxy can reach is ignored rather than fatal, which is what
+    // Spring does for the same situation. It is not ignored quietly: the method is named in a
+    // warning, so the author still learns the annotation is doing nothing. Failing the load put
+    // the stop on whoever extended the class rather than whoever wrote the annotation, and the
+    // remedy named a file they may not own.
     @Test
-    @DisplayName("Should refuse a method-level annotation on an inaccessible inherited method")
-    void shouldRefuseAnnotatedCrossPackagePackagePrivate() {
-        ContainerException thrown = assertThrows(ContainerException.class,
+    @DisplayName("Should ignore, not refuse, a method-level annotation on an unreachable method")
+    void shouldIgnoreAnnotationOnUnreachableMethod() {
+        Class<?> resolved = assertDoesNotThrow(
                 () -> exceptionCatchResolver().resolve(OverAnnotatedPackagePrivate.class));
-        assertTrue(thrown.getMessage().contains("annotatedPackagePrivate"),
-                "the refusal must name the method: " + thrown.getMessage());
+        assertFalse(declares(resolved, "annotatedPackagePrivate"),
+                "the method cannot be overridden from the bean's package, so it is not intercepted");
+    }
+
+    public static class OwnPrivateAnnotated {
+        @ExceptionCatch(silent = true)
+        private void helper() { }
+        public void touch() { helper(); }
+    }
+
+    // Same rule whether the author owns the declaration or not: one behaviour, one warning.
+    @Test
+    @DisplayName("Should ignore a method-level annotation on the bean's own private method")
+    void shouldIgnoreAnnotationOnOwnPrivateMethod() {
+        assertDoesNotThrow(() -> exceptionCatchResolver().resolve(OwnPrivateAnnotated.class));
+    }
+
+    // A final class is the one case that still fails: nothing can be subclassed, so interception
+    // is impossible rather than merely out of reach. Spring throws AopConfigException here too.
+    @Test
+    @DisplayName("Should still refuse a final class, which cannot be subclassed at all")
+    void shouldStillRefuseFinalClass() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> exceptionCatchResolver().resolve(FinalWithClassLevel.class));
+        assertTrue(thrown.getMessage().contains("FINAL_CLASS"), thrown.getMessage());
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static final class FinalWithClassLevel {
+        public String risky() { throw new IllegalStateException("boom"); }
     }
 
     // Cross-package plus package-private means the two declarations do not override one another,
