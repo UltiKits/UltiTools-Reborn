@@ -530,16 +530,29 @@ public final class ReflectionUtil {
     /**
      * True for default (package-private) access: neither {@code public}, {@code protected}, nor
      * {@code private}.
+     * <p>
+     * Public so that consumers deciding the same question share this implementation. See the note
+     * on {@link #overrides(Method, Method)} for why a second copy is a hazard rather than a
+     * convenience.
+     *
+     * @param modifiers the modifiers to test, from {@code Member#getModifiers()}
+     * @return true if the modifiers describe default access
      */
-    private static boolean isPackagePrivate(int modifiers) {
+    public static boolean isPackagePrivate(int modifiers) {
         return !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers)
                 && !Modifier.isPrivate(modifiers);
     }
 
     /**
      * The class's package name, or the empty string for the unnamed package.
+     * <p>
+     * Public for the same reason as {@link #isPackagePrivate(int)}: package-private access is
+     * decided here and by {@code AopEligibility}, and the two must not answer differently.
+     *
+     * @param clazz the class to inspect
+     * @return the package name, or the empty string
      */
-    private static String packageNameOf(Class<?> clazz) {
+    public static String packageNameOf(Class<?> clazz) {
         Package pkg = clazz.getPackage();
         return pkg == null ? "" : pkg.getName();
     }

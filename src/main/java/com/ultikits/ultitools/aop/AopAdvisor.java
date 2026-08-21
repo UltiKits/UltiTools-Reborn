@@ -18,7 +18,11 @@ public interface AopAdvisor {
      * Determines if this advisor applies to the given method.
      *
      * @param method      the method to check
-     * @param targetClass the class declaring the method
+     * @param targetClass the bean class the proxy is built for - <b>not</b> the method's declaring
+     *                    class, which for an inherited method is a superclass that does not carry
+     *                    the bean's class-level annotations. Both call sites pass the same value
+     *                    at collection time and at invocation time, so an advisor's two answers
+     *                    cannot disagree. See issue #309.
      * @return true if this advisor should intercept the method
      */
     boolean matches(Method method, Class<?> targetClass);

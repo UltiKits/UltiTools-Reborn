@@ -217,17 +217,26 @@ public class AopProxyResolver {
                 }
                 Class<? extends Annotation> type = advisor.getAnnotationType();
                 if (type != null && method.isAnnotationPresent(type)) {
-                    // Method-level: an explicit request. Added unconditionally so that an
-                    // unproxyable one still reaches AopEligibility.check and fails the load.
-                    result.add(method);
-                } else if (!isExcludedFromClassLevel(method)
+                    // Method-level: an explicit request, added even when unproxyable so that
+                    // AopEligibility.check fails the load naming the method. Shadowed methods are
+                    // the one exception: check deliberately does not report those, so adding one
+                    // would reach the proxy factory and throw without naming anything.
+                    if (!AopEligibility.isShadowed(method, beanClass)) {
+                        result.add(method);
+                    }
+                    break;
+                }
+                if (!isExcludedFromClassLevel(method)
                         && AopEligibility.isProxyable(method, beanClass)) {
                     // Class-level: a bulk request the author never vetted method by method, so
                     // anything unproxyable is skipped rather than failing the module load. The
                     // skip is silent by design - see the design note's known-limitations section.
                     result.add(method);
+                    break;
                 }
-                break;
+                // This advisor matched but declined. Breaking here would drop a later advisor's
+                // method-level annotation on the same method - an explicit request the author did
+                // make - so the loop continues instead.
             }
         }
         return result;

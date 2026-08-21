@@ -626,13 +626,20 @@ public class PluginManager {
      * method leaves no diagnostic. A method-level annotation is never skipped: an unproxyable
      * one fails the module load by name instead. See issue #309.
      * <p>
-     * <b>Scope limit 3 — two kinds of annotation are still never seen.</b> The scan walks
-     * {@code getSuperclass()} only, so an annotation on an <b>interface default method</b> is
-     * invisible: {@code @ExceptionCatch} silently does nothing there and {@code @Transactional}
-     * is not even refused. Separately, a <b>class-level annotation declared on a superclass</b>
-     * is invisible to a subclass bean, because neither annotation carries {@code @Inherited}
-     * and the advisor tests the bean's own type. Both predate this wiring and neither is fixed
-     * here.
+     * <b>Scope limit 3 — three kinds of annotation are still never seen.</b> None is fixed
+     * here, and all three behave the same way on 6.2.x.
+     * <ul>
+     * <li>An annotation on an <b>interface default method</b>. The scan walks
+     * {@code getSuperclass()} only, so {@code @ExceptionCatch} silently does nothing there and
+     * {@code @Transactional} is not even refused.</li>
+     * <li>A <b>class-level annotation declared on a superclass</b>. Neither annotation carries
+     * {@code @Inherited} and the advisor tests the bean's own type.</li>
+     * <li>A <b>method-level annotation on a superclass method the bean overrides</b>. Java does
+     * not inherit method annotations, and the scan keeps only the most derived declaration of
+     * each overridable method - which is the override, and it carries nothing. Annotate the
+     * override too. The erased half of a generic override behaves the same way, for the
+     * related reason that the compiler's bridge shadows the annotated declaration.</li>
+     * </ul>
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
@@ -651,11 +658,15 @@ public class PluginManager {
      * 异常会把一个可见的异常换成一个静默的错误结果。两类跳过均为有意静默，因此类级注解
      * 对某个继承方法看似未生效时不会留下任何排查线索。方法级注解从不被跳过：不可代理时
      * 直接点名该方法并让模块加载失败。见 issue #309。
-     * 范围限制三：仍有两类注解完全看不见。扫描只走 {@code getSuperclass()}，因此
-     * <b>接口 default 方法</b>上的注解不可见——{@code @ExceptionCatch} 在那里静默失效，
-     * {@code @Transactional} 连拒绝都不会触发。另外，<b>声明在父类上的类级注解</b>对子类
-     * bean 不可见，因为两个注解都没有 {@code @Inherited}，而 advisor 判定的是 bean 自身的
-     * 类型。两者都早于本次接线存在，本批均未修复。
+     * 范围限制三：仍有三类注解完全看不见，本批均未修复，在 6.2.x 上行为相同。
+     * 一是<b>接口 default 方法</b>上的注解——扫描只走 {@code getSuperclass()}，
+     * {@code @ExceptionCatch} 在那里静默失效，{@code @Transactional} 连拒绝都不会触发。
+     * 二是<b>声明在父类上的类级注解</b>——两个注解都没有 {@code @Inherited}，
+     * 而 advisor 判定的是 bean 自身的类型。
+     * 三是<b>父类方法上的方法级注解、而子类覆写了该方法</b>——Java 不继承方法注解，
+     * 且扫描对每个可覆写方法只保留最派生的那条声明，也就是不带注解的那个覆写。
+     * 请在覆写方法上一并标注。泛型覆写的擦除另一半同理，原因相近：编译器生成的桥接
+     * 遮蔽了带注解的那条声明。
      *
      * @param context the plugin container, before refresh
      */

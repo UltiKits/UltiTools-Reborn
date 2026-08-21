@@ -136,6 +136,15 @@ class AopProxyResolverTest {
         public void shared() { }
     }
 
+    public abstract static class GenericAnnotatedBase<T> {
+        @ExceptionCatch(silent = true, defaultValue = "generic")
+        public abstract void handle(T value);
+    }
+
+    public static class ConcreteHandler extends GenericAnnotatedBase<String> {
+        @Override public void handle(String value) { }
+    }
+
     @BeforeEach
     void setUp() {
         log = new ArrayList<>();
@@ -448,5 +457,14 @@ class AopProxyResolverTest {
                 () -> exceptionCatchResolver().resolve(OverSameName.class));
         assertTrue(ProxyFactory.isProxyClass(resolved));
         assertTrue(declares(resolved, "shared"));
+    }
+    // The erased half of a generic override is shadowed by the compiler's bridge, so it cannot be
+    // intercepted - but it is a compiler artifact, not an author error. Reporting it as a
+    // load-blocking problem told the author to move an annotation that already sits on the only
+    // declaration they wrote. alpha loads this bean; refusing it here would be a regression.
+    @Test
+    @DisplayName("Should not fail the load over an annotation on an erased generic declaration")
+    void shouldNotRefuseAnnotatedErasedDeclaration() {
+        assertDoesNotThrow(() -> exceptionCatchResolver().resolve(ConcreteHandler.class));
     }
 }

@@ -85,13 +85,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
         // proxies. See issue #309.
         ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
         if (annotation == null) {
-            Object target = invocation.getTarget();
-            if (target != null) {
-                annotation = target.getClass().getAnnotation(ExceptionCatch.class);
-            }
-        }
-        if (annotation == null) {
-            annotation = method.getDeclaringClass().getAnnotation(ExceptionCatch.class);
+            annotation = beanClassOf(invocation, method).getAnnotation(ExceptionCatch.class);
         }
 
         try {
@@ -127,17 +121,46 @@ public class ExceptionInterceptor implements MethodInterceptor {
     }
 
     /**
+     * The class the bean actually is, with any proxy layers unwrapped.
+     * <p>
+     * {@code method.getDeclaringClass()} is only the bean while every intercepted method is one
+     * the bean declares. Once the scan started walking the hierarchy that stopped holding, so both
+     * the class-level annotation lookup and the failure attribution read the target instead. The
+     * declaring class remains the fallback for a target that is not a proxy at all. See issue #309.
+     *
+     * @param invocation the invocation in progress
+     * @param method     the method being intercepted
+     * @return the bean class, never null
+     */
+    private static Class<?> beanClassOf(MethodInvocation invocation, Method method) {
+        Object target = invocation.getTarget();
+        if (target == null) {
+            return method.getDeclaringClass();
+        }
+        Class<?> current = target.getClass();
+        while (ProxyFactory.isProxyClass(current) && current.getSuperclass() != null) {
+            current = current.getSuperclass();
+        }
+        return current;
+    }
+
+    /**
      * Handles a caught exception according to the annotation configuration.
      */
     private Object handleCaughtException(Throwable e, MethodInvocation invocation, ExceptionCatch annotation)
             throws Throwable {
 
         Method method = invocation.getMethod();
+        // The bean, not the declaring class. For an inherited method the declaring class is a
+        // superclass - often a framework base - which tells an operator nothing about which of the
+        // several concrete beans failed, and makes two different beans that inherit one method
+        // collapse into a single deduplicated error report.
+        String beanName = beanClassOf(invocation, method).getSimpleName();
 
         // Log unless silent
         if (!annotation.silent()) {
-            LOGGER.log(Level.WARNING, "Exception caught in " + method.getDeclaringClass().getSimpleName() +
-                    "." + method.getName() + "(): " + e.getMessage(), e);
+            LOGGER.log(Level.WARNING, "Exception caught in " + beanName
+                    + "." + method.getName() + "(): " + e.getMessage(), e);
         }
 
         // Report to error collector
@@ -146,9 +169,8 @@ public class ExceptionInterceptor implements MethodInterceptor {
             if (instance != null) {
                 ErrorReportCollector erc = instance.getErrorReportCollector();
                 if (erc != null) {
-                    erc.reportError(e, method.getDeclaringClass().getSimpleName(),
-                            TriggerContext.aop(method.getDeclaringClass().getSimpleName(),
-                                    method.getName()));
+                    erc.reportError(e, beanName,
+                            TriggerContext.aop(beanName, method.getName()));
                 }
             }
         } catch (Exception ignored) {
