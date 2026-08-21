@@ -226,11 +226,19 @@ public class AopProxyResolver {
                     }
                     break;
                 }
-                if (!isExcludedFromClassLevel(method)
+                // The exclusion list describes what a class-level annotation may sweep up, so it
+                // applies only when the match came from one. A pointcut advisor has no annotation
+                // type and named the method in code, which is the opposite of an unvetted bulk
+                // request; dropping its target silently would be wrong.
+                boolean sweptUpByClassLevel = type != null;
+                if ((!sweptUpByClassLevel || !isExcludedFromClassLevel(method))
                         && AopEligibility.isProxyable(method, beanClass)) {
                     // Class-level: a bulk request the author never vetted method by method, so
                     // anything unproxyable is skipped rather than failing the module load. The
                     // skip is silent by design - see the design note's known-limitations section.
+                    // A pointcut advisor's targets are filtered the same way, because nothing
+                    // upstream checks them: AopEligibility.check only inspects the framework's own
+                    // two annotations, so an unproxyable target would reach the proxy factory.
                     result.add(method);
                     break;
                 }

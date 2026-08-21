@@ -467,4 +467,32 @@ class AopProxyResolverTest {
     void shouldNotRefuseAnnotatedErasedDeclaration() {
         assertDoesNotThrow(() -> exceptionCatchResolver().resolve(ConcreteHandler.class));
     }
+    public static class PlainHashCode {
+        @Override public int hashCode() { return 7; }
+    }
+
+    // A pointcut advisor has no annotation type, so it cannot be a "bulk request the author never
+    // vetted method by method" - it named the method in code. The exclusion list is about what a
+    // class-level annotation sweeps up, and must not silently drop a hand-written pointcut.
+    @Test
+    @DisplayName("Should honour a pointcut advisor that deliberately targets an excluded signature")
+    void shouldHonourPointcutOnExcludedSignature() {
+        AopProxyResolver pointcutResolver = new AopProxyResolver();
+        pointcutResolver.addAdvisor(new AopAdvisor() {
+            @Override
+            public boolean matches(java.lang.reflect.Method method, Class<?> targetClass) {
+                return "hashCode".equals(method.getName());
+            }
+
+            @Override
+            public MethodInterceptor getInterceptor() {
+                return MethodInvocation::proceed;
+            }
+        });
+
+        Class<?> resolved = pointcutResolver.resolve(PlainHashCode.class);
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+        assertTrue(declares(resolved, "hashCode"),
+                "the exclusion list governs class-level annotation coverage only");
+    }
 }
