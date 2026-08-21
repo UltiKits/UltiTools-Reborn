@@ -75,17 +75,14 @@ public class ExceptionInterceptor implements MethodInterceptor {
     public Object invoke(MethodInvocation invocation) throws Throwable {
         Method method = invocation.getMethod();
 
-        // Method level first, then the class the bean actually is. The class-level lookup used
-        // to read method.getDeclaringClass() alone, which is the bean itself only while every
-        // intercepted method is one the bean declares. For a method inherited from a superclass
-        // the declaring class is that superclass, which does not carry the bean's class-level
-        // annotation, so the lookup came up empty and the exception propagated. The target's
-        // runtime class is the generated proxy, onto which ProxyFactory copies the bean's type
-        // annotations. The declaring class is kept as a fallback for targets that are not
-        // proxies. See issue #309.
+        // Method level first, then class level through the shared lookup. Resolving the class
+        // level here independently is what previously let the advisor decide a method was covered
+        // while this interceptor found no annotation and quietly re-threw - proxied, annotated and
+        // inert. AopAdvisor.findClassLevelAnnotation is the single definition of which class-level
+        // annotation governs a method, so the two cannot disagree. See issue #309.
         ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
         if (annotation == null) {
-            annotation = beanClassOf(invocation, method).getAnnotation(ExceptionCatch.class);
+            annotation = AopAdvisor.findClassLevelAnnotation(method, ExceptionCatch.class);
         }
 
         try {

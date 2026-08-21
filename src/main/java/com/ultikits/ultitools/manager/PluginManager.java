@@ -615,30 +615,36 @@ public class PluginManager {
      * independent second reason they can never be proxied. The "beans using it are rejected"
      * promise above only reaches beans built through a bean definition. Tracked in issue #308.
      * <p>
-     * <b>Scope limit 2 — class-level coverage skips some methods silently.</b> A class-level
-     * annotation covers the whole superclass chain, minus two sets. First, methods this proxy
-     * cannot both override and reach through {@code super}: {@code private}, {@code static},
-     * {@code final}, package-private ones declared in another package, and the erased half of
-     * a generic override that a bridge method shadows. Second,
-     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where swallowing
-     * an exception would replace it with a silent wrong answer. Both skips are silent by
-     * deliberate choice, so a class-level annotation that appears not to apply to one inherited
-     * method leaves no diagnostic. A method-level annotation is never skipped: an unproxyable
-     * one fails the module load by name instead. See issue #309.
+     * <b>Class-level scope.</b> A class-level annotation is a default for the methods the
+     * annotated class declares, and for its subclasses. It does not apply to ancestors, so a bean
+     * does not extend its own annotation over everything it inherits - in particular not over the
+     * framework base classes it extends, where a swallowed exception would become a null that
+     * resurfaces as an unrelated failure far from its cause. Inherited methods must be locally
+     * redeclared to pick up a subclass's annotation. This is the rule Spring documents for a
+     * class-level {@code @Transactional}. A method-level annotation is unaffected: it applies
+     * wherever the method is declared.
      * <p>
-     * <b>Scope limit 3 — three kinds of annotation are still never seen.</b> None is fixed
-     * here, and all three behave the same way on 6.2.x.
+     * <b>Scope limit 2 - inside that scope, some methods are skipped silently.</b> Two sets.
+     * First, methods this proxy cannot both override and reach through {@code super}:
+     * {@code private}, {@code static}, {@code final}, package-private ones declared in another
+     * package, and the erased half of a generic override that a bridge method shadows. Second,
+     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where swallowing an
+     * exception would replace it with a silent wrong answer - Lombok emits all three onto the
+     * annotated class itself, so class-level scope does not keep them out. Both skips are silent
+     * by deliberate choice and leave no diagnostic. A method-level annotation is never skipped:
+     * an unproxyable one fails the module load by name instead. See issue #309.
+     * <p>
+     * <b>Scope limit 3 - two kinds of annotation are never seen.</b> Neither is fixed here, and
+     * both behave the same way on 6.2.x.
      * <ul>
      * <li>An annotation on an <b>interface default method</b>. The scan walks
      * {@code getSuperclass()} only, so {@code @ExceptionCatch} silently does nothing there and
      * {@code @Transactional} is not even refused.</li>
-     * <li>A <b>class-level annotation declared on a superclass</b>. Neither annotation carries
-     * {@code @Inherited} and the advisor tests the bean's own type.</li>
      * <li>A <b>method-level annotation on a superclass method the bean overrides</b>. Java does
      * not inherit method annotations, and the scan keeps only the most derived declaration of
      * each overridable method - which is the override, and it carries nothing. Annotate the
-     * override too. The erased half of a generic override behaves the same way, for the
-     * related reason that the compiler's bridge shadows the annotated declaration.</li>
+     * override too. The erased half of a generic override behaves the same way, for the related
+     * reason that the compiler's bridge shadows the annotated declaration.</li>
      * </ul>
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
@@ -651,19 +657,22 @@ public class PluginManager {
      * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
      * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
      * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。见 issue #308。
-     * 范围限制二：类级注解覆盖整条父类链，但减去两类。其一是代理既覆写不了、也 super
-     * 不到的方法：{@code private}、{@code static}、{@code final}、声明在别的包里的
-     * package-private 方法，以及被桥接方法遮蔽的泛型覆写擦除另一半。其二是
-     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的
-     * 异常会把一个可见的异常换成一个静默的错误结果。两类跳过均为有意静默，因此类级注解
-     * 对某个继承方法看似未生效时不会留下任何排查线索。方法级注解从不被跳过：不可代理时
-     * 直接点名该方法并让模块加载失败。见 issue #309。
-     * 范围限制三：仍有三类注解完全看不见，本批均未修复，在 6.2.x 上行为相同。
+     * 类级作用域：类级注解是「被注解类自己声明的方法」及其子类的默认值，不作用于祖先类。
+     * 因此 bean 不会把自己的注解扩张到它继承来的一切——尤其不会扩张到它继承的框架基类上，
+     * 在那里吞掉异常会变成一个 null，并在远离原因的地方以不相干的故障重新浮现。
+     * 继承来的方法需在子类中重新声明才会被子类的注解覆盖。这与 Spring 对类级
+     * {@code @Transactional} 的既定规则一致。方法级注解不受此限：方法声明在哪里就在哪里生效。
+     * 范围限制二：在该作用域内仍有两类被跳过。其一是代理既覆写不了、也 super 不到的方法：
+     * {@code private}、{@code static}、{@code final}、声明在别的包里的 package-private 方法，
+     * 以及被桥接方法遮蔽的泛型覆写擦除另一半。其二是 {@code equals(Object)} /
+     * {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的异常会把一个可见的异常换成
+     * 一个静默的错误结果；Lombok 把这三个生成在被注解类自己身上，类级作用域挡不住它们。
+     * 两类跳过均为有意静默，不留任何排查线索。方法级注解从不被跳过：不可代理时直接点名
+     * 该方法并让模块加载失败。见 issue #309。
+     * 范围限制三：仍有两类注解完全看不见，本批均未修复，在 6.2.x 上行为相同。
      * 一是<b>接口 default 方法</b>上的注解——扫描只走 {@code getSuperclass()}，
      * {@code @ExceptionCatch} 在那里静默失效，{@code @Transactional} 连拒绝都不会触发。
-     * 二是<b>声明在父类上的类级注解</b>——两个注解都没有 {@code @Inherited}，
-     * 而 advisor 判定的是 bean 自身的类型。
-     * 三是<b>父类方法上的方法级注解、而子类覆写了该方法</b>——Java 不继承方法注解，
+     * 二是<b>父类方法上的方法级注解、而子类覆写了该方法</b>——Java 不继承方法注解，
      * 且扫描对每个可覆写方法只保留最派生的那条声明，也就是不带注解的那个覆写。
      * 请在覆写方法上一并标注。泛型覆写的擦除另一半同理，原因相近：编译器生成的桥接
      * 遮蔽了带注解的那条声明。

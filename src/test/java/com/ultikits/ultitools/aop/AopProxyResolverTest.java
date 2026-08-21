@@ -80,23 +80,27 @@ class AopProxyResolverTest {
         return resolver;
     }
 
-    public static class UnproxyableBase {
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelWithUnproxyable {
         private String privateHelper() { return "private"; }
         public static String staticHelper() { return "static"; }
         public final String finalHelper() { return "final"; }
         public String ordinary() { throw new IllegalStateException("ordinary-boom"); }
     }
 
-    @ExceptionCatch(silent = true, defaultValue = "class-level")
-    public static class ClassLevelOverUnproxyable extends UnproxyableBase { }
-
     @Data
-    public static class LombokBase {
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelWithLombok {
         private String name;
+        public String own() { throw new IllegalStateException("own-boom"); }
+    }
+
+    public static class PlainAncestor {
+        public String ancestorOnly() { return "ancestor"; }
     }
 
     @ExceptionCatch(silent = true, defaultValue = "class-level")
-    public static class ClassLevelOverLombok extends LombokBase {
+    public static class AnnotatedSubclass extends PlainAncestor {
         public String own() { throw new IllegalStateException("own-boom"); }
     }
 
@@ -120,12 +124,12 @@ class AopProxyResolverTest {
         }
     }
 
-    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    /** The class-level annotation lives on GenericBase, so its own declarations are in scope. */
     public static class OverGeneric extends GenericBase<String> {
         @Override public void take(String value) { }
     }
 
-    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    /** The class-level annotation lives on PackagePrivateBase, in another package. */
     public static class OverPackagePrivate extends PackagePrivateBase { }
 
     /** The annotation is on the inaccessible method itself, so the load must fail. */
@@ -356,7 +360,7 @@ class AopProxyResolverTest {
     @DisplayName("Should skip unproxyable methods a class-level annotation covers, not fail")
     void shouldSkipUnproxyableUnderClassLevel() {
         Class<?> resolved = assertDoesNotThrow(
-                () -> exceptionCatchResolver().resolve(ClassLevelOverUnproxyable.class));
+                () -> exceptionCatchResolver().resolve(ClassLevelWithUnproxyable.class));
         assertTrue(ProxyFactory.isProxyClass(resolved));
 
         assertTrue(declares(resolved, "ordinary"),
@@ -366,6 +370,18 @@ class AopProxyResolverTest {
         assertFalse(declares(resolved, "finalHelper"));
     }
 
+    // The scope rule: a class-level annotation is a default for the class that declares it and
+    // for its subclasses, never for its ancestors. Matches Spring's documented behaviour and is
+    // what keeps coverage off every framework base class a module bean happens to extend.
+    @Test
+    @DisplayName("Should not let a class-level annotation reach up into an ancestor")
+    void shouldNotCoverAncestorDeclarations() {
+        Class<?> resolved = exceptionCatchResolver().resolve(AnnotatedSubclass.class);
+        assertTrue(declares(resolved, "own"), "the class's own method is covered");
+        assertFalse(declares(resolved, "ancestorOnly"),
+                "the ancestor declared it, so the subclass's annotation must not reach it");
+    }
+
     // Swallowing equals returns false and the caller's HashMap then misses a key it holds. A
     // propagating exception at least reaches someone. canEqual is in the list because the proxy
     // overrides it and the superclass equals reaches it by virtual dispatch, so excluding equals
@@ -373,7 +389,7 @@ class AopProxyResolverTest {
     @Test
     @DisplayName("Should never let a class-level annotation cover equals, hashCode or canEqual")
     void shouldExcludeSilentWrongAnswerSignatures() {
-        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelOverLombok.class);
+        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelWithLombok.class);
         assertFalse(declares(resolved, "equals", Object.class));
         assertFalse(declares(resolved, "hashCode"));
         assertFalse(declares(resolved, "canEqual", Object.class));
@@ -386,7 +402,7 @@ class AopProxyResolverTest {
     @Test
     @DisplayName("Should still cover toString and the class's own methods")
     void shouldStillCoverToStringAndOwnMethods() {
-        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelOverLombok.class);
+        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelWithLombok.class);
         assertTrue(declares(resolved, "toString"),
                 "toString is deliberately NOT excluded");
         assertTrue(declares(resolved, "own"));

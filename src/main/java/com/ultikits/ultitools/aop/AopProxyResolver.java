@@ -316,13 +316,11 @@ public class AopProxyResolver {
         @Override
         public Object invoke(MethodInvocation invocation) throws Throwable {
             Method method = invocation.getMethod();
-            // The bean class the proxy was built for, captured at resolve time. It used to be
-            // method.getDeclaringClass(), which was equivalent only while the scan was limited
-            // to getDeclaredMethods(). Once the scan started walking the hierarchy the two
-            // diverged: an inherited method is declared on a superclass that does not carry the
-            // bean's class-level annotation, so this re-check disagreed with the collection-time
-            // check and the advisor silently stepped aside. Passing the same class both times is
-            // what keeps them from disagreeing again. See issue #309.
+            // The bean class the proxy was built for, captured at resolve time, so that this
+            // per-invocation re-check is given exactly what the collection-time check was given.
+            // Annotation advisors no longer read it - they anchor on the declaring class - but a
+            // pointcut advisor's matches() may, and an advisor that saw one class at collection
+            // time and a different one here would silently step aside. See issue #309.
             if (advisor.matches(method, beanClass)) {
                 return advisor.getInterceptor().invoke(invocation);
             }
