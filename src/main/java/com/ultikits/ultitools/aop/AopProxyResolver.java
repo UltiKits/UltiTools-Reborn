@@ -221,7 +221,7 @@ public class AopProxyResolver {
                     // unproxyable one still reaches AopEligibility.check and fails the load.
                     result.add(method);
                 } else if (!isExcludedFromClassLevel(method)
-                        && AopEligibility.isProxyable(method)) {
+                        && AopEligibility.isProxyable(method, beanClass)) {
                     // Class-level: a bulk request the author never vetted method by method, so
                     // anything unproxyable is skipped rather than failing the module load. The
                     // skip is silent by design - see the design note's known-limitations section.

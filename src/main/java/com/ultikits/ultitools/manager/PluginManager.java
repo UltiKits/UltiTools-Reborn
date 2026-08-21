@@ -615,15 +615,24 @@ public class PluginManager {
      * independent second reason they can never be proxied. The "beans using it are rejected"
      * promise above only reaches beans built through a bean definition. Tracked in issue #308.
      * <p>
-     * <b>Scope limit 2 — class-level coverage skips some methods silently.</b> Annotation
-     * lookup walks the whole inheritance hierarchy, so an annotation on a superclass method is
-     * found. A class-level annotation covers that hierarchy too, minus two sets: methods no
-     * inheritance-based proxy can intercept ({@code private}, {@code static}, {@code final}),
-     * and {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where
-     * swallowing an exception would replace it with a silent wrong answer. Both skips are
-     * silent by deliberate choice, so a class-level annotation that appears not to apply to one
-     * inherited method leaves no diagnostic. A method-level annotation is never skipped: an
-     * unproxyable one fails the module load instead. See issue #309.
+     * <b>Scope limit 2 — class-level coverage skips some methods silently.</b> A class-level
+     * annotation covers the whole superclass chain, minus two sets. First, methods this proxy
+     * cannot both override and reach through {@code super}: {@code private}, {@code static},
+     * {@code final}, package-private ones declared in another package, and the erased half of
+     * a generic override that a bridge method shadows. Second,
+     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where swallowing
+     * an exception would replace it with a silent wrong answer. Both skips are silent by
+     * deliberate choice, so a class-level annotation that appears not to apply to one inherited
+     * method leaves no diagnostic. A method-level annotation is never skipped: an unproxyable
+     * one fails the module load by name instead. See issue #309.
+     * <p>
+     * <b>Scope limit 3 — two kinds of annotation are still never seen.</b> The scan walks
+     * {@code getSuperclass()} only, so an annotation on an <b>interface default method</b> is
+     * invisible: {@code @ExceptionCatch} silently does nothing there and {@code @Transactional}
+     * is not even refused. Separately, a <b>class-level annotation declared on a superclass</b>
+     * is invisible to a subclass bean, because neither annotation carries {@code @Inherited}
+     * and the advisor tests the bean's own type. Both predate this wiring and neither is fixed
+     * here.
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
@@ -635,13 +644,18 @@ public class PluginManager {
      * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
      * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
      * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。见 issue #308。
-     * 范围限制二：注解识别现在走整个继承层级，父类方法上的注解能被找到。
-     * 类级注解同样覆盖整个层级，但减去两类：继承式代理无法拦截的方法
-     * （{@code private}、{@code static}、{@code final}），以及 {@code equals(Object)} /
-     * {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的异常会把一个可见的异常
-     * 换成一个静默的错误结果。两类跳过均为有意静默，因此类级注解对某个继承方法
-     * 看似未生效时不会留下任何排查线索。方法级注解从不被跳过：不可代理时直接让模块
-     * 加载失败。见 issue #309。
+     * 范围限制二：类级注解覆盖整条父类链，但减去两类。其一是代理既覆写不了、也 super
+     * 不到的方法：{@code private}、{@code static}、{@code final}、声明在别的包里的
+     * package-private 方法，以及被桥接方法遮蔽的泛型覆写擦除另一半。其二是
+     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的
+     * 异常会把一个可见的异常换成一个静默的错误结果。两类跳过均为有意静默，因此类级注解
+     * 对某个继承方法看似未生效时不会留下任何排查线索。方法级注解从不被跳过：不可代理时
+     * 直接点名该方法并让模块加载失败。见 issue #309。
+     * 范围限制三：仍有两类注解完全看不见。扫描只走 {@code getSuperclass()}，因此
+     * <b>接口 default 方法</b>上的注解不可见——{@code @ExceptionCatch} 在那里静默失效，
+     * {@code @Transactional} 连拒绝都不会触发。另外，<b>声明在父类上的类级注解</b>对子类
+     * bean 不可见，因为两个注解都没有 {@code @Inherited}，而 advisor 判定的是 bean 自身的
+     * 类型。两者都早于本次接线存在，本批均未修复。
      *
      * @param context the plugin container, before refresh
      */

@@ -24,6 +24,10 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Final;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.crosspackage.AnnotatedPackagePrivateBase;
+import com.ultikits.ultitools.aop.crosspackage.GenericBase;
+import com.ultikits.ultitools.aop.crosspackage.PackagePrivateBase;
+import com.ultikits.ultitools.aop.crosspackage.SameNameBase;
 import com.ultikits.ultitools.exceptions.ContainerException;
 
 @DisplayName("AopProxyResolver Tests")
@@ -114,6 +118,22 @@ class AopProxyResolverTest {
         } catch (NoSuchMethodException e) {
             return false;
         }
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class OverGeneric extends GenericBase<String> {
+        @Override public void take(String value) { }
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class OverPackagePrivate extends PackagePrivateBase { }
+
+    /** The annotation is on the inaccessible method itself, so the load must fail. */
+    public static class OverAnnotatedPackagePrivate extends AnnotatedPackagePrivateBase { }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class OverSameName extends SameNameBase {
+        public void shared() { }
     }
 
     @BeforeEach
@@ -370,5 +390,63 @@ class AopProxyResolverTest {
         Class<?> resolved = exceptionCatchResolver().resolve(MethodLevelOnHashCode.class);
         assertTrue(declares(resolved, "hashCode"),
                 "the exclusion list governs class-level coverage only");
+    }
+    // getAllMethods returns both GenericBase.take(Object) and OverGeneric.take(String): overrides()
+    // compares erased parameter types, and those differ. The erased declaration is not
+    // super-invokable - the compiler put a bridge over it - so handing it to ProxyFactory throws
+    // "Cannot invoke ... as a super method" and the whole module fails to load. Reproduced against
+    // alpha, where the narrower getDeclaredMethods() scan never surfaced the twin.
+    @Test
+    @DisplayName("Should skip an erased superclass declaration a subclass bridges over")
+    void shouldSkipBridgedErasedDeclaration() {
+        Class<?> resolved = assertDoesNotThrow(
+                () -> exceptionCatchResolver().resolve(OverGeneric.class));
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+        assertTrue(declares(resolved, "take", String.class),
+                "the concrete override is proxyable and must still be intercepted");
+
+        // take(Object) does appear on the proxy, but as ByteBuddy's own bridge preserving the
+        // generic contract - not as an interception override. Asserting it is absent would fail
+        // for the wrong reason; asserting it is a bridge is what distinguishes the two.
+        Method erasedTwin = assertDoesNotThrow(
+                () -> resolved.getDeclaredMethod("take", Object.class));
+        assertTrue(erasedTwin.isBridge(),
+                "the erased twin must be a bridge, not an intercepted override");
+    }
+
+    // An inheritance proxy is generated in the bean's package, so a package-private method
+    // declared in another package can be neither overridden nor super-invoked. Nothing in the
+    // static/private/final rules catches it.
+    @Test
+    @DisplayName("Should skip a package-private superclass method from another package")
+    void shouldSkipCrossPackagePackagePrivate() {
+        Class<?> resolved = assertDoesNotThrow(
+                () -> exceptionCatchResolver().resolve(OverPackagePrivate.class));
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+        assertTrue(declares(resolved, "ordinary"),
+                "the public inherited method must still be intercepted");
+        assertFalse(declares(resolved, "packagePrivateHelper"));
+    }
+
+    // The class-level path skips silently; the method-level path must fail the load instead, and
+    // must name the method rather than letting ByteBuddy throw a message that names none.
+    @Test
+    @DisplayName("Should refuse a method-level annotation on an inaccessible inherited method")
+    void shouldRefuseAnnotatedCrossPackagePackagePrivate() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> exceptionCatchResolver().resolve(OverAnnotatedPackagePrivate.class));
+        assertTrue(thrown.getMessage().contains("annotatedPackagePrivate"),
+                "the refusal must name the method: " + thrown.getMessage());
+    }
+
+    // Cross-package plus package-private means the two declarations do not override one another,
+    // so both survive the scan and both map to trampoline ultitools$super$shared.
+    @Test
+    @DisplayName("Should not collide trampolines when two declarations share a signature")
+    void shouldNotCollideTrampolines() {
+        Class<?> resolved = assertDoesNotThrow(
+                () -> exceptionCatchResolver().resolve(OverSameName.class));
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+        assertTrue(declares(resolved, "shared"));
     }
 }

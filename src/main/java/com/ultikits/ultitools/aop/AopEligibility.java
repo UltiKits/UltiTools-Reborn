@@ -142,35 +142,118 @@ public final class AopEligibility {
                 problems.add(new Problem(Problem.Kind.FINAL_METHOD, location,
                         "Remove the 'final' keyword from the method and mark it @Final instead, "
                                 + "which keeps the non-overridable contract while allowing AOP."));
+            } else if (isInaccessible(method, beanClass)) {
+                problems.add(new Problem(Problem.Kind.INACCESSIBLE_METHOD, location,
+                        "The generated proxy lives in " + packageOf(beanClass) + ", so it cannot "
+                                + "override a package-private method declared in "
+                                + packageOf(method.getDeclaringClass()) + ". Widen the method to "
+                                + "protected or public, move the two classes into one package, or "
+                                + "remove the AOP annotation."));
+            } else if (isShadowed(method, beanClass)) {
+                problems.add(new Problem(Problem.Kind.SHADOWED_METHOD, location,
+                        "A class between " + beanClass.getName() + " and the declaring class "
+                                + "already declares this signature - usually the bridge method a "
+                                + "generic override generates - so the original cannot be reached "
+                                + "through super. Move the AOP annotation onto the overriding "
+                                + "method instead."));
             }
         }
         return problems;
     }
 
     /**
-     * Whether an inheritance-based proxy can intercept a single method.
+     * Whether an inheritance-based proxy generated for {@code beanClass} can intercept the given
+     * method - meaning it can both override it and reach the original through {@code super}.
      * <p>
      * Shares its rules with {@link #check(Class, Set)}, which is why the two must be changed
      * together. They exist separately because they serve opposite audiences. A method-level
      * annotation is an explicit request, so an unproxyable one becomes a startup failure. A
      * class-level annotation is a bulk request the author never vetted method by method, so the
-     * class-level path filters with this predicate instead of failing the whole module. See
-     * issue #309.
+     * class-level path filters with this predicate instead of failing the whole module.
      * <p>
-     * 与 check 共用同一组规则，两者必须同步修改。分开存在是因为受众相反：方法级注解是显式点名，
-     * 不可代理即启动失败；类级注解是批量覆盖，作者从未逐个过目，因此改为过滤而不是让模块加载失败。
+     * The bean class is a parameter rather than being derived from the method because two of the
+     * five rules are relative to it. A method is not intrinsically unproxyable; it is unproxyable
+     * <em>from a particular subclass</em>. See issue #309.
+     * <p>
+     * 判断为 beanClass 生成的继承式代理能否拦截该方法——既能覆写，也能经 super 调到原实现。
+     * 与 check 共用同一组规则，两者必须同步修改。bean 类是参数而非从方法推导，因为五条规则里
+     * 有两条是相对于它的：一个方法不是天然不可代理，而是<em>相对某个子类</em>不可代理。
      *
-     * @param method the method to test, may be null
+     * @param method    the method to test, may be null
+     * @param beanClass the class the proxy will extend, may be null
      * @return true if an inheritance-based proxy can intercept it
      */
-    public static boolean isProxyable(Method method) {
-        if (method == null) {
+    public static boolean isProxyable(Method method, Class<?> beanClass) {
+        if (method == null || beanClass == null) {
             return false;
         }
         int modifiers = method.getModifiers();
-        return !Modifier.isStatic(modifiers)
-                && !Modifier.isPrivate(modifiers)
-                && !Modifier.isFinal(modifiers);
+        if (Modifier.isStatic(modifiers) || Modifier.isPrivate(modifiers)
+                || Modifier.isFinal(modifiers)) {
+            return false;
+        }
+        return !isInaccessible(method, beanClass) && !isShadowed(method, beanClass);
+    }
+
+    /**
+     * Whether the proxy could not even see the method: it is package-private and declared in a
+     * different package than the class the proxy extends.
+     * <p>
+     * The generated proxy lives in the bean's package, so a package-private declaration from
+     * elsewhere is neither overridable nor reachable through {@code super}. Package names are
+     * compared as strings rather than through {@link Package} so the answer does not depend on
+     * how the two classes were loaded.
+     * <p>
+     * 代理生成在 bean 所在的包里，别的包中的 package-private 声明既覆写不了也 super 不到。
+     */
+    private static boolean isInaccessible(Method method, Class<?> beanClass) {
+        int modifiers = method.getModifiers();
+        boolean packagePrivate = !Modifier.isPublic(modifiers)
+                && !Modifier.isProtected(modifiers)
+                && !Modifier.isPrivate(modifiers);
+        return packagePrivate && !packageOf(method.getDeclaringClass()).equals(packageOf(beanClass));
+    }
+
+    /**
+     * Whether a class between the bean and the method's declaring class already declares that
+     * exact name and parameter list, which makes the candidate unreachable through {@code super}.
+     * <p>
+     * This is the erased half of a generic override. Given {@code Base<T>.take(T)} and
+     * {@code Child extends Base<String>} overriding {@code take(String)}, the compiler emits a
+     * bridge {@code Child.take(Object)}. {@code ReflectionUtil.getAllMethods} skips bridges and
+     * compares erased parameter types, so {@code take(String)} does not collapse
+     * {@code take(Object)} and both come back as separate methods - but only the first is
+     * {@code super}-invokable. Bridge and synthetic declarations are deliberately included in the
+     * scan here, because they are exactly what does the shadowing.
+     * <p>
+     * 泛型覆写的擦除另一半：编译器为 Child 生成桥接方法 take(Object)，getAllMethods 会跳过桥接
+     * 且按擦除参数比较，于是父类的 take(Object) 作为独立方法返回，但它已不可 super 调用。
+     * 此处有意连桥接与合成方法一起扫描，因为遮蔽正是它们造成的。
+     */
+    private static boolean isShadowed(Method method, Class<?> beanClass) {
+        Class<?> declaring = method.getDeclaringClass();
+        for (Class<?> current = beanClass;
+             current != null && current != declaring && current != Object.class;
+             current = current.getSuperclass()) {
+            for (Method candidate : current.getDeclaredMethods()) {
+                if (candidate.getName().equals(method.getName())
+                        && Arrays.equals(candidate.getParameterTypes(),
+                                         method.getParameterTypes())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The package name of a class, derived from its binary name so the result does not depend on
+     * the defining class loader. Returns an empty string for the default package.
+     */
+    private static String packageOf(Class<?> clazz) {
+        String name = clazz.getName();
+        int lastDot = name.lastIndexOf('.');
+        return lastDot < 0 ? "" : name.substring(0, lastDot);
     }
 
     /**
@@ -187,7 +270,11 @@ public final class AopEligibility {
             /** An annotated method is private and cannot be intercepted. */
             PRIVATE_METHOD,
             /** An annotated method is static and has no bean instance. */
-            STATIC_METHOD
+            STATIC_METHOD,
+            /** An annotated method is package-private and declared in another package. */
+            INACCESSIBLE_METHOD,
+            /** An annotated method is shadowed by a nearer declaration, usually a bridge. */
+            SHADOWED_METHOD
         }
 
         private final Kind kind;

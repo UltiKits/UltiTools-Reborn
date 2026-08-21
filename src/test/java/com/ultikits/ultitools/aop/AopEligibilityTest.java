@@ -242,23 +242,27 @@ class AopEligibilityTest {
         @DisplayName("Should agree with check on every rejection kind")
         void shouldAgreeWithCheck() throws Exception {
             assertFalse(AopEligibility.isProxyable(
-                    HasStaticMethod.class.getDeclaredMethod("staticMethod")));
+                    HasStaticMethod.class.getDeclaredMethod("staticMethod"),
+                    HasStaticMethod.class));
             assertFalse(AopEligibility.isProxyable(
-                    HasPrivateMethod.class.getDeclaredMethod("privateMethod")));
+                    HasPrivateMethod.class.getDeclaredMethod("privateMethod"),
+                    HasPrivateMethod.class));
             assertFalse(AopEligibility.isProxyable(
-                    HasFinalMethod.class.getDeclaredMethod("finalMethod")));
+                    HasFinalMethod.class.getDeclaredMethod("finalMethod"),
+                    HasFinalMethod.class));
         }
 
         @Test
         @DisplayName("Should accept an ordinary overridable method")
         void shouldAcceptOrdinaryMethod() throws Exception {
-            assertTrue(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok")));
+            assertTrue(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok"), Clean.class));
         }
 
         @Test
         @DisplayName("Should reject null rather than throw")
-        void shouldRejectNull() {
-            assertFalse(AopEligibility.isProxyable(null));
+        void shouldRejectNull() throws Exception {
+            assertFalse(AopEligibility.isProxyable(null, Clean.class));
+            assertFalse(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok"), null));
         }
     }
 }
