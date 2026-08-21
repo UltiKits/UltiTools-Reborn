@@ -75,8 +75,21 @@ public class ExceptionInterceptor implements MethodInterceptor {
     public Object invoke(MethodInvocation invocation) throws Throwable {
         Method method = invocation.getMethod();
 
-        // Get annotation from method or class
+        // Method level first, then the class the bean actually is. The class-level lookup used
+        // to read method.getDeclaringClass() alone, which is the bean itself only while every
+        // intercepted method is one the bean declares. For a method inherited from a superclass
+        // the declaring class is that superclass, which does not carry the bean's class-level
+        // annotation, so the lookup came up empty and the exception propagated. The target's
+        // runtime class is the generated proxy, onto which ProxyFactory copies the bean's type
+        // annotations. The declaring class is kept as a fallback for targets that are not
+        // proxies. See issue #309.
         ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
+        if (annotation == null) {
+            Object target = invocation.getTarget();
+            if (target != null) {
+                annotation = target.getClass().getAnnotation(ExceptionCatch.class);
+            }
+        }
         if (annotation == null) {
             annotation = method.getDeclaringClass().getAnnotation(ExceptionCatch.class);
         }

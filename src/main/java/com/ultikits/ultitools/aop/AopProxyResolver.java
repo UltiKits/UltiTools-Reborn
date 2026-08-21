@@ -157,7 +157,7 @@ public class AopProxyResolver {
 
         List<MethodInterceptor> interceptors = new ArrayList<>();
         for (AopAdvisor advisor : advisors) {
-            interceptors.add(new AdvisorScopedInterceptor(advisor));
+            interceptors.add(new AdvisorScopedInterceptor(advisor, beanClass));
         }
         return new ProxyFactory(interceptors).createProxyClass(beanClass, intercepted);
     }
@@ -289,18 +289,24 @@ public class AopProxyResolver {
     private static class AdvisorScopedInterceptor implements MethodInterceptor {
 
         private final AopAdvisor advisor;
+        private final Class<?> beanClass;
 
-        AdvisorScopedInterceptor(AopAdvisor advisor) {
+        AdvisorScopedInterceptor(AopAdvisor advisor, Class<?> beanClass) {
             this.advisor = advisor;
+            this.beanClass = beanClass;
         }
 
         @Override
         public Object invoke(MethodInvocation invocation) throws Throwable {
             Method method = invocation.getMethod();
-            // Use the declaring class rather than the target's runtime class: under an
-            // inheritance-based proxy the latter is the generated subclass. Annotations are
-            // copied onto it, so both work, but the declaring class does not depend on that.
-            if (advisor.matches(method, method.getDeclaringClass())) {
+            // The bean class the proxy was built for, captured at resolve time. It used to be
+            // method.getDeclaringClass(), which was equivalent only while the scan was limited
+            // to getDeclaredMethods(). Once the scan started walking the hierarchy the two
+            // diverged: an inherited method is declared on a superclass that does not carry the
+            // bean's class-level annotation, so this re-check disagreed with the collection-time
+            // check and the advisor silently stepped aside. Passing the same class both times is
+            // what keeps them from disagreeing again. See issue #309.
+            if (advisor.matches(method, beanClass)) {
                 return advisor.getInterceptor().invoke(invocation);
             }
             return invocation.proceed();

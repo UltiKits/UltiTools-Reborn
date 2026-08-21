@@ -1,14 +1,18 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+
+import lombok.Data;
 
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -23,8 +27,10 @@ import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.ModuleEvent;
+import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
 
@@ -101,6 +107,52 @@ class AopActivationTest {
         public String name() { return "collaborator"; }
     }
 
+    /** Everything ClassLevelInherited exposes is declared here, not on the subclass. */
+    public static class ClassLevelBase {
+        public String first() { throw new IllegalStateException("first-boom"); }
+        public String second() { throw new IllegalStateException("second-boom"); }
+        private String privateHelper() { return "private"; }
+        public static String staticHelper() { return "static"; }
+        public final String finalHelper() { return "final"; }
+    }
+
+    /**
+     * Carries the annotation on the type, with no method-level annotation anywhere, and declares
+     * no methods of its own. Under getDeclaredMethods() this produced an empty intercepted set
+     * and the bean came back unproxied with no error at all - the second shape of the gap named
+     * in PluginManager.wireAop's javadoc. The default differs from every other fixture in this
+     * file (null and "intercepted") so the assertions below can tell which annotation fired.
+     */
+    @Service
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelInherited extends ClassLevelBase { }
+
+    @Data
+    public static class LombokBase {
+        private String label;
+        public String risky() { throw new IllegalStateException("risky-boom"); }
+    }
+
+    @Service
+    @ExceptionCatch(silent = true, defaultValue = "over-lombok")
+    public static class ClassLevelOverLombok extends LombokBase { }
+
+    public static class InheritedMethodLevelBase {
+        @ExceptionCatch(silent = true, defaultValue = "from-base")
+        public String guardedOnBase() { throw new IllegalStateException("base-boom"); }
+    }
+
+    @Service
+    public static class InheritsMethodLevel extends InheritedMethodLevelBase { }
+
+    public static class TransactionalBase {
+        @Transactional
+        public void transactionalOnBase() { }
+    }
+
+    @Service
+    public static class InheritsTransactionalBean extends TransactionalBase { }
+
     private static SimpleContainer wiredContainer() {
         SimpleContainer context = new SimpleContainer();
         invokeWireAop(context);
@@ -108,6 +160,25 @@ class AopActivationTest {
         context.registerBean(KitchenSink.class);
         context.refresh();
         return context;
+    }
+
+    private static SimpleContainer wiredContainer(Class<?>... beans) {
+        SimpleContainer context = new SimpleContainer();
+        invokeWireAop(context);
+        for (Class<?> bean : beans) {
+            context.registerBean(bean);
+        }
+        context.refresh();
+        return context;
+    }
+
+    private static boolean declares(Class<?> clazz, String name, Class<?>... params) {
+        try {
+            clazz.getDeclaredMethod(name, params);
+            return true;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
     }
 
     /**
@@ -231,5 +302,113 @@ class AopActivationTest {
     void shouldReturnSameInstanceOnEveryLookup() {
         SimpleContainer context = wiredContainer();
         assertSame(context.getBean(KitchenSink.class), context.getBean(KitchenSink.class));
+    }
+    @Test
+    @DisplayName("A class-level @ExceptionCatch must actually intercept, returning its own default")
+    void shouldInterceptClassLevel() {
+        assertEquals("class-level",
+                wiredContainer(ClassLevelInherited.class)
+                        .getBean(ClassLevelInherited.class).first(),
+                "assert the returned value, not merely that nothing escaped: 'class-level' is "
+                        + "produced by no other path in this file");
+    }
+
+    @Test
+    @DisplayName("A class-level annotation must cover every method, not one by accident")
+    void shouldInterceptEveryMethodUnderClassLevel() {
+        assertEquals("class-level",
+                wiredContainer(ClassLevelInherited.class)
+                        .getBean(ClassLevelInherited.class).second());
+    }
+
+    @Test
+    @DisplayName("The class-level annotation must survive onto the generated proxy type")
+    void shouldKeepClassLevelAnnotationOnProxy() {
+        Class<?> proxyClass =
+                wiredContainer(ClassLevelInherited.class)
+                        .getBean(ClassLevelInherited.class).getClass();
+        assertTrue(proxyClass.isAnnotationPresent(ExceptionCatch.class),
+                "type annotations are not @Inherited, so this depends on ProxyFactory's "
+                        + "annotateType copy; a regression there breaks every class-level scan "
+                        + "silently");
+    }
+
+    @Test
+    @DisplayName("A class whose methods are all inherited must still be proxied")
+    void shouldProxyAClassThatDeclaresNoMethods() {
+        Object bean = wiredContainer(ClassLevelInherited.class).getBean(ClassLevelInherited.class);
+        assertTrue(ProxyFactory.isProxyClass(bean.getClass()),
+                "ClassLevelInherited declares no methods of its own; scanning only "
+                        + "getDeclaredMethods() yields an empty set and returns it unproxied");
+    }
+
+    @Test
+    @DisplayName("Unproxyable inherited methods must be skipped, not fail the container")
+    void shouldSkipUnproxyableWithoutFailing() {
+        Class<?> proxyClass =
+                wiredContainer(ClassLevelInherited.class)
+                        .getBean(ClassLevelInherited.class).getClass();
+        assertFalse(declares(proxyClass, "privateHelper"));
+        assertFalse(declares(proxyClass, "staticHelper"));
+        assertFalse(declares(proxyClass, "finalHelper"));
+    }
+
+    @Test
+    @DisplayName("A class-level annotation must not cover equals, hashCode or canEqual")
+    void shouldExcludeSilentWrongAnswerSignatures() {
+        Class<?> proxyClass =
+                wiredContainer(ClassLevelOverLombok.class)
+                        .getBean(ClassLevelOverLombok.class).getClass();
+        assertFalse(declares(proxyClass, "equals", Object.class));
+        assertFalse(declares(proxyClass, "hashCode"));
+        assertFalse(declares(proxyClass, "canEqual", Object.class));
+
+        // The other half: without it, an implementation that excluded every Lombok-generated
+        // method - or every method at all - would pass the three assertions above.
+        assertTrue(declares(proxyClass, "toString"),
+                "toString is deliberately not on the exclusion list");
+        assertEquals("over-lombok",
+                wiredContainer(ClassLevelOverLombok.class)
+                        .getBean(ClassLevelOverLombok.class).risky());
+    }
+
+    @Test
+    @DisplayName("A method-level annotation declared on a superclass must be intercepted")
+    void shouldInterceptInheritedMethodLevel() {
+        assertEquals("from-base",
+                wiredContainer(InheritsMethodLevel.class)
+                        .getBean(InheritsMethodLevel.class).guardedOnBase(),
+                "neither @ExceptionCatch nor @Transactional is @Inherited, so this only works "
+                        + "if the scan walks the hierarchy itself");
+    }
+
+    @Test
+    @DisplayName("@Transactional on a superclass method must trigger the load-time refusal")
+    void shouldRefuseInheritedTransactional() {
+        SimpleContainer context = new SimpleContainer();
+        invokeWireAop(context);
+        context.registerBean(InheritsTransactionalBean.class);
+
+        // SimpleContainer.createBean catches Exception and rewraps it, and ContainerException is
+        // itself a RuntimeException, so the refusal arrives wrapped and its text is no longer the
+        // top-level message. The chain is searched rather than the assertion being loosened to
+        // RuntimeException, which any unrelated container failure would also satisfy.
+        RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
+        ContainerException refusal = null;
+        Throwable cursor = thrown;
+        for (int depth = 0; cursor != null && depth < 16; depth++) {
+            if (cursor instanceof ContainerException) {
+                refusal = (ContainerException) cursor;
+                break;
+            }
+            cursor = cursor.getCause();
+        }
+
+        assertNotNull(refusal, "the cause chain must contain the refusal, but was: " + thrown);
+        assertTrue(refusal.getMessage().contains("Transactional"),
+                "the refusal must name the annotation: " + refusal.getMessage());
+        assertTrue(refusal.getMessage().contains("transactionalOnBase"),
+                "the refusal must name the inherited method, not just the bean: "
+                        + refusal.getMessage());
     }
 }
