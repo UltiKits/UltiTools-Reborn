@@ -3,12 +3,14 @@ package com.ultikits.ultitools.aop;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +58,20 @@ class AopProxyResolverTest {
 
     /** Inherits the annotated method without declaring anything of its own. */
     public static class InheritsTransactional extends TransactionalBase { }
+
+    public static class GuardedBase {
+        @ExceptionCatch(silent = true, defaultValue = "from-base")
+        public String guardedOnBase() { throw new IllegalStateException("base-boom"); }
+    }
+
+    public static class InheritsGuarded extends GuardedBase { }
+
+    private static AopProxyResolver exceptionCatchResolver() {
+        AopProxyResolver resolver = new AopProxyResolver();
+        resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class,
+                new ExceptionInterceptor(Collections.emptyList(), null), 200));
+        return resolver;
+    }
 
     @BeforeEach
     void setUp() {
@@ -248,5 +264,18 @@ class AopProxyResolverTest {
         assertTrue(thrown.getMessage().contains("transactionalOnBase"),
                 "the message must name the offending method, not just the bean: "
                         + thrown.getMessage());
+    }
+    @Test
+    @DisplayName("Should proxy a bean whose only annotated method is inherited")
+    void shouldProxyInheritedGuarded() throws Exception {
+        Class<?> resolved = exceptionCatchResolver().resolve(InheritsGuarded.class);
+        assertNotSame(InheritsGuarded.class, resolved,
+                "an inherited @ExceptionCatch must still produce a proxy");
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+
+        Object bean = resolved.getDeclaredConstructor().newInstance();
+        assertEquals("from-base",
+                resolved.getMethod("guardedOnBase").invoke(bean),
+                "assert the swallowed return value, not merely that a proxy was created");
     }
 }

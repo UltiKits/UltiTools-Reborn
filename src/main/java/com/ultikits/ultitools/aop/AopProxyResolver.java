@@ -201,11 +201,13 @@ public class AopProxyResolver {
     }
 
     /**
-     * Collects methods matched by at least one advisor.
+     * Collects methods matched by at least one advisor, across the whole inheritance hierarchy.
+     * <p>
+     * 收集被至少一个 advisor 匹配的方法，范围覆盖整个继承层级。
      */
     private Set<Method> collectInterceptedMethods(Class<?> beanClass) {
         Set<Method> result = new LinkedHashSet<>();
-        for (Method method : beanClass.getDeclaredMethods()) {
+        for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
             if (method.isSynthetic()) {
                 continue;
             }
