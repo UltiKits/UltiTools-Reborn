@@ -8,10 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+
+import lombok.Data;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -71,6 +74,46 @@ class AopProxyResolverTest {
         resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class,
                 new ExceptionInterceptor(Collections.emptyList(), null), 200));
         return resolver;
+    }
+
+    public static class UnproxyableBase {
+        private String privateHelper() { return "private"; }
+        public static String staticHelper() { return "static"; }
+        public final String finalHelper() { return "final"; }
+        public String ordinary() { throw new IllegalStateException("ordinary-boom"); }
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelOverUnproxyable extends UnproxyableBase { }
+
+    @Data
+    public static class LombokBase {
+        private String name;
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelOverLombok extends LombokBase {
+        public String own() { throw new IllegalStateException("own-boom"); }
+    }
+
+    public static class MethodLevelOnHashCode {
+        @Override
+        @ExceptionCatch(silent = true)
+        public int hashCode() { return 1; }
+    }
+
+    /**
+     * Whether the generated proxy declares an override for the given signature. Checking the
+     * generated type rather than merely calling the method is what distinguishes "excluded from
+     * interception" from "intercepted but happened not to throw".
+     */
+    private static boolean declares(Class<?> clazz, String name, Class<?>... params) {
+        try {
+            clazz.getDeclaredMethod(name, params);
+            return true;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
     }
 
     @BeforeEach
@@ -277,5 +320,55 @@ class AopProxyResolverTest {
         assertEquals("from-base",
                 resolved.getMethod("guardedOnBase").invoke(bean),
                 "assert the swallowed return value, not merely that a proxy was created");
+    }
+    // A class-level annotation is a bulk request. One private helper on a superclass must not
+    // stop the module from loading - the author never named that method. See issue #309.
+    @Test
+    @DisplayName("Should skip unproxyable methods a class-level annotation covers, not fail")
+    void shouldSkipUnproxyableUnderClassLevel() {
+        Class<?> resolved = assertDoesNotThrow(
+                () -> exceptionCatchResolver().resolve(ClassLevelOverUnproxyable.class));
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+
+        assertTrue(declares(resolved, "ordinary"),
+                "the one proxyable method must still be intercepted");
+        assertFalse(declares(resolved, "privateHelper"));
+        assertFalse(declares(resolved, "staticHelper"));
+        assertFalse(declares(resolved, "finalHelper"));
+    }
+
+    // Swallowing equals returns false and the caller's HashMap then misses a key it holds. A
+    // propagating exception at least reaches someone. canEqual is in the list because the proxy
+    // overrides it and the superclass equals reaches it by virtual dispatch, so excluding equals
+    // alone excludes nothing. See issue #309.
+    @Test
+    @DisplayName("Should never let a class-level annotation cover equals, hashCode or canEqual")
+    void shouldExcludeSilentWrongAnswerSignatures() {
+        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelOverLombok.class);
+        assertFalse(declares(resolved, "equals", Object.class));
+        assertFalse(declares(resolved, "hashCode"));
+        assertFalse(declares(resolved, "canEqual", Object.class));
+    }
+
+    // The other half of the assertion above. Without it, an implementation that excluded every
+    // superclass-generated method - or every method whatsoever - would pass just as well.
+    // toString is kept off the exclusion list on purpose: swallowing it costs a log line, and
+    // "the logging statement itself threw" is what @ExceptionCatch(silent = true) is for.
+    @Test
+    @DisplayName("Should still cover toString and the class's own methods")
+    void shouldStillCoverToStringAndOwnMethods() {
+        Class<?> resolved = exceptionCatchResolver().resolve(ClassLevelOverLombok.class);
+        assertTrue(declares(resolved, "toString"),
+                "toString is deliberately NOT excluded");
+        assertTrue(declares(resolved, "own"));
+    }
+
+    // Method-level beats the exclusion list: the author named the method explicitly.
+    @Test
+    @DisplayName("Should honour a method-level annotation on an otherwise excluded signature")
+    void shouldHonourMethodLevelOnExcludedSignature() {
+        Class<?> resolved = exceptionCatchResolver().resolve(MethodLevelOnHashCode.class);
+        assertTrue(declares(resolved, "hashCode"),
+                "the exclusion list governs class-level coverage only");
     }
 }

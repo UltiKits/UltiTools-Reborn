@@ -212,13 +212,58 @@ public class AopProxyResolver {
                 continue;
             }
             for (AopAdvisor advisor : advisors) {
-                if (advisor.matches(method, beanClass)) {
-                    result.add(method);
-                    break;
+                if (!advisor.matches(method, beanClass)) {
+                    continue;
                 }
+                Class<? extends Annotation> type = advisor.getAnnotationType();
+                if (type != null && method.isAnnotationPresent(type)) {
+                    // Method-level: an explicit request. Added unconditionally so that an
+                    // unproxyable one still reaches AopEligibility.check and fails the load.
+                    result.add(method);
+                } else if (!isExcludedFromClassLevel(method)
+                        && AopEligibility.isProxyable(method)) {
+                    // Class-level: a bulk request the author never vetted method by method, so
+                    // anything unproxyable is skipped rather than failing the module load. The
+                    // skip is silent by design - see the design note's known-limitations section.
+                    result.add(method);
+                }
+                break;
             }
         }
         return result;
+    }
+
+    /**
+     * Whether a class-level annotation must never cover this method.
+     * <p>
+     * Intercepting one of these swaps a visible exception for a silent wrong answer. An
+     * {@code @ExceptionCatch} that swallows {@code equals} returns {@code false}, and the caller's
+     * {@code HashMap} then fails to find a key it does hold; a propagating exception at least
+     * reaches someone. {@code canEqual} is Lombok's {@code equals} collaborator - the proxy
+     * overrides it and the superclass {@code equals} reaches it through virtual dispatch, so
+     * excluding {@code equals} without excluding {@code canEqual} excludes nothing.
+     * <p>
+     * {@code toString} is deliberately absent: swallowing it costs a log line rather than a wrong
+     * answer, and "the logging statement itself threw" is a case
+     * {@code @ExceptionCatch(silent = true)} exists for. A method-level annotation on any of these
+     * three is still honoured, because the author named it explicitly. See issue #309.
+     * <p>
+     * 类级注解绝不覆盖的三个签名：拦截它们会把一个可见的异常换成一个静默的错误结果。
+     * toString 有意不在其中——吞掉它只损失一行日志，而「日志语句自身抛异常」正是该注解的用例。
+     * 方法级标注在这三个签名上依然生效，因为那是作者显式点名的。
+     *
+     * @param method the candidate method
+     * @return true if class-level coverage must skip it
+     */
+    private static boolean isExcludedFromClassLevel(Method method) {
+        Class<?>[] params = method.getParameterTypes();
+        if (params.length == 0) {
+            return "hashCode".equals(method.getName());
+        }
+        if (params.length == 1 && params[0] == Object.class) {
+            return "equals".equals(method.getName()) || "canEqual".equals(method.getName());
+        }
+        return false;
     }
 
     /**
