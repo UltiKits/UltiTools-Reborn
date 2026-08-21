@@ -359,7 +359,21 @@ outright. Tracked in issues **#195** and **#196**; once the framework can supply
 `TransactionManager`, `@Transactional` will move from "unavailable" to "wired," which will be
 recorded here in its own right when it happens.
 
-If your module declares `@Transactional` anywhere, before upgrading to 6.3.0 you must either:
+**How far the refusal reaches.** "Carries it" is wider than the annotation appearing in the file
+you are looking at, and it got wider still while 6.3.0 was being built. The refusal fires when
+either of these is true anywhere in the bean's superclass chain:
+
+- a method carries `@Transactional`, including a method your class inherits and never mentions;
+- a class carries `@Transactional`, including a base class your bean merely extends.
+
+So a module that never types the word `Transactional` still fails to load if it extends a class
+that does — from a shared internal base class, or from a library you depend on. Check your base
+classes, not only your own files. This reach is the same one that makes `@ExceptionCatch` work on
+inherited methods; the two annotations are deliberately resolved by the same rule, so that
+identical code shapes cannot behave oppositely depending on which annotation is used.
+
+If your module declares `@Transactional` anywhere, or extends anything that does, before upgrading
+to 6.3.0 you must either:
 
 - remove the annotation, or
 - call `DataOperator.transaction(Callable)` explicitly instead.
@@ -968,7 +982,19 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 **#195** 与 **#196**；等框架能提供真正的 TransactionManager，`@Transactional` 会从「不可用」变为
 「已接线」，届时会作为它自己的一条记录写在这里。
 
-如果你的模块任何地方声明了 `@Transactional`，升级到 6.3.0 之前必须二选一：
+**这条拒绝的射程有多远。**「带有该注解」比「你正在看的这个文件里出现了这个注解」要宽，而且在
+6.3.0 的开发过程中又变得更宽了。只要 bean 的整条父类链上满足下面任意一条，拒绝就会触发：
+
+- 某个方法带 `@Transactional`，包括你的类继承下来、自己从未提及的方法；
+- 某个类带 `@Transactional`，包括你的 bean 只是继承了它的某个基类。
+
+也就是说，一个从头到尾没打过 `Transactional` 这个词的模块，只要它继承的类打了，就同样加载不了
+——可能来自你们内部共用的基类，也可能来自你依赖的某个库。请连基类一起检查，不要只看自己的文件。
+这个射程与让 `@ExceptionCatch` 在继承方法上生效的射程是同一个：两个注解有意用同一条规则解析，
+这样同样的代码形状不会因为用了哪个注解而表现相反。
+
+如果你的模块任何地方声明了 `@Transactional`，或者继承了任何声明了它的类，升级到 6.3.0 之前
+必须二选一：
 
 - 移除该注解；或
 - 改为显式调用 `DataOperator.transaction(Callable)`。
