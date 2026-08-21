@@ -73,6 +73,15 @@ class AopEligibilityTest {
 
     public static class InheritsFinalMethod extends FinalMethodBase { }
 
+    public abstract static class AnnotatedGenericBase<T> {
+        @ExceptionCatch
+        public abstract void handle(T value);
+    }
+
+    public static class ConcreteGeneric extends AnnotatedGenericBase<String> {
+        @Override public void handle(String value) { }
+    }
+
     @ExceptionCatch
     public static class ClassLevelOnly {
         public void plain() { }
@@ -215,6 +224,21 @@ class AopEligibilityTest {
                     ClassLevelOnFinalClass.class, Collections.<Method>emptySet());
             assertEquals(1, problems.size());
             assertEquals(AopEligibility.Problem.Kind.FINAL_CLASS, problems.get(0).getKind());
+        }
+
+        // wireAop's javadoc promises a method-level annotation is never skipped quietly. Shadowed
+        // methods are skipped, so check() has to name them - it did not, and the warning loop in
+        // AopProxyResolver had nothing to print for the one case it most needed to.
+        @Test
+        @DisplayName("Should report a shadowed method rather than let it be skipped in silence")
+        void shouldReportShadowedMethod() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    ConcreteGeneric.class,
+                    AopEligibility.findAopAnnotatedMethods(ConcreteGeneric.class));
+            assertEquals(1, problems.size(), String.valueOf(problems));
+            assertEquals(AopEligibility.Problem.Kind.SHADOWED_METHOD, problems.get(0).getKind());
+            assertTrue(problems.get(0).getLocation().contains("handle"),
+                    problems.get(0).getLocation());
         }
 
         // Now that the scan walks the hierarchy, an annotated method can be declared somewhere

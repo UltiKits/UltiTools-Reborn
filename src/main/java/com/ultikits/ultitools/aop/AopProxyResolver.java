@@ -154,7 +154,12 @@ public class AopProxyResolver {
         // named in a warning, since an annotation that quietly does nothing is exactly what left
         // @ExceptionCatch inert from 6.2.0 to 6.3.0. See issue #309.
         List<AopEligibility.Problem> blocking = new ArrayList<>();
-        for (AopEligibility.Problem problem : AopEligibility.check(beanClass, annotated)) {
+        // Skipped entirely when nothing asked for interception: check() would otherwise build a
+        // FINAL_CLASS problem and its remedy string for every plain final bean, only for the
+        // guard below to discard it.
+        for (AopEligibility.Problem problem : interceptionRequested
+                ? AopEligibility.check(beanClass, annotated)
+                : java.util.Collections.<AopEligibility.Problem>emptyList()) {
             if (problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS) {
                 blocking.add(problem);
             } else {
@@ -203,29 +208,23 @@ public class AopProxyResolver {
      *         one, or null
      */
     private String locateAnnotation(Class<?> beanClass, Class<? extends Annotation> type) {
-        if (beanClass.isAnnotationPresent(type)) {
-            return beanClass.getName();
-        }
         // Walks the hierarchy: neither @Transactional nor @ExceptionCatch is @Inherited, so an
         // annotation on a superclass method is invisible to getDeclaredMethods() and the refusal
         // below would never fire for it. See issue #309.
+        // Refuse exactly when the annotation governs at least one of the bean's methods, using
+        // the same governance rule interception uses. Testing beanClass.isAnnotationPresent
+        // instead made the two annotations disagree on identical shapes: an annotated class whose
+        // methods are all inherited governs nothing, yet @Transactional refused it while
+        // @ExceptionCatch quietly covered nothing. One rule, so one answer. See issue #309.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
             if (method.isAnnotationPresent(type)) {
                 // The declaring class, not the bean: the method may come from a superclass, and
                 // naming the bean would point the author at a file with no such annotation.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
             }
-        }
-        // A class-level annotation on an ancestor governs the methods that ancestor declares, and
-        // the bean inherits them, so it must be refused here too. Testing only beanClass left the
-        // two annotations disagreeing on identical shapes: for @ExceptionCatch on a superclass the
-        // methods are intercepted, while @Transactional on a superclass was neither intercepted
-        // nor refused - the silent-inert case this refusal exists to eliminate. See issue #309.
-        for (Class<?> current = beanClass;
-             current != null && current != Object.class;
-             current = current.getSuperclass()) {
-            if (current.isAnnotationPresent(type)) {
-                return current.getName();
+            Class<?> owner = AopAdvisor.findClassLevelAnnotationOwner(method, type);
+            if (owner != null) {
+                return owner.getName();
             }
         }
         return null;

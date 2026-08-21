@@ -618,4 +618,31 @@ class AopProxyResolverTest {
                 "a class-level @ExceptionCatch must never turn hashCode into a silent 0, whichever "
                         + "advisor put it in the proxy: " + wrapped.getCause());
     }
+    public static class UnannotatedAncestor {
+        public String work() { throw new IllegalStateException("boom"); }
+    }
+
+    @Transactional
+    public static class TransactionalDeclaringNothing extends UnannotatedAncestor { }
+
+    @ExceptionCatch(silent = true, defaultValue = "ec")
+    public static class ExceptionCatchDeclaringNothing extends UnannotatedAncestor { }
+
+    // A class-level annotation on a class that declares no methods of its own governs nothing,
+    // because class-level scope does not reach ancestors. The refusal has to agree with the
+    // interception: previously @Transactional refused this shape while @ExceptionCatch quietly
+    // covered nothing, so identical code behaved oppositely depending on the annotation - which
+    // is exactly what COMPATIBILITY.md tells module authors cannot happen.
+    @Test
+    @DisplayName("Should treat a class-level annotation that governs nothing the same either way")
+    void shouldTreatBothAnnotationsAlikeWhenNothingIsGoverned() {
+        AopProxyResolver bare = new AopProxyResolver();
+        bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
+        assertDoesNotThrow(() -> bare.resolve(TransactionalDeclaringNothing.class),
+                "the annotation governs no method, so there is nothing to refuse");
+
+        Class<?> resolved = exceptionCatchResolver().resolve(ExceptionCatchDeclaringNothing.class);
+        assertSame(ExceptionCatchDeclaringNothing.class, resolved,
+                "the same shape covers nothing for @ExceptionCatch, so it is not proxied");
+    }
 }

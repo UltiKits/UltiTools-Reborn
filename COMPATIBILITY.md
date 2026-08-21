@@ -363,14 +363,28 @@ recorded here in its own right when it happens.
 you are looking at, and it got wider still while 6.3.0 was being built. The refusal fires when
 either of these is true anywhere in the bean's superclass chain:
 
-- a method carries `@Transactional`, including a method your class inherits and never mentions;
-- a class carries `@Transactional`, including a base class your bean merely extends.
+- a method carries `@Transactional` — including a method your class inherits and never mentions,
+  **provided your class does not override it**;
+- a class carries `@Transactional` and declares at least one of the methods your bean ends up
+  with — including a base class your bean merely extends.
 
 So a module that never types the word `Transactional` still fails to load if it extends a class
 that does — from a shared internal base class, or from a library you depend on. Check your base
-classes, not only your own files. This reach is the same one that makes `@ExceptionCatch` work on
-inherited methods; the two annotations are deliberately resolved by the same rule, so that
-identical code shapes cannot behave oppositely depending on which annotation is used.
+classes, not only your own files.
+
+Two edges are worth stating exactly, because both are easy to guess wrong:
+
+- **Overriding hides the annotation.** Annotations are resolved on the most derived declaration of
+  each method, and Java does not inherit method annotations. If your class overrides an annotated
+  superclass method, the annotation is not seen: no refusal, and equally no interception if it were
+  `@ExceptionCatch`. Annotate the override as well if you mean it to apply.
+- **A class-level annotation on a class that declares no methods of its own governs nothing**,
+  because class-level scope reaches the declaring class and its subclasses, never its ancestors.
+
+That reach is shared with `@ExceptionCatch` by construction — one rule resolves both, so identical
+code shapes cannot be *covered* by one annotation and not the other. What differs is the
+consequence once covered: `@Transactional` is unavailable in this release and refuses the load,
+while `@ExceptionCatch` is wired and simply applies.
 
 If your module declares `@Transactional` anywhere, or extends anything that does, before upgrading
 to 6.3.0 you must either:
@@ -985,13 +999,24 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 **这条拒绝的射程有多远。**「带有该注解」比「你正在看的这个文件里出现了这个注解」要宽，而且在
 6.3.0 的开发过程中又变得更宽了。只要 bean 的整条父类链上满足下面任意一条，拒绝就会触发：
 
-- 某个方法带 `@Transactional`，包括你的类继承下来、自己从未提及的方法；
-- 某个类带 `@Transactional`，包括你的 bean 只是继承了它的某个基类。
+- 某个方法带 `@Transactional`——包括你的类继承下来、自己从未提及的方法，**前提是你的类没有覆写它**；
+- 某个类带 `@Transactional`，且它自己声明了你的 bean 最终拥有的某个方法——包括你的 bean 只是
+  继承了它的某个基类。
 
 也就是说，一个从头到尾没打过 `Transactional` 这个词的模块，只要它继承的类打了，就同样加载不了
 ——可能来自你们内部共用的基类，也可能来自你依赖的某个库。请连基类一起检查，不要只看自己的文件。
-这个射程与让 `@ExceptionCatch` 在继承方法上生效的射程是同一个：两个注解有意用同一条规则解析，
-这样同样的代码形状不会因为用了哪个注解而表现相反。
+
+有两处边界值得写明，因为都容易猜错：
+
+- **覆写会遮住注解。** 注解是在每个方法最派生的那条声明上解析的，而 Java 不继承方法注解。
+  如果你的类覆写了父类上带注解的方法，那个注解就看不见了：不会拒绝，换成 `@ExceptionCatch`
+  同样不会拦截。想让它生效，请在覆写方法上也标注一次。
+- **一个自己不声明任何方法的类，其类级注解什么都不管**，因为类级作用域只到「声明它的那个类
+  及其子类」，从不上溯到祖先。
+
+这个射程与 `@ExceptionCatch` 是同一条规则算出来的，因此同样的代码形状不会被一个注解覆盖、
+被另一个漏掉。不同的是覆盖之后的后果：`@Transactional` 在本版本中不可用，会拒绝加载；
+`@ExceptionCatch` 已接线，就正常生效。
 
 如果你的模块任何地方声明了 `@Transactional`，或者继承了任何声明了它的类，升级到 6.3.0 之前
 必须二选一：

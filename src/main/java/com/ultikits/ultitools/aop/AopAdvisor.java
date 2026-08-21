@@ -40,7 +40,38 @@ public interface AopAdvisor {
      * @return the governing annotation, or null
      */
     static <A extends Annotation> A findClassLevelAnnotation(Method method, Class<A> annotationType) {
-        return findClassLevelAnnotation0(method, annotationType);
+        Class<?> owner = findClassLevelAnnotationOwner(method, annotationType);
+        return owner == null ? null : owner.getAnnotation(annotationType);
+    }
+
+    /**
+     * The class whose type-level annotation governs the method, or null if none does.
+     * <p>
+     * Same walk as {@link #findClassLevelAnnotation(Method, Class)}, exposed separately because a
+     * caller that has to name the offending class in a message needs the class rather than the
+     * annotation. Deriving it a second time in the caller is how two copies of one rule start
+     * disagreeing.
+     * <p>
+     * 与 findClassLevelAnnotation 是同一趟遍历，单独暴露是因为要在报错信息里点名那个类的调用方
+     * 需要的是类而不是注解——让调用方自己再推一遍，正是「一条规则两份实现」的开端。
+     *
+     * @param method         the method being considered
+     * @param annotationType the annotation to look for
+     * @return the class carrying it, or null
+     */
+    static Class<?> findClassLevelAnnotationOwner(Method method,
+                                                 Class<? extends Annotation> annotationType) {
+        if (method == null || annotationType == null) {
+            return null;
+        }
+        for (Class<?> current = method.getDeclaringClass();
+             current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            if (current.isAnnotationPresent(annotationType)) {
+                return current;
+            }
+        }
+        return null;
     }
 
     /**
@@ -74,30 +105,20 @@ public interface AopAdvisor {
      * @return true if class-level coverage must skip it
      */
     static boolean isExcludedFromClassLevel(Method method) {
+        // Name first: getParameterTypes() clones its array, and this runs on every intercepted
+        // invocation through matches(). Only three names can ever match, so the clone is avoided
+        // for every other method.
+        String name = method.getName();
+        boolean candidate = "hashCode".equals(name) || "equals".equals(name)
+                || "canEqual".equals(name);
+        if (!candidate) {
+            return false;
+        }
         Class<?>[] params = method.getParameterTypes();
         if (params.length == 0) {
-            return "hashCode".equals(method.getName());
+            return "hashCode".equals(name);
         }
-        if (params.length == 1 && params[0] == Object.class) {
-            return "equals".equals(method.getName()) || "canEqual".equals(method.getName());
-        }
-        return false;
-    }
-
-    /** The uncached computation; {@code ClassLevelAnnotationCache} is its caching decorator. */
-    static <A extends Annotation> A findClassLevelAnnotation0(Method method, Class<A> annotationType) {
-        if (method == null || annotationType == null) {
-            return null;
-        }
-        for (Class<?> current = method.getDeclaringClass();
-             current != null && current != Object.class;
-             current = current.getSuperclass()) {
-            A found = current.getAnnotation(annotationType);
-            if (found != null) {
-                return found;
-            }
-        }
-        return null;
+        return params.length == 1 && params[0] == Object.class && !"hashCode".equals(name);
     }
 
     /**

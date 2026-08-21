@@ -160,9 +160,16 @@ public final class AopEligibility {
                                         + "declared in a different package than the bean, so "
                                         + "package-private would still be unreachable.")));
             } else if (Modifier.isFinal(modifiers)) {
+                // Same trap as the private branch above: dropping 'final' on a package-private
+                // method declared elsewhere leaves it unreachable for a second, different reason.
                 problems.add(new Problem(Problem.Kind.FINAL_METHOD, location,
                         "Remove the 'final' keyword from the method and mark it @Final instead, "
-                                + "which keeps the non-overridable contract while allowing AOP."));
+                                + "which keeps the non-overridable contract while allowing AOP."
+                                + (isInaccessible(method, beanClass)
+                                        ? " It is also package-private and declared in a different "
+                                                + "package than the bean, so it must be widened to "
+                                                + "protected or public as well."
+                                        : "")));
             } else if (isInaccessible(method, beanClass)) {
                 problems.add(new Problem(Problem.Kind.INACCESSIBLE_METHOD, location,
                         "The generated proxy lives in "
@@ -172,13 +179,18 @@ public final class AopEligibility {
                                 + ". Widen the method to "
                                 + "protected or public, move the two classes into one package, or "
                                 + "remove the AOP annotation."));
+            } else if (isShadowed(method, beanClass)) {
+                // Reported, but never fatal. What shadows a declaration is a bridge the compiler
+                // generated, not anything the author wrote, so refusing to load would have told
+                // them to move an annotation that has nowhere else to go. Silence is not the
+                // alternative: the annotation genuinely does nothing here, and saying so is the
+                // whole point of reporting. See issue #309.
+                problems.add(new Problem(Problem.Kind.SHADOWED_METHOD, location,
+                        "A nearer declaration - usually the bridge method a generic override "
+                                + "generates - hides this one, so the proxy cannot reach it "
+                                + "through super. Move the annotation onto the overriding method, "
+                                + "which is the declaration that actually runs."));
             }
-            // Shadowing is deliberately not a problem. What shadows a declaration is a bridge the
-            // compiler generated, not anything the author wrote: an @ExceptionCatch on an abstract
-            // Base<T>.handle(T) already sits on the only declaration that exists to annotate.
-            // Refusing to load told the author to move an annotation that had nowhere else to go,
-            // and it refused a bean that loads fine without this change. isProxyable still returns
-            // false for these, so class-level coverage skips them. See issue #309.
         }
         return problems;
     }
@@ -293,7 +305,9 @@ public final class AopEligibility {
             /** An annotated method is static and has no bean instance. */
             STATIC_METHOD,
             /** An annotated method is package-private and declared in another package. */
-            INACCESSIBLE_METHOD
+            INACCESSIBLE_METHOD,
+            /** An annotated method is hidden by a nearer declaration, usually a bridge. */
+            SHADOWED_METHOD
         }
 
         private final Kind kind;
