@@ -34,7 +34,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
     private static final Logger LOGGER = Logger.getLogger(ExceptionInterceptor.class.getName());
 
     private final List<ExceptionHandler> globalHandlers;
-    /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
+    /** Instance-scoped on purpose - see AnnotationLookupCache's class javadoc. */
     private final AnnotationLookupCache<ExceptionCatch> lookupCache =
             new AnnotationLookupCache<>(ExceptionCatch.class);
 

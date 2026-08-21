@@ -4,6 +4,8 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * An advisor that combines a pointcut (when to apply) with advice (what to do).
@@ -17,24 +19,24 @@ import java.lang.reflect.Method;
 public interface AopAdvisor {
 
     /**
-     * Finds the class-level annotation that governs a method, or null if none does.
+     * Finds the method-level annotation that governs a method, or null if none does.
      * <p>
-     * The lookup is anchored at the method's <b>declaring class</b> and walks up from there. A
-     * class-level annotation is a default for the class that declares it and for that class's
-     * subclasses; it does not apply to ancestors. A bean therefore does not extend its own
-     * annotation's reach over everything it inherits - notably not over the framework base classes
-     * it extends, where swallowing an exception would turn into a null that resurfaces as an
-     * unrelated failure far from its cause. This is the rule Spring documents for a class-level
-     * {@code @Transactional}, and inherited methods must be locally redeclared to pick up a
-     * subclass's annotation.
+     * Looks at the method's own declaration first, then at the declarations it overrides. Java does
+     * not inherit method annotations, and the scan keeps only the most derived declaration of each
+     * overridable method, so without the second step an override hides its superclass's annotation
+     * completely. Spring's attribute lookup falls back from the target method to the declaring
+     * method for the same reason.
+     * <p>
+     * Overriding is transitive, so the walk tests each candidate against the whole chain collected
+     * so far rather than against the leaf - see the comment in the body for the case that makes the
+     * difference.
      * <p>
      * Exposed and shared so that the match test and the interceptors that read the annotation's
      * attributes cannot answer differently. See issue #309.
      * <p>
-     * 类级注解的查找锚点是方法的<b>声明类</b>，并从那里向上走。类级注解是「声明它的那个类及其
-     * 子类」的默认值，不作用于祖先类，因此 bean 不会把自己注解的作用范围扩张到它继承来的一切
-     * ——尤其不会扩张到它继承的框架基类上，在那里吞掉异常会变成一个 null，并在远离原因的地方
-     * 以不相干的故障重新浮现。这是 Spring 对类级 @Transactional 的既定规则。
+     * 先看方法自身的声明，再看它所覆写的声明。Java 不继承方法注解，而扫描对每个可覆写方法只保留
+     * 最派生的那条声明，缺了第二步，覆写就会把父类的注解完全遮住。覆写具有传递性，因此候选要与
+     * 「已收集的整条链」比较，而不是只与叶子比较。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -53,9 +55,18 @@ public interface AopAdvisor {
         // the scan keeps only the most derived declaration of each overridable method, so without
         // this step an override hid its superclass's annotation completely: no interception, and
         // for an unavailable annotation no refusal either. Spring's attribute lookup falls back
-        // from the target method to the declaring method for the same reason. ReflectionUtil
-        // decides what overrides what, so a private or static same-signature method elsewhere in
-        // the chain does not count. See issue #309.
+        // from the target method to the declaring method for the same reason.
+        //
+        // Each candidate is tested against every declaration already in the chain, not against the
+        // leaf alone, because overriding is transitive (JLS 8.4.8.1). In x.A#m (package-private)
+        // -> x.B#m (public) -> y.C#m (public), the leaf does not override the root directly - the
+        // packages differ - but does so through the middle declaration, and all three are one
+        // method. Testing only against the leaf loses the root's annotation entirely. This is the
+        // same rule, and the same reason, that ReflectionUtil.getAllMethods documents for its
+        // override slots; deriving a second, subtly different version of it here is what made this
+        // wrong the first time. See issue #309.
+        List<Method> chain = new ArrayList<>();
+        chain.add(method);
         for (Class<?> current = method.getDeclaringClass().getSuperclass();
              current != null && current != Object.class;
              current = current.getSuperclass()) {
@@ -66,12 +77,21 @@ public interface AopAdvisor {
             } catch (NoSuchMethodException notDeclaredHere) {
                 continue;
             }
-            if (ReflectionUtil.overrides(method, superDeclaration)) {
-                A found = superDeclaration.getAnnotation(annotationType);
-                if (found != null) {
-                    return found;
+            boolean partOfChain = false;
+            for (Method member : chain) {
+                if (ReflectionUtil.overrides(member, superDeclaration)) {
+                    partOfChain = true;
+                    break;
                 }
             }
+            if (!partOfChain) {
+                continue;
+            }
+            A found = superDeclaration.getAnnotation(annotationType);
+            if (found != null) {
+                return found;
+            }
+            chain.add(superDeclaration);
         }
         return null;
     }
@@ -248,7 +268,7 @@ public interface AopAdvisor {
         private final Class<? extends Annotation> annotationType;
         private final MethodInterceptor interceptor;
         private final int order;
-        /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
+        /** Instance-scoped on purpose - see AnnotationLookupCache's class javadoc. */
         private final AnnotationLookupCache<? extends Annotation> lookupCache;
 
         AnnotationAopAdvisor(Class<? extends Annotation> annotationType,

@@ -261,18 +261,22 @@ class AopEligibilityTest {
 
         // Calls both sides and compares them, rather than restating the modifiers. An earlier
         // version of this test claimed to do that but only ever called isProxyable, so it asserted
-        // nothing about check() and would not have caught a fifth rule added to one side alone.
-        // Shadowing is the documented exception: check deliberately does not report it, because
-        // what shadows a declaration is a compiler-generated bridge rather than an author error.
+        // nothing about check(). check() reports all five rules today - including shadowing, which
+        // it briefly did not - so agreement is total and the fixtures below cover every one.
         @Test
         @DisplayName("Should agree with check on every rule except the one check omits")
         void shouldAgreeWithCheck() throws Exception {
             Class<?>[] owners = {HasStaticMethod.class, HasPrivateMethod.class,
-                    HasFinalMethod.class, Clean.class};
-            String[] methods = {"staticMethod", "privateMethod", "finalMethod", "ok"};
+                    HasFinalMethod.class, Clean.class, ConcreteGeneric.class};
+            String[] methods = {"staticMethod", "privateMethod", "finalMethod", "ok", "handle"};
+            Class<?>[][] params = {{}, {}, {}, {}, {String.class}};
 
             for (int i = 0; i < owners.length; i++) {
-                Method method = owners[i].getDeclaredMethod(methods[i]);
+                // The shadowed case is reached through the annotated superclass declaration, which
+                // is the one both sides have to agree about.
+                Method method = i == 4
+                        ? AnnotatedGenericBase.class.getDeclaredMethod("handle", Object.class)
+                        : owners[i].getDeclaredMethod(methods[i], params[i]);
                 boolean proxyable = AopEligibility.isProxyable(method, owners[i]);
                 boolean checkRejects = !AopEligibility.check(
                         owners[i], Collections.singleton(method)).isEmpty();

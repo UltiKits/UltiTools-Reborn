@@ -25,6 +25,7 @@ import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Final;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.aop.crosspackage.AnnotatedPackagePrivateBase;
+import com.ultikits.ultitools.aop.chainy.C;
 import com.ultikits.ultitools.aop.crosspackage.GenericBase;
 import com.ultikits.ultitools.aop.crosspackage.PackagePrivateBase;
 import com.ultikits.ultitools.aop.crosspackage.SameNameBase;
@@ -714,5 +715,50 @@ class AopProxyResolverTest {
         reused.removeAdvisor(reused.getAdvisors().get(0));
         assertSame(ClassLevelWithLombok.class, reused.resolve(ClassLevelWithLombok.class),
                 "with no advisor left there is nothing to intercept");
+    }
+    // Overriding is transitive (JLS 8.4.8.1). chainx.A declares a package-private annotated m(),
+    // chainx.B widens it to public, and chainy.C overrides that from another package. C does not
+    // override A directly - the packages differ - but does so through B, and getAllMethods folds
+    // all three into one method. Testing candidates against the leaf alone lost A's annotation
+    // entirely, which is the same trap ReflectionUtil.getAllMethods documents for its own slots.
+    @Test
+    @DisplayName("Should find an annotation reachable only through a transitive override chain")
+    void shouldFollowATransitiveOverrideChain() throws Exception {
+        Class<?> resolved = exceptionCatchResolver().resolve(C.class);
+        assertTrue(ProxyFactory.isProxyClass(resolved),
+                "the annotation on chainx.A governs chainy.C's override through chainx.B");
+
+        Object bean = resolved.getDeclaredConstructor().newInstance();
+        assertEquals("from-A", resolved.getMethod("m").invoke(bean));
+    }
+
+    @Transactional
+    public static class TransactionalOverUnproxyableOnly {
+        private void helper() { }
+        public static void statik() { }
+        public final void fin() { }
+    }
+
+    @ExceptionCatch(silent = true)
+    public static class ExceptionCatchOverUnproxyableOnly {
+        private void helper() { }
+        public static void statik() { }
+        public final void fin() { }
+    }
+
+    // COMPATIBILITY.md promises module authors that one rule decides coverage for both
+    // annotations. The refusal used to fire on the mere presence of a class-level @Transactional,
+    // so a class whose every method is unproxyable was hard-failed for an annotation that could
+    // never have taken effect - while the @ExceptionCatch twin simply was not proxied.
+    @Test
+    @DisplayName("Should not refuse for a class-level annotation that could cover nothing")
+    void shouldNotRefuseWhereTheTwinCoversNothing() {
+        AopProxyResolver bare = new AopProxyResolver();
+        bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
+        assertDoesNotThrow(() -> bare.resolve(TransactionalOverUnproxyableOnly.class));
+
+        assertSame(ExceptionCatchOverUnproxyableOnly.class,
+                exceptionCatchResolver().resolve(ExceptionCatchOverUnproxyableOnly.class),
+                "the twin covers nothing, so the two agree");
     }
 }

@@ -36,22 +36,6 @@ public class AopProxyResolver {
 
     private static final Logger LOGGER = Logger.getLogger(AopProxyResolver.class.getName());
 
-    private final List<AopAdvisor> advisors = new CopyOnWriteArrayList<>();
-
-    /**
-     * Annotations the framework recognises but deliberately does not implement in this release,
-     * mapped to the reason. A bean carrying one is rejected rather than handed back unproxied,
-     * because an unproxied bean is indistinguishable from a working annotation.
-     */
-    private final Map<Class<? extends Annotation>, String> unavailableAnnotations =
-            new LinkedHashMap<>();
-
-    /**
-     * Declares an annotation as recognised but unavailable.
-     *
-     * @param type   the annotation type
-     * @param reason what the module author should know, including where to follow up
-     */
     /**
      * Bean class to the class the container should instantiate for it.
      * <p>
@@ -70,9 +54,27 @@ public class AopProxyResolver {
      */
     private final Map<Class<?>, Class<?>> resolvedClasses = new ConcurrentHashMap<>();
 
+
+    private final List<AopAdvisor> advisors = new CopyOnWriteArrayList<>();
+
+    /**
+     * Annotations the framework recognises but deliberately does not implement in this release,
+     * mapped to the reason. A bean carrying one is rejected rather than handed back unproxied,
+     * because an unproxied bean is indistinguishable from a working annotation.
+     */
+    private final Map<Class<? extends Annotation>, String> unavailableAnnotations =
+            new LinkedHashMap<>();
+
+    /**
+     * Declares an annotation as recognised but unavailable.
+     *
+     * @param type   the annotation type
+     * @param reason what the module author should know, including where to follow up
+     */
     public void addUnavailableAnnotation(Class<? extends Annotation> type, String reason) {
-        resolvedClasses.clear();
         unavailableAnnotations.put(type, reason);
+        // After the mutation - see addAdvisor.
+        resolvedClasses.clear();
     }
 
     /**
@@ -116,9 +118,11 @@ public class AopProxyResolver {
      * @param advisor the advisor to add
      */
     public void addAdvisor(AopAdvisor advisor) {
-        resolvedClasses.clear();
         advisors.add(advisor);
         advisors.sort(Comparator.comparingInt(AopAdvisor::getOrder));
+        // Cleared after the mutation, never before: a resolve() interleaved between a clear and
+        // its mutation would re-cache the pre-mutation answer, and nothing would clear it again.
+        resolvedClasses.clear();
     }
 
     /**
@@ -128,8 +132,9 @@ public class AopProxyResolver {
      * @return true if the advisor was removed
      */
     public boolean removeAdvisor(AopAdvisor advisor) {
+        boolean removed = advisors.remove(advisor);
         resolvedClasses.clear();
-        return advisors.remove(advisor);
+        return removed;
     }
 
     /**
@@ -201,6 +206,20 @@ public class AopProxyResolver {
         }
 
         if (intercepted.isEmpty()) {
+            // Every other skip in this class is named in a warning; this one used to be the
+            // exception. "@ExceptionCatch class ServiceImpl extends AbstractService {}" is a shape
+            // authors write, and class-level scope does not reach ancestors, so it covers nothing -
+            // silence there is the failure mode this whole change exists to remove.
+            for (AopAdvisor advisor : advisors) {
+                Class<? extends Annotation> type = advisor.getAnnotationType();
+                if (type != null && beanClass.isAnnotationPresent(type)) {
+                    LOGGER.warning("@" + type.getSimpleName() + " on " + beanClass.getName()
+                            + " covers no method and has no effect. A class-level annotation "
+                            + "applies to the methods its own class declares and to subclasses, "
+                            + "not to methods inherited from an ancestor; redeclare the method "
+                            + "here, or annotate it where it is declared.");
+                }
+            }
             resolvedClasses.put(beanClass, beanClass);
             return beanClass;
         }
@@ -248,13 +267,23 @@ public class AopProxyResolver {
         // methods are all inherited governs nothing, yet @Transactional refused it while
         // @ExceptionCatch quietly covered nothing. One rule, so one answer. See issue #309.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-            if (AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
+            if (AopAdvisor.findMethodLevelAnnotation(method, type) != null
+                    && AopEligibility.isProxyable(method, beanClass)) {
                 // The declaring class, not the bean: the method may come from a superclass, and
-                // naming the bean would point the author at a file with no such annotation.
+                // naming the bean would point the author at a file with no such annotation. An
+                // unproxyable one is left to the warning path, the same way @ExceptionCatch treats
+                // it - the annotation could not have taken effect there either.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
             }
+            // Class-level, but only where it would actually take effect. Refusing on the mere
+            // presence of the annotation made @Transactional reject shapes @ExceptionCatch does
+            // not cover at all - a class whose every method is unproxyable, or one whose only
+            // methods are the excluded equals/hashCode/canEqual - so a module was hard-failed for
+            // an annotation that could never have done anything there. COMPATIBILITY.md promises
+            // module authors that one rule decides coverage for both.
             Class<?> owner = AopAdvisor.findClassLevelAnnotationOwner(method, type);
-            if (owner != null) {
+            if (owner != null && !AopAdvisor.isExcludedFromClassLevel(method)
+                    && AopEligibility.isProxyable(method, beanClass)) {
                 return owner.getName();
             }
         }

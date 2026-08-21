@@ -399,6 +399,37 @@ guarantee its own annotation promises, and continuing to allow that for one more
 with a louder warning — is exactly the risk this document exists to flag, not something worth
 preserving a little longer.
 
+### Recorded instance: `@ExceptionCatch` can now stop a module from loading (6.3.0)
+
+Before 6.3.0 `@ExceptionCatch` did nothing at all. AOP was never wired into the container, so the
+annotation was recognised, ignored, and had no effect on whether a module loaded. 6.3.0 wires it,
+which means the framework now has to build a proxy for the beans that carry it — and one shape
+cannot be proxied at all.
+
+**A `final` bean class fails the load if anything asks to intercept it**, including an
+`@ExceptionCatch` method it merely inherits:
+
+```java
+public class GuardedBase {
+    @ExceptionCatch(silent = true)
+    public String guarded() { ... }
+}
+
+public final class MyService extends GuardedBase { }   // 6.2.5: loads. 6.3.0: refuses.
+```
+
+Remove the `final` keyword and mark the class `@Final` instead, which keeps the non-extendable
+contract while allowing AOP. Lombok's `@Value` and `@UtilityClass` also emit `final`; switch to
+`@Data` if one of those is the source.
+
+Nothing else about `@ExceptionCatch` can stop a module loading. An annotation on a method no
+inheritance proxy can reach — `private`, `static`, `final`, package-private from another package,
+or hidden by the bridge a generic override generates — is ignored with a startup warning naming the
+method, which is what Spring does for a method it cannot advise. The annotation does nothing there,
+but the module loads.
+
+Method signatures are unchanged, so `japicmp` cannot detect any of this.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
@@ -1029,6 +1060,33 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 中间态可走：要逐步淘汰的「旧行为」本身就是一个 bean 在没有它自己注解承诺的事务保护下运行，哪怕
 只是多打一条更响的警告、再多放行一个版本，都正是本文件存在的目的要拦下的那种风险，不值得再多
 保留一会儿。
+
+### 已记录的实例：`@ExceptionCatch` 现在可能让模块无法加载（6.3.0）
+
+6.3.0 之前 `@ExceptionCatch` 什么都不做。AOP 从未接入容器，这个注解只是被认得、被忽略，不影响
+模块能否加载。6.3.0 把它接上了，于是框架必须为带它的 bean 生成代理——而有一种形状根本无法生成。
+
+**只要有任何东西要求拦截，一个 `final` 的 bean 类就会让加载失败**，包括它仅仅是继承来的
+`@ExceptionCatch` 方法：
+
+```java
+public class GuardedBase {
+    @ExceptionCatch(silent = true)
+    public String guarded() { ... }
+}
+
+public final class MyService extends GuardedBase { }   // 6.2.5：能加载。6.3.0：拒绝。
+```
+
+去掉 `final` 关键字，改标 `@Final` 注解——它保留「不可继承」的约定，同时允许 AOP。Lombok 的
+`@Value` 与 `@UtilityClass` 也会生成 `final`，如果是它们造成的，请改用 `@Data`。
+
+除此之外，`@ExceptionCatch` 不会再有别的方式阻止模块加载。标在继承式代理够不着的方法上的注解
+——`private`、`static`、`final`、声明在别的包里的 package-private、或被泛型覆写生成的桥接方法
+遮蔽的——会被忽略，并打一条点名到该方法的启动期警告，这与 Spring 对「织不进去的方法」的处理
+一致。注解在那里不起作用，但模块照常加载。
+
+方法签名没有变化，`japicmp` 抓不到上述任何一条。
 
 ## 移除清单覆盖不到的二进制不兼容
 
