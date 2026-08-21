@@ -81,9 +81,14 @@ public final class AopEligibility {
         if (beanClass == null) {
             return result;
         }
+        // One hierarchy walk, not one per annotation. getAllMethods builds an override-slot map
+        // over every declared method of every superclass, and the result does not vary with the
+        // annotation being looked for; calling it inside the loop repeated that work for each
+        // entry in AOP_ANNOTATIONS, on the startup path, for every bean of every module.
+        // getAllMethods already drops bridge and synthetic declarations.
+        List<Method> methods = ReflectionUtil.getAllMethods(beanClass);
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
-            for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-                // getAllMethods already drops bridge and synthetic declarations.
+            for (Method method : methods) {
                 if (method.isAnnotationPresent(annotation)) {
                     result.add(method);
                 }

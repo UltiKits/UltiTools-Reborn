@@ -40,6 +40,52 @@ public interface AopAdvisor {
      * @return the governing annotation, or null
      */
     static <A extends Annotation> A findClassLevelAnnotation(Method method, Class<A> annotationType) {
+        return findClassLevelAnnotation0(method, annotationType);
+    }
+
+    /**
+     * Whether a class-level annotation must never cover this method.
+     * <p>
+     * Intercepting one of these swaps a visible exception for a silent wrong answer. An
+     * {@code @ExceptionCatch} that swallows {@code equals} returns {@code false}, and the caller's
+     * {@code HashMap} then fails to find a key it does hold; a propagating exception at least
+     * reaches someone. {@code canEqual} is Lombok's {@code equals} collaborator - the proxy
+     * overrides it and the superclass {@code equals} reaches it through virtual dispatch, so
+     * excluding {@code equals} without excluding {@code canEqual} excludes nothing.
+     * <p>
+     * {@code toString} is deliberately absent: swallowing it costs a log line rather than a wrong
+     * answer, and "the logging statement itself threw" is a case
+     * {@code @ExceptionCatch(silent = true)} exists for. A method-level annotation on any of these
+     * three is still honoured, because the author named it explicitly.
+     * <p>
+     * This lives in the pointcut rather than in the code that collects methods, so that the answer
+     * given while building the proxy and the answer given on each invocation are the same answer.
+     * Enforcing it only while collecting left a second advisor able to pull {@code hashCode} into
+     * the proxy, after which this advisor's class-level branch matched it again at invocation time
+     * and swallowed the exception into a {@code 0}. Spring reaches the same end differently, by
+     * routing {@code equals} and {@code hashCode} to callbacks that structurally cannot run advice.
+     * <p>
+     * 类级注解绝不覆盖的三个签名：拦截它们会把一个可见的异常换成一个静默的错误结果。
+     * toString 有意不在其中——吞掉它只损失一行日志，而「日志语句自身抛异常」正是该注解的用例。
+     * 方法级标注在这三个签名上依然生效。该判定放在切点内而非收集代码里，是为了让「构建代理时」
+     * 与「每次调用时」给出同一个答案。
+     *
+     * @param method the candidate method
+     * @return true if class-level coverage must skip it
+     */
+    static boolean isExcludedFromClassLevel(Method method) {
+        Class<?>[] params = method.getParameterTypes();
+        if (params.length == 0) {
+            return "hashCode".equals(method.getName());
+        }
+        if (params.length == 1 && params[0] == Object.class) {
+            return "equals".equals(method.getName()) || "canEqual".equals(method.getName());
+        }
+        return false;
+    }
+
+    /** The uncached computation; {@code ClassLevelAnnotationCache} is its caching decorator. */
+    static <A extends Annotation> A findClassLevelAnnotation0(Method method, Class<A> annotationType) {
         if (method == null || annotationType == null) {
             return null;
         }
@@ -57,12 +103,13 @@ public interface AopAdvisor {
     /**
      * Determines if this advisor applies to the given method.
      *
-     * @param method      the method to check
-     * @param targetClass the bean class the proxy is built for - <b>not</b> the method's declaring
-     *                    class, which for an inherited method is a superclass that does not carry
-     *                    the bean's class-level annotations. Both call sites pass the same value
-     *                    at collection time and at invocation time, so an advisor's two answers
-     *                    cannot disagree. See issue #309.
+     * @param method      the candidate method
+     * @param targetClass the target class - the bean class the proxy is built for, which is what
+     *                    Spring's {@code MethodMatcher} means by the same parameter name. It is
+     *                    <b>not</b> the method's declaring class; for an inherited method those
+     *                    differ. Both call sites pass the same value at collection time and at
+     *                    invocation time, so an advisor's two answers cannot disagree.
+     *                    See issue #309.
      * @return true if this advisor should intercept the method
      */
     boolean matches(Method method, Class<?> targetClass);
@@ -123,6 +170,8 @@ public interface AopAdvisor {
         private final Class<? extends Annotation> annotationType;
         private final MethodInterceptor interceptor;
         private final int order;
+        /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
+        private final ClassLevelAnnotationCache<? extends Annotation> classLevelCache;
 
         AnnotationAopAdvisor(Class<? extends Annotation> annotationType,
                             MethodInterceptor interceptor,
@@ -130,6 +179,7 @@ public interface AopAdvisor {
             this.annotationType = annotationType;
             this.interceptor = interceptor;
             this.order = order;
+            this.classLevelCache = new ClassLevelAnnotationCache<>(annotationType);
         }
 
         @Override
@@ -139,8 +189,9 @@ public interface AopAdvisor {
                 return true;
             }
             // Then class level, anchored at the declaring class rather than the bean - see
-            // findClassLevelAnnotation for why the difference matters.
-            return findClassLevelAnnotation(method, annotationType) != null;
+            // findClassLevelAnnotation for why the difference matters - minus the signatures a
+            // bulk request must never sweep up.
+            return classLevelCache.get(method) != null && !isExcludedFromClassLevel(method);
         }
 
         @Override

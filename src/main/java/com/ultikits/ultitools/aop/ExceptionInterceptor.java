@@ -34,6 +34,9 @@ public class ExceptionInterceptor implements MethodInterceptor {
     private static final Logger LOGGER = Logger.getLogger(ExceptionInterceptor.class.getName());
 
     private final List<ExceptionHandler> globalHandlers;
+    /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
+    private final ClassLevelAnnotationCache<ExceptionCatch> classLevelCache =
+            new ClassLevelAnnotationCache<>(ExceptionCatch.class);
 
     /**
      * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
@@ -82,7 +85,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
         // annotation governs a method, so the two cannot disagree. See issue #309.
         ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
         if (annotation == null) {
-            annotation = AopAdvisor.findClassLevelAnnotation(method, ExceptionCatch.class);
+            annotation = classLevelCache.get(method);
         }
 
         try {

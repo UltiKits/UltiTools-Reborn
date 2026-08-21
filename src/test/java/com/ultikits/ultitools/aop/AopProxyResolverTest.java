@@ -539,4 +539,52 @@ class AopProxyResolverTest {
         assertTrue(declares(resolved, "hashCode"),
                 "the exclusion list governs class-level annotation coverage only");
     }
+    @ExceptionCatch(silent = true, defaultValue = "class-level")
+    public static class ClassLevelOverOwnHashCode {
+        @Override
+        public int hashCode() { throw new IllegalStateException("hash-boom"); }
+    }
+
+    // The exclusion was enforced only while collecting, so a second advisor could pull hashCode
+    // into the intercepted set and the ExceptionCatch advisor would then match it again at
+    // invocation time - through its class-level branch, which never consulted the exclusion - and
+    // swallow the exception into a 0. Spring routes equals/hashCode to callbacks that structurally
+    // cannot run advice; the equivalent here is to make the pointcut itself say no, so collection
+    // and invocation cannot answer differently.
+    @Test
+    @DisplayName("Should not swallow hashCode even when another advisor pulls it into the proxy")
+    void shouldNotSwallowExcludedSignatureViaSecondAdvisor() throws Exception {
+        AopProxyResolver two = new AopProxyResolver();
+        two.addAdvisor(new AopAdvisor() {
+            @Override
+            public boolean matches(Method method, Class<?> targetClass) {
+                return "hashCode".equals(method.getName());
+            }
+
+            @Override
+            public MethodInterceptor getInterceptor() {
+                return MethodInvocation::proceed;
+            }
+
+            @Override
+            public int getOrder() {
+                return 0;
+            }
+        });
+        two.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class,
+                new ExceptionInterceptor(Collections.emptyList(), null), 200));
+
+        Class<?> resolved = two.resolve(ClassLevelOverOwnHashCode.class);
+        assertTrue(declares(resolved, "hashCode"),
+                "precondition: the pointcut advisor must have pulled hashCode into the proxy, "
+                        + "or this test asserts nothing");
+
+        Object bean = resolved.getDeclaredConstructor().newInstance();
+        java.lang.reflect.InvocationTargetException wrapped = assertThrows(
+                java.lang.reflect.InvocationTargetException.class,
+                () -> resolved.getMethod("hashCode").invoke(bean));
+        assertTrue(wrapped.getCause() instanceof IllegalStateException,
+                "a class-level @ExceptionCatch must never turn hashCode into a silent 0, whichever "
+                        + "advisor put it in the proxy: " + wrapped.getCause());
+    }
 }
