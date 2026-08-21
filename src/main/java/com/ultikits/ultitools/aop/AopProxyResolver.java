@@ -191,10 +191,22 @@ public class AopProxyResolver {
         // annotation on a superclass method is invisible to getDeclaredMethods() and the refusal
         // below would never fire for it. See issue #309.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-            if (!method.isSynthetic() && method.isAnnotationPresent(type)) {
+            if (method.isAnnotationPresent(type)) {
                 // The declaring class, not the bean: the method may come from a superclass, and
                 // naming the bean would point the author at a file with no such annotation.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
+            }
+        }
+        // A class-level annotation on an ancestor governs the methods that ancestor declares, and
+        // the bean inherits them, so it must be refused here too. Testing only beanClass left the
+        // two annotations disagreeing on identical shapes: for @ExceptionCatch on a superclass the
+        // methods are intercepted, while @Transactional on a superclass was neither intercepted
+        // nor refused - the silent-inert case this refusal exists to eliminate. See issue #309.
+        for (Class<?> current = beanClass;
+             current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            if (current.isAnnotationPresent(type)) {
+                return current.getName();
             }
         }
         return null;
@@ -207,10 +219,10 @@ public class AopProxyResolver {
      */
     private Set<Method> collectInterceptedMethods(Class<?> beanClass) {
         Set<Method> result = new LinkedHashSet<>();
+        // No synthetic filter here: ReflectionUtil.getAllMethods already drops bridge and
+        // synthetic declarations. AopEligibility.isShadowed deliberately does scan them, and a
+        // redundant guard here would blur that contrast for the next reader.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-            if (method.isSynthetic()) {
-                continue;
-            }
             for (AopAdvisor advisor : advisors) {
                 if (!advisor.matches(method, beanClass)) {
                     continue;

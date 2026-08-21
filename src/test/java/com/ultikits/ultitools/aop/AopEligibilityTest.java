@@ -235,21 +235,26 @@ class AopEligibilityTest {
     @DisplayName("isProxyable")
     class Proxyable {
 
-        // Asserting agreement with check(...) rather than restating the three modifiers is what
-        // keeps the two from drifting when a fourth rule is added to either one. A method check()
-        // reports a Problem for must be a method isProxyable() rejects, and vice versa.
+        // Calls both sides and compares them, rather than restating the modifiers. An earlier
+        // version of this test claimed to do that but only ever called isProxyable, so it asserted
+        // nothing about check() and would not have caught a fifth rule added to one side alone.
+        // Shadowing is the documented exception: check deliberately does not report it, because
+        // what shadows a declaration is a compiler-generated bridge rather than an author error.
         @Test
-        @DisplayName("Should agree with check on every rejection kind")
+        @DisplayName("Should agree with check on every rule except the one check omits")
         void shouldAgreeWithCheck() throws Exception {
-            assertFalse(AopEligibility.isProxyable(
-                    HasStaticMethod.class.getDeclaredMethod("staticMethod"),
-                    HasStaticMethod.class));
-            assertFalse(AopEligibility.isProxyable(
-                    HasPrivateMethod.class.getDeclaredMethod("privateMethod"),
-                    HasPrivateMethod.class));
-            assertFalse(AopEligibility.isProxyable(
-                    HasFinalMethod.class.getDeclaredMethod("finalMethod"),
-                    HasFinalMethod.class));
+            Class<?>[] owners = {HasStaticMethod.class, HasPrivateMethod.class,
+                    HasFinalMethod.class, Clean.class};
+            String[] methods = {"staticMethod", "privateMethod", "finalMethod", "ok"};
+
+            for (int i = 0; i < owners.length; i++) {
+                Method method = owners[i].getDeclaredMethod(methods[i]);
+                boolean proxyable = AopEligibility.isProxyable(method, owners[i]);
+                boolean checkRejects = !AopEligibility.check(
+                        owners[i], Collections.singleton(method)).isEmpty();
+                assertEquals(checkRejects, !proxyable,
+                        methods[i] + ": check and isProxyable disagree");
+            }
         }
 
         @Test

@@ -329,6 +329,30 @@ class AopProxyResolverTest {
     // @Transactional method into an abstract base class got neither interception nor refusal:
     // the module loaded and the annotation did nothing, which is the exact failure the refusal
     // exists to prevent. See issue #309.
+    @Transactional
+    public static class ClassLevelTransactionalBase {
+        public void governedByClassLevel() { }
+    }
+
+    public static class InheritsClassLevelTransactional extends ClassLevelTransactionalBase { }
+
+    // A class-level annotation on an ancestor governs that ancestor's methods, and the bean
+    // inherits them - @ExceptionCatch is intercepted in exactly this shape. The refusal has to
+    // agree, or the two annotations behave differently for identical code: one intercepted, the
+    // other silently inert, which is the failure the refusal exists to eliminate.
+    @Test
+    @DisplayName("Should refuse a bean governed by a class-level @Transactional on a superclass")
+    void shouldRefuseClassLevelTransactionalOnSuperclass() {
+        AopProxyResolver bare = new AopProxyResolver();
+        bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
+
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> bare.resolve(InheritsClassLevelTransactional.class));
+        assertTrue(thrown.getMessage().contains(ClassLevelTransactionalBase.class.getName()),
+                "the refusal must name the class that carries the annotation: "
+                        + thrown.getMessage());
+    }
+
     @Test
     @DisplayName("Should refuse a bean whose @Transactional method is declared on a superclass")
     void shouldRefuseInheritedTransactional() {
@@ -465,7 +489,11 @@ class AopProxyResolverTest {
     }
 
     // Cross-package plus package-private means the two declarations do not override one another,
-    // so both survive the scan and both map to trampoline ultitools$super$shared.
+    // so both survive the scan and both would map to trampoline ultitools$super$shared. The
+    // annotation is on SameNameBase so that both are genuinely in class-level scope - without it
+    // the scope rule alone would keep the superclass declaration out and this would pass while
+    // testing nothing. Two independent rules now prevent the collision: the superclass
+    // declaration is inaccessible from the bean's package, and it is shadowed by the subclass's.
     @Test
     @DisplayName("Should not collide trampolines when two declarations share a signature")
     void shouldNotCollideTrampolines() {

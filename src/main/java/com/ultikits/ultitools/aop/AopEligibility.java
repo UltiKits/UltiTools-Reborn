@@ -28,7 +28,10 @@ import java.util.Set;
  * dispatches them with {@code invokespecial} and {@code invokestatic}, neither of which consults
  * the subclass, so no inheritance-based AOP framework can intercept them.
  * <p>
- * 这里的每一条拒绝都会变成一次点名到类和方法的启动期失败，任何一条都不得静默跳过。
+ * 两种受众，两种答案。check 服务于作者用方法级注解点名的方法：那里的每一条拒绝都会变成一次
+ * 点名到类和方法的启动期失败，因为静默地不代理正是让 @Transactional 自 6.2.0 起长期失效的
+ * 那种失败方式。isProxyable 服务于类级覆盖——作者从未逐个过目——它静默过滤，而不是为了一个
+ * 没人点名的方法让整个模块加载失败。见 issue #309。
  *
  * @author wisdomme
  * @since 6.3.0
@@ -80,9 +83,7 @@ public final class AopEligibility {
         }
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
             for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-                if (method.isSynthetic()) {
-                    continue;
-                }
+                // getAllMethods already drops bridge and synthetic declarations.
                 if (method.isAnnotationPresent(annotation)) {
                     result.add(method);
                 }
@@ -137,10 +138,18 @@ public final class AopEligibility {
                                 + "handling have nothing to apply to. Remove the AOP annotation, "
                                 + "or make the method an instance method."));
             } else if (Modifier.isPrivate(modifiers)) {
+                // Package-private is only a valid remedy when the declaration is in the bean's own
+                // package; suggesting it across packages would send the author straight into an
+                // INACCESSIBLE_METHOD failure on the next startup.
+                boolean samePackage = ReflectionUtil.packageNameOf(method.getDeclaringClass())
+                        .equals(ReflectionUtil.packageNameOf(beanClass));
                 problems.add(new Problem(Problem.Kind.PRIVATE_METHOD, location,
                         "Private methods are dispatched with invokespecial and cannot be "
                                 + "intercepted by any inheritance-based AOP framework. Remove the "
-                                + "AOP annotation, or widen the method to package-private."));
+                                + "AOP annotation, or widen the method to "
+                                + (samePackage ? "package-private." : "protected or public - it is "
+                                        + "declared in a different package than the bean, so "
+                                        + "package-private would still be unreachable.")));
             } else if (Modifier.isFinal(modifiers)) {
                 problems.add(new Problem(Problem.Kind.FINAL_METHOD, location,
                         "Remove the 'final' keyword from the method and mark it @Final instead, "
@@ -245,6 +254,9 @@ public final class AopEligibility {
      * @return true if a nearer declaration makes it unreachable through {@code super}
      */
     public static boolean isShadowed(Method method, Class<?> beanClass) {
+        if (method == null || beanClass == null) {
+            return false;
+        }
         Class<?> declaring = method.getDeclaringClass();
         for (Class<?> current = beanClass;
              current != null && current != declaring && current != Object.class;

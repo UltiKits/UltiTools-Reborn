@@ -120,10 +120,13 @@ public class ExceptionInterceptor implements MethodInterceptor {
     /**
      * The class the bean actually is, with any proxy layers unwrapped.
      * <p>
-     * {@code method.getDeclaringClass()} is only the bean while every intercepted method is one
-     * the bean declares. Once the scan started walking the hierarchy that stopped holding, so both
-     * the class-level annotation lookup and the failure attribution read the target instead. The
-     * declaring class remains the fallback for a target that is not a proxy at all. See issue #309.
+     * Used for <b>attribution only</b>. Which class-level annotation governs a method is decided
+     * by {@link AopAdvisor#findClassLevelAnnotation(Method, Class)}, which anchors on the declaring
+     * class and never consults the target. Attribution wants the opposite: for an inherited method
+     * the declaring class is often a framework base, which tells an operator nothing about which
+     * concrete bean failed and makes ErrorReportCollector's fingerprint dedup collapse two
+     * different beans into one report. The declaring class remains the fallback for a target that
+     * is not a proxy at all. See issue #309.
      *
      * @param invocation the invocation in progress
      * @param method     the method being intercepted
@@ -181,7 +184,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
                 // configuration mistake indistinguishable from a handler that ran and returned
                 // the default value.
                 LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
-                        + method.getDeclaringClass().getName() + "#" + method.getName()
+                        + beanClassOf(invocation, method).getName() + "#" + method.getName()
                         + " cannot be resolved: this interceptor has no container. "
                         + "Falling back to the default value.");
             } else {
@@ -192,7 +195,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
                                 e, invocation.getTarget(), method, invocation.getArguments());
                     }
                     LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
-                            + method.getDeclaringClass().getName() + "#" + method.getName()
+                            + beanClassOf(invocation, method).getName() + "#" + method.getName()
                             + " resolved to a bean of type "
                             + (handlerBean == null ? "null" : handlerBean.getClass().getName())
                             + ", which does not implement ExceptionHandler. "
