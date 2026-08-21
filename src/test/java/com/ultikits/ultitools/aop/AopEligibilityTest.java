@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -57,6 +58,31 @@ class AopEligibilityTest {
         public void guarded() { }
     }
 
+    public static class AnnotatedBase {
+        @Transactional
+        public void inheritedAnnotated() { }
+    }
+
+    /** Declares nothing of its own; the annotated method comes entirely from the superclass. */
+    public static class InheritsAnnotation extends AnnotatedBase { }
+
+    public static class FinalMethodBase {
+        @Transactional
+        public final void inheritedFinal() { }
+    }
+
+    public static class InheritsFinalMethod extends FinalMethodBase { }
+
+    @ExceptionCatch
+    public static class ClassLevelOnly {
+        public void plain() { }
+    }
+
+    @ExceptionCatch
+    public static final class ClassLevelOnFinalClass {
+        public void plain() { }
+    }
+
     @Nested
     @DisplayName("findAopAnnotatedMethods")
     class Finding {
@@ -81,6 +107,24 @@ class AopEligibilityTest {
         @DisplayName("Should return empty set for a class with no AOP annotations")
         void shouldReturnEmptyForPlainClass() {
             assertTrue(AopEligibility.findAopAnnotatedMethods(String.class).isEmpty());
+        }
+
+        @Test
+        @DisplayName("Should find a method-level annotation declared on a superclass")
+        void shouldFindInheritedMethodLevel() {
+            Set<Method> found = AopEligibility.findAopAnnotatedMethods(InheritsAnnotation.class);
+            assertEquals(1, found.size());
+            assertEquals("inheritedAnnotated", found.iterator().next().getName());
+        }
+
+        // check() turns everything in this set into a load-blocking Problem, so a class-level
+        // annotation must not contribute to it: the author never vetted those methods one by one
+        // and a single private helper on a superclass would stop the module from loading.
+        // Class-level coverage is resolved in AopProxyResolver instead. See issue #309.
+        @Test
+        @DisplayName("Should not report methods covered only by a class-level annotation")
+        void shouldIgnoreClassLevelCoverage() {
+            assertTrue(AopEligibility.findAopAnnotatedMethods(ClassLevelOnly.class).isEmpty());
         }
     }
 
@@ -158,6 +202,33 @@ class AopEligibilityTest {
             String location = problems.get(0).getLocation();
             assertTrue(location.contains(HasFinalMethod.class.getName()), location);
             assertTrue(location.contains("finalMethod"), location);
+        }
+
+        // The final-class branch used to sit behind an isEmpty() short-circuit on the second
+        // argument. Once class-level annotations stopped contributing to that argument, a final
+        // class carrying only a class-level annotation slipped past it and reached ByteBuddy,
+        // which throws a bare exception naming neither the class nor a remedy. See issue #309.
+        @Test
+        @DisplayName("Should reject a final class even when no method-level annotation exists")
+        void shouldRejectFinalClassWithoutMethodLevelAnnotations() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    ClassLevelOnFinalClass.class, Collections.<Method>emptySet());
+            assertEquals(1, problems.size());
+            assertEquals(AopEligibility.Problem.Kind.FINAL_CLASS, problems.get(0).getKind());
+        }
+
+        // Now that the scan walks the hierarchy, an annotated method can be declared somewhere
+        // other than the bean. Naming the bean would send the author to a file that does not
+        // contain the annotation being complained about.
+        @Test
+        @DisplayName("Should name the declaring class, not the bean, for an inherited method")
+        void shouldNameDeclaringClassForInheritedMethod() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    InheritsFinalMethod.class,
+                    AopEligibility.findAopAnnotatedMethods(InheritsFinalMethod.class));
+            assertEquals(1, problems.size());
+            assertTrue(problems.get(0).getLocation().contains(FinalMethodBase.class.getName()),
+                    problems.get(0).getLocation());
         }
     }
     @Nested

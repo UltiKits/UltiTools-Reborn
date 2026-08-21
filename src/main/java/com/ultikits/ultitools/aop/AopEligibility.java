@@ -2,6 +2,7 @@ package com.ultikits.ultitools.aop;
 
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -53,13 +54,21 @@ public final class AopEligibility {
     }
 
     /**
-     * Collects the methods of the given class that request interception.
+     * Collects the methods that carry an AOP annotation <b>on the method itself</b>, walking the
+     * whole inheritance hierarchy.
      * <p>
-     * A class-level AOP annotation applies to every declared method, matching what
-     * {@code AopAdvisor.AnnotationAopAdvisor.matches} does.
+     * Class-level annotations are deliberately not represented here. Everything this method
+     * returns is fed to {@link #check(Class, Set)}, which turns an unproxyable entry into a load
+     * failure - correct for a method the author explicitly named, wrong for one a class-level
+     * annotation happened to cover. Class-level coverage is resolved by
+     * {@code AopProxyResolver.collectInterceptedMethods} instead. See issue #309.
+     * <p>
+     * 只收集<b>方法本身</b>带 AOP 注解的方法，并遍历整个继承层级。类级注解有意不在此体现：
+     * 本方法的结果会送进 check，而 check 会把不可代理的条目变成加载失败——对作者显式点名的方法
+     * 是对的，对被类级注解顺带覆盖到的方法则是误伤。类级覆盖改由 AopProxyResolver 处理。
      *
      * @param beanClass the class to scan
-     * @return the methods requesting interception, in declaration order
+     * @return the methods carrying a method-level AOP annotation, subclass overrides first
      */
     public static Set<Method> findAopAnnotatedMethods(Class<?> beanClass) {
         Set<Method> result = new LinkedHashSet<>();
@@ -67,12 +76,11 @@ public final class AopEligibility {
             return result;
         }
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
-            boolean classLevel = beanClass.isAnnotationPresent(annotation);
-            for (Method method : beanClass.getDeclaredMethods()) {
+            for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
                 if (method.isSynthetic()) {
                     continue;
                 }
-                if (classLevel || method.isAnnotationPresent(annotation)) {
+                if (method.isAnnotationPresent(annotation)) {
                     result.add(method);
                 }
             }
@@ -84,16 +92,22 @@ public final class AopEligibility {
      * Checks whether the given class can be proxied.
      *
      * @param beanClass        the class to check
-     * @param annotatedMethods the methods requesting interception, from
-     *                         {@link #findAopAnnotatedMethods(Class)}
+     * @param annotatedMethods the method-level annotated methods, from
+     *                         {@link #findAopAnnotatedMethods(Class)}; may be empty when
+     *                         interception was requested at class level only
      * @return the blocking problems, empty if the class can be proxied
      */
     public static List<Problem> check(Class<?> beanClass, Set<Method> annotatedMethods) {
         List<Problem> problems = new ArrayList<>();
-        if (beanClass == null || annotatedMethods == null || annotatedMethods.isEmpty()) {
+        if (beanClass == null) {
             return problems;
         }
 
+        // Checked before the empty-set short-circuit below, not after: a class carrying only a
+        // class-level annotation contributes nothing to annotatedMethods, and returning early on
+        // that empty set would hand a final class to ByteBuddy, which throws without naming the
+        // class or a remedy. Callers must only call check(...) when the bean actually needs a
+        // proxy. See issue #309.
         if (Modifier.isFinal(beanClass.getModifiers())) {
             problems.add(new Problem(Problem.Kind.FINAL_CLASS, beanClass.getName(),
                     "Remove the 'final' keyword from the class and mark it @Final instead, "
@@ -104,8 +118,15 @@ public final class AopEligibility {
             return problems;
         }
 
+        if (annotatedMethods == null || annotatedMethods.isEmpty()) {
+            return problems;
+        }
+
         for (Method method : annotatedMethods) {
-            String location = beanClass.getName() + "#" + method.getName();
+            // The declaring class, not the bean: now that the scan walks the hierarchy the
+            // method may come from a superclass, and naming the bean would point the author
+            // at a file that does not contain the annotation being complained about.
+            String location = method.getDeclaringClass().getName() + "#" + method.getName();
             int modifiers = method.getModifiers();
             if (Modifier.isStatic(modifiers)) {
                 problems.add(new Problem(Problem.Kind.STATIC_METHOD, location,
