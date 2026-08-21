@@ -127,6 +127,32 @@ public final class AopEligibility {
     }
 
     /**
+     * Whether an inheritance-based proxy can intercept a single method.
+     * <p>
+     * Shares its rules with {@link #check(Class, Set)}, which is why the two must be changed
+     * together. They exist separately because they serve opposite audiences. A method-level
+     * annotation is an explicit request, so an unproxyable one becomes a startup failure. A
+     * class-level annotation is a bulk request the author never vetted method by method, so the
+     * class-level path filters with this predicate instead of failing the whole module. See
+     * issue #309.
+     * <p>
+     * 与 check 共用同一组规则，两者必须同步修改。分开存在是因为受众相反：方法级注解是显式点名，
+     * 不可代理即启动失败；类级注解是批量覆盖，作者从未逐个过目，因此改为过滤而不是让模块加载失败。
+     *
+     * @param method the method to test, may be null
+     * @return true if an inheritance-based proxy can intercept it
+     */
+    public static boolean isProxyable(Method method) {
+        if (method == null) {
+            return false;
+        }
+        int modifiers = method.getModifiers();
+        return !Modifier.isStatic(modifiers)
+                && !Modifier.isPrivate(modifiers)
+                && !Modifier.isFinal(modifiers);
+    }
+
+    /**
      * A single reason a class cannot be proxied.
      */
     public static final class Problem {

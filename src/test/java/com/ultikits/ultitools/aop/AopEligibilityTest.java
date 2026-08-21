@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
@@ -157,6 +158,36 @@ class AopEligibilityTest {
             String location = problems.get(0).getLocation();
             assertTrue(location.contains(HasFinalMethod.class.getName()), location);
             assertTrue(location.contains("finalMethod"), location);
+        }
+    }
+    @Nested
+    @DisplayName("isProxyable")
+    class Proxyable {
+
+        // Asserting agreement with check(...) rather than restating the three modifiers is what
+        // keeps the two from drifting when a fourth rule is added to either one. A method check()
+        // reports a Problem for must be a method isProxyable() rejects, and vice versa.
+        @Test
+        @DisplayName("Should agree with check on every rejection kind")
+        void shouldAgreeWithCheck() throws Exception {
+            assertFalse(AopEligibility.isProxyable(
+                    HasStaticMethod.class.getDeclaredMethod("staticMethod")));
+            assertFalse(AopEligibility.isProxyable(
+                    HasPrivateMethod.class.getDeclaredMethod("privateMethod")));
+            assertFalse(AopEligibility.isProxyable(
+                    HasFinalMethod.class.getDeclaredMethod("finalMethod")));
+        }
+
+        @Test
+        @DisplayName("Should accept an ordinary overridable method")
+        void shouldAcceptOrdinaryMethod() throws Exception {
+            assertTrue(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok")));
+        }
+
+        @Test
+        @DisplayName("Should reject null rather than throw")
+        void shouldRejectNull() {
+            assertFalse(AopEligibility.isProxyable(null));
         }
     }
 }
