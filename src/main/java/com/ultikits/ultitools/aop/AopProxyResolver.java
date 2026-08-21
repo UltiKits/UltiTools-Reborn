@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
 
@@ -51,7 +52,26 @@ public class AopProxyResolver {
      * @param type   the annotation type
      * @param reason what the module author should know, including where to follow up
      */
+    /**
+     * Bean class to the class the container should instantiate for it.
+     * <p>
+     * {@code resolve} is called from {@code SimpleContainer.createBean}, which runs once per
+     * instantiation - so for a prototype-scoped bean it ran on every {@code getBean()}, repeating
+     * three hierarchy scans, re-emitting the "annotation ignored" warning that the javadoc calls a
+     * startup warning, and asking ByteBuddy for a brand new proxy class each time. The answer
+     * depends only on the bean class and this resolver's advisors, so it is computed once. Spring
+     * caches generated proxy classes for the same reason.
+     * <p>
+     * Only successful resolutions are stored. A refusal re-runs and re-throws, which costs nothing
+     * because it fails the module load anyway.
+     * <p>
+     * Instance-scoped, like the annotation caches: it holds {@code Class} references and must die
+     * with the container that owns it rather than pin a module's classes for the life of the JVM.
+     */
+    private final Map<Class<?>, Class<?>> resolvedClasses = new ConcurrentHashMap<>();
+
     public void addUnavailableAnnotation(Class<? extends Annotation> type, String reason) {
+        resolvedClasses.clear();
         unavailableAnnotations.put(type, reason);
     }
 
@@ -96,6 +116,7 @@ public class AopProxyResolver {
      * @param advisor the advisor to add
      */
     public void addAdvisor(AopAdvisor advisor) {
+        resolvedClasses.clear();
         advisors.add(advisor);
         advisors.sort(Comparator.comparingInt(AopAdvisor::getOrder));
     }
@@ -107,6 +128,7 @@ public class AopProxyResolver {
      * @return true if the advisor was removed
      */
     public boolean removeAdvisor(AopAdvisor advisor) {
+        resolvedClasses.clear();
         return advisors.remove(advisor);
     }
 
@@ -131,12 +153,18 @@ public class AopProxyResolver {
             return null;
         }
 
+        Class<?> memoized = resolvedClasses.get(beanClass);
+        if (memoized != null) {
+            return memoized;
+        }
+
         // Checked before the advisor short-circuit below: a bean using an unavailable annotation
         // must fail even when no advisor is registered at all, which is exactly the configuration
         // that would otherwise return it unproxied.
         rejectUnavailableAnnotations(beanClass);
 
         if (advisors.isEmpty()) {
+            resolvedClasses.put(beanClass, beanClass);
             return beanClass;
         }
 
@@ -173,6 +201,7 @@ public class AopProxyResolver {
         }
 
         if (intercepted.isEmpty()) {
+            resolvedClasses.put(beanClass, beanClass);
             return beanClass;
         }
 
@@ -183,7 +212,9 @@ public class AopProxyResolver {
         for (AopAdvisor advisor : advisors) {
             interceptors.add(new AdvisorScopedInterceptor(advisor, beanClass));
         }
-        return new ProxyFactory(interceptors).createProxyClass(beanClass, intercepted);
+        Class<?> proxyClass = new ProxyFactory(interceptors).createProxyClass(beanClass, intercepted);
+        resolvedClasses.put(beanClass, proxyClass);
+        return proxyClass;
     }
 
     /**
@@ -217,7 +248,7 @@ public class AopProxyResolver {
         // methods are all inherited governs nothing, yet @Transactional refused it while
         // @ExceptionCatch quietly covered nothing. One rule, so one answer. See issue #309.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-            if (method.isAnnotationPresent(type)) {
+            if (AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
                 // The declaring class, not the bean: the method may come from a superclass, and
                 // naming the bean would point the author at a file with no such annotation.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
@@ -246,7 +277,7 @@ public class AopProxyResolver {
                     continue;
                 }
                 Class<? extends Annotation> type = advisor.getAnnotationType();
-                if (type != null && method.isAnnotationPresent(type)) {
+                if (type != null && AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
                     // Method-level: an explicit request, but still only collected when the proxy
                     // can actually reach it. resolve() warns about the ones dropped here, using
                     // AopEligibility.check for the reason and the remedy.

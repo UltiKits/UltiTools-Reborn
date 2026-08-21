@@ -35,8 +35,8 @@ public class ExceptionInterceptor implements MethodInterceptor {
 
     private final List<ExceptionHandler> globalHandlers;
     /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
-    private final ClassLevelAnnotationCache<ExceptionCatch> classLevelCache =
-            new ClassLevelAnnotationCache<>(ExceptionCatch.class);
+    private final AnnotationLookupCache<ExceptionCatch> lookupCache =
+            new AnnotationLookupCache<>(ExceptionCatch.class);
 
     /**
      * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
@@ -83,9 +83,9 @@ public class ExceptionInterceptor implements MethodInterceptor {
         // while this interceptor found no annotation and quietly re-threw - proxied, annotated and
         // inert. AopAdvisor.findClassLevelAnnotation is the single definition of which class-level
         // annotation governs a method, so the two cannot disagree. See issue #309.
-        ExceptionCatch annotation = method.getAnnotation(ExceptionCatch.class);
+        ExceptionCatch annotation = lookupCache.methodLevel(method);
         if (annotation == null) {
-            annotation = classLevelCache.get(method);
+            annotation = lookupCache.classLevel(method);
         }
 
         try {

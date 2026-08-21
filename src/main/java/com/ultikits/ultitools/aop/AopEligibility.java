@@ -93,7 +93,9 @@ public final class AopEligibility {
         List<Method> methods = ReflectionUtil.getAllMethods(beanClass);
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
             for (Method method : methods) {
-                if (method.isAnnotationPresent(annotation)) {
+                // Includes a declaration this method overrides - that annotation governs the
+                // override, which is the declaration that actually runs.
+                if (AopAdvisor.findMethodLevelAnnotation(method, annotation) != null) {
                     result.add(method);
                 }
             }

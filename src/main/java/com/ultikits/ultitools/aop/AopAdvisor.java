@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.aop;
 
+import com.ultikits.ultitools.utils.ReflectionUtil;
+
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 
@@ -33,6 +35,61 @@ public interface AopAdvisor {
      * 子类」的默认值，不作用于祖先类，因此 bean 不会把自己注解的作用范围扩张到它继承来的一切
      * ——尤其不会扩张到它继承的框架基类上，在那里吞掉异常会变成一个 null，并在远离原因的地方
      * 以不相干的故障重新浮现。这是 Spring 对类级 @Transactional 的既定规则。
+     *
+     * @param method         the method being considered
+     * @param annotationType the annotation to look for
+     * @param <A>            the annotation type
+     * @return the governing annotation, or null
+     */
+    static <A extends Annotation> A findMethodLevelAnnotation(Method method, Class<A> annotationType) {
+        if (method == null || annotationType == null) {
+            return null;
+        }
+        A own = method.getAnnotation(annotationType);
+        if (own != null) {
+            return own;
+        }
+        // Then the declarations this one overrides. Java does not inherit method annotations, and
+        // the scan keeps only the most derived declaration of each overridable method, so without
+        // this step an override hid its superclass's annotation completely: no interception, and
+        // for an unavailable annotation no refusal either. Spring's attribute lookup falls back
+        // from the target method to the declaring method for the same reason. ReflectionUtil
+        // decides what overrides what, so a private or static same-signature method elsewhere in
+        // the chain does not count. See issue #309.
+        for (Class<?> current = method.getDeclaringClass().getSuperclass();
+             current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            Method superDeclaration;
+            try {
+                superDeclaration = current.getDeclaredMethod(
+                        method.getName(), method.getParameterTypes());
+            } catch (NoSuchMethodException notDeclaredHere) {
+                continue;
+            }
+            if (ReflectionUtil.overrides(method, superDeclaration)) {
+                A found = superDeclaration.getAnnotation(annotationType);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Finds the class-level annotation that governs a method, or null if none does.
+     * <p>
+     * The lookup is anchored at the method's <b>declaring class</b> and walks up from there. A
+     * class-level annotation is a default for the class that declares it and for that class's
+     * subclasses; it does not apply to ancestors. A bean therefore does not extend its own
+     * annotation's reach over everything it inherits - notably not over the framework base classes
+     * it extends, where swallowing an exception would turn into a null that resurfaces as an
+     * unrelated failure far from its cause. This is the rule Spring documents for a class-level
+     * {@code @Transactional}, and inherited methods must be locally redeclared to pick up a
+     * subclass's annotation.
+     * <p>
+     * 类级注解的查找锚点是方法的<b>声明类</b>，并从那里向上走。类级注解是「声明它的那个类及其
+     * 子类」的默认值，不作用于祖先类。这是 Spring 对类级 @Transactional 的既定规则。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -192,7 +249,7 @@ public interface AopAdvisor {
         private final MethodInterceptor interceptor;
         private final int order;
         /** Instance-scoped on purpose - see ClassLevelAnnotationCache's class javadoc. */
-        private final ClassLevelAnnotationCache<? extends Annotation> classLevelCache;
+        private final AnnotationLookupCache<? extends Annotation> lookupCache;
 
         AnnotationAopAdvisor(Class<? extends Annotation> annotationType,
                             MethodInterceptor interceptor,
@@ -200,19 +257,20 @@ public interface AopAdvisor {
             this.annotationType = annotationType;
             this.interceptor = interceptor;
             this.order = order;
-            this.classLevelCache = new ClassLevelAnnotationCache<>(annotationType);
+            this.lookupCache = new AnnotationLookupCache<>(annotationType);
         }
 
         @Override
         public boolean matches(Method method, Class<?> targetClass) {
-            // Method-level first: the author named this method, wherever it is declared.
-            if (method.isAnnotationPresent(annotationType)) {
+            // Method-level first, including a declaration this method overrides: the author
+            // named this method, wherever in the chain they wrote it.
+            if (lookupCache.methodLevel(method) != null) {
                 return true;
             }
             // Then class level, anchored at the declaring class rather than the bean - see
             // findClassLevelAnnotation for why the difference matters - minus the signatures a
             // bulk request must never sweep up.
-            return classLevelCache.get(method) != null && !isExcludedFromClassLevel(method);
+            return lookupCache.classLevel(method) != null && !isExcludedFromClassLevel(method);
         }
 
         @Override

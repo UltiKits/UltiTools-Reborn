@@ -645,4 +645,74 @@ class AopProxyResolverTest {
         assertSame(ExceptionCatchDeclaringNothing.class, resolved,
                 "the same shape covers nothing for @ExceptionCatch, so it is not proxied");
     }
+    public static class AnnotatedThenOverridden {
+        @ExceptionCatch(silent = true, defaultValue = "from-base")
+        public String load() { throw new IllegalStateException("base-boom"); }
+    }
+
+    public static class OverridesAnnotated extends AnnotatedThenOverridden {
+        @Override public String load() { throw new IllegalStateException("child-boom"); }
+    }
+
+    public static class TransactionalThenOverridden {
+        @Transactional public void save() { }
+    }
+
+    public static class OverridesTransactional extends TransactionalThenOverridden {
+        @Override public void save() { }
+    }
+
+    // Java does not inherit method annotations and the scan keeps only the most derived
+    // declaration, so an override used to hide the annotation entirely: no interception, and for
+    // @Transactional no refusal either - the silent-inert shape this whole branch exists to close.
+    // Spring's attribute lookup falls back from the target method to the declaring method for the
+    // same reason. The override is the declaration that actually runs, so it is the one proxied.
+    @Test
+    @DisplayName("Should honour an annotation on a superclass declaration the bean overrides")
+    void shouldHonourAnnotationOnAnOverriddenDeclaration() throws Exception {
+        Class<?> resolved = exceptionCatchResolver().resolve(OverridesAnnotated.class);
+        assertTrue(ProxyFactory.isProxyClass(resolved));
+
+        Object bean = resolved.getDeclaredConstructor().newInstance();
+        assertEquals("from-base", resolved.getMethod("load").invoke(bean),
+                "the annotation on the overridden declaration governs the override that runs");
+    }
+
+    @Test
+    @DisplayName("Should refuse an unavailable annotation on an overridden declaration too")
+    void shouldRefuseUnavailableAnnotationOnAnOverriddenDeclaration() {
+        AopProxyResolver bare = new AopProxyResolver();
+        bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
+
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> bare.resolve(OverridesTransactional.class));
+        assertTrue(thrown.getMessage().contains("save"), thrown.getMessage());
+    }
+    // resolve() runs inside SimpleContainer.createBean, which runs per instantiation - so for a
+    // prototype-scoped bean this used to repeat the whole analysis, re-emit the "annotation
+    // ignored" warning the javadoc calls a startup warning, and hand back a brand new ByteBuddy
+    // class on every getBean(). Reusing the class is also what stops a prototype bean from
+    // accumulating one generated class per instance.
+    @Test
+    @DisplayName("Should resolve a bean class once and reuse the answer")
+    void shouldMemoizeResolution() {
+        AopProxyResolver reused = exceptionCatchResolver();
+        Class<?> first = reused.resolve(ClassLevelWithLombok.class);
+        Class<?> second = reused.resolve(ClassLevelWithLombok.class);
+        assertSame(first, second, "a second resolve must not generate another proxy class");
+    }
+
+    // The memo has to lose its answers when the advisors change, or a resolver reconfigured after
+    // first use would keep handing out proxies built for the old configuration.
+    @Test
+    @DisplayName("Should discard the memo when the advisor set changes")
+    void shouldDiscardMemoOnReconfiguration() {
+        AopProxyResolver reused = exceptionCatchResolver();
+        Class<?> proxied = reused.resolve(ClassLevelWithLombok.class);
+        assertTrue(ProxyFactory.isProxyClass(proxied));
+
+        reused.removeAdvisor(reused.getAdvisors().get(0));
+        assertSame(ClassLevelWithLombok.class, reused.resolve(ClassLevelWithLombok.class),
+                "with no advisor left there is nothing to intercept");
+    }
 }
