@@ -636,18 +636,10 @@ public class PluginManager {
      * startup warning, the way Spring ignores an annotation on a method it cannot advise. The
      * one thing that still fails the load is a final class, which cannot be subclassed at all.
      * <p>
-     * <b>Scope limit 3 - two kinds of annotation are never seen.</b> Neither is fixed here, and
-     * both behave the same way on 6.2.x.
-     * <ul>
-     * <li>An annotation on an <b>interface default method</b>. The scan walks
-     * {@code getSuperclass()} only, so {@code @ExceptionCatch} silently does nothing there and
-     * {@code @Transactional} is not even refused.</li>
-     * <li>A <b>method-level annotation on a superclass method the bean overrides</b>. Java does
-     * not inherit method annotations, and the scan keeps only the most derived declaration of
-     * each overridable method - which is the override, and it carries nothing. Annotate the
-     * override too. The erased half of a generic override behaves the same way, for the related
-     * reason that the compiler's bridge shadows the annotated declaration.</li>
-     * </ul>
+     * <b>Scope limit 3 - one kind of annotation is never seen.</b> An annotation on an
+     * <b>interface default method</b>. The scan walks {@code getSuperclass()} only, so
+     * {@code @ExceptionCatch} silently does nothing there and {@code @Transactional} is not
+     * even refused. Unchanged from 6.2.x, and not fixed here.
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
@@ -672,13 +664,9 @@ public class PluginManager {
      * 两类跳过均为有意静默，不留任何排查线索。方法级注解只在代理根本够不着该方法时才被跳过，
      * 且绝不悄悄跳过：会以启动期警告点名，这与 Spring 对「织不进去的方法上的注解」的处理一致。
      * 唯一仍会让加载失败的是 final 类——它根本无法被继承。见 issue #309。
-     * 范围限制三：仍有两类注解完全看不见，本批均未修复，在 6.2.x 上行为相同。
-     * 一是<b>接口 default 方法</b>上的注解——扫描只走 {@code getSuperclass()}，
-     * {@code @ExceptionCatch} 在那里静默失效，{@code @Transactional} 连拒绝都不会触发。
-     * 二是<b>父类方法上的方法级注解、而子类覆写了该方法</b>——Java 不继承方法注解，
-     * 且扫描对每个可覆写方法只保留最派生的那条声明，也就是不带注解的那个覆写。
-     * 请在覆写方法上一并标注。泛型覆写的擦除另一半同理，原因相近：编译器生成的桥接
-     * 遮蔽了带注解的那条声明。
+     * 范围限制三：仍有一类注解完全看不见——<b>接口 default 方法</b>上的注解。扫描只走
+     * {@code getSuperclass()}，因此 {@code @ExceptionCatch} 在那里静默失效，
+     * {@code @Transactional} 连拒绝都不会触发。与 6.2.x 行为相同，本批未修复。
      *
      * @param context the plugin container, before refresh
      */

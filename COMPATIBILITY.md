@@ -364,7 +364,7 @@ you are looking at, and it got wider still while 6.3.0 was being built. The refu
 either of these is true anywhere in the bean's superclass chain:
 
 - a method carries `@Transactional` — including a method your class inherits and never mentions,
-  **provided your class does not override it**;
+  and including one your class overrides without repeating the annotation;
 - a class carries `@Transactional` and declares at least one of the methods your bean ends up
   with — including a base class your bean merely extends.
 
@@ -374,10 +374,10 @@ classes, not only your own files.
 
 Two edges are worth stating exactly, because both are easy to guess wrong:
 
-- **Overriding hides the annotation.** Annotations are resolved on the most derived declaration of
-  each method, and Java does not inherit method annotations. If your class overrides an annotated
-  superclass method, the annotation is not seen: no refusal, and equally no interception if it were
-  `@ExceptionCatch`. Annotate the override as well if you mean it to apply.
+- **Overriding does not hide the annotation.** Java does not inherit method annotations, but the
+  lookup falls back from a method to the declaration it overrides, the way Spring's transaction
+  attribute lookup does. So overriding an annotated superclass method still refuses — you do not
+  have to repeat the annotation on the override, and repeating it changes nothing.
 - **A class-level annotation on a class that declares no methods of its own governs nothing**,
   because class-level scope reaches the declaring class and its subclasses, never its ancestors.
 
@@ -999,7 +999,8 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 **这条拒绝的射程有多远。**「带有该注解」比「你正在看的这个文件里出现了这个注解」要宽，而且在
 6.3.0 的开发过程中又变得更宽了。只要 bean 的整条父类链上满足下面任意一条，拒绝就会触发：
 
-- 某个方法带 `@Transactional`——包括你的类继承下来、自己从未提及的方法，**前提是你的类没有覆写它**；
+- 某个方法带 `@Transactional`——包括你的类继承下来、自己从未提及的方法，也包括你的类覆写了、
+  但没有重复标注的方法；
 - 某个类带 `@Transactional`，且它自己声明了你的 bean 最终拥有的某个方法——包括你的 bean 只是
   继承了它的某个基类。
 
@@ -1008,9 +1009,9 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 
 有两处边界值得写明，因为都容易猜错：
 
-- **覆写会遮住注解。** 注解是在每个方法最派生的那条声明上解析的，而 Java 不继承方法注解。
-  如果你的类覆写了父类上带注解的方法，那个注解就看不见了：不会拒绝，换成 `@ExceptionCatch`
-  同样不会拦截。想让它生效，请在覆写方法上也标注一次。
+- **覆写不会遮住注解。** Java 确实不继承方法注解，但查找会从一个方法回退到它所覆写的那条声明，
+  与 Spring 的事务属性查找同理。所以覆写了父类上带注解的方法，同样会被拒绝——你不需要在覆写
+  方法上重复标注一次，重复标注也不改变结果。
 - **一个自己不声明任何方法的类，其类级注解什么都不管**，因为类级作用域只到「声明它的那个类
   及其子类」，从不上溯到祖先。
 
