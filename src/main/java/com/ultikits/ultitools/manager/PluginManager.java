@@ -6,6 +6,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
@@ -26,8 +27,13 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
+import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopProxyResolver;
+import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
@@ -205,6 +211,7 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
+            wireAop(pluginContext);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
@@ -225,7 +232,8 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s", plugin.getPluginName())
+                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", plugin.getPluginName(), e.getMessage()),
+                    e
             );
             return false;
         }
@@ -582,6 +590,85 @@ public class PluginManager {
     }
 
     /**
+     * Attaches AOP to a plugin container.
+     * <p>
+     * Must be called before {@link SimpleContainer#refresh()}: the resolver participates in bean
+     * instantiation, so beans created earlier are never proxied.
+     * <p>
+     * Only {@code @ExceptionCatch} is wired in this release. {@code @Transactional} is declared
+     * unavailable rather than silently inert: the framework has no reachable
+     * {@code TransactionManager} today, because {@code DataStore} does not expose its
+     * {@code DataSource} and the default SQLite backend opens one connection pool per entity class
+     * against a per-plugin {@code .db} file. Tracked in issues #195 and #196.
+     * <p>
+     * <b>Scope limit 1 — {@code registerSingleton} bypasses this entirely.</b> Only beans the
+     * container constructs itself (through {@code registerBean} or component scanning) are ever
+     * offered to the resolver, because {@link AopProxyResolver#resolve(Class)} only runs on the
+     * constructor branch of bean creation. The plugin instance itself, an {@code @ContextEntry}
+     * bean (built by hand with reflection), config entities, {@code @Configuration} classes, and
+     * the beans their {@code @Bean} methods produce are all registered with
+     * {@code registerSingleton} instead, so none of them ever reach it:
+     * {@code @ExceptionCatch} on such a class stays a no-op, and {@code @Transactional} on it is
+     * silently allowed to run rather than rejected. Unlike the first three, {@code @Configuration}
+     * classes and {@code @Bean} methods are written by module authors rather than the framework,
+     * and they are also constructed before {@code wireAop} runs in {@code initializePlugin}, an
+     * independent second reason they can never be proxied. The "beans using it are rejected"
+     * promise above only reaches beans built through a bean definition.
+     * <p>
+     * <b>Scope limit 2 — inherited annotations are invisible.</b> Annotation lookup only scans
+     * methods declared directly on the bean's own class ({@code Class#getDeclaredMethods()}), and
+     * neither {@code @Transactional} nor {@code @ExceptionCatch} carries {@code @Inherited}. An
+     * annotation declared on a superclass is invisible to a subclass bean: it is neither
+     * intercepted nor rejected. The same gap has a second shape: even a class-level annotation
+     * declared directly on the bean's own class is invisible if that class declares no methods of
+     * its own — {@link AopProxyResolver#collectInterceptedMethods(Class)} also scans only
+     * {@code getDeclaredMethods()}, so a bean whose methods are all inherited from its superclass
+     * yields an empty intercepted set and is returned unproxied with no error, exactly like the
+     * inherited-annotation case above.
+     * <p>
+     * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
+     * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
+     * <p>
+     * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
+     * {@code @ContextEntry} bean（反射手工构造）、config 实体、{@code @Configuration} 类
+     * 及其 {@code @Bean} 方法产出的 bean 都是这样注册的，它们上面的
+     * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
+     * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
+     * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
+     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。
+     * 范围限制二：注解识别只看类自身声明的方法（getDeclaredMethods），且两个注解都没有
+     * {@code @Inherited}，父类上声明的注解对子类 bean 同样不可见——既不拦截也不拒绝。
+     * 同样的缺口还有第二种形态：即便注解直接写在 bean 自己的类上，只要这个类没有自己声明的
+     * 方法（全部继承自父类），也会不可见——{@code AopProxyResolver#collectInterceptedMethods}
+     * 同样只扫描 {@code getDeclaredMethods()}，得到的拦截方法集合为空，{@code resolve()}
+     * 就会原样返回未被代理的类，不会有任何报错，和上面「注解声明在父类」的情形结果相同。
+     *
+     * @param context the plugin container, before refresh
+     */
+    static void wireAop(SimpleContainer context) {
+        AopProxyResolver resolver = new AopProxyResolver();
+
+        // The interceptor resolves @ExceptionCatch(handler = "...") beans from THIS container.
+        // Reading the global ContextHolder instead would let the last plugin to initialise
+        // overwrite every earlier plugin's handler lookup. See issue #190.
+        ExceptionInterceptor exceptionInterceptor =
+                new ExceptionInterceptor(Collections.emptyList(), context);
+        resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, exceptionInterceptor, 200));
+
+        resolver.addUnavailableAnnotation(Transactional.class,
+                "@Transactional needs a TransactionManager bound to a DataSource. The framework "
+                        + "cannot provide one yet: DataStore does not expose its DataSource, and "
+                        + "the default SQLite backend opens one connection pool per entity class, "
+                        + "so a single .db file would have several unrelated transaction managers. "
+                        + "Tracked in issues #195 and #196. Until then use "
+                        + "DataOperator.transaction(Callable) explicitly.");
+
+        resolver.validateAnnotationCoverage();
+
+        context.setAopProxyResolver(resolver);
+    }
+
+    /**
      * Initialize module.
      * <br>
      * 初始化模块。
@@ -662,6 +749,7 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
+            wireAop(pluginContext);
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -853,6 +941,7 @@ public class PluginManager {
         }
 
         // 3. Refresh container to instantiate beans
+        wireAop(context);
         context.refresh();
         adapter.setContext(context);
 

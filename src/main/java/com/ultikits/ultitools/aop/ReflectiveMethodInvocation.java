@@ -2,6 +2,7 @@ package com.ultikits.ultitools.aop;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.Callable;
 
 /**
  * Implementation of {@link MethodInvocation} that uses reflection to invoke methods.
@@ -17,10 +18,13 @@ public class ReflectiveMethodInvocation implements MethodInvocation {
     private final Method method;
     private final Object[] arguments;
     private final List<MethodInterceptor> interceptors;
+    private final Callable<?> superCall;
     private int currentIndex = 0;
 
     /**
-     * Creates a new reflective method invocation.
+     * Creates a new reflective method invocation whose chain tail reflects on the target.
+     * <p>
+     * 创建反射式方法调用，链尾通过反射调用目标方法。
      *
      * @param target       the target object
      * @param method       the method to invoke
@@ -29,10 +33,32 @@ public class ReflectiveMethodInvocation implements MethodInvocation {
      */
     public ReflectiveMethodInvocation(Object target, Method method, Object[] arguments,
                                       List<MethodInterceptor> interceptors) {
+        this(target, method, arguments, interceptors, null);
+    }
+
+    /**
+     * Creates a new reflective method invocation with an explicit chain tail.
+     * <p>
+     * Inheritance-based proxies must pass a {@code superCall} that invokes
+     * {@code super.method()}. Reflecting on the target would re-enter the proxy through
+     * virtual dispatch and recurse until the stack overflows.
+     * <p>
+     * 继承式代理必须传入调用 {@code super.method()} 的 {@code superCall}。
+     * 对目标做反射调用会经虚方法分派再次进入代理，导致无限递归。
+     *
+     * @param target       the target object
+     * @param method       the method to invoke
+     * @param arguments    the method arguments
+     * @param interceptors the list of interceptors to apply
+     * @param superCall    the chain tail, or null to reflect on the target
+     */
+    public ReflectiveMethodInvocation(Object target, Method method, Object[] arguments,
+                                      List<MethodInterceptor> interceptors, Callable<?> superCall) {
         this.target = target;
         this.method = method;
         this.arguments = arguments != null ? arguments : new Object[0];
         this.interceptors = interceptors;
+        this.superCall = superCall;
     }
 
     @Override
@@ -57,8 +83,13 @@ public class ReflectiveMethodInvocation implements MethodInvocation {
             MethodInterceptor interceptor = interceptors.get(currentIndex++);
             return interceptor.invoke(this);
         }
-        
-        // All interceptors have been invoked, call the target method
+
+        // Chain tail. An inheritance-based proxy supplies a superCall; reflecting on the
+        // target instead would recurse into the proxy. See issue #190.
+        if (superCall != null) {
+            return superCall.call();
+        }
+
         method.setAccessible(true);
         return method.invoke(target, arguments);
     }

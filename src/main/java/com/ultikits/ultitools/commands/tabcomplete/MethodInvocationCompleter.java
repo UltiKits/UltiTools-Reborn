@@ -15,6 +15,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSuggest;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Completer that invokes suggestion methods annotated with @CmdSuggest.
@@ -122,8 +123,11 @@ public class MethodInvocationCompleter implements TabCompleter {
      * 在类中按名称查找方法。
      */
     private Method[] findMethodsByName(Class<?> clazz, String methodName) {
+        // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
+        // overrides, so a suggest method declared elsewhere in the class would silently stop being
+        // found. See issue #190.
         List<Method> found = new ArrayList<>();
-        for (Method method : clazz.getDeclaredMethods()) {
+        for (Method method : ReflectionUtil.getAllMethods(clazz)) {
             if (method.getName().equals(methodName)) {
                 found.add(method);
             }

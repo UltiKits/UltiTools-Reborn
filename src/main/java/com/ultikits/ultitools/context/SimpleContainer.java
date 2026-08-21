@@ -20,6 +20,7 @@ import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
@@ -53,6 +54,11 @@ public class SimpleContainer {
     private SimpleContainer parent;
     private ClassLoader classLoader;
     private boolean isStarted = false;
+    /**
+     * Resolves which class to instantiate for a bean. Null means AOP is not wired for this
+     * container, in which case every bean is instantiated as its declared class.
+     */
+    private com.ultikits.ultitools.aop.AopProxyResolver aopProxyResolver;
 
     public enum BeanScope {
         SINGLETON, PROTOTYPE
@@ -609,8 +615,16 @@ public class SimpleContainer {
                 // Factory method creation
                 bean = definition.getFactoryMethod().invoke(definition.getFactoryBean());
             } else {
-                // Constructor creation with smart matching
+                // Constructor creation with smart matching.
+                // AOP: resolve the class to instantiate BEFORE construction. An inheritance-based
+                // proxy is the bean itself, so it must be the object every later step sees --
+                // @Autowired injection, @PostConstruct, and the singleton cache all act on it.
+                // ByteBuddy copies every constructor of the target, so all three paths below work
+                // unchanged on the generated subclass. See issue #190.
                 Class<?> beanClass = definition.getBeanClass();
+                if (aopProxyResolver != null) {
+                    beanClass = aopProxyResolver.resolve(beanClass);
+                }
                 Object[] constructorArgs = definition.getConstructorArgValues();
                 
                 if (constructorArgs != null && constructorArgs.length > 0) {
@@ -817,20 +831,19 @@ public class SimpleContainer {
      * @param bean the bean instance <br> Bean实例
      */
     private void invokePostConstructMethods(Object bean) {
-        Class<?> clazz = bean.getClass();
-        while (clazz != null && clazz != Object.class) {
-            for (Method method : clazz.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(PostConstruct.class)) {
-                    try {
-                        method.setAccessible(true);
-                        method.invoke(bean);
-                        LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
-                    }
+        // Walk the hierarchy with override de-duplication. Iterating getDeclaredMethods() level by
+        // level fires the callback once per level when an override repeats the annotation, and on
+        // an AOP proxy that is the normal case rather than the exception. See issue #190.
+        for (Method method : ReflectionUtil.getAllMethods(bean.getClass())) {
+            if (method.isAnnotationPresent(PostConstruct.class)) {
+                try {
+                    method.setAccessible(true);
+                    method.invoke(bean);
+                    LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
                 }
             }
-            clazz = clazz.getSuperclass();
         }
     }
 
@@ -842,20 +855,17 @@ public class SimpleContainer {
      * @param bean the bean instance <br> Bean实例
      */
     private void invokePreDestroyMethods(Object bean) {
-        Class<?> clazz = bean.getClass();
-        while (clazz != null && clazz != Object.class) {
-            for (Method method : clazz.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(PreDestroy.class)) {
-                    try {
-                        method.setAccessible(true);
-                        method.invoke(bean);
-                        LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
-                    } catch (Throwable e) { // NOPMD - must catch Error (e.g. NoClassDefFoundError when dependency plugins unload first)
-                        LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
-                    }
+        // Same hierarchy walk and de-dup as invokePostConstructMethods; see the comment there.
+        for (Method method : ReflectionUtil.getAllMethods(bean.getClass())) {
+            if (method.isAnnotationPresent(PreDestroy.class)) {
+                try {
+                    method.setAccessible(true);
+                    method.invoke(bean);
+                    LOGGER.fine("Invoked @PreDestroy method: " + method.getName());
+                } catch (Throwable e) { // NOPMD - must catch Error (e.g. NoClassDefFoundError when dependency plugins unload first)
+                    LOGGER.log(Level.WARNING, "Failed to invoke @PreDestroy method: " + method.getName(), e);
                 }
             }
-            clazz = clazz.getSuperclass();
         }
     }
 
@@ -868,6 +878,30 @@ public class SimpleContainer {
      */
     public void addBeanPostProcessor(BeanPostProcessor processor) {
         beanPostProcessors.add(processor);
+    }
+
+    /**
+     * Sets the AOP proxy resolver for this container.
+     * <p>
+     * Must be called before {@link #refresh()}: the resolver participates in bean instantiation,
+     * not in post-processing, so beans created earlier would not be proxied.
+     * <p>
+     * 必须在 refresh() 之前调用。解析器参与的是 bean 实例化而非后置处理，
+     * 更早创建的 bean 不会被代理。
+     *
+     * @param resolver the resolver, or null to disable AOP for this container
+     */
+    public void setAopProxyResolver(com.ultikits.ultitools.aop.AopProxyResolver resolver) {
+        this.aopProxyResolver = resolver;
+    }
+
+    /**
+     * Gets the AOP proxy resolver for this container.
+     *
+     * @return the resolver, or null if AOP is not wired
+     */
+    public com.ultikits.ultitools.aop.AopProxyResolver getAopProxyResolver() {
+        return aopProxyResolver;
     }
 
     /**

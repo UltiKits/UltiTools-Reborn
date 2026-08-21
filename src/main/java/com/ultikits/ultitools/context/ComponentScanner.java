@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -18,6 +19,8 @@ import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
@@ -76,6 +79,11 @@ public class ComponentScanner {
                     scanJar(resource, basePackage, classLoader);
                 }
             }
+        } catch (ContainerException e) {
+            // A @Final contract violation is a hard failure and must abort module loading - the
+            // catch-all below would otherwise log it and let scanning continue as if nothing
+            // happened. See issue #190.
+            throw e;
         } catch (Exception e) {
             // Log warning and continue
             System.err.println("Failed to scan package: " + basePackage + ", " + e.getMessage());
@@ -145,6 +153,18 @@ public class ComponentScanner {
      * 处理类的组件注解。
      */
     private void processClass(Class<?> clazz) {
+        // The @Final contract is checked before anything else, including @ConditionalOnConfig:
+        // extending a sealed type is a violation whether or not this particular class ends up
+        // registered. See issue #190.
+        List<String> finalViolations = FinalContractValidator.validate(clazz);
+        if (!finalViolations.isEmpty()) {
+            StringBuilder message = new StringBuilder("@Final contract violation:");
+            for (String violation : finalViolations) {
+                message.append("\n  - ").append(violation);
+            }
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED, message.toString());
+        }
+
         // Check @ConditionalOnConfig before registering anything
         if (!shouldRegister(clazz)) {
             return;

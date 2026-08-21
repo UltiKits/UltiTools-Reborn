@@ -16,7 +16,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
-import com.ultikits.ultitools.context.ContextHolder;
+import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 
@@ -36,19 +36,39 @@ public class ExceptionInterceptor implements MethodInterceptor {
     private final List<ExceptionHandler> globalHandlers;
 
     /**
-     * Creates an exception interceptor with no global handlers.
+     * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
+     * <p>
+     * Injected per plugin rather than read from the global {@code ContextHolder}: each plugin has
+     * its own container, and a single static holder would make the last plugin to initialise win,
+     * sending every earlier plugin's handler lookup to the wrong container. See issue #190.
+     */
+    private final SimpleContainer context;
+
+    /**
+     * Creates an exception interceptor with no global handlers and no container.
      */
     public ExceptionInterceptor() {
-        this(Collections.emptyList());
+        this(Collections.emptyList(), null);
     }
 
     /**
-     * Creates an exception interceptor with the given global handlers.
+     * Creates an exception interceptor with the given global handlers and no container.
      *
      * @param globalHandlers handlers to try for any exception
      */
     public ExceptionInterceptor(List<ExceptionHandler> globalHandlers) {
+        this(globalHandlers, null);
+    }
+
+    /**
+     * Creates an exception interceptor bound to a plugin's container.
+     *
+     * @param globalHandlers handlers to try for any exception
+     * @param context        the container used to resolve named handlers, may be null
+     */
+    public ExceptionInterceptor(List<ExceptionHandler> globalHandlers, SimpleContainer context) {
         this.globalHandlers = globalHandlers != null ? new ArrayList<>(globalHandlers) : new ArrayList<>();
+        this.context = context;
     }
 
     @Override
@@ -124,14 +144,30 @@ public class ExceptionInterceptor implements MethodInterceptor {
 
         // Try custom handler first
         if (!annotation.handler().isEmpty()) {
-            try {
-                Object handlerBean = ContextHolder.getContext().getBean(annotation.handler());
-                if (handlerBean instanceof ExceptionHandler) {
-                    return ((ExceptionHandler) handlerBean).handleException(
-                            e, invocation.getTarget(), method, invocation.getArguments());
+            if (context == null) {
+                // The author named a handler explicitly; saying nothing here would make a
+                // configuration mistake indistinguishable from a handler that ran and returned
+                // the default value.
+                LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                        + method.getDeclaringClass().getName() + "#" + method.getName()
+                        + " cannot be resolved: this interceptor has no container. "
+                        + "Falling back to the default value.");
+            } else {
+                try {
+                    Object handlerBean = context.getBean(annotation.handler());
+                    if (handlerBean instanceof ExceptionHandler) {
+                        return ((ExceptionHandler) handlerBean).handleException(
+                                e, invocation.getTarget(), method, invocation.getArguments());
+                    }
+                    LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                            + method.getDeclaringClass().getName() + "#" + method.getName()
+                            + " resolved to a bean of type "
+                            + (handlerBean == null ? "null" : handlerBean.getClass().getName())
+                            + ", which does not implement ExceptionHandler. "
+                            + "Falling back to the default value.");
+                } catch (Exception handlerException) {
+                    LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
                 }
-            } catch (Exception handlerException) {
-                LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
             }
         }
 

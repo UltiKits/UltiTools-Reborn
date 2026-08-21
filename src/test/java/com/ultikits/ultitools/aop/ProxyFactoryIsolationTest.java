@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +23,10 @@ import org.junit.jupiter.api.Test;
  * plugins/*.jar while the framework itself is loaded by Paper's plugin loader,
  * so the proxy factory must work across that boundary. This scenario was never
  * covered before issue #188 and is the reason the AOP engine went unverified.
+ * <p>
+ * The proxy is inheritance-based (issue #190), so these tests build the proxy class with
+ * {@code createProxyClass} and instantiate it directly - there is no separate target instance
+ * to compare against.
  */
 @DisplayName("ProxyFactory Cross-ClassLoader Tests")
 class ProxyFactoryIsolationTest {
@@ -55,13 +62,15 @@ class ProxyFactoryIsolationTest {
         try (URLClassLoader isolated = newIsolatedLoader()) {
             Class<Object> isolatedClass =
                     (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
-            Object target = isolatedClass.getDeclaredConstructor().newInstance();
 
             ProxyFactory factory = new ProxyFactory(Collections.emptyList());
-            Object proxy = factory.createProxy(isolatedClass, target);
+            Set<Method> intercepted = new LinkedHashSet<>(Arrays.asList(
+                    isolatedClass.getMethod("getValue"),
+                    isolatedClass.getMethod("calculate", int.class, int.class)));
+            Class<?> proxyClass = factory.createProxyClass(isolatedClass, intercepted);
+            Object proxy = proxyClass.getDeclaredConstructor().newInstance();
 
             assertNotNull(proxy);
-            assertNotSame(target, proxy);
             assertTrue(isolatedClass.isInstance(proxy));
 
             Object value = isolatedClass.getMethod("getValue").invoke(proxy);
@@ -80,17 +89,19 @@ class ProxyFactoryIsolationTest {
         try (URLClassLoader isolated = newIsolatedLoader()) {
             Class<Object> isolatedClass =
                     (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
-            Object target = isolatedClass.getDeclaredConstructor().newInstance();
 
             MethodInterceptor prefixing = invocation -> "intercepted:" + invocation.proceed();
-
             ProxyFactory factory = new ProxyFactory(Collections.singletonList(prefixing));
-            Object proxy = factory.createProxy(isolatedClass, target);
 
-            // The INJECTION strategy puts the proxy in the target's own loader, so a
-            // package-private method is overridable and therefore interceptable.
             Method pkgMethod = isolatedClass.getDeclaredMethod("packagePrivateMethod");
             pkgMethod.setAccessible(true);
+            Set<Method> intercepted = Collections.singleton(pkgMethod);
+
+            Object proxy = factory.createProxyClass(isolatedClass, intercepted)
+                    .getDeclaredConstructor().newInstance();
+
+            // The INJECTION strategy puts the proxy in the target's own loader and package, so
+            // a package-private method is overridable and therefore interceptable.
             assertEquals("intercepted:pkg-original", pkgMethod.invoke(proxy));
         }
     }
@@ -102,12 +113,12 @@ class ProxyFactoryIsolationTest {
         try (URLClassLoader isolated = newIsolatedLoader()) {
             Class<Object> isolatedClass =
                     (Class<Object>) isolated.loadClass(IsolatedProxyTarget.class.getName());
-            Object target = isolatedClass.getDeclaredConstructor().newInstance();
 
             ProxyFactory factory = new ProxyFactory(Collections.emptyList());
-            Object proxy = factory.createProxy(isolatedClass, target);
+            Class<?> proxyClass =
+                    factory.createProxyClass(isolatedClass, Collections.emptySet());
 
-            assertEquals(isolatedClass.getClassLoader(), proxy.getClass().getClassLoader());
+            assertEquals(isolatedClass.getClassLoader(), proxyClass.getClassLoader());
         }
     }
 }

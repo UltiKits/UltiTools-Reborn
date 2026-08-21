@@ -43,6 +43,22 @@ public interface AopAdvisor {
     }
 
     /**
+     * The annotation this advisor serves, for annotation-coverage checks.
+     * <p>
+     * {@link AopProxyResolver#validateAnnotationCoverage()} uses this to prove that every
+     * annotation {@link AopEligibility} recognises is either served by a registered advisor or
+     * declared unavailable. An advisor whose pointcut is not annotation-based (a custom
+     * {@code matches} implementation) has nothing truthful to report here and should leave the
+     * default in place.
+     *
+     * @return the annotation type this advisor matches, or {@code null} if its pointcut logic is
+     *         not annotation-based
+     */
+    default Class<? extends Annotation> getAnnotationType() {
+        return null;
+    }
+
+    /**
      * Creates an advisor that matches methods or classes with the given annotation.
      *
      * @param annotationType the annotation to match
@@ -90,6 +106,11 @@ public interface AopAdvisor {
         @Override
         public int getOrder() {
             return order;
+        }
+
+        @Override
+        public Class<? extends Annotation> getAnnotationType() {
+            return annotationType;
         }
     }
 }

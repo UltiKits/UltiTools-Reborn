@@ -1,18 +1,28 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -26,6 +36,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
  * <p>
  * Unlike the CGLIB implementation these tests replaced, none of them require
  * --add-opens JVM arguments. See issue #188 for the decision record.
+ * <p>
+ * The proxy is inheritance-based (issue #190): {@code createProxyClass} returns a subclass, and
+ * the caller instantiates it directly. There is no separate target instance to compare identity
+ * against or forward {@code Object} methods to, which is exactly the delegating-proxy defect
+ * this redesign removes - so the tests below exercise the generated class and its instances
+ * directly instead of a target/proxy pair.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ProxyFactory Tests")
@@ -60,6 +76,52 @@ class ProxyFactoryTest {
         public String method3() {
             return "method3";
         }
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    public @interface MarkerType { }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    public @interface MarkerMethod { }
+
+    public static class CountingTarget {
+        static int instances = 0;
+        public CountingTarget() { instances++; }
+        public String work() { return "work"; }
+    }
+
+    public static class SelfCallTarget {
+        public String outer() { return "outer:" + inner(); }
+        public String inner() { return "inner"; }
+    }
+
+    public static class StatefulTarget {
+        public final Map<String, String> cache = new HashMap<>();
+        public void put() { cache.put("k", "v"); }
+    }
+
+    @MarkerType
+    public static class AnnotatedTarget {
+        @MarkerMethod
+        public String annotated() { return "annotated"; }
+    }
+
+    public static class ThrowingTarget {
+        public String checked() throws IOException { throw new IOException("checked-boom"); }
+    }
+
+    public static class GenericBase<T> {
+        public T identity(T value) { return value; }
+    }
+
+    // Overriding a generic supertype method with a concrete type parameter makes javac emit a
+    // synthetic bridge method (Object identity(Object)) alongside the real one - reflection APIs
+    // like getMethods() return both. See shouldIgnoreBridgeMethods below.
+    public static class StringIdentityTarget extends GenericBase<String> {
+        @Override
+        public String identity(String value) { return value; }
     }
 
     @Nested
@@ -107,25 +169,129 @@ class ProxyFactoryTest {
     }
 
     @Nested
-    @DisplayName("Factory Method Tests")
-    class FactoryMethodTests {
+    @DisplayName("Inheritance-based proxy semantics")
+    class InheritanceSemantics {
 
         @Test
-        @DisplayName("Should have createProxy with target method")
-        void shouldHaveCreateProxyWithTargetMethod() throws NoSuchMethodException {
-            Method method = ProxyFactory.class.getMethod("createProxy", Object.class);
+        @DisplayName("Should produce a subclass whose instance is the only object")
+        void shouldNotCreateSecondInstance() throws Exception {
+            CountingTarget.instances = 0;
+            Set<Method> intercepted = Collections.singleton(
+                    CountingTarget.class.getMethod("work"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
 
-            assertNotNull(method);
-            assertEquals(Object.class, method.getReturnType());
+            Class<? extends CountingTarget> proxyClass =
+                    factory.createProxyClass(CountingTarget.class, intercepted);
+            CountingTarget bean = proxyClass.getDeclaredConstructor().newInstance();
+
+            assertEquals(1, CountingTarget.instances,
+                    "constructor must run exactly once: the proxy IS the bean");
+            assertTrue(ProxyFactory.isProxyClass(bean.getClass()));
+            assertTrue(CountingTarget.class.isInstance(bean));
         }
 
         @Test
-        @DisplayName("Should have createProxy with class and target method")
-        void shouldHaveCreateProxyWithClassAndTargetMethod() throws NoSuchMethodException {
-            Method method = ProxyFactory.class.getMethod("createProxy", Class.class, Object.class);
+        @DisplayName("Should intercept self-invocation")
+        void shouldInterceptSelfInvocation() throws Exception {
+            List<String> log = new ArrayList<>();
+            MethodInterceptor recorder = inv -> {
+                log.add(inv.getMethod().getName());
+                return inv.proceed();
+            };
+            Set<Method> intercepted = new LinkedHashSet<>(Arrays.asList(
+                    SelfCallTarget.class.getMethod("outer"),
+                    SelfCallTarget.class.getMethod("inner")));
+            ProxyFactory factory = new ProxyFactory(Collections.singletonList(recorder));
 
-            assertNotNull(method);
-            assertEquals(Object.class, method.getReturnType());
+            SelfCallTarget bean = factory.createProxyClass(SelfCallTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
+
+            assertEquals("outer:inner", bean.outer());
+            assertEquals(Arrays.asList("outer", "inner"), log,
+                    "this.inner() must be intercepted, not bypassed");
+        }
+
+        @Test
+        @DisplayName("Should keep fields on the single instance")
+        void shouldKeepFieldsOnSingleInstance() throws Exception {
+            Set<Method> intercepted = Collections.singleton(
+                    StatefulTarget.class.getMethod("put"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            StatefulTarget bean = factory.createProxyClass(StatefulTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
+            bean.put();
+
+            assertEquals("v", bean.cache.get("k"),
+                    "no second object: the write must land on the bean the caller holds");
+        }
+
+        @Test
+        @DisplayName("Should copy type and method annotations onto the proxy")
+        void shouldCopyAnnotations() throws Exception {
+            Set<Method> intercepted = Collections.singleton(
+                    AnnotatedTarget.class.getMethod("annotated"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            Class<? extends AnnotatedTarget> proxyClass =
+                    factory.createProxyClass(AnnotatedTarget.class, intercepted);
+
+            assertNotNull(proxyClass.getAnnotation(MarkerType.class),
+                    "type annotations are not @Inherited; they must be copied");
+            assertNotNull(proxyClass.getMethod("annotated").getAnnotation(MarkerMethod.class),
+                    "overriding methods do not inherit annotations; they must be copied");
+        }
+
+        @Test
+        @DisplayName("Should ignore bridge methods even when passed in interceptedMethods (regression)")
+        void shouldIgnoreBridgeMethods() throws Exception {
+            Set<Method> allMethods = new LinkedHashSet<>(
+                    Arrays.asList(StringIdentityTarget.class.getMethods()));
+            assertTrue(allMethods.stream().anyMatch(Method::isBridge),
+                    "test fixture must actually produce a bridge method, or this test proves nothing");
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            // MethodCall.invoke(bridgeMethod).onSuper() throws IllegalStateException at build
+            // time if bridge methods aren't filtered out before generating trampolines - this must
+            // not throw, and the real (non-bridge) method must still work normally.
+            StringIdentityTarget bean = factory
+                    .createProxyClass(StringIdentityTarget.class, allMethods)
+                    .getDeclaredConstructor().newInstance();
+
+            assertEquals("hello", bean.identity("hello"));
+        }
+
+        @Test
+        @DisplayName("Should leave methods outside the intercepted set untouched")
+        void shouldNotInterceptUnlistedMethods() throws Exception {
+            List<String> log = new ArrayList<>();
+            MethodInterceptor recorder = inv -> {
+                log.add(inv.getMethod().getName());
+                return inv.proceed();
+            };
+            Set<Method> intercepted = Collections.singleton(
+                    SelfCallTarget.class.getMethod("inner"));
+            ProxyFactory factory = new ProxyFactory(Collections.singletonList(recorder));
+
+            SelfCallTarget bean = factory.createProxyClass(SelfCallTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
+            bean.outer();
+
+            assertEquals(Collections.singletonList("inner"), log);
+        }
+
+        @Test
+        @DisplayName("Should propagate checked exceptions unwrapped")
+        void shouldPropagateCheckedExceptionUnwrapped() throws Exception {
+            Set<Method> intercepted = Collections.singleton(
+                    ThrowingTarget.class.getMethod("checked"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            ThrowingTarget bean = factory.createProxyClass(ThrowingTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
+
+            IOException thrown = assertThrows(IOException.class, bean::checked);
+            assertEquals("checked-boom", thrown.getMessage());
         }
     }
 
@@ -134,24 +300,28 @@ class ProxyFactoryTest {
     class ProxyCreationTests {
 
         @Test
-        @DisplayName("Should create proxy from target object")
-        void shouldCreateProxyFromTargetObject() {
-            SimpleTarget target = new SimpleTarget();
+        @DisplayName("Should create a proxy subclass distinct from the target class")
+        void shouldCreateProxyFromTargetClass() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
             ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
 
-            SimpleTarget proxy = proxyFactory.createProxy(target);
+            Class<? extends SimpleTarget> proxyClass =
+                    proxyFactory.createProxyClass(SimpleTarget.class, intercepted);
+            SimpleTarget proxy = proxyClass.getDeclaredConstructor().newInstance();
 
             assertNotNull(proxy);
-            assertNotSame(target, proxy);
+            assertNotEquals(SimpleTarget.class, proxy.getClass());
+            assertTrue(ProxyFactory.isProxyClass(proxy.getClass()));
         }
 
         @Test
         @DisplayName("Should proxy be instance of target class")
-        void shouldProxyBeInstanceOfTargetClass() {
-            SimpleTarget target = new SimpleTarget();
+        void shouldProxyBeInstanceOfTargetClass() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
             ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
 
-            SimpleTarget proxy = proxyFactory.createProxy(target);
+            SimpleTarget proxy = proxyFactory.createProxyClass(SimpleTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
 
             assertTrue(proxy instanceof SimpleTarget);
         }
@@ -159,15 +329,15 @@ class ProxyFactoryTest {
         @Test
         @DisplayName("Should intercept method calls")
         void shouldInterceptMethodCalls() throws Throwable {
-            SimpleTarget target = new SimpleTarget();
-
             when(mockInterceptor.invoke(any(MethodInvocation.class))).thenAnswer(invocation -> {
                 MethodInvocation mi = invocation.getArgument(0);
                 return "intercepted:" + mi.proceed();
             });
 
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
             ProxyFactory proxyFactory = new ProxyFactory(Collections.singletonList(mockInterceptor));
-            SimpleTarget proxy = proxyFactory.createProxy(target);
+            SimpleTarget proxy = proxyFactory.createProxyClass(SimpleTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
 
             String result = proxy.getValue();
 
@@ -176,82 +346,33 @@ class ProxyFactoryTest {
 
         @Test
         @DisplayName("Should pass primitive arguments and return values through")
-        void shouldPassPrimitivesThrough() {
-            SimpleTarget target = new SimpleTarget();
+        void shouldPassPrimitivesThrough() throws Exception {
+            Set<Method> intercepted = Collections.singleton(
+                    SimpleTarget.class.getMethod("calculate", int.class, int.class));
             ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
 
-            SimpleTarget proxy = proxyFactory.createProxy(target);
+            SimpleTarget proxy = proxyFactory.createProxyClass(SimpleTarget.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
 
             assertEquals(5, proxy.calculate(2, 3));
         }
 
         @Test
         @DisplayName("Should proxy class with multiple methods")
-        void shouldProxyClassWithMultipleMethods() {
-            TargetWithMultipleMethods target = new TargetWithMultipleMethods();
+        void shouldProxyClassWithMultipleMethods() throws Exception {
+            Set<Method> intercepted = new LinkedHashSet<>(Arrays.asList(
+                    TargetWithMultipleMethods.class.getMethod("method1"),
+                    TargetWithMultipleMethods.class.getMethod("method2"),
+                    TargetWithMultipleMethods.class.getMethod("method3")));
             ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
 
-            TargetWithMultipleMethods proxy = proxyFactory.createProxy(target);
+            TargetWithMultipleMethods proxy =
+                    proxyFactory.createProxyClass(TargetWithMultipleMethods.class, intercepted)
+                            .getDeclaredConstructor().newInstance();
 
             assertEquals("method1", proxy.method1());
             assertEquals("method2", proxy.method2());
             assertEquals("method3", proxy.method3());
-        }
-    }
-
-    @Nested
-    @DisplayName("Object Method Forwarding Tests")
-    class ObjectMethodForwardingTests {
-
-        @Test
-        @DisplayName("Should forward hashCode to target")
-        void shouldForwardHashCodeToTarget() {
-            SimpleTarget target = new SimpleTarget();
-            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
-
-            SimpleTarget proxy = proxyFactory.createProxy(target);
-
-            assertEquals(target.hashCode(), proxy.hashCode());
-        }
-
-        @Test
-        @DisplayName("Should forward toString to target")
-        void shouldForwardToStringToTarget() {
-            SimpleTarget target = new SimpleTarget();
-            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
-
-            SimpleTarget proxy = proxyFactory.createProxy(target);
-
-            assertEquals(target.toString(), proxy.toString());
-        }
-
-        @Test
-        @DisplayName("Should forward equals to target")
-        void shouldForwardEqualsToTarget() {
-            SimpleTarget target = new SimpleTarget();
-            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
-
-            SimpleTarget proxy = proxyFactory.createProxy(target);
-
-            // equals is forwarded, so proxy.equals(target) evaluates target.equals(target)
-            assertTrue(proxy.equals(target));
-        }
-
-        @Test
-        @DisplayName("Should not override clone() (regression: InaccessibleObjectException on JDK 17+)")
-        void shouldNotOverrideClone() {
-            // clone() is a protected member of java.lang.Object. If the method matcher ever
-            // picks it up again, the handler's method.setAccessible(true) throws
-            // InaccessibleObjectException because module java.base does not open java.lang
-            // to the unnamed module on JDK 17+.
-            SimpleTarget target = new SimpleTarget();
-            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
-
-            SimpleTarget proxy = proxyFactory.createProxy(target);
-
-            boolean declaresClone = Arrays.stream(proxy.getClass().getDeclaredMethods())
-                    .anyMatch(m -> m.getName().equals("clone"));
-            assertFalse(declaresClone, "Proxy class must not declare an overriding clone() method");
         }
     }
 }

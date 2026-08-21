@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 
@@ -858,7 +859,12 @@ class PluginManagerTest {
 
             // Assert
             assertThat(result).isTrue();
-            verify(plugin).setContext(any());
+            ArgumentCaptor<SimpleContainer> contextCaptor = ArgumentCaptor.forClass(SimpleContainer.class);
+            verify(plugin).setContext(contextCaptor.capture());
+            // Pins call site 1 (register(UltiToolsPlugin)): if PluginManager.wireAop(pluginContext)
+            // is ever removed from that path, this container comes back with no resolver attached
+            // and @ExceptionCatch/@Transactional silently stop doing anything again. See issue #190.
+            assertThat(contextCaptor.getValue().getAopProxyResolver()).isNotNull();
         }
 
         @Test

@@ -206,11 +206,13 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
      * 扫描命令映射。
      */
     private void scanCommandMappings() {
-        Class<? extends AbstractCommandExecutor> clazz = this.getClass();
-        Method[] methods = clazz.getDeclaredMethods();
-        for (Method method : methods) {
+        // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
+        // overrides, so scanning it directly would drop every other @CmdMapping on the class. See
+        // issue #190. putIfAbsent keeps the most specific override's format when a subclass reuses
+        // a parent's format string - see BaseCommandExecutor.scanCommandMappings for the same call.
+        for (Method method : ReflectionUtil.getAllMethods(this.getClass())) {
             if (method.isAnnotationPresent(CmdMapping.class)) {
-                mappings.put(method.getAnnotation(CmdMapping.class).format(), method);
+                mappings.putIfAbsent(method.getAnnotation(CmdMapping.class).format(), method);
             }
         }
     }
