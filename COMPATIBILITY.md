@@ -381,10 +381,13 @@ Two edges are worth stating exactly, because both are easy to guess wrong:
 - **A class-level annotation on a class that declares no methods of its own governs nothing**,
   because class-level scope reaches the declaring class and its subclasses, never its ancestors.
 
-That reach is shared with `@ExceptionCatch` by construction — one rule resolves both, so identical
-code shapes cannot be *covered* by one annotation and not the other. What differs is the
-consequence once covered: `@Transactional` is unavailable in this release and refuses the load,
-while `@ExceptionCatch` is wired and simply applies.
+How far the annotation is *found* is shared with `@ExceptionCatch` by construction — one rule
+walks the override chain and the class hierarchy for both. What the two do with it differs, and
+deliberately so. `@ExceptionCatch` is wired, so it applies where the proxy can reach and is ignored
+with a warning where it cannot. `@Transactional` is unavailable in this release, so its presence
+alone refuses the load — including on a method no proxy could reach. Degrading `@ExceptionCatch`
+to "the exception propagates" is visible; degrading `@Transactional` to "no transaction" is not,
+and a body that writes several rows would run half-applied with nothing to show for it.
 
 If your module declares `@Transactional` anywhere, or extends anything that does, before upgrading
 to 6.3.0 you must either:
@@ -1046,9 +1049,11 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 - **一个自己不声明任何方法的类，其类级注解什么都不管**，因为类级作用域只到「声明它的那个类
   及其子类」，从不上溯到祖先。
 
-这个射程与 `@ExceptionCatch` 是同一条规则算出来的，因此同样的代码形状不会被一个注解覆盖、
-被另一个漏掉。不同的是覆盖之后的后果：`@Transactional` 在本版本中不可用，会拒绝加载；
-`@ExceptionCatch` 已接线，就正常生效。
+注解被**找到**的射程与 `@ExceptionCatch` 是同一条规则算出来的——两者共用同一趟覆写链与类层级
+遍历。但两者拿它做的事不同，而且是有意为之。`@ExceptionCatch` 已接线，代理够得着就生效，够不着
+就忽略并打警告。`@Transactional` 在本版本不可用，因此它**只要存在**就拒绝加载——包括标在代理
+根本够不着的方法上。`@ExceptionCatch` 降级成「异常照常抛出」是看得见的；`@Transactional` 降级成
+「没有事务」看不见，一个要写好几行的方法体会半途而废，且不留任何痕迹。
 
 如果你的模块任何地方声明了 `@Transactional`，或者继承了任何声明了它的类，升级到 6.3.0 之前
 必须二选一：

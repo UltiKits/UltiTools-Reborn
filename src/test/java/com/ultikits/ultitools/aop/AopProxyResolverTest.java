@@ -488,8 +488,10 @@ class AopProxyResolverTest {
     void shouldIgnoreAnnotationOnUnreachableMethod() {
         Class<?> resolved = assertDoesNotThrow(
                 () -> exceptionCatchResolver().resolve(OverAnnotatedPackagePrivate.class));
-        assertFalse(declares(resolved, "annotatedPackagePrivate"),
-                "the method cannot be overridden from the bean's package, so it is not intercepted");
+        // The class itself, not a proxy: asserting only that the proxy does not declare the method
+        // would have passed no matter what, since no proxy is generated at all here.
+        assertSame(OverAnnotatedPackagePrivate.class, resolved,
+                "nothing is interceptable, so the bean class is returned unchanged");
     }
 
     public static class OwnPrivateAnnotated {
@@ -746,19 +748,39 @@ class AopProxyResolverTest {
         public final void fin() { }
     }
 
-    // COMPATIBILITY.md promises module authors that one rule decides coverage for both
-    // annotations. The refusal used to fire on the mere presence of a class-level @Transactional,
-    // so a class whose every method is unproxyable was hard-failed for an annotation that could
-    // never have taken effect - while the @ExceptionCatch twin simply was not proxied.
+    // The refusal answers a different question from interception, on purpose. Interception asks
+    // what the proxy will cover; the refusal asks whether the module uses an annotation this
+    // release cannot honour, and answers fail-closed. Narrowing it to coverage was tried and
+    // reverted: it let @Transactional on a private method load and run its writes with no
+    // transaction, while @ExceptionCatch degrading to "the exception propagates" stays visible.
     @Test
-    @DisplayName("Should not refuse for a class-level annotation that could cover nothing")
-    void shouldNotRefuseWhereTheTwinCoversNothing() {
+    @DisplayName("Should refuse on the presence of an unavailable annotation, not on its coverage")
+    void shouldRefuseOnPresenceNotCoverage() {
         AopProxyResolver bare = new AopProxyResolver();
         bare.addUnavailableAnnotation(Transactional.class, "not available in this release");
-        assertDoesNotThrow(() -> bare.resolve(TransactionalOverUnproxyableOnly.class));
+        assertThrows(ContainerException.class,
+                () -> bare.resolve(TransactionalOverUnproxyableOnly.class),
+                "the annotation is written here and cannot work, which is what must be reported");
 
         assertSame(ExceptionCatchOverUnproxyableOnly.class,
                 exceptionCatchResolver().resolve(ExceptionCatchOverUnproxyableOnly.class),
-                "the twin covers nothing, so the two agree");
+                "the wired annotation covers nothing and simply does not proxy");
+    }
+
+    public static final class FinalWithUnreachableAnnotation {
+        @ExceptionCatch(silent = true)
+        private void helper() { }
+        public void touch() { helper(); }
+    }
+
+    // A final class blocks the load only when something would actually have been proxied. The
+    // annotation here sits on a method no proxy could reach even if the class were not final, so
+    // dropping 'final' would not make it work and refusing on that grounds sends the author after
+    // the wrong thing. COMPATIBILITY.md tells authors this shape loads with a warning.
+    @Test
+    @DisplayName("Should not refuse a final class whose only annotation is on an unreachable method")
+    void shouldNotRefuseFinalClassWhenNothingWouldBeProxied() {
+        assertDoesNotThrow(
+                () -> exceptionCatchResolver().resolve(FinalWithUnreachableAnnotation.class));
     }
 }

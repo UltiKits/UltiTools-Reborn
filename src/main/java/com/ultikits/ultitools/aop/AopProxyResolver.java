@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
 
@@ -54,6 +55,20 @@ public class AopProxyResolver {
      */
     private final Map<Class<?>, Class<?>> resolvedClasses = new ConcurrentHashMap<>();
 
+    /**
+     * Bumped by every change to the advisor set or the unavailable-annotation map.
+     * <p>
+     * Clearing the memo after a mutation closes only one of the two interleavings. The other is a
+     * resolve() that read the old configuration, was overtaken by a mutation and its clear, and
+     * then stored its now-stale answer - which nothing would clear again. A resolution is kept
+     * only if the configuration it was computed against is still current.
+     * <p>
+     * 变更后清空只堵住两种交错中的一种。另一种是：resolve 读到旧配置，被一次变更与清空超过，
+     * 然后才把已经陈旧的结果写进去——那条记录再也不会被清掉。因此只在「计算所依据的配置仍然
+     * 有效」时才保留结果。
+     */
+    private final AtomicLong configGeneration = new AtomicLong();
+
 
     private final List<AopAdvisor> advisors = new CopyOnWriteArrayList<>();
 
@@ -73,8 +88,7 @@ public class AopProxyResolver {
      */
     public void addUnavailableAnnotation(Class<? extends Annotation> type, String reason) {
         unavailableAnnotations.put(type, reason);
-        // After the mutation - see addAdvisor.
-        resolvedClasses.clear();
+        invalidate();
     }
 
     /**
@@ -120,9 +134,7 @@ public class AopProxyResolver {
     public void addAdvisor(AopAdvisor advisor) {
         advisors.add(advisor);
         advisors.sort(Comparator.comparingInt(AopAdvisor::getOrder));
-        // Cleared after the mutation, never before: a resolve() interleaved between a clear and
-        // its mutation would re-cache the pre-mutation answer, and nothing would clear it again.
-        resolvedClasses.clear();
+        invalidate();
     }
 
     /**
@@ -133,7 +145,7 @@ public class AopProxyResolver {
      */
     public boolean removeAdvisor(AopAdvisor advisor) {
         boolean removed = advisors.remove(advisor);
-        resolvedClasses.clear();
+        invalidate();
         return removed;
     }
 
@@ -162,6 +174,7 @@ public class AopProxyResolver {
         if (memoized != null) {
             return memoized;
         }
+        long generation = configGeneration.get();
 
         // Checked before the advisor short-circuit below: a bean using an unavailable annotation
         // must fail even when no advisor is registered at all, which is exactly the configuration
@@ -169,13 +182,15 @@ public class AopProxyResolver {
         rejectUnavailableAnnotations(beanClass);
 
         if (advisors.isEmpty()) {
-            resolvedClasses.put(beanClass, beanClass);
-            return beanClass;
+            return memoize(beanClass, beanClass, generation);
         }
 
         Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(beanClass);
         Set<Method> intercepted = collectInterceptedMethods(beanClass);
-        boolean interceptionRequested = !intercepted.isEmpty() || !annotated.isEmpty();
+        // Only what would actually be proxied counts. Including `annotated` here made a final
+        // class fail the load over an annotation on a method no proxy could reach anyway, with a
+        // remedy - drop 'final' - that would not have made that method interceptable either.
+        boolean interceptionRequested = !intercepted.isEmpty();
 
         // One case is fatal and the rest are not, and the line between them is whether the author
         // is being told about a method or about the class. A final class cannot be subclassed, so
@@ -200,7 +215,7 @@ public class AopProxyResolver {
                         + ": " + problem + " The annotation has no effect; the module still loads.");
             }
         }
-        if (!blocking.isEmpty() && interceptionRequested) {
+        if (!blocking.isEmpty()) {
             throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
                     buildMessage(beanClass, blocking));
         }
@@ -210,18 +225,8 @@ public class AopProxyResolver {
             // exception. "@ExceptionCatch class ServiceImpl extends AbstractService {}" is a shape
             // authors write, and class-level scope does not reach ancestors, so it covers nothing -
             // silence there is the failure mode this whole change exists to remove.
-            for (AopAdvisor advisor : advisors) {
-                Class<? extends Annotation> type = advisor.getAnnotationType();
-                if (type != null && beanClass.isAnnotationPresent(type)) {
-                    LOGGER.warning("@" + type.getSimpleName() + " on " + beanClass.getName()
-                            + " covers no method and has no effect. A class-level annotation "
-                            + "applies to the methods its own class declares and to subclasses, "
-                            + "not to methods inherited from an ancestor; redeclare the method "
-                            + "here, or annotate it where it is declared.");
-                }
-            }
-            resolvedClasses.put(beanClass, beanClass);
-            return beanClass;
+            warnAboutClassLevelAnnotationsCoveringNothing(beanClass);
+            return memoize(beanClass, beanClass, generation);
         }
 
         LOGGER.fine("Creating AOP proxy class for " + beanClass.getName()
@@ -232,8 +237,25 @@ public class AopProxyResolver {
             interceptors.add(new AdvisorScopedInterceptor(advisor, beanClass));
         }
         Class<?> proxyClass = new ProxyFactory(interceptors).createProxyClass(beanClass, intercepted);
-        resolvedClasses.put(beanClass, proxyClass);
-        return proxyClass;
+        return memoize(beanClass, proxyClass, generation);
+    }
+
+    /** Marks every memoized resolution as computed against a configuration that no longer holds. */
+    private void invalidate() {
+        configGeneration.incrementAndGet();
+        resolvedClasses.clear();
+    }
+
+    /**
+     * Stores a resolution, but only if the configuration it was computed against is still the
+     * current one. Returns the resolution either way - it is correct for this call, just not
+     * necessarily for the next one.
+     */
+    private Class<?> memoize(Class<?> beanClass, Class<?> resolved, long generation) {
+        if (configGeneration.get() == generation) {
+            resolvedClasses.put(beanClass, resolved);
+        }
+        return resolved;
     }
 
     /**
@@ -261,29 +283,21 @@ public class AopProxyResolver {
         // Walks the hierarchy: neither @Transactional nor @ExceptionCatch is @Inherited, so an
         // annotation on a superclass method is invisible to getDeclaredMethods() and the refusal
         // below would never fire for it. See issue #309.
-        // Refuse exactly when the annotation governs at least one of the bean's methods, using
-        // the same governance rule interception uses. Testing beanClass.isAnnotationPresent
-        // instead made the two annotations disagree on identical shapes: an annotated class whose
-        // methods are all inherited governs nothing, yet @Transactional refused it while
-        // @ExceptionCatch quietly covered nothing. One rule, so one answer. See issue #309.
+        // This asks a different question from interception, on purpose. Interception asks what
+        // the proxy will cover; this asks whether the module uses an annotation this release
+        // cannot honour at all, and answers fail-closed. Narrowing it to what would be covered was
+        // tried and reverted: it let @Transactional on a private method load and run its writes
+        // with no transaction, where @ExceptionCatch degrading to "the exception propagates" is at
+        // least visible. Reach is shared with interception - a declaration this method overrides,
+        // and a class-level annotation on an ancestor, both count. See issue #309.
         for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
-            if (AopAdvisor.findMethodLevelAnnotation(method, type) != null
-                    && AopEligibility.isProxyable(method, beanClass)) {
+            if (AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
                 // The declaring class, not the bean: the method may come from a superclass, and
-                // naming the bean would point the author at a file with no such annotation. An
-                // unproxyable one is left to the warning path, the same way @ExceptionCatch treats
-                // it - the annotation could not have taken effect there either.
+                // naming the bean would point the author at a file with no such annotation.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
             }
-            // Class-level, but only where it would actually take effect. Refusing on the mere
-            // presence of the annotation made @Transactional reject shapes @ExceptionCatch does
-            // not cover at all - a class whose every method is unproxyable, or one whose only
-            // methods are the excluded equals/hashCode/canEqual - so a module was hard-failed for
-            // an annotation that could never have done anything there. COMPATIBILITY.md promises
-            // module authors that one rule decides coverage for both.
             Class<?> owner = AopAdvisor.findClassLevelAnnotationOwner(method, type);
-            if (owner != null && !AopAdvisor.isExcludedFromClassLevel(method)
-                    && AopEligibility.isProxyable(method, beanClass)) {
+            if (owner != null) {
                 return owner.getName();
             }
         }
@@ -330,6 +344,61 @@ public class AopProxyResolver {
             }
         }
         return result;
+    }
+
+    /**
+     * Warns for a class-level annotation that ends up covering no method at all.
+     * <p>
+     * Every other skip in this class is named; this one used to be the exception, and
+     * {@code @ExceptionCatch class ServiceImpl extends AbstractService {}} is a shape authors
+     * write. The annotation is located with the same hierarchy walk everything else uses - testing
+     * {@code beanClass.isAnnotationPresent} instead missed an annotation inherited from an
+     * ancestor, which is the silent no-op this warning exists to remove.
+     * <p>
+     * The reason is derived rather than assumed. Ancestor scope is only one way to cover nothing;
+     * a class whose every method is unproxyable, or whose only methods are the excluded
+     * signatures, gets there too, and telling that author to "redeclare the method here" would
+     * send them after methods already declared there.
+     */
+    private void warnAboutClassLevelAnnotationsCoveringNothing(Class<?> beanClass) {
+        for (AopAdvisor advisor : advisors) {
+            Class<? extends Annotation> type = advisor.getAnnotationType();
+            if (type == null) {
+                continue;
+            }
+            Class<?> owner = null;
+            boolean sawUnreachable = false;
+            for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
+                Class<?> candidate = AopAdvisor.findClassLevelAnnotationOwner(method, type);
+                if (candidate == null) {
+                    continue;
+                }
+                owner = candidate;
+                if (!AopAdvisor.isExcludedFromClassLevel(method)
+                        && !AopEligibility.isProxyable(method, beanClass)) {
+                    sawUnreachable = true;
+                }
+            }
+            if (owner == null) {
+                // The annotation is on the bean's own type but governs none of its methods, which
+                // is what ancestor-only method sets look like.
+                if (beanClass.isAnnotationPresent(type)) {
+                    LOGGER.warning("@" + type.getSimpleName() + " on " + beanClass.getName()
+                            + " covers no method and has no effect. A class-level annotation "
+                            + "applies to the methods its own class declares and to subclasses, "
+                            + "not to methods inherited from an ancestor; redeclare the method "
+                            + "here, or annotate it where it is declared.");
+                }
+                continue;
+            }
+            LOGGER.warning("@" + type.getSimpleName() + " on " + owner.getName()
+                    + " covers no method of " + beanClass.getName() + " and has no effect: "
+                    + (sawUnreachable
+                            ? "every method it would cover is one no inheritance proxy can reach."
+                            : "the only methods it would cover are excluded from class-level "
+                                    + "coverage because swallowing them would produce a silent "
+                                    + "wrong answer."));
+        }
     }
 
     /**

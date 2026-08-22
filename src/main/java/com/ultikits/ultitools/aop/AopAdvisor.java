@@ -182,6 +182,9 @@ public interface AopAdvisor {
      * @return true if class-level coverage must skip it
      */
     static boolean isExcludedFromClassLevel(Method method) {
+        if (method == null) {
+            return false;
+        }
         // Name first: getParameterTypes() clones its array, and this runs on every intercepted
         // invocation through matches(). Only three names can ever match, so the clone is avoided
         // for every other method.
