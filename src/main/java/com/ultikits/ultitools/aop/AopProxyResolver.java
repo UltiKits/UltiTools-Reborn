@@ -187,10 +187,11 @@ public class AopProxyResolver {
 
         Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(beanClass);
         Set<Method> intercepted = collectInterceptedMethods(beanClass);
-        // Only what would actually be proxied counts. Including `annotated` here made a final
-        // class fail the load over an annotation on a method no proxy could reach anyway, with a
-        // remedy - drop 'final' - that would not have made that method interceptable either.
-        boolean interceptionRequested = !intercepted.isEmpty();
+        // Two different questions, and conflating them cost the warnings once already. Whether to
+        // diagnose at all depends on whether the author asked for anything; whether a final class
+        // is fatal depends on whether something would actually have been proxied.
+        boolean anythingAsked = !intercepted.isEmpty() || !annotated.isEmpty();
+        boolean somethingWouldBeProxied = !intercepted.isEmpty();
 
         // One case is fatal and the rest are not, and the line between them is whether the author
         // is being told about a method or about the class. A final class cannot be subclassed, so
@@ -203,13 +204,20 @@ public class AopProxyResolver {
         // @ExceptionCatch inert from 6.2.0 to 6.3.0. See issue #309.
         List<AopEligibility.Problem> blocking = new ArrayList<>();
         // Skipped entirely when nothing asked for interception: check() would otherwise build a
-        // FINAL_CLASS problem and its remedy string for every plain final bean, only for the
-        // guard below to discard it.
-        for (AopEligibility.Problem problem : interceptionRequested
+        // FINAL_CLASS problem and its remedy string for every plain final bean, for nothing.
+        for (AopEligibility.Problem problem : anythingAsked
                 ? AopEligibility.check(beanClass, annotated)
                 : java.util.Collections.<AopEligibility.Problem>emptyList()) {
             if (problem.getKind() == AopEligibility.Problem.Kind.FINAL_CLASS) {
-                blocking.add(problem);
+                if (somethingWouldBeProxied) {
+                    blocking.add(problem);
+                } else {
+                    // Final, but nothing was going to be proxied anyway, so dropping 'final' would
+                    // not have made the annotations work. Say so rather than fail the load.
+                    LOGGER.warning("AOP annotations on " + beanClass.getName()
+                            + " have no effect: the class is final, so no proxy can be generated, "
+                            + "and none of its annotated methods could be intercepted in any case.");
+                }
             } else {
                 LOGGER.warning("AOP annotation ignored on " + beanClass.getName()
                         + ": " + problem + " The annotation has no effect; the module still loads.");

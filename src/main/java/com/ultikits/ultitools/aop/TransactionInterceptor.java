@@ -49,9 +49,13 @@ public class TransactionInterceptor implements MethodInterceptor {
         // nothing and called proceed(): the body ran with no transaction and no diagnostic. That is
         // the "proxied, annotated and inert" failure the ExceptionInterceptor half already fixed.
         // See issue #309.
-        Transactional tx = lookupCache.methodLevel(method);
+        Transactional tx = lookupCache.ownMethod(method);
         if (tx == null) {
             tx = lookupCache.classLevel(method);
+        }
+        if (tx == null) {
+            // Spring's precedence - see ExceptionInterceptor for the ordering rationale.
+            tx = lookupCache.inheritedMethod(method);
         }
 
         // No @Transactional - proceed without transaction management

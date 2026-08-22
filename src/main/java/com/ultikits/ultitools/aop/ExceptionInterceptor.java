@@ -83,9 +83,16 @@ public class ExceptionInterceptor implements MethodInterceptor {
         // while this interceptor found no annotation and quietly re-threw - proxied, annotated and
         // inert. AopAdvisor.findClassLevelAnnotation is the single definition of which class-level
         // annotation governs a method, so the two cannot disagree. See issue #309.
-        ExceptionCatch annotation = lookupCache.methodLevel(method);
+        // Spring's precedence: the method itself, then the target class, then the
+        // declaration this method overrides. A subclass writing its own class-level
+        // annotation outranks a method-level one it inherited - the subclass author is
+        // closer to the bean than whoever wrote the superclass method.
+        ExceptionCatch annotation = lookupCache.ownMethod(method);
         if (annotation == null) {
             annotation = lookupCache.classLevel(method);
+        }
+        if (annotation == null) {
+            annotation = lookupCache.inheritedMethod(method);
         }
 
         try {

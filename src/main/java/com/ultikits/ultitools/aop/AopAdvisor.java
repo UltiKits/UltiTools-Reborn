@@ -51,6 +51,32 @@ public interface AopAdvisor {
         if (own != null) {
             return own;
         }
+        return findInheritedMethodAnnotation(method, annotationType);
+    }
+
+    /**
+     * Finds the annotation on a declaration this method overrides, ignoring its own declaration.
+     * <p>
+     * Split out because precedence differs from presence. Deciding <em>whether</em> to intercept
+     * only asks whether an annotation exists anywhere; deciding <em>which</em> annotation supplies
+     * the attributes has an order, and Spring's is: the method itself, then the target class, then
+     * the declaration the method overrides, then that declaration's class. A subclass that writes
+     * its own class-level annotation outranks a method-level one it inherited, because the subclass
+     * author is the one closer to the bean.
+     * <p>
+     * 拆出来是因为「有没有」与「用哪一个」是两个问题。判断是否拦截只问存在性；决定用哪个注解的
+     * 属性则有次序，Spring 的次序是：方法自身 → 目标类 → 被覆写的声明 → 该声明所在的类。
+     *
+     * @param method         the method being considered
+     * @param annotationType the annotation to look for
+     * @param <A>            the annotation type
+     * @return the annotation on an overridden declaration, or null
+     */
+    static <A extends Annotation> A findInheritedMethodAnnotation(Method method,
+                                                                 Class<A> annotationType) {
+        if (method == null || annotationType == null) {
+            return null;
+        }
         // Then the declarations this one overrides. Java does not inherit method annotations, and
         // the scan keeps only the most derived declaration of each overridable method, so without
         // this step an override hid its superclass's annotation completely: no interception, and

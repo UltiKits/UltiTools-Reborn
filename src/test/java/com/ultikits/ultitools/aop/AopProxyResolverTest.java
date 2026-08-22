@@ -12,6 +12,10 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import java.util.List;
 
 import lombok.Data;
@@ -782,5 +786,70 @@ class AopProxyResolverTest {
     void shouldNotRefuseFinalClassWhenNothingWouldBeProxied() {
         assertDoesNotThrow(
                 () -> exceptionCatchResolver().resolve(FinalWithUnreachableAnnotation.class));
+    }
+    public static class OnlyUnreachableAnnotated {
+        @ExceptionCatch(silent = true)
+        private void helper() { }
+        public void touch() { helper(); }
+    }
+
+    /** Captures WARNING records from the resolver's own logger for the duration of one call. */
+    private static List<String> warningsWhile(Runnable body) {
+        Logger target = Logger.getLogger(AopProxyResolver.class.getName());
+        List<String> captured = new ArrayList<>();
+        Handler handler = new Handler() {
+            @Override public void publish(LogRecord record) {
+                if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                    captured.add(record.getMessage());
+                }
+            }
+
+            @Override public void flush() { }
+
+            @Override public void close() { }
+        };
+        target.addHandler(handler);
+        try {
+            body.run();
+        } finally {
+            target.removeHandler(handler);
+        }
+        return captured;
+    }
+
+    // Asserting on the log because the behaviour under test is "something is said". Gating the
+    // diagnosis on what would actually be proxied - a fix for a final class being refused when
+    // nothing was proxyable - silently took the warning with it, for exactly the shape
+    // COMPATIBILITY.md promises a warning for. Nothing else would have caught that.
+    @Test
+    @DisplayName("Should warn when the only annotated method is one no proxy can reach")
+    void shouldWarnAboutAnUnreachableAnnotatedMethod() {
+        List<String> warnings = warningsWhile(
+                () -> exceptionCatchResolver().resolve(OnlyUnreachableAnnotated.class));
+        assertFalse(warnings.isEmpty(), "the annotation does nothing here and must be reported");
+        assertTrue(warnings.toString().contains("helper"),
+                "the warning must name the method: " + warnings);
+    }
+
+    public static class MethodAnnotatedBase {
+        @ExceptionCatch(silent = true, defaultValue = "from-super-method")
+        public String work() { throw new IllegalStateException("boom"); }
+    }
+
+    @ExceptionCatch(silent = true, defaultValue = "from-own-class")
+    public static class OverridesWithOwnClassLevel extends MethodAnnotatedBase {
+        @Override public String work() { throw new IllegalStateException("boom"); }
+    }
+
+    // Presence and precedence are different questions. Both annotations apply here, and Spring's
+    // order decides which one supplies the attributes: the method itself, then the target class,
+    // then the declaration it overrides. The subclass author is closer to the bean than whoever
+    // wrote the superclass method, so their class-level default wins.
+    @Test
+    @DisplayName("Should prefer the target class over a superclass method declaration")
+    void shouldPreferTargetClassOverInheritedMethodAnnotation() throws Exception {
+        Class<?> resolved = exceptionCatchResolver().resolve(OverridesWithOwnClassLevel.class);
+        Object bean = resolved.getDeclaredConstructor().newInstance();
+        assertEquals("from-own-class", resolved.getMethod("work").invoke(bean));
     }
 }

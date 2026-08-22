@@ -39,6 +39,7 @@ final class AnnotationLookupCache<A extends Annotation> {
 
     private final Class<A> annotationType;
     private final Map<Method, Object> methodLevel = new ConcurrentHashMap<>();
+    private final Map<Method, Object> inherited = new ConcurrentHashMap<>();
     private final Map<Class<?>, Object> classLevel = new ConcurrentHashMap<>();
 
     AnnotationLookupCache(Class<A> annotationType) {
@@ -49,6 +50,27 @@ final class AnnotationLookupCache<A extends Annotation> {
      * @param method the method being considered, may be null
      * @return the annotation on this method or on a declaration it overrides, or null
      */
+    A ownMethod(Method method) {
+        return method == null ? null : method.getAnnotation(annotationType);
+    }
+
+    /**
+     * @param method the method being considered, may be null
+     * @return the annotation on a declaration this method overrides, or null
+     */
+    A inheritedMethod(Method method) {
+        if (method == null) {
+            return null;
+        }
+        Object cached = inherited.get(method);
+        if (cached == null) {
+            A found = AopAdvisor.findInheritedMethodAnnotation(method, annotationType);
+            cached = found == null ? NONE : found;
+            inherited.put(method, cached);
+        }
+        return unwrap(cached);
+    }
+
     A methodLevel(Method method) {
         if (method == null) {
             return null;
