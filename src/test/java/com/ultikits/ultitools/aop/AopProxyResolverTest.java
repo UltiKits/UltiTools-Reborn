@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -562,7 +563,7 @@ class AopProxyResolverTest {
         AopProxyResolver pointcutResolver = new AopProxyResolver();
         pointcutResolver.addAdvisor(new AopAdvisor() {
             @Override
-            public boolean matches(java.lang.reflect.Method method, Class<?> targetClass) {
+            public boolean matches(Method method, Class<?> targetClass) {
                 return "hashCode".equals(method.getName());
             }
 
@@ -618,8 +619,7 @@ class AopProxyResolverTest {
                         + "or this test asserts nothing");
 
         Object bean = resolved.getDeclaredConstructor().newInstance();
-        java.lang.reflect.InvocationTargetException wrapped = assertThrows(
-                java.lang.reflect.InvocationTargetException.class,
+        InvocationTargetException wrapped = assertThrows(InvocationTargetException.class,
                 () -> resolved.getMethod("hashCode").invoke(bean));
         assertTrue(wrapped.getCause() instanceof IllegalStateException,
                 "a class-level @ExceptionCatch must never turn hashCode into a silent 0, whichever "
