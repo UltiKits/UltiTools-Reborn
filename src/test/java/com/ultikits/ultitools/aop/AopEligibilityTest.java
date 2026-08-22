@@ -1,9 +1,11 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -56,6 +58,40 @@ class AopEligibilityTest {
         public void guarded() { }
     }
 
+    public static class AnnotatedBase {
+        @Transactional
+        public void inheritedAnnotated() { }
+    }
+
+    /** Declares nothing of its own; the annotated method comes entirely from the superclass. */
+    public static class InheritsAnnotation extends AnnotatedBase { }
+
+    public static class FinalMethodBase {
+        @Transactional
+        public final void inheritedFinal() { }
+    }
+
+    public static class InheritsFinalMethod extends FinalMethodBase { }
+
+    public abstract static class AnnotatedGenericBase<T> {
+        @ExceptionCatch
+        public abstract void handle(T value);
+    }
+
+    public static class ConcreteGeneric extends AnnotatedGenericBase<String> {
+        @Override public void handle(String value) { }
+    }
+
+    @ExceptionCatch
+    public static class ClassLevelOnly {
+        public void plain() { }
+    }
+
+    @ExceptionCatch
+    public static final class ClassLevelOnFinalClass {
+        public void plain() { }
+    }
+
     @Nested
     @DisplayName("findAopAnnotatedMethods")
     class Finding {
@@ -80,6 +116,24 @@ class AopEligibilityTest {
         @DisplayName("Should return empty set for a class with no AOP annotations")
         void shouldReturnEmptyForPlainClass() {
             assertTrue(AopEligibility.findAopAnnotatedMethods(String.class).isEmpty());
+        }
+
+        @Test
+        @DisplayName("Should find a method-level annotation declared on a superclass")
+        void shouldFindInheritedMethodLevel() {
+            Set<Method> found = AopEligibility.findAopAnnotatedMethods(InheritsAnnotation.class);
+            assertEquals(1, found.size());
+            assertEquals("inheritedAnnotated", found.iterator().next().getName());
+        }
+
+        // check() turns everything in this set into a load-blocking Problem, so a class-level
+        // annotation must not contribute to it: the author never vetted those methods one by one
+        // and a single private helper on a superclass would stop the module from loading.
+        // Class-level coverage is resolved in AopProxyResolver instead. See issue #309.
+        @Test
+        @DisplayName("Should not report methods covered only by a class-level annotation")
+        void shouldIgnoreClassLevelCoverage() {
+            assertTrue(AopEligibility.findAopAnnotatedMethods(ClassLevelOnly.class).isEmpty());
         }
     }
 
@@ -157,6 +211,91 @@ class AopEligibilityTest {
             String location = problems.get(0).getLocation();
             assertTrue(location.contains(HasFinalMethod.class.getName()), location);
             assertTrue(location.contains("finalMethod"), location);
+        }
+
+        // The final-class branch used to sit behind an isEmpty() short-circuit on the second
+        // argument. Once class-level annotations stopped contributing to that argument, a final
+        // class carrying only a class-level annotation slipped past it and reached ByteBuddy,
+        // which throws a bare exception naming neither the class nor a remedy. See issue #309.
+        @Test
+        @DisplayName("Should reject a final class even when no method-level annotation exists")
+        void shouldRejectFinalClassWithoutMethodLevelAnnotations() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    ClassLevelOnFinalClass.class, Collections.<Method>emptySet());
+            assertEquals(1, problems.size());
+            assertEquals(AopEligibility.Problem.Kind.FINAL_CLASS, problems.get(0).getKind());
+        }
+
+        // wireAop's javadoc promises a method-level annotation is never skipped quietly. Shadowed
+        // methods are skipped, so check() has to name them - it did not, and the warning loop in
+        // AopProxyResolver had nothing to print for the one case it most needed to.
+        @Test
+        @DisplayName("Should report a shadowed method rather than let it be skipped in silence")
+        void shouldReportShadowedMethod() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    ConcreteGeneric.class,
+                    AopEligibility.findAopAnnotatedMethods(ConcreteGeneric.class));
+            assertEquals(1, problems.size(), String.valueOf(problems));
+            assertEquals(AopEligibility.Problem.Kind.SHADOWED_METHOD, problems.get(0).getKind());
+            assertTrue(problems.get(0).getLocation().contains("handle"),
+                    problems.get(0).getLocation());
+        }
+
+        // Now that the scan walks the hierarchy, an annotated method can be declared somewhere
+        // other than the bean. Naming the bean would send the author to a file that does not
+        // contain the annotation being complained about.
+        @Test
+        @DisplayName("Should name the declaring class, not the bean, for an inherited method")
+        void shouldNameDeclaringClassForInheritedMethod() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    InheritsFinalMethod.class,
+                    AopEligibility.findAopAnnotatedMethods(InheritsFinalMethod.class));
+            assertEquals(1, problems.size());
+            assertTrue(problems.get(0).getLocation().contains(FinalMethodBase.class.getName()),
+                    problems.get(0).getLocation());
+        }
+    }
+    @Nested
+    @DisplayName("isProxyable")
+    class Proxyable {
+
+        // Calls both sides and compares them, rather than restating the modifiers. An earlier
+        // version of this test claimed to do that but only ever called isProxyable, so it asserted
+        // nothing about check(). check() reports all five rules today - including shadowing, which
+        // it briefly did not - so agreement is total and the fixtures below cover every one.
+        @Test
+        @DisplayName("Should agree with check on every rule except the one check omits")
+        void shouldAgreeWithCheck() throws Exception {
+            Class<?>[] owners = {HasStaticMethod.class, HasPrivateMethod.class,
+                    HasFinalMethod.class, Clean.class, ConcreteGeneric.class};
+            String[] methods = {"staticMethod", "privateMethod", "finalMethod", "ok", "handle"};
+            Class<?>[][] params = {{}, {}, {}, {}, {String.class}};
+
+            for (int i = 0; i < owners.length; i++) {
+                // The shadowed case is reached through the annotated superclass declaration, which
+                // is the one both sides have to agree about.
+                Method method = i == 4
+                        ? AnnotatedGenericBase.class.getDeclaredMethod("handle", Object.class)
+                        : owners[i].getDeclaredMethod(methods[i], params[i]);
+                boolean proxyable = AopEligibility.isProxyable(method, owners[i]);
+                boolean checkRejects = !AopEligibility.check(
+                        owners[i], Collections.singleton(method)).isEmpty();
+                assertEquals(checkRejects, !proxyable,
+                        methods[i] + ": check and isProxyable disagree");
+            }
+        }
+
+        @Test
+        @DisplayName("Should accept an ordinary overridable method")
+        void shouldAcceptOrdinaryMethod() throws Exception {
+            assertTrue(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok"), Clean.class));
+        }
+
+        @Test
+        @DisplayName("Should reject null rather than throw")
+        void shouldRejectNull() throws Exception {
+            assertFalse(AopEligibility.isProxyable(null, Clean.class));
+            assertFalse(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok"), null));
         }
     }
 }

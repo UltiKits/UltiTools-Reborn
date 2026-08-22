@@ -359,7 +359,38 @@ outright. Tracked in issues **#195** and **#196**; once the framework can supply
 `TransactionManager`, `@Transactional` will move from "unavailable" to "wired," which will be
 recorded here in its own right when it happens.
 
-If your module declares `@Transactional` anywhere, before upgrading to 6.3.0 you must either:
+**How far the refusal reaches.** "Carries it" is wider than the annotation appearing in the file
+you are looking at, and it got wider still while 6.3.0 was being built. The refusal fires when
+either of these is true anywhere in the bean's superclass chain:
+
+- a method carries `@Transactional` — including a method your class inherits and never mentions,
+  and including one your class overrides without repeating the annotation;
+- a class carries `@Transactional` and declares at least one of the methods your bean ends up
+  with — including a base class your bean merely extends.
+
+So a module that never types the word `Transactional` still fails to load if it extends a class
+that does — from a shared internal base class, or from a library you depend on. Check your base
+classes, not only your own files.
+
+Two edges are worth stating exactly, because both are easy to guess wrong:
+
+- **Overriding does not hide the annotation.** Java does not inherit method annotations, but the
+  lookup falls back from a method to the declaration it overrides, the way Spring's transaction
+  attribute lookup does. So overriding an annotated superclass method still refuses — you do not
+  have to repeat the annotation on the override, and repeating it changes nothing.
+- **A class-level annotation on a class that declares no methods of its own governs nothing**,
+  because class-level scope reaches the declaring class and its subclasses, never its ancestors.
+
+How far the annotation is *found* is shared with `@ExceptionCatch` by construction — one rule
+walks the override chain and the class hierarchy for both. What the two do with it differs, and
+deliberately so. `@ExceptionCatch` is wired, so it applies where the proxy can reach and is ignored
+with a warning where it cannot. `@Transactional` is unavailable in this release, so its presence
+alone refuses the load — including on a method no proxy could reach. Degrading `@ExceptionCatch`
+to "the exception propagates" is visible; degrading `@Transactional` to "no transaction" is not,
+and a body that writes several rows would run half-applied with nothing to show for it.
+
+If your module declares `@Transactional` anywhere, or extends anything that does, before upgrading
+to 6.3.0 you must either:
 
 - remove the annotation, or
 - call `DataOperator.transaction(Callable)` explicitly instead.
@@ -370,6 +401,37 @@ through here: the "old behaviour" being phased out is a bean running without the
 guarantee its own annotation promises, and continuing to allow that for one more release — even
 with a louder warning — is exactly the risk this document exists to flag, not something worth
 preserving a little longer.
+
+### Recorded instance: `@ExceptionCatch` can now stop a module from loading (6.3.0)
+
+Before 6.3.0 `@ExceptionCatch` did nothing at all. AOP was never wired into the container, so the
+annotation was recognised, ignored, and had no effect on whether a module loaded. 6.3.0 wires it,
+which means the framework now has to build a proxy for the beans that carry it — and one shape
+cannot be proxied at all.
+
+**A `final` bean class fails the load if anything asks to intercept it**, including an
+`@ExceptionCatch` method it merely inherits:
+
+```java
+public class GuardedBase {
+    @ExceptionCatch(silent = true)
+    public String guarded() { ... }
+}
+
+public final class MyService extends GuardedBase { }   // 6.2.5: loads. 6.3.0: refuses.
+```
+
+Remove the `final` keyword and mark the class `@Final` instead, which keeps the non-extendable
+contract while allowing AOP. Lombok's `@Value` and `@UtilityClass` also emit `final`; switch to
+`@Data` if one of those is the source.
+
+Nothing else about `@ExceptionCatch` can stop a module loading. An annotation on a method no
+inheritance proxy can reach — `private`, `static`, `final`, package-private from another package,
+or hidden by the bridge a generic override generates — is ignored with a startup warning naming the
+method, which is what Spring does for a method it cannot advise. The annotation does nothing there,
+but the module loads.
+
+Method signatures are unchanged, so `japicmp` cannot detect any of this.
 
 ## Binary incompatibilities the removal list cannot cover
 
@@ -968,7 +1030,33 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 **#195** 与 **#196**；等框架能提供真正的 TransactionManager，`@Transactional` 会从「不可用」变为
 「已接线」，届时会作为它自己的一条记录写在这里。
 
-如果你的模块任何地方声明了 `@Transactional`，升级到 6.3.0 之前必须二选一：
+**这条拒绝的射程有多远。**「带有该注解」比「你正在看的这个文件里出现了这个注解」要宽，而且在
+6.3.0 的开发过程中又变得更宽了。只要 bean 的整条父类链上满足下面任意一条，拒绝就会触发：
+
+- 某个方法带 `@Transactional`——包括你的类继承下来、自己从未提及的方法，也包括你的类覆写了、
+  但没有重复标注的方法；
+- 某个类带 `@Transactional`，且它自己声明了你的 bean 最终拥有的某个方法——包括你的 bean 只是
+  继承了它的某个基类。
+
+也就是说，一个从头到尾没打过 `Transactional` 这个词的模块，只要它继承的类打了，就同样加载不了
+——可能来自你们内部共用的基类，也可能来自你依赖的某个库。请连基类一起检查，不要只看自己的文件。
+
+有两处边界值得写明，因为都容易猜错：
+
+- **覆写不会遮住注解。** Java 确实不继承方法注解，但查找会从一个方法回退到它所覆写的那条声明，
+  与 Spring 的事务属性查找同理。所以覆写了父类上带注解的方法，同样会被拒绝——你不需要在覆写
+  方法上重复标注一次，重复标注也不改变结果。
+- **一个自己不声明任何方法的类，其类级注解什么都不管**，因为类级作用域只到「声明它的那个类
+  及其子类」，从不上溯到祖先。
+
+注解被**找到**的射程与 `@ExceptionCatch` 是同一条规则算出来的——两者共用同一趟覆写链与类层级
+遍历。但两者拿它做的事不同，而且是有意为之。`@ExceptionCatch` 已接线，代理够得着就生效，够不着
+就忽略并打警告。`@Transactional` 在本版本不可用，因此它**只要存在**就拒绝加载——包括标在代理
+根本够不着的方法上。`@ExceptionCatch` 降级成「异常照常抛出」是看得见的；`@Transactional` 降级成
+「没有事务」看不见，一个要写好几行的方法体会半途而废，且不留任何痕迹。
+
+如果你的模块任何地方声明了 `@Transactional`，或者继承了任何声明了它的类，升级到 6.3.0 之前
+必须二选一：
 
 - 移除该注解；或
 - 改为显式调用 `DataOperator.transaction(Callable)`。
@@ -977,6 +1065,33 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 中间态可走：要逐步淘汰的「旧行为」本身就是一个 bean 在没有它自己注解承诺的事务保护下运行，哪怕
 只是多打一条更响的警告、再多放行一个版本，都正是本文件存在的目的要拦下的那种风险，不值得再多
 保留一会儿。
+
+### 已记录的实例：`@ExceptionCatch` 现在可能让模块无法加载（6.3.0）
+
+6.3.0 之前 `@ExceptionCatch` 什么都不做。AOP 从未接入容器，这个注解只是被认得、被忽略，不影响
+模块能否加载。6.3.0 把它接上了，于是框架必须为带它的 bean 生成代理——而有一种形状根本无法生成。
+
+**只要有任何东西要求拦截，一个 `final` 的 bean 类就会让加载失败**，包括它仅仅是继承来的
+`@ExceptionCatch` 方法：
+
+```java
+public class GuardedBase {
+    @ExceptionCatch(silent = true)
+    public String guarded() { ... }
+}
+
+public final class MyService extends GuardedBase { }   // 6.2.5：能加载。6.3.0：拒绝。
+```
+
+去掉 `final` 关键字，改标 `@Final` 注解——它保留「不可继承」的约定，同时允许 AOP。Lombok 的
+`@Value` 与 `@UtilityClass` 也会生成 `final`，如果是它们造成的，请改用 `@Data`。
+
+除此之外，`@ExceptionCatch` 不会再有别的方式阻止模块加载。标在继承式代理够不着的方法上的注解
+——`private`、`static`、`final`、声明在别的包里的 package-private、或被泛型覆写生成的桥接方法
+遮蔽的——会被忽略，并打一条点名到该方法的启动期警告，这与 Spring 对「织不进去的方法」的处理
+一致。注解在那里不起作用，但模块照常加载。
+
+方法签名没有变化，`japicmp` 抓不到上述任何一条。
 
 ## 移除清单覆盖不到的二进制不兼容
 

@@ -20,6 +20,10 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
  */
 public class TransactionInterceptor implements MethodInterceptor {
 
+    /** Instance-scoped on purpose - see AnnotationLookupCache's class javadoc. */
+    private final AnnotationLookupCache<Transactional> lookupCache =
+            new AnnotationLookupCache<>(Transactional.class);
+
     private static final Logger LOGGER = Logger.getLogger(TransactionInterceptor.class.getName());
 
     private final TransactionManager transactionManager;
@@ -38,9 +42,20 @@ public class TransactionInterceptor implements MethodInterceptor {
         Method method = invocation.getMethod();
 
         // Get @Transactional annotation from method or class
-        Transactional tx = method.getAnnotation(Transactional.class);
+        // The same lookup the advisor used to decide this method should be intercepted. Reading
+        // method.getAnnotation plus declaringClass.getAnnotation here disagreed with it in two
+        // shapes the advisor now honours - an annotation on a declaration this method overrides,
+        // and a class-level annotation on an ancestor - so the method was proxied while this found
+        // nothing and called proceed(): the body ran with no transaction and no diagnostic. That is
+        // the "proxied, annotated and inert" failure the ExceptionInterceptor half already fixed.
+        // See issue #309.
+        Transactional tx = lookupCache.ownMethod(method);
         if (tx == null) {
-            tx = method.getDeclaringClass().getAnnotation(Transactional.class);
+            tx = lookupCache.classLevel(method);
+        }
+        if (tx == null) {
+            // Spring's precedence - see ExceptionInterceptor for the ordering rationale.
+            tx = lookupCache.inheritedMethod(method);
         }
 
         // No @Transactional - proceed without transaction management

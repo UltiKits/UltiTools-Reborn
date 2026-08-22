@@ -613,18 +613,33 @@ public class PluginManager {
      * classes and {@code @Bean} methods are written by module authors rather than the framework,
      * and they are also constructed before {@code wireAop} runs in {@code initializePlugin}, an
      * independent second reason they can never be proxied. The "beans using it are rejected"
-     * promise above only reaches beans built through a bean definition.
+     * promise above only reaches beans built through a bean definition. Tracked in issue #308.
      * <p>
-     * <b>Scope limit 2 — inherited annotations are invisible.</b> Annotation lookup only scans
-     * methods declared directly on the bean's own class ({@code Class#getDeclaredMethods()}), and
-     * neither {@code @Transactional} nor {@code @ExceptionCatch} carries {@code @Inherited}. An
-     * annotation declared on a superclass is invisible to a subclass bean: it is neither
-     * intercepted nor rejected. The same gap has a second shape: even a class-level annotation
-     * declared directly on the bean's own class is invisible if that class declares no methods of
-     * its own — {@link AopProxyResolver#collectInterceptedMethods(Class)} also scans only
-     * {@code getDeclaredMethods()}, so a bean whose methods are all inherited from its superclass
-     * yields an empty intercepted set and is returned unproxied with no error, exactly like the
-     * inherited-annotation case above.
+     * <b>Class-level scope.</b> A class-level annotation is a default for the methods the
+     * annotated class declares, and for its subclasses. It does not apply to ancestors, so a bean
+     * does not extend its own annotation over everything it inherits - in particular not over the
+     * framework base classes it extends, where a swallowed exception would become a null that
+     * resurfaces as an unrelated failure far from its cause. Inherited methods must be locally
+     * redeclared to pick up a subclass's annotation. This is the rule Spring documents for a
+     * class-level {@code @Transactional}. A method-level annotation is unaffected: it applies
+     * wherever the method is declared.
+     * <p>
+     * <b>Scope limit 2 - inside that scope, some methods are skipped silently.</b> Two sets.
+     * First, methods this proxy cannot both override and reach through {@code super}:
+     * {@code private}, {@code static}, {@code final}, package-private ones declared in another
+     * package, and the erased half of a generic override that a bridge method shadows. Second,
+     * {@code equals(Object)} / {@code hashCode()} / {@code canEqual(Object)}, where swallowing an
+     * exception would replace it with a silent wrong answer - Lombok emits all three onto the
+     * annotated class itself, so class-level scope does not keep them out. Both skips are silent
+     * by deliberate choice and leave no diagnostic. A method-level annotation is skipped only
+     * when the proxy cannot reach the method at all, and never quietly: it is named in a
+     * startup warning, the way Spring ignores an annotation on a method it cannot advise. The
+     * one thing that still fails the load is a final class, which cannot be subclassed at all.
+     * <p>
+     * <b>Scope limit 3 - one kind of annotation is never seen.</b> An annotation on an
+     * <b>interface default method</b>. The scan walks {@code getSuperclass()} only, so
+     * {@code @ExceptionCatch} silently does nothing there and {@code @Transactional} is not
+     * even refused. Unchanged from 6.2.x, and not fixed here.
      * <p>
      * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
      * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
@@ -635,13 +650,23 @@ public class PluginManager {
      * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
      * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
      * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
-     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。
-     * 范围限制二：注解识别只看类自身声明的方法（getDeclaredMethods），且两个注解都没有
-     * {@code @Inherited}，父类上声明的注解对子类 bean 同样不可见——既不拦截也不拒绝。
-     * 同样的缺口还有第二种形态：即便注解直接写在 bean 自己的类上，只要这个类没有自己声明的
-     * 方法（全部继承自父类），也会不可见——{@code AopProxyResolver#collectInterceptedMethods}
-     * 同样只扫描 {@code getDeclaredMethods()}，得到的拦截方法集合为空，{@code resolve()}
-     * 就会原样返回未被代理的类，不会有任何报错，和上面「注解声明在父类」的情形结果相同。
+     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。见 issue #308。
+     * 类级作用域：类级注解是「被注解类自己声明的方法」及其子类的默认值，不作用于祖先类。
+     * 因此 bean 不会把自己的注解扩张到它继承来的一切——尤其不会扩张到它继承的框架基类上，
+     * 在那里吞掉异常会变成一个 null，并在远离原因的地方以不相干的故障重新浮现。
+     * 继承来的方法需在子类中重新声明才会被子类的注解覆盖。这与 Spring 对类级
+     * {@code @Transactional} 的既定规则一致。方法级注解不受此限：方法声明在哪里就在哪里生效。
+     * 范围限制二：在该作用域内仍有两类被跳过。其一是代理既覆写不了、也 super 不到的方法：
+     * {@code private}、{@code static}、{@code final}、声明在别的包里的 package-private 方法，
+     * 以及被桥接方法遮蔽的泛型覆写擦除另一半。其二是 {@code equals(Object)} /
+     * {@code hashCode()} / {@code canEqual(Object)}——吞掉它们的异常会把一个可见的异常换成
+     * 一个静默的错误结果；Lombok 把这三个生成在被注解类自己身上，类级作用域挡不住它们。
+     * 两类跳过均为有意静默，不留任何排查线索。方法级注解只在代理根本够不着该方法时才被跳过，
+     * 且绝不悄悄跳过：会以启动期警告点名，这与 Spring 对「织不进去的方法上的注解」的处理一致。
+     * 唯一仍会让加载失败的是 final 类——它根本无法被继承。见 issue #309。
+     * 范围限制三：仍有一类注解完全看不见——<b>接口 default 方法</b>上的注解。扫描只走
+     * {@code getSuperclass()}，因此 {@code @ExceptionCatch} 在那里静默失效，
+     * {@code @Transactional} 连拒绝都不会触发。与 6.2.x 行为相同，本批未修复。
      *
      * @param context the plugin container, before refresh
      */
