@@ -280,20 +280,16 @@ public class ProxyFactory {
         /**
          * Invokes an already-resolved trampoline, and unwraps {@link InvocationTargetException} so
          * checked exceptions reach the caller as their original type rather than wrapped - matching
-         * what a direct {@code super.method()} call would have thrown.
+         * what a direct {@code super.method()} call would have thrown. See {@link SneakyThrows} for
+         * why this needs a checked-exception-safe rethrow at all, and why it is not defined here.
          */
         private static Object invokeTrampoline(Method trampoline, Object proxy, Object[] arguments)
                 throws Exception {
             try {
                 return trampoline.invoke(proxy, arguments);
             } catch (InvocationTargetException e) {
-                throw sneakyThrow(e.getCause());
+                throw SneakyThrows.sneakyThrow(e.getCause());
             }
-        }
-
-        @SuppressWarnings("unchecked")
-        private static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
-            throw (E) t;
         }
     }
 }

@@ -198,21 +198,35 @@ public class ExceptionInterceptor implements MethodInterceptor {
                         + " cannot be resolved: this interceptor has no container. "
                         + "Falling back to the default value.");
             } else {
+                // Bean resolution is the only thing this catch covers - a lookup failure is a
+                // configuration mistake and still falls back gracefully. What handleException()
+                // itself throws (below, outside this try) must not be caught here: a handler that
+                // deliberately re-throws is indistinguishable from one that failed unless its
+                // throw is allowed to reach the caller (D-06/D-07).
+                Object handlerBean;
                 try {
-                    Object handlerBean = context.getBean(annotation.handler());
-                    if (handlerBean instanceof ExceptionHandler) {
-                        return ((ExceptionHandler) handlerBean).handleException(
-                                e, invocation.getTarget(), method, invocation.getArguments());
-                    }
-                    LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
-                            + beanClassOf(invocation, method).getName() + "#" + method.getName()
-                            + " resolved to a bean of type "
-                            + (handlerBean == null ? "null" : handlerBean.getClass().getName())
-                            + ", which does not implement ExceptionHandler. "
-                            + "Falling back to the default value.");
-                } catch (Exception handlerException) {
-                    LOGGER.log(Level.WARNING, "Custom exception handler failed", handlerException);
+                    handlerBean = context.getBean(annotation.handler());
+                } catch (Exception resolutionFailure) {
+                    LOGGER.log(Level.WARNING, "@ExceptionCatch(handler = \"" + annotation.handler()
+                            + "\") on " + beanClassOf(invocation, method).getName() + "#"
+                            + method.getName() + " failed to resolve. Falling back to the "
+                            + "default value.", resolutionFailure);
+                    handlerBean = null;
                 }
+                if (handlerBean instanceof ExceptionHandler) {
+                    // No catch here: whatever this throws - including a checked Throwable the
+                    // intercepted method's own throws clause does not declare - must propagate to
+                    // the caller unconditionally. See SneakyThrows for why a checked type still
+                    // compiles through this call site's uncaught path when it needs to.
+                    return ((ExceptionHandler) handlerBean).handleException(
+                            e, invocation.getTarget(), method, invocation.getArguments());
+                }
+                LOGGER.warning("@ExceptionCatch(handler = \"" + annotation.handler() + "\") on "
+                        + beanClassOf(invocation, method).getName() + "#" + method.getName()
+                        + " resolved to a bean of type "
+                        + (handlerBean == null ? "null" : handlerBean.getClass().getName())
+                        + ", which does not implement ExceptionHandler. "
+                        + "Falling back to the default value.");
             }
         }
 
