@@ -12,7 +12,10 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.Collections;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,6 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.ultikits.ultitools.annotations.ExceptionCatch;
+import com.ultikits.ultitools.aop.chainy.C;
 
 /**
  * Unit tests for AopAdvisor interface and AnnotationAopAdvisor implementation.
@@ -250,11 +256,125 @@ class AopAdvisorTest {
         void shouldSupportAdvisorsForDifferentAnnotations() {
             MethodInterceptor interceptor1 = mock(MethodInterceptor.class);
             MethodInterceptor interceptor2 = mock(MethodInterceptor.class);
-            
+
             AopAdvisor advisor1 = AopAdvisor.forAnnotation(TestAnnotation.class, interceptor1, 100);
             AopAdvisor advisor2 = AopAdvisor.forAnnotation(OtherAnnotation.class, interceptor2, 100);
-            
+
             assertNotSame(advisor1, advisor2);
+        }
+    }
+
+    /** Declares nothing of its own between an annotated grandparent and an overriding leaf. */
+    @TestAnnotation
+    static class AnnotatedGrandparent {
+        public void m() { }
+    }
+
+    static class MiddleDeclaringNothing extends AnnotatedGrandparent { }
+
+    static class LeafOverridingThroughGap extends MiddleDeclaringNothing {
+        @Override public void m() { }
+    }
+
+    // D-38's first half: findInheritedMethodAnnotation's superclass walk no longer branches on a
+    // caught NoSuchMethodException. Only the transitive-override case (Test 1) and the
+    // no-declaration-here case (Test 2) have an observable surface; the removal of the catch block
+    // itself is evidenced structurally, not by a test - see AopEligibilityTest's sibling reasoning
+    // and this plan's own SUMMARY.
+    @Nested
+    @DisplayName("findInheritedMethodAnnotation superclass walk (D-38)")
+    class InheritedAnnotationWalk {
+
+        @Test
+        @DisplayName("Should find a transitively overridden annotation across a package boundary")
+        void shouldFindTransitiveOverrideAcrossPackages() throws Exception {
+            // chainx.A (package-private, annotated) -> chainx.B (widens to public) ->
+            // chainy.C (different package, overrides again). C does not override A directly - the
+            // packages differ - only through B, and all three are one method (JLS 8.4.8.1).
+            Method leaf = C.class.getDeclaredMethod("m");
+
+            ExceptionCatch found = AopAdvisor.findMethodLevelAnnotation(leaf, ExceptionCatch.class);
+
+            assertNotNull(found, "the annotation on chainx.A must be found through chainx.B");
+        }
+
+        @Test
+        @DisplayName("Should skip a superclass declaring nothing of the same name, without breaking the walk")
+        void shouldSkipSuperclassDeclaringNothing() throws Exception {
+            // MiddleDeclaringNothing declares no m() at all - the ordinary case on the startup
+            // path, not an exceptional one. The walk must continue past it to AnnotatedGrandparent.
+            Method leaf = LeafOverridingThroughGap.class.getDeclaredMethod("m");
+
+            TestAnnotation found = AopAdvisor.findMethodLevelAnnotation(leaf, TestAnnotation.class);
+
+            assertNotNull(found, "the annotation on the grandparent must still be found");
+        }
+    }
+
+    @Nested
+    @DisplayName("Shared AnnotationLookupCache (D-38)")
+    class SharedLookupCache {
+
+        @Test
+        @DisplayName("An advisor built with an injected cache still collapses own+inherited into one presence check")
+        void advisorMatchStillCollapsesOwnAndInherited() throws Exception {
+            AnnotationLookupCache<TestAnnotation> cache =
+                    new AnnotationLookupCache<>(TestAnnotation.class);
+            AopAdvisor advisor = AopAdvisor.forAnnotation(TestAnnotation.class, mockInterceptor, 0, cache);
+
+            // Own: UnannotatedClass#annotatedMethod carries the annotation directly.
+            assertTrue(advisor.matches(
+                    UnannotatedClass.class.getMethod("annotatedMethod"), UnannotatedClass.class));
+            // Class-level: AnnotatedClass#method1 has none of its own, the class does.
+            assertTrue(advisor.matches(
+                    AnnotatedClass.class.getMethod("method1"), AnnotatedClass.class));
+            // Neither: PlainClass#someMethod has nothing anywhere in the chain.
+            assertFalse(advisor.matches(
+                    PlainClass.class.getMethod("someMethod"), PlainClass.class));
+        }
+
+        @Test
+        @DisplayName("The advisor and the exception interceptor use the same injected cache instance")
+        void advisorAndInterceptorShareTheSameInstance() throws Exception {
+            AnnotationLookupCache<ExceptionCatch> cache =
+                    new AnnotationLookupCache<>(ExceptionCatch.class);
+
+            AopAdvisor advisor = AopAdvisor.forAnnotation(
+                    ExceptionCatch.class, mockInterceptor, 200, cache);
+            ExceptionInterceptor interceptor =
+                    new ExceptionInterceptor(Collections.emptyList(), null, cache);
+
+            Object advisorCache = readLookupCache(advisor);
+            Object interceptorCache = readLookupCache(interceptor);
+
+            assertSame(cache, advisorCache, "the advisor must use the injected instance");
+            assertSame(cache, interceptorCache, "the interceptor must use the injected instance");
+            assertSame(advisorCache, interceptorCache,
+                    "the advisor and the interceptor must share one instance, not two equal ones");
+        }
+
+        @Test
+        @DisplayName("Neither the advisor nor the interceptor nor the cache class holds a static cache field")
+        void noStaticCacheFieldAnywhere() {
+            assertNoStaticFieldOfType(AopAdvisor.AnnotationAopAdvisor.class, AnnotationLookupCache.class);
+            assertNoStaticFieldOfType(ExceptionInterceptor.class, AnnotationLookupCache.class);
+        }
+
+        private void assertNoStaticFieldOfType(Class<?> owner, Class<?> fieldType) {
+            for (Field field : owner.getDeclaredFields()) {
+                if (fieldType.isAssignableFrom(field.getType())) {
+                    assertFalse(Modifier.isStatic(field.getModifiers()),
+                            owner.getSimpleName() + "#" + field.getName()
+                                    + " must not be static - it would pin every module's classes "
+                                    + "for the life of the JVM and block plugin ClassLoader unload");
+                }
+            }
+        }
+
+        private Object readLookupCache(Object owner) throws Exception {
+            Field field = owner.getClass().getDeclaredField("lookupCache");
+            field.setAccessible(true);
+            return field.get(owner);
         }
     }
 }
