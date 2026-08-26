@@ -135,8 +135,12 @@ public class ExceptionInterceptor implements MethodInterceptor {
      * class and never consults the target. Attribution wants the opposite: for an inherited method
      * the declaring class is often a framework base, which tells an operator nothing about which
      * concrete bean failed and makes ErrorReportCollector's fingerprint dedup collapse two
-     * different beans into one report. The declaring class remains the fallback for a target that
-     * is not a proxy at all. See issue #309.
+     * different beans into one report. The declaring class remains the fallback for a null target -
+     * that branch is not proxy identity and is out of scope for this method's unwrap. See issue
+     * #309.
+     * <p>
+     * Unwrapping itself delegates to {@link ProxyFactory#unwrap(Class)}: a proxy of a proxy already
+     * names the original target, so no hierarchy walk is needed here either.
      *
      * @param invocation the invocation in progress
      * @param method     the method being intercepted
@@ -147,11 +151,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
         if (target == null) {
             return method.getDeclaringClass();
         }
-        Class<?> current = target.getClass();
-        while (ProxyFactory.isProxyClass(current) && current.getSuperclass() != null) {
-            current = current.getSuperclass();
-        }
-        return current;
+        return ProxyFactory.unwrap(target.getClass());
     }
 
     /**
