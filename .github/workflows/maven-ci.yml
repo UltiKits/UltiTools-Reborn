@@ -104,6 +104,43 @@ jobs:
         CODACY_PROJECT_NAME: UltiTools-Reborn
       run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r target/site/jacoco/jacoco.xml
 
+  # ==================== 隔离测试阶段 ====================
+  # TaskManagerTest is tagged @Tag("isolated") because it mutates global scheduler state, so it
+  # is excluded from the default `mvn -B clean verify` run above (see pom.xml's excludedGroups
+  # property). This job gives it its own Maven invocation and its own build directory - a
+  # separate job rather than a second step in the `test` job (D-28) - so it cannot observe or
+  # overwrite the other job's surefire output or the japicmp report, and so its own isolation
+  # from global scheduler state is real rather than nominal.
+  test-isolated:
+    name: 🧪 Isolated Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: ☕ Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: 🧪 Run isolated-tagged tests
+      # -Dgroups=isolated selects only the isolated tag; -DexcludedGroups= clears pom.xml's
+      # default exclusion (which would otherwise still filter this class out).
+      run: mvn -B test -Dgroups=isolated -DexcludedGroups=
+
+    - name: 📤 Upload Isolated Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: isolated-test-results
+        path: target/surefire-reports/
+        retention-days: 30
+
   # ==================== 构建 SNAPSHOT 阶段 ====================
   build-snapshot:
     name: 🔨 Build SNAPSHOT
