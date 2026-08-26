@@ -32,6 +32,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -84,20 +85,26 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
     }
 
     /**
-     * Checks whether the sender is valid.
+     * Checks whether the sender matches the given effective target type.
      * <p>
-     * 检查发送者是否有效。
+     * Takes a resolved {@link CmdTarget.CmdTargetType} rather than a {@link CmdTarget} instance
+     * so the caller does not have to synthesize a fake annotation just to carry a value that
+     * {@link CmdTargetComposition#resolve} already computed. This is the only place that
+     * actually compares a sender against a target type; everything above it is resolution.
+     * <p>
+     * 检查发送者是否匹配已解析出的有效目标类型。参数是已解析的枚举值而非注解实例，
+     * 因为 CmdTargetComposition#resolve 已经算出这个值，调用方不必再合成一个假注解。
      *
-     * @param sender    The sender of the command. <br> 命令的发送者。
-     * @param cmdTarget The method that matches the command. <br> 匹配命令的方法。
+     * @param sender     The sender of the command. <br> 命令的发送者。
+     * @param targetType The effective target type, already resolved. <br> 已解析的有效目标类型。
      * @return Whether the sender is valid. <br> 发送者是否有效。
      */
-    private boolean checkCmdTargetType(CommandSender sender, CmdTarget cmdTarget) {
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.PLAYER) && !(sender instanceof Player)) {
+    private boolean checkCmdTargetType(CommandSender sender, CmdTarget.CmdTargetType targetType) {
+        if (targetType == CmdTarget.CmdTargetType.PLAYER && !(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只有游戏内可以执行这个指令！"));
             return false;
         }
-        if (cmdTarget.value().equals(CmdTarget.CmdTargetType.CONSOLE) && sender instanceof Player) {
+        if (targetType == CmdTarget.CmdTargetType.CONSOLE && sender instanceof Player) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("只可以在后台执行这个指令！"));
             return false;
         }
@@ -302,37 +309,33 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
     }
 
     /**
-     * Checks whether the sender is valid.
+     * Checks whether the sender is valid for the matched method, resolving the class-level and
+     * method-level {@code @CmdTarget} through the shared composition rule (D-01/D-04).
      * <p>
-     * 检查发送者是否有效。
-     *
-     * @param sender The sender of the command. <br> 命令的发送者。
-     * @return Whether the sender is valid. <br> 发送者是否有效。
-     */
-    private boolean checkSender(CommandSender sender) {
-        Class<? extends AbstractCommandExecutor> clazz = this.getClass();
-        if (!clazz.isAnnotationPresent(CmdTarget.class)) {
-            return true;
-        }
-        CmdTarget cmdTarget = clazz.getAnnotation(CmdTarget.class);
-        return checkCmdTargetType(sender, cmdTarget);
-    }
-
-    /**
-     * Checks whether the sender is valid.
+     * This used to be two independent checks - one against the class-level annotation, one
+     * against the method-level annotation - combined with {@code ||} at the call site, which is
+     * a boolean AND and therefore an intersection: both had to pass. That intersection reading
+     * disagreed with {@code SenderTypeValidator}'s unguarded override, so migrating a command
+     * class between the two executor generations silently changed who could invoke it. A single
+     * resolved type collapses that gap: by the time a class reaches this method,
+     * {@code ComponentScanner} has already refused any composition that would make the two
+     * readings disagree, so there is only one type left to check against.
      * <p>
-     * 检查发送者是否有效。
+     * 检查发送者对匹配方法是否有效，通过共享的组合规则解析类级与方法级 @CmdTarget。
+     * 以前是两个独立检查在调用处用 || 组合——那其实是布尔与，即取交集，
+     * 与 SenderTypeValidator 的无守卫覆盖语义不一致。
      *
      * @param sender The sender of the command. <br> 命令的发送者。
      * @param method The method that matches the command. <br> 匹配命令的方法。
      * @return Whether the sender is valid. <br> 发送者是否有效。
      */
     private boolean checkSender(CommandSender sender, Method method) {
-        if (!method.isAnnotationPresent(CmdTarget.class)) {
-            return true;
-        }
-        CmdTarget cmdTarget = method.getAnnotation(CmdTarget.class);
-        return checkCmdTargetType(sender, cmdTarget);
+        Class<? extends AbstractCommandExecutor> clazz = this.getClass();
+        CmdTarget.CmdTargetType classLevel = clazz.isAnnotationPresent(CmdTarget.class)
+                ? clazz.getAnnotation(CmdTarget.class).value()
+                : CmdTarget.CmdTargetType.BOTH;
+        CmdTarget.CmdTargetType effectiveType = CmdTargetComposition.resolve(classLevel, method);
+        return checkCmdTargetType(sender, effectiveType);
     }
 
     /**
@@ -1015,7 +1018,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
         if (!checkParameters(strings, method, commandSender,command)) {
             return true;
         }
-        if (!checkSender(commandSender) || !checkSender(commandSender, method)) {
+        if (!checkSender(commandSender, method)) {
             return true;
         }
         if (!checkPermission(commandSender) || !checkPermission(commandSender, method)) {

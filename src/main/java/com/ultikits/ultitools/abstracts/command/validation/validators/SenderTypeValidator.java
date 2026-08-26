@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 
@@ -67,20 +68,21 @@ public class SenderTypeValidator implements CommandValidator {
     
     /**
      * Determines the effective target type from context or method annotation.
-     * 从上下文或方法注解确定有效的目标类型。
+     * <p>
+     * Delegates to {@link CmdTargetComposition#resolve}, the one place this class-versus-method
+     * composition rule is implemented (D-01: narrowing-only override). By the time a matched
+     * method reaches here, {@code ComponentScanner} has already refused any class whose
+     * composition is ambiguous, so this is a plain lookup - it does not re-validate.
+     * <p>
+     * 从上下文或方法注解确定有效的目标类型，委托给 CmdTargetComposition#resolve——
+     * 唯一实现类/方法组合规则的地方。
      *
      * @param context the command context
      * @return the effective target type
      */
     private CmdTarget.CmdTargetType determineTargetType(CommandContext context) {
-        // First check method-level annotation
         Method method = context.getMatchedMethod();
-        if (method != null && method.isAnnotationPresent(CmdTarget.class)) {
-            return method.getAnnotation(CmdTarget.class).value();
-        }
-        
-        // Use the configured type
-        return expectedType;
+        return CmdTargetComposition.resolve(expectedType, method);
     }
     
     @Override
