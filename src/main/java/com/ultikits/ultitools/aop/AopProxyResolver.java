@@ -176,17 +176,25 @@ public class AopProxyResolver {
         }
         long generation = configGeneration.get();
 
+        // One reflective hierarchy scan per resolve, handed to every consumer below that used to
+        // repeat it (D-37): the unavailable-annotation locator, the intercepted-method collector,
+        // AopEligibility's method-level scan, and the diagnostic pass. This alone gives no
+        // compile-time guarantee - the consumers below still take a MethodScan, not a Class, but
+        // nothing stops a future edit from calling getAllMethods directly again.
+        // AopProxyResolverScanCountTest is the guard that actually pins the call count.
+        MethodScan scan = new MethodScan(beanClass, ReflectionUtil.getAllMethods(beanClass));
+
         // Checked before the advisor short-circuit below: a bean using an unavailable annotation
         // must fail even when no advisor is registered at all, which is exactly the configuration
         // that would otherwise return it unproxied.
-        rejectUnavailableAnnotations(beanClass);
+        rejectUnavailableAnnotations(scan);
 
         if (advisors.isEmpty()) {
             return memoize(beanClass, beanClass, generation);
         }
 
-        Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(beanClass);
-        Set<Method> intercepted = collectInterceptedMethods(beanClass);
+        Set<Method> annotated = AopEligibility.findAopAnnotatedMethods(scan);
+        Set<Method> intercepted = collectInterceptedMethods(scan);
         // Two different questions, and conflating them cost the warnings once already. Whether to
         // diagnose at all depends on whether the author asked for anything; whether a final class
         // is fatal depends on whether something would actually have been proxied.
@@ -233,7 +241,7 @@ public class AopProxyResolver {
             // exception. "@ExceptionCatch class ServiceImpl extends AbstractService {}" is a shape
             // authors write, and class-level scope does not reach ancestors, so it covers nothing -
             // silence there is the failure mode this whole change exists to remove.
-            warnAboutClassLevelAnnotationsCoveringNothing(beanClass);
+            warnAboutClassLevelAnnotationsCoveringNothing(scan);
             return memoize(beanClass, beanClass, generation);
         }
 
@@ -269,9 +277,10 @@ public class AopProxyResolver {
     /**
      * Throws if the bean uses an annotation declared unavailable.
      */
-    private void rejectUnavailableAnnotations(Class<?> beanClass) {
+    private void rejectUnavailableAnnotations(MethodScan scan) {
+        Class<?> beanClass = scan.getBeanClass();
         for (Map.Entry<Class<? extends Annotation>, String> entry : unavailableAnnotations.entrySet()) {
-            String location = locateAnnotation(beanClass, entry.getKey());
+            String location = locateAnnotation(scan, entry.getKey());
             if (location != null) {
                 throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
                         "Cannot create " + beanClass.getName() + ": " + location + " uses @"
@@ -287,7 +296,7 @@ public class AopProxyResolver {
      * @return the class name for a type-level annotation, {@code class#method} for a method-level
      *         one, or null
      */
-    private String locateAnnotation(Class<?> beanClass, Class<? extends Annotation> type) {
+    private String locateAnnotation(MethodScan scan, Class<? extends Annotation> type) {
         // Walks the hierarchy: neither @Transactional nor @ExceptionCatch is @Inherited, so an
         // annotation on a superclass method is invisible to getDeclaredMethods() and the refusal
         // below would never fire for it. See issue #309.
@@ -298,7 +307,7 @@ public class AopProxyResolver {
         // with no transaction, where @ExceptionCatch degrading to "the exception propagates" is at
         // least visible. Reach is shared with interception - a declaration this method overrides,
         // and a class-level annotation on an ancestor, both count. See issue #309.
-        for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
+        for (Method method : scan.getMethods()) {
             if (AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
                 // The declaring class, not the bean: the method may come from a superclass, and
                 // naming the bean would point the author at a file with no such annotation.
@@ -317,12 +326,13 @@ public class AopProxyResolver {
      * <p>
      * 收集被至少一个 advisor 匹配的方法，范围覆盖整个继承层级。
      */
-    private Set<Method> collectInterceptedMethods(Class<?> beanClass) {
+    private Set<Method> collectInterceptedMethods(MethodScan scan) {
         Set<Method> result = new LinkedHashSet<>();
-        // No synthetic filter here: ReflectionUtil.getAllMethods already drops bridge and
-        // synthetic declarations. AopEligibility's shadowing rule deliberately does scan them,
-        // and a redundant guard here would blur that contrast for the next reader.
-        for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
+        Class<?> beanClass = scan.getBeanClass();
+        // No synthetic filter here: the scan already drops bridge and synthetic declarations.
+        // AopEligibility's shadowing rule deliberately does scan them, and a redundant guard here
+        // would blur that contrast for the next reader.
+        for (Method method : scan.getMethods()) {
             for (AopAdvisor advisor : advisors) {
                 if (!advisor.matches(method, beanClass)) {
                     continue;
@@ -368,7 +378,8 @@ public class AopProxyResolver {
      * signatures, gets there too, and telling that author to "redeclare the method here" would
      * send them after methods already declared there.
      */
-    private void warnAboutClassLevelAnnotationsCoveringNothing(Class<?> beanClass) {
+    private void warnAboutClassLevelAnnotationsCoveringNothing(MethodScan scan) {
+        Class<?> beanClass = scan.getBeanClass();
         for (AopAdvisor advisor : advisors) {
             Class<? extends Annotation> type = advisor.getAnnotationType();
             if (type == null) {
@@ -376,7 +387,7 @@ public class AopProxyResolver {
             }
             Class<?> owner = null;
             boolean sawUnreachable = false;
-            for (Method method : ReflectionUtil.getAllMethods(beanClass)) {
+            for (Method method : scan.getMethods()) {
                 Class<?> candidate = AopAdvisor.findClassLevelAnnotationOwner(method, type);
                 if (candidate == null) {
                     continue;

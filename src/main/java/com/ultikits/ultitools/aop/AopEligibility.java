@@ -74,26 +74,46 @@ public final class AopEligibility {
      * annotation happened to cover. Class-level coverage is resolved by
      * {@code AopProxyResolver.collectInterceptedMethods} instead. See issue #309.
      * <p>
+     * Scans the class itself - callers on the startup path that already hold a
+     * {@link MethodScan} should call {@link #findAopAnnotatedMethods(MethodScan)} instead, so the
+     * hierarchy is not walked a second time (D-37).
+     * <p>
      * 只收集<b>方法本身</b>带 AOP 注解的方法，并遍历整个继承层级。类级注解有意不在此体现：
      * 本方法的结果会送进 check，而 check 会把不可代理的条目变成加载失败——对作者显式点名的方法
      * 是对的，对被类级注解顺带覆盖到的方法则是误伤。类级覆盖改由 AopProxyResolver 处理。
+     * 已经持有 MethodScan 的调用方应改用 findAopAnnotatedMethods(MethodScan)，避免重复扫描。
      *
      * @param beanClass the class to scan
      * @return the methods carrying a method-level AOP annotation, subclass overrides first
      */
     public static Set<Method> findAopAnnotatedMethods(Class<?> beanClass) {
-        Set<Method> result = new LinkedHashSet<>();
         if (beanClass == null) {
+            return new LinkedHashSet<>();
+        }
+        return findAopAnnotatedMethods(MethodScan.of(beanClass));
+    }
+
+    /**
+     * Same as {@link #findAopAnnotatedMethods(Class)}, but reads from a scan the caller already
+     * has instead of walking the hierarchy again.
+     * <p>
+     * {@link AopProxyResolver#resolve(Class)} builds one {@link MethodScan} per resolve and hands
+     * it to this method, the intercepted-method collector, and the diagnostic pass, instead of each
+     * repeating the reflective hierarchy walk {@code MethodScan} already carries the result of
+     * (D-37).
+     *
+     * @param scan the scan to read from
+     * @return the methods carrying a method-level AOP annotation, subclass overrides first
+     */
+    static Set<Method> findAopAnnotatedMethods(MethodScan scan) {
+        Set<Method> result = new LinkedHashSet<>();
+        if (scan == null) {
             return result;
         }
-        // One hierarchy walk, not one per annotation. getAllMethods builds an override-slot map
-        // over every declared method of every superclass, and the result does not vary with the
-        // annotation being looked for; calling it inside the loop repeated that work for each
-        // entry in AOP_ANNOTATIONS, on the startup path, for every bean of every module.
-        // getAllMethods already drops bridge and synthetic declarations.
-        List<Method> methods = ReflectionUtil.getAllMethods(beanClass);
+        // One pass over the given scan, not one per annotation - the scan does not vary with the
+        // annotation being looked for, so looping annotations on the outside avoids rescanning.
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
-            for (Method method : methods) {
+            for (Method method : scan.getMethods()) {
                 // Includes a declaration this method overrides - that annotation governs the
                 // override, which is the declaration that actually runs.
                 if (AopAdvisor.findMethodLevelAnnotation(method, annotation) != null) {
