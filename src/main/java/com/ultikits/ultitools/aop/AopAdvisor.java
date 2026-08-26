@@ -5,6 +5,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -91,16 +92,27 @@ public interface AopAdvisor {
         // same rule, and the same reason, that ReflectionUtil.getAllMethods documents for its
         // override slots; deriving a second, subtly different version of it here is what made this
         // wrong the first time. See issue #309.
+        //
+        // A superclass declaring no method of this name and signature is the ordinary case here,
+        // and on the startup path the majority case - not an exceptional one. The walk used to
+        // probe with getDeclaredMethod and treat the resulting NoSuchMethodException as its
+        // "not declared here, keep walking" branch; it now enumerates each superclass's declared
+        // methods and selects the matching declaration directly, so "not found" is a loop that
+        // finds nothing rather than a caught exception (D-38).
         List<Method> chain = new ArrayList<>();
         chain.add(method);
         for (Class<?> current = method.getDeclaringClass().getSuperclass();
              current != null && current != Object.class;
              current = current.getSuperclass()) {
-            Method superDeclaration;
-            try {
-                superDeclaration = current.getDeclaredMethod(
-                        method.getName(), method.getParameterTypes());
-            } catch (NoSuchMethodException notDeclaredHere) {
+            Method superDeclaration = null;
+            for (Method candidate : current.getDeclaredMethods()) {
+                if (candidate.getName().equals(method.getName())
+                        && Arrays.equals(candidate.getParameterTypes(), method.getParameterTypes())) {
+                    superDeclaration = candidate;
+                    break;
+                }
+            }
+            if (superDeclaration == null) {
                 continue;
             }
             boolean partOfChain = false;
@@ -278,6 +290,11 @@ public interface AopAdvisor {
 
     /**
      * Creates an advisor that matches methods or classes with the given annotation.
+     * <p>
+     * Builds its own, unshared {@link AnnotationLookupCache}. A caller that also constructs an
+     * {@code ExceptionInterceptor} (or any other consumer) for the same annotation type should use
+     * {@link #forAnnotation(Class, MethodInterceptor, int, AnnotationLookupCache)} instead and
+     * inject one shared instance into both (D-38).
      *
      * @param annotationType the annotation to match
      * @param interceptor    the interceptor to apply
@@ -288,6 +305,30 @@ public interface AopAdvisor {
                                     MethodInterceptor interceptor,
                                     int order) {
         return new AnnotationAopAdvisor(annotationType, interceptor, order);
+    }
+
+    /**
+     * Creates an advisor that matches methods or classes with the given annotation, using a
+     * caller-supplied {@link AnnotationLookupCache} instead of building its own.
+     * <p>
+     * {@code PluginManager.wireAop} is the intended caller: it builds one cache instance per
+     * annotation type and passes the same instance here and to the matching
+     * {@code ExceptionInterceptor}, so the class-level and inherited-method lookups are memoized
+     * once for both consumers instead of twice (D-38). Sharing the cache does not change what
+     * either consumer asks it - this advisor's {@link AnnotationAopAdvisor#matches} still collapses
+     * own-and-inherited into a single presence check.
+     *
+     * @param annotationType the annotation to match
+     * @param interceptor    the interceptor to apply
+     * @param order          the advisor order
+     * @param sharedCache    the cache to use instead of constructing a new one
+     * @return a new annotation-based advisor
+     */
+    static AopAdvisor forAnnotation(Class<? extends Annotation> annotationType,
+                                    MethodInterceptor interceptor,
+                                    int order,
+                                    AnnotationLookupCache<? extends Annotation> sharedCache) {
+        return new AnnotationAopAdvisor(annotationType, interceptor, order, sharedCache);
     }
 
     /**
@@ -303,10 +344,17 @@ public interface AopAdvisor {
         AnnotationAopAdvisor(Class<? extends Annotation> annotationType,
                             MethodInterceptor interceptor,
                             int order) {
+            this(annotationType, interceptor, order, AnnotationLookupCache.standalone(annotationType));
+        }
+
+        AnnotationAopAdvisor(Class<? extends Annotation> annotationType,
+                            MethodInterceptor interceptor,
+                            int order,
+                            AnnotationLookupCache<? extends Annotation> lookupCache) {
             this.annotationType = annotationType;
             this.interceptor = interceptor;
             this.order = order;
-            this.lookupCache = new AnnotationLookupCache<>(annotationType);
+            this.lookupCache = lookupCache;
         }
 
         @Override

@@ -265,8 +265,8 @@ class AopAdvisorTest {
     }
 
     /** Declares nothing of its own between an annotated grandparent and an overriding leaf. */
-    @TestAnnotation
     static class AnnotatedGrandparent {
+        @TestAnnotation
         public void m() { }
     }
 

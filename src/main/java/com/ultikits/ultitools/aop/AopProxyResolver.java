@@ -292,6 +292,14 @@ public class AopProxyResolver {
 
     /**
      * Finds where an annotation appears on the class, or null if it does not.
+     * <p>
+     * The class-level half is routed through this resolver's own per-type
+     * {@link AnnotationLookupCache} (D-38) - it used to call
+     * {@code AopAdvisor.findClassLevelAnnotationOwner} directly on every method of every
+     * unavailable-annotation entry, uncached. Not the same instance {@code PluginManager.wireAop}
+     * shares between the advisor and {@code ExceptionInterceptor}: an unavailable annotation type
+     * is typically one neither of those ever sees, so this resolver owns its own per-type caches
+     * rather than assuming the wiring seam already built one for it.
      *
      * @return the class name for a type-level annotation, {@code class#method} for a method-level
      *         one, or null
@@ -307,18 +315,31 @@ public class AopProxyResolver {
         // with no transaction, where @ExceptionCatch degrading to "the exception propagates" is at
         // least visible. Reach is shared with interception - a declaration this method overrides,
         // and a class-level annotation on an ancestor, both count. See issue #309.
+        AnnotationLookupCache<?> cache = lookupCacheFor(type);
         for (Method method : scan.getMethods()) {
             if (AopAdvisor.findMethodLevelAnnotation(method, type) != null) {
                 // The declaring class, not the bean: the method may come from a superclass, and
                 // naming the bean would point the author at a file with no such annotation.
                 return method.getDeclaringClass().getName() + "#" + method.getName();
             }
-            Class<?> owner = AopAdvisor.findClassLevelAnnotationOwner(method, type);
+            Class<?> owner = cache.classLevelOwner(method);
             if (owner != null) {
                 return owner.getName();
             }
         }
         return null;
+    }
+
+    /**
+     * Per-annotation-type caches this resolver owns for its own class-level lookups. Instance-
+     * scoped like {@link #resolvedClasses}: it holds {@code Class} references and must die with
+     * the container that owns this resolver, not pin a module's classes for the life of the JVM.
+     */
+    private final Map<Class<? extends Annotation>, AnnotationLookupCache<?>> lookupCaches =
+            new ConcurrentHashMap<>();
+
+    private AnnotationLookupCache<?> lookupCacheFor(Class<? extends Annotation> type) {
+        return lookupCaches.computeIfAbsent(type, AnnotationLookupCache::new);
     }
 
     /**

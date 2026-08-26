@@ -35,8 +35,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
 
     private final List<ExceptionHandler> globalHandlers;
     /** Instance-scoped on purpose - see AnnotationLookupCache's class javadoc. */
-    private final AnnotationLookupCache<ExceptionCatch> lookupCache =
-            new AnnotationLookupCache<>(ExceptionCatch.class);
+    private final AnnotationLookupCache<ExceptionCatch> lookupCache;
 
     /**
      * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
@@ -64,14 +63,40 @@ public class ExceptionInterceptor implements MethodInterceptor {
     }
 
     /**
-     * Creates an exception interceptor bound to a plugin's container.
+     * Creates an exception interceptor bound to a plugin's container, with its own unshared
+     * {@link AnnotationLookupCache}.
+     * <p>
+     * A caller that also builds an {@code AopAdvisor} for {@code @ExceptionCatch} should use
+     * {@link #ExceptionInterceptor(List, SimpleContainer, AnnotationLookupCache)} instead and
+     * inject one shared instance into both (D-38). {@code PluginManager.wireAop} is that caller;
+     * this constructor exists for standalone construction and for exercising this interceptor in
+     * isolation.
      *
      * @param globalHandlers handlers to try for any exception
      * @param context        the container used to resolve named handlers, may be null
      */
     public ExceptionInterceptor(List<ExceptionHandler> globalHandlers, SimpleContainer context) {
+        this(globalHandlers, context, AnnotationLookupCache.standalone(ExceptionCatch.class));
+    }
+
+    /**
+     * Creates an exception interceptor bound to a plugin's container, using a caller-supplied
+     * {@link AnnotationLookupCache} instead of building its own.
+     * <p>
+     * Sharing the cache does not change what this interceptor asks it: {@link #invoke} still
+     * resolves own-method, then class-level, then inherited-method, with class-level ranking
+     * between the other two - only the memoized answers are shared with whichever advisor was
+     * given the same instance (D-38).
+     *
+     * @param globalHandlers handlers to try for any exception
+     * @param context        the container used to resolve named handlers, may be null
+     * @param lookupCache    the cache to use instead of constructing a new one
+     */
+    public ExceptionInterceptor(List<ExceptionHandler> globalHandlers, SimpleContainer context,
+                                 AnnotationLookupCache<ExceptionCatch> lookupCache) {
         this.globalHandlers = globalHandlers != null ? new ArrayList<>(globalHandlers) : new ArrayList<>();
         this.context = context;
+        this.lookupCache = lookupCache;
     }
 
     @Override
