@@ -221,10 +221,11 @@
                     </excludes>
                 </configuration>
             </plugin>
-            <!-- japicmp 二进制兼容性门（GATE-01，阶段 1/3）。
-                 仅报告，不阻断构建。对比对象是上一个已发布的 6.2.5，
-                 比较范围仅限 com.ultikits.ultitools 本身。report-only stage 1 of 3
-                 for GATE-01; watches only our own package, against the last released 6.2.5 jar. -->
+            <!-- japicmp binary-compatibility gate (GATE-01, stage 1 of 3). Report-only: it never
+                 breaks the build. Diffs against the last released 6.2.5 artifact, watching only
+                 com.ultikits.ultitools itself.
+                 japicmp 二进制兼容性门（GATE-01，阶段 1/3）。仅报告，不阻断构建。
+                 对比对象是上一个已发布的 6.2.5，比较范围仅限 com.ultikits.ultitools 本身。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
