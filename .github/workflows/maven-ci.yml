@@ -74,6 +74,14 @@ jobs:
         path: target/surefire-reports/
         retention-days: 30
         
+    - name: 📤 Upload japicmp Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: japicmp-report
+        path: target/japicmp/
+        retention-days: 30
+        
     - name: ✅ Coverage Gate Check
       run: |
         COVERAGE=${{ steps.jacoco.outputs.coverage }}
