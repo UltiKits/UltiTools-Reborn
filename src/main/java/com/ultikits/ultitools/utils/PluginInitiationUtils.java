@@ -1,7 +1,10 @@
 package com.ultikits.ultitools.utils;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
@@ -209,6 +212,108 @@ public class PluginInitiationUtils {
      * 初始化所有管理器
      */
     /**
+     * The inbound-message dispatch table: message {@code type} string to the handler that serves it.
+     * <p>
+     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
+     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
+     * finding). A switch multiplies independent path counts by the number of branches; a lookup
+     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
+     * rather than by how many message types exist. Built once, statically, and never mutated after
+     * construction — see {@link #buildInboundHandlers()}.
+     * <p>
+     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
+     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
+     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
+     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
+     * this repository already has twice, in its command-executor and GUI generations.
+     * <p>
+     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
+     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
+     */
+    private static final Map<String, BiConsumer<JsonObject, JsonObject>> INBOUND_HANDLERS =
+            Collections.unmodifiableMap(buildInboundHandlers());
+
+    /**
+     * Builds {@link #INBOUND_HANDLERS}. Each entry invokes exactly the same target its former
+     * {@code case} label invoked — this method is the byte-for-byte routing record of the switch it
+     * replaces, not a redesign of it. {@code log_stream} and {@code log_stream_control} share one
+     * {@link BiConsumer} instance, preserving the fall-through the two case labels used to express.
+     *
+     * @return a table from message {@code type} to the handler that serves it
+     */
+    private static Map<String, BiConsumer<JsonObject, JsonObject>> buildInboundHandlers() {
+        Map<String, BiConsumer<JsonObject, JsonObject>> handlers = new HashMap<>();
+
+        // 系统基础消息
+        handlers.put("ping", (message, data) -> handlePing(message));
+        handlers.put("pong", (message, data) -> handlePong(data));
+        handlers.put("subscribe", (message, data) -> handleSubscribe(data));
+        handlers.put("unsubscribe", (message, data) -> handleUnsubscribe(data));
+        handlers.put("notification", (message, data) -> handleNotification(data));
+        handlers.put("error", (message, data) -> handleError(data));
+
+        // 服务器监控消息
+        handlers.put("server_status", (message, data) -> handleServerStatusRequest(data));
+        handlers.put("plugin_list", (message, data) -> handlePluginListRequest(data));
+        handlers.put("player_event", (message, data) -> handlePlayerEvent(data));
+        handlers.put("metrics_data", (message, data) -> handleMetricsRequest(data));
+
+        // 操作控制消息
+        handlers.put("execute_command",
+                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data));
+        handlers.put("command_result", (message, data) -> handleCommandResult(data));
+        handlers.put("file_operation",
+                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data));
+        handlers.put("file_operation_result", (message, data) -> handleFileOperationResult(data));
+
+        // 数据流消息 —— log_stream 与 log_stream_control 共享同一个处理器，
+        // 这是原先两个 case 标签之间 fall-through 的等价写法。
+        BiConsumer<JsonObject, JsonObject> logStreamHandler =
+                (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
+        handlers.put("log_stream", logStreamHandler);
+        handlers.put("log_stream_control", logStreamHandler);
+        handlers.put("backup_operation", (message, data) -> handleBackupOperation(data));
+        handlers.put("backup_progress", (message, data) -> handleBackupProgress(data));
+
+        // 配置管理消息
+        handlers.put("upload_config", (message, data) -> handleConfigUpload(data));
+        handlers.put("update_config", (message, data) -> handleConfigUpdate(data));
+        handlers.put("server_properties", (message, data) -> {
+            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+            }
+        });
+        handlers.put("server_properties_result", (message, data) ->
+                // Response from this plugin forwarded back by DO — ignore silently
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received server_properties_result echo — ignoring"));
+
+        // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
+        handlers.put("auth_complete", (message, data) ->
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received auth_complete message: " + (data != null ? data.toString() : "null")));
+        handlers.put("magic_link_response", (message, data) ->
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                        "Received magic_link_response message: " + (data != null ? data.toString() : "null")));
+
+        return handlers;
+    }
+
+    /**
+     * Package-private accessor for {@link #INBOUND_HANDLERS}, exposed only so
+     * {@code PluginInitiationUtilsDispatchTableTest} can assert the table's key set and entry
+     * identities without duplicating {@link #buildInboundHandlers()}'s routing record in a second
+     * place. Not a registration point — the returned map is already unmodifiable.
+     * <p>
+     * 包级可见而非 public —— 只为可测，不是注册入口。
+     *
+     * @return the unmodifiable inbound dispatch table
+     */
+    static Map<String, BiConsumer<JsonObject, JsonObject>> inboundDispatchTable() {
+        return INBOUND_HANDLERS;
+    }
+
+    /**
      * 处理面板下发的入站 WebSocket 消息。
      * <p>
      * 从 {@code initWebsocket()} 的 lambda 中提取出来，唯一目的是让它可以被单元测试直接调用：
@@ -261,100 +366,16 @@ public class PluginInitiationUtils {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 String.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
 
-            switch (type) {
-                // 系统基础消息
-                case "ping":
-                    handlePing(message);
-                    break;
-                case "pong":
-                    handlePong(data);
-                    break;
-                case "subscribe":
-                    handleSubscribe(data);
-                    break;
-                case "unsubscribe":
-                    handleUnsubscribe(data);
-                    break;
-                case "notification":
-                    handleNotification(data);
-                    break;
-                case "error":
-                    handleError(data);
-                    break;
-                
-                // 服务器监控消息
-                case "server_status":
-                    handleServerStatusRequest(data);
-                    break;
-                case "plugin_list":
-                    handlePluginListRequest(data);
-                    break;
-                case "player_event":
-                    handlePlayerEvent(data);
-                    break;
-                case "metrics_data":
-                    handleMetricsRequest(data);
-                    break;
-                
-                // 操作控制消息
-                case "execute_command":
-                    UltiTools.getInstance().getCommandExecutionManager().executeCommand(data);
-                    break;
-                case "command_result":
-                    handleCommandResult(data);
-                    break;
-                case "file_operation":
-                    UltiTools.getInstance().getFileOperationManager().handleFileOperation(data);
-                    break;
-                case "file_operation_result":
-                    handleFileOperationResult(data);
-                    break;
-                
-                // 数据流消息
-                case "log_stream":
-                case "log_stream_control":
-                    UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-                    break;
-                case "backup_operation":
-                    handleBackupOperation(data);
-                    break;
-                case "backup_progress":
-                    handleBackupProgress(data);
-                    break;
-                
-                // 配置管理消息
-                case "upload_config":
-                    handleConfigUpload(data);
-                    break;
-                case "update_config":
-                    handleConfigUpdate(data);
-                    break;
-                case "server_properties":
-                    if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                        UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
-                    }
-                    break;
-                case "server_properties_result":
-                    // Response from this plugin forwarded back by DO — ignore silently
-                    UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received server_properties_result echo — ignoring");
-                    break;
-
-                // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-                case "auth_complete":
-                    UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received auth_complete message: " + (data != null ? data.toString() : "null"));
-                    break;
-                case "magic_link_response":
-                    UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received magic_link_response message: " + (data != null ? data.toString() : "null"));
-                    break;
-
-                default:
-                    UltiTools.getInstance().getLogger().log(Level.WARNING,
-                        String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                    // Don't send error responses to avoid feedback loops with server
-                    break;
+            // Lookup replaces the former 24-case switch — see INBOUND_HANDLERS. Every entry
+            // invokes the same target its former case label invoked; an absent entry is the same
+            // "unknown type" outcome the former default branch produced.
+            BiConsumer<JsonObject, JsonObject> handler = INBOUND_HANDLERS.get(type);
+            if (handler != null) {
+                handler.accept(message, data);
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
+                // Don't send error responses to avoid feedback loops with server
             }
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.SEVERE,
