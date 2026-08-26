@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Final;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.crosspackage.PackagePrivateBase;
 
 @DisplayName("AopEligibility Tests")
 class AopEligibilityTest {
@@ -296,6 +297,101 @@ class AopEligibilityTest {
         void shouldRejectNull() throws Exception {
             assertFalse(AopEligibility.isProxyable(null, Clean.class));
             assertFalse(AopEligibility.isProxyable(Clean.class.getDeclaredMethod("ok"), null));
+        }
+    }
+
+    // D-36: the five proxy-eligibility rules exist once, as a rule enum check() and isProxyable()
+    // both walk. These tests exercise the property the enum is supposed to guarantee - kind
+    // agreement between the two paths, bean-class relativity, the final-class short circuit, and
+    // that the boolean path never pays for a description string it never returns.
+    @Nested
+    @DisplayName("Rule enum consolidation (D-36)")
+    class RuleConsolidation {
+
+        @Test
+        @DisplayName("Should report each of the five rules with its own kind, and isProxyable agrees")
+        void shouldReportEachRuleWithItsOwnKind() throws Exception {
+            Method staticMethod = HasStaticMethod.class.getDeclaredMethod("staticMethod");
+            Method privateMethod = HasPrivateMethod.class.getDeclaredMethod("privateMethod");
+            Method finalMethod = HasFinalMethod.class.getDeclaredMethod("finalMethod");
+            Method shadowed = AnnotatedGenericBase.class.getDeclaredMethod("handle", Object.class);
+            Method inaccessible = PackagePrivateBase.class.getDeclaredMethod("packagePrivateHelper");
+
+            assertRuleAgreement(staticMethod, HasStaticMethod.class,
+                    AopEligibility.Problem.Kind.STATIC_METHOD);
+            assertRuleAgreement(privateMethod, HasPrivateMethod.class,
+                    AopEligibility.Problem.Kind.PRIVATE_METHOD);
+            assertRuleAgreement(finalMethod, HasFinalMethod.class,
+                    AopEligibility.Problem.Kind.FINAL_METHOD);
+            assertRuleAgreement(shadowed, ConcreteGeneric.class,
+                    AopEligibility.Problem.Kind.SHADOWED_METHOD);
+            // A different package than the one the method is declared in - the bean-class-relative
+            // rule, not the method-intrinsic ones above.
+            assertRuleAgreement(inaccessible, AopEligibilityTest.class,
+                    AopEligibility.Problem.Kind.INACCESSIBLE_METHOD);
+        }
+
+        private void assertRuleAgreement(Method method, Class<?> beanClass,
+                                          AopEligibility.Problem.Kind expectedKind) {
+            List<AopEligibility.Problem> problems =
+                    AopEligibility.check(beanClass, Collections.singleton(method));
+            assertEquals(1, problems.size(), String.valueOf(problems));
+            assertEquals(expectedKind, problems.get(0).getKind());
+            assertFalse(AopEligibility.isProxyable(method, beanClass),
+                    expectedKind + ": check and isProxyable disagree");
+        }
+
+        @Test
+        @DisplayName("Should agree a method violating none of the five rules is eligible")
+        void shouldAgreeNoViolation() throws Exception {
+            Method ok = Clean.class.getDeclaredMethod("ok");
+            assertTrue(AopEligibility.check(Clean.class, Collections.singleton(ok)).isEmpty());
+            assertTrue(AopEligibility.isProxyable(ok, Clean.class));
+        }
+
+        // The boolean path must cost nothing to call: no rule's remediation text is ever built
+        // from isProxyable, even for a method that violates one. describeInvocationCountForTesting
+        // is a package-private instrumentation hook that only the rule enum's diagnostic path
+        // increments, so a stuck-at-zero counter proves the boolean path never reaches it - and the
+        // second half of this test proves the counter is not vacuously stuck at zero regardless.
+        @Test
+        @DisplayName("isProxyable should never build remediation text, even for a violating method")
+        void shouldBuildNoRemediationTextOnBooleanPath() throws Exception {
+            Method staticMethod = HasStaticMethod.class.getDeclaredMethod("staticMethod");
+            int before = AopEligibility.describeInvocationCountForTesting();
+
+            boolean proxyable = AopEligibility.isProxyable(staticMethod, HasStaticMethod.class);
+
+            assertFalse(proxyable);
+            assertEquals(before, AopEligibility.describeInvocationCountForTesting(),
+                    "isProxyable must not build any rule's remediation text");
+
+            // Sanity: the counter does move on the diagnostic path, so the assertion above is not
+            // vacuously true against a counter that never increments at all.
+            AopEligibility.check(HasStaticMethod.class, Collections.singleton(staticMethod));
+            assertTrue(AopEligibility.describeInvocationCountForTesting() > before,
+                    "the counter must increment on the diagnostic path, or the assertion above "
+                            + "proves nothing");
+        }
+
+        @Test
+        @DisplayName("The two bean-class-relative rules answer relative to the bean class")
+        void shouldAnswerRelativeToBeanClass() throws Exception {
+            Method packagePrivate = PackagePrivateBase.class.getDeclaredMethod("packagePrivateHelper");
+
+            // Same package as the declaration: reachable through super.
+            assertTrue(AopEligibility.isProxyable(packagePrivate, PackagePrivateBase.class));
+            // A different package: the identical Method, unreachable from this beanClass instead.
+            assertFalse(AopEligibility.isProxyable(packagePrivate, AopEligibilityTest.class));
+        }
+
+        @Test
+        @DisplayName("A final class remains a class-level short circuit before any per-method rule runs")
+        void shouldShortCircuitOnFinalClass() {
+            List<AopEligibility.Problem> problems = AopEligibility.check(
+                    FinalClass.class, AopEligibility.findAopAnnotatedMethods(FinalClass.class));
+            assertEquals(1, problems.size());
+            assertEquals(AopEligibility.Problem.Kind.FINAL_CLASS, problems.get(0).getKind());
         }
     }
 }
