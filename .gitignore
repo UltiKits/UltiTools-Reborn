@@ -148,3 +148,7 @@ data.json
 .project
 .factorypath
 .settings/
+
+# GSD planning artifacts (local-only, never published)
+.planning/
+.gsd/
