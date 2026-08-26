@@ -655,11 +655,22 @@
             <version>2.11.6</version>
             <scope>provided</scope>
         </dependency>
-        <!-- XSeries for cross-version compatibility (1.8.8 - 1.21+) -->
+        <!-- XSeries for cross-version compatibility (1.8.8 - 1.21+). provided scope (D-23/D-24,
+             FOUND-05): 276 of the released 6.2.5 jar's 720 classes were XSeries - moving it out of
+             the shaded artifact removes 38% of the jar with zero API break. plugin.yml's libraries:
+             block below carries the matching entry so Paper downloads it at runtime; the two edits
+             land together deliberately, because provided scope alone compiles and packages cleanly
+             and only fails at server startup if the libraries: entry is missing.
+             No shade-plugin package renaming is added for XSeries here - see 01-ADJUDICATION.md's
+             #211 row and vendored-type leak audit table: ItemStackBuilder exposes XMaterial/
+             XEnchantment in three public entry points, so that technique's precondition (no vendored
+             type in a public signature) does not hold. The resulting classpath-shadowing risk is
+             accepted with zero observed instances (D-24). -->
         <dependency>
             <groupId>com.github.cryptomorin</groupId>
             <artifactId>XSeries</artifactId>
             <version>13.0.0</version>
+            <scope>provided</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.zaxxer/HikariCP -->
         <dependency>
