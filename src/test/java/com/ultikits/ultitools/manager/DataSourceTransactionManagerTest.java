@@ -419,6 +419,99 @@ class DataSourceTransactionManagerTest {
             // 不应该有异常
             assertThat(true).isTrue();
         }
+
+        // ===== D-10: setTimeout records a real deadline (02-09 Task 2) =====
+
+        @Test
+        @DisplayName("no active transaction: getTimeoutDeadlineNanos() returns null")
+        void deadlineIsNullWithNoActiveTransaction() {
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout(N) with an active transaction records a deadline ~N seconds out")
+        void setTimeoutRecordsDeadlineWhenTransactionActive() throws Exception {
+            transactionManager.begin();
+            long before = System.nanoTime();
+
+            transactionManager.setTimeout(10);
+
+            Long deadline = transactionManager.getTimeoutDeadlineNanos();
+            assertThat(deadline).isNotNull();
+            // Bounds rather than an exact value: real wall-clock time elapses between "before"
+            // and the setTimeout() call itself.
+            assertThat(deadline - before).isBetween(
+                    java.util.concurrent.TimeUnit.SECONDS.toNanos(9),
+                    java.util.concurrent.TimeUnit.SECONDS.toNanos(11));
+        }
+
+        @Test
+        @DisplayName("setTimeout(0) with an active transaction leaves the deadline null")
+        void zeroTimeoutDoesNotRecordDeadlineWhenActive() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.setTimeout(0);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout(negative) with an active transaction leaves the deadline null")
+        void negativeTimeoutDoesNotRecordDeadlineWhenActive() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.setTimeout(-5);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout with no active transaction records nothing and does not throw")
+        void setTimeoutWithNoActiveTransactionRecordsNothing() {
+            transactionManager.setTimeout(30);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("commit() clears the deadline along with the rest of the context")
+        void deadlineClearedAfterCommit() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNotNull();
+
+            transactionManager.commit();
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("rollback() clears the deadline along with the rest of the context")
+        void deadlineClearedAfterRollback() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+
+            transactionManager.rollback();
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("suspend()/resume() carry the deadline with the detached context")
+        void deadlineSurvivesSuspendResume() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+            Long deadlineBeforeSuspend = transactionManager.getTimeoutDeadlineNanos();
+
+            Object suspended = transactionManager.suspend();
+            assertThat(transactionManager.getTimeoutDeadlineNanos())
+                    .as("no active transaction while suspended")
+                    .isNull();
+
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isEqualTo(deadlineBeforeSuspend);
+        }
     }
 
     @Nested

@@ -118,6 +118,31 @@ public interface TransactionManager {
     void setTimeout(int seconds);
 
     /**
+     * Returns the {@link System#nanoTime()} value at which the active transaction's timeout
+     * budget expires, or {@code null} when no timeout is configured for the active transaction
+     * -- no active transaction at all, or {@code @Transactional(timeout=0)} (the default).
+     * <p>
+     * D-10: consulted per statement (by {@code TimeoutAwareQueryRunner} and the two direct
+     * {@code PreparedStatement} call sites {@code AbstractRelationalDataOperator.insertAll}/
+     * {@code updateAll} build themselves) to compute the time <em>remaining</em> in the budget,
+     * not a value captured once -- the caller re-reads this on every statement.
+     * <p>
+     * The default implementation always returns {@code null}, meaning "never enforced" -- the
+     * same posture a backend whose {@code setTimeout(int)} refuses any positive value outright
+     * (rather than ever recording a deadline) naturally has, since it never has anything to
+     * report here either. A backend that wants per-statement enforcement overrides this together
+     * with {@link #setTimeout(int)} -- overriding only one half of the pair leaves the other
+     * silently inert, the same caution {@link #suspend()}'s javadoc gives for its pair.
+     *
+     * @return the deadline, as a {@link System#nanoTime()} value, or {@code null} if none is
+     *         active
+     * @since 6.3.0
+     */
+    default Long getTimeoutDeadlineNanos() {
+        return null;
+    }
+
+    /**
      * Gets the current transaction depth (for nested transactions).
      *
      * @return the transaction depth (0 if no transaction)
