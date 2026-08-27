@@ -28,8 +28,11 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.manager.DataStoreManager;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Tests for JsonStore.
@@ -45,6 +48,7 @@ class JsonStoreTest {
     private static UltiTools mockUltiToolsInstance;
     private static BukkitScheduler mockScheduler;
     private static BukkitTask mockTask;
+    private static PluginManager mockPluginManager;
 
     @BeforeAll
     static void setUpClass() {
@@ -74,10 +78,19 @@ class JsonStoreTest {
         when(mockUltiToolsInstance.getConfig()).thenReturn(mockConfig);
         when(mockConfig.getInt(anyString())).thenReturn(10);
         when(mockUltiToolsInstance.isEnabled()).thenReturn(true);
-        
+
+        // 02-12 Task 2: every getOperator(UltiToolsPlugin, Class) call now runs checkOwnership()
+        // first, which consults UltiTools.getInstance().getPluginManager().findOwningPlugin(...).
+        // Each nested class's own @BeforeEach (re-)stubs findOwningPlugin's default Answer to
+        // echo back its own freshly-created mockPlugin's name, so ownership passes by default for
+        // the plugin under test; individual tests override this with a more specific,
+        // entity-scoped stub when they need a genuine refusal.
+        mockPluginManager = mock(PluginManager.class);
+        when(mockUltiToolsInstance.getPluginManager()).thenReturn(mockPluginManager);
+
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiToolsInstance);
-        
+
         mockedDataStoreManager = mockStatic(DataStoreManager.class);
     }
     
@@ -128,8 +141,10 @@ class JsonStoreTest {
             store = new JsonStore(tempDir.toString());
             mockPlugin = mock(UltiToolsPlugin.class);
             when(mockPlugin.getPluginName()).thenReturn("TestPlugin");
+            when(mockPluginManager.findOwningPlugin(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> mockPlugin.getPluginName());
         }
-        
+
         @Test
         @DisplayName("Should return DataOperator for annotated entity")
         void testGetOperator() {
@@ -197,8 +212,10 @@ class JsonStoreTest {
             store = new JsonStore(tempDir.toString());
             mockPlugin = mock(UltiToolsPlugin.class);
             when(mockPlugin.getPluginName()).thenReturn("TestPlugin");
+            when(mockPluginManager.findOwningPlugin(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> mockPlugin.getPluginName());
         }
-        
+
         @Test
         @DisplayName("Should flush all operators without error")
         void testDestroyAllOperators() {
@@ -252,6 +269,8 @@ class JsonStoreTest {
             store = new JsonStore(tempDir.toString());
             mockPlugin = mock(UltiToolsPlugin.class);
             when(mockPlugin.getPluginName()).thenReturn("IntegrationTestPlugin");
+            when(mockPluginManager.findOwningPlugin(org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(inv -> mockPlugin.getPluginName());
         }
         
         @Test
@@ -282,20 +301,26 @@ class JsonStoreTest {
         }
         
         @Test
-        @DisplayName("Multiple plugins using same JsonStore")
-        void testMultiplePlugins() {
-            // Pins SILENT-04's fix: dataOperatorMap is keyed by (plugin identity, entity class), not
-            // by entity class alone, so two plugins requesting the same @Table entity get two
-            // distinct operators writing to two distinct directories and cannot read each other's
-            // rows through them.
+        @DisplayName("Two plugins, two entities: each succeeds on its own, isolated storage (SILENT-04)")
+        void testMultiplePluginsWithOwnEntities() {
+            // Was: testMultiplePlugins, which had plugin1 and plugin2 both request the SAME
+            // @Table entity class and asserted each got its own isolated operator. Under 02-12's
+            // ownership model an entity has exactly one owner (PluginManager.findOwningPlugin,
+            // first-registration-wins), so that scenario is no longer legitimate -- it is exactly
+            // what D-14 exists to refuse (see testSecondPluginRequestingFirstPluginsEntityIsRefused
+            // below). This test keeps SILENT-04's real remaining claim: dataOperatorMap is keyed by
+            // (plugin identity, entity class), so two DIFFERENT, each-legitimately-owned entities
+            // resolve to two distinct operators writing to two distinct directories.
             UltiToolsPlugin plugin1 = mock(UltiToolsPlugin.class);
             when(plugin1.getPluginName()).thenReturn("Plugin1");
+            when(mockPluginManager.findOwningPlugin(AnnotatedTestData.class)).thenReturn("Plugin1");
 
             UltiToolsPlugin plugin2 = mock(UltiToolsPlugin.class);
             when(plugin2.getPluginName()).thenReturn("Plugin2");
+            when(mockPluginManager.findOwningPlugin(AnotherAnnotatedTestData.class)).thenReturn("Plugin2");
 
             DataOperator<AnnotatedTestData> op1 = store.getOperator(plugin1, AnnotatedTestData.class);
-            DataOperator<AnnotatedTestData> op2 = store.getOperator(plugin2, AnnotatedTestData.class);
+            DataOperator<AnotherAnnotatedTestData> op2 = store.getOperator(plugin2, AnotherAnnotatedTestData.class);
 
             assertThat(op1).isNotSameAs(op2);
 
@@ -305,10 +330,82 @@ class JsonStoreTest {
             data1.setName("from plugin 1");
             op1.insert(data1);
 
-            // Visible through plugin1's own operator...
+            // Visible through plugin1's own operator, and plugin2's operator (a different entity
+            // type entirely) has no way to even ask for it.
             assertThat(op1.getById("plugin1-data")).isNotNull();
-            // ...but NOT through plugin2's operator - they are isolated, not shared.
-            assertThat(op2.getById("plugin1-data")).isNull();
+        }
+
+        @Test
+        @DisplayName("A second plugin requesting the first plugin's entity is refused (D-14/D-18, 02-12)")
+        void testSecondPluginRequestingFirstPluginsEntityIsRefused() {
+            UltiToolsPlugin plugin1 = mock(UltiToolsPlugin.class);
+            when(plugin1.getPluginName()).thenReturn("Plugin1");
+            when(mockPluginManager.findOwningPlugin(AnnotatedTestData.class)).thenReturn("Plugin1");
+
+            UltiToolsPlugin plugin2 = mock(UltiToolsPlugin.class);
+            when(plugin2.getPluginName()).thenReturn("Plugin2");
+
+            DataOperator<AnnotatedTestData> op1 = store.getOperator(plugin1, AnnotatedTestData.class);
+            assertThat(op1).isNotNull();
+
+            assertThatThrownBy(() -> store.getOperator(plugin2, AnnotatedTestData.class))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+        }
+    }
+
+    // ==================== Ownership Tests (02-12 Task 2, D-14/D-18) ====================
+
+    /**
+     * {@code checkOwnership} is now called as the first statement of both legacy
+     * {@code getOperator} overrides -- closing the residual bypass 02-07 disclosed. JsonStore has
+     * no connection pool to prove empty on refusal (unlike SQLite/MySQL), so these tests assert
+     * against the operator cache instead, via the store's own package-private
+     * {@code getDataOperatorCount()} test seam.
+     */
+    @Nested
+    @DisplayName("Ownership Tests")
+    class OwnershipTests {
+
+        private JsonStore store;
+
+        @BeforeEach
+        void setUp() {
+            store = new JsonStore(tempDir.toString());
+            when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir.toFile());
+        }
+
+        @Test
+        @DisplayName("getOperator(File, Class) should refuse another plugin's unregistered folder, with no cache side effect")
+        void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() throws java.io.IOException {
+            java.io.File someOtherPluginsFolder = java.nio.file.Files.createTempDirectory("json-other-plugin").toFile();
+            when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
+
+            assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, AnnotatedTestData.class))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+            // getDataOperatorCount() is package-private on JsonStore; this test class is in the
+            // same package (com.ultikits.ultitools.interfaces.impl.data.json), so it is called
+            // directly -- no reflection needed.
+            assertThat(store.getDataOperatorCount())
+                    .as("a refused call must not have built an operator")
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("The framework's own core data folder should still be exempt on getOperator(File, Class)")
+        void shouldExemptFrameworkCoreFolderViaFileOverload() {
+            // mockUltiToolsInstance.getDataFolder() is stubbed to tempDir.toFile() above -- passing
+            // tempDir.toFile() itself is exactly the framework-core-folder sentinel
+            // checkOwnership(File, Class) exempts. No PluginManager stub needed for this call to
+            // succeed.
+            DataOperator<AnnotatedTestData> operator = store.getOperator(tempDir.toFile(), AnnotatedTestData.class);
+
+            assertThat(operator).isNotNull();
+            assertThat(store.getDataOperatorCount()).isEqualTo(1);
         }
     }
 
