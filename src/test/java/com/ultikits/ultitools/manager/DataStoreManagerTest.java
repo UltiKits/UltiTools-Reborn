@@ -12,11 +12,14 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +31,10 @@ import org.mockito.ArgumentCaptor;
 
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.testutil.PoolStateAssertions;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -571,6 +578,62 @@ class DataStoreManagerTest {
             org.mockito.Mockito.verify(store1).destroyAllOperators();
             org.mockito.Mockito.verify(store2).destroyAllOperators();
             org.mockito.Mockito.verify(store3).destroyAllOperators();
+        }
+    }
+
+    @Nested
+    @DisplayName("destroyAllOperators 真实连接池状态测试 (Wave 0 gap 1, SILENT-03)")
+    class PoolTeardownRealPoolTests {
+
+        private HikariDataSource createH2Pool() {
+            HikariConfig config = new HikariConfig();
+            // H2 stands in for SQLite here - the SQLite JDBC driver ships with Paper, not with this
+            // project's test dependencies, so a real jdbc:sqlite: pool cannot be constructed in tests.
+            config.setJdbcUrl("jdbc:h2:mem:datastoremanagerpooltest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            return new HikariDataSource(config);
+        }
+
+        /**
+         * Pins ROADMAP success criterion 3 through the actual {@code DataStoreManager.close()} call
+         * path (not just {@code SQLiteDataStore.destroyAllOperators()} in isolation): registers a real
+         * {@code SQLiteDataStore} carrying two live H2-backed pools, closes the manager, and asserts
+         * against {@link com.zaxxer.hikari.HikariPoolMXBean} state via {@link PoolStateAssertions} -
+         * not against the absence of a thrown exception.
+         * <p>
+         * RED at HEAD (before Task 2's fix): {@code SQLiteDataStore.destroyAllOperators()} is an empty
+         * body, so both pools remain open. GREEN after Task 2.
+         */
+        @Test
+        @DisplayName("close() 应该让已注册 SQLiteDataStore 持有的每个连接池归零")
+        void closeShouldLeaveZeroOpenConnectionsAcrossRegisteredStore() throws Exception {
+            SQLiteDataStore sqliteStore = new SQLiteDataStore();
+            HikariDataSource poolA = createH2Pool();
+            HikariDataSource poolB = createH2Pool();
+
+            Field poolMapField = SQLiteDataStore.class.getDeclaredField("dataSourceMap");
+            poolMapField.setAccessible(true); // NOPMD
+            @SuppressWarnings("unchecked")
+            Map<String, DataSource> poolMap = (Map<String, DataSource>) poolMapField.get(sqliteStore);
+            poolMap.put("fileA", poolA);
+            poolMap.put("fileB", poolB);
+
+            try {
+                DataStoreManager.register(sqliteStore);
+
+                DataStoreManager.close();
+
+                PoolStateAssertions.assertNoOpenConnections(Arrays.asList(poolA, poolB));
+            } finally {
+                if (!poolA.isClosed()) {
+                    poolA.close();
+                }
+                if (!poolB.isClosed()) {
+                    poolB.close();
+                }
+                poolMap.remove("fileA");
+                poolMap.remove("fileB");
+            }
         }
     }
 
