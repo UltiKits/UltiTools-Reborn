@@ -28,6 +28,10 @@ public class WhereCondition {
     private Object value;
     /**
      * 查询的运算符
+     * <p>
+     * Always non-null: {@code @Builder.Default} guarantees {@link Comparison#EQUAL} when the
+     * builder does not set it explicitly, so no relational WHERE builder has to null-check this
+     * field before mapping it to a SQL operator.
      */
     @Builder.Default
     private Comparison comparison = Comparison.EQUAL;

@@ -23,6 +23,7 @@ import com.google.gson.Gson;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -140,6 +141,96 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         };
     }
 
+    /**
+     * Maps a {@link Comparison} to its SQL operator fragment (including the placeholder).
+     * <p>
+     * Shared by all four relational WHERE builders ({@link #exist(WhereCondition...)},
+     * {@link #getAll(WhereCondition...)}, {@link #page(int, int, WhereCondition...)},
+     * {@link #del(WhereCondition...)}) so a given {@code Comparison} means the same thing on
+     * every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There is no
+     * silent fallback to equality: an unhandled constant throws rather than being misread as
+     * {@code EQUAL}, since a silent default is exactly how this defect stayed invisible before.
+     *
+     * @param comparison the comparison operator
+     * @return the SQL fragment, e.g. {@code " > ?"}
+     */
+    private String sqlOperatorFor(Comparison comparison) {
+        switch (comparison) {
+            case EQUAL:
+                return " = ?";
+            case GREATER:
+                return " > ?";
+            case LESS:
+                return " < ?";
+            case INCLUDE:
+            case STARTSWITH:
+            case ENDSWITH:
+                return " LIKE ?";
+            default:
+                throw new IllegalArgumentException("Unhandled comparison: " + comparison);
+        }
+    }
+
+    /**
+     * Wraps a condition's value with the {@code %} wildcards its {@link Comparison} implies,
+     * matching {@code SimpleJsonDataOperator#conditionCal}'s existing placement exactly:
+     * {@code INCLUDE} wraps both sides, {@code STARTSWITH} appends a trailing wildcard,
+     * {@code ENDSWITH} prepends a leading wildcard. {@code EQUAL}/{@code GREATER}/{@code LESS}
+     * pass the value through unchanged.
+     *
+     * @param condition the condition supplying the comparison and the raw value
+     * @return the value to bind as the SQL parameter
+     */
+    private Object likeWrappedValue(WhereCondition condition) {
+        Object value = condition.getValue();
+        switch (condition.getComparison()) {
+            case INCLUDE:
+                return "%" + value + "%";
+            case STARTSWITH:
+                return value + "%";
+            case ENDSWITH:
+                return "%" + value;
+            default:
+                return value;
+        }
+    }
+
+    /**
+     * Appends a {@code WHERE} clause built from {@code conditions} to {@code sql} and their
+     * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
+     * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
+     * <p>
+     * When {@code skipEmpty} is {@code true}, conditions whose {@link WhereCondition#isEmpty()}
+     * is {@code true} are skipped — {@link #getAll(WhereCondition...)}'s pre-existing behavior,
+     * preserved here rather than changed. {@link #exist(WhereCondition...)},
+     * {@link #page(int, int, WhereCondition...)}, and {@link #del(WhereCondition...)} do not
+     * skip empty conditions; that asymmetry already existed before this method and is not
+     * resolved by this change (see 02-03-SUMMARY.md).
+     *
+     * @param sql        the SQL being built; must already hold the statement up to (not
+     *                   including) the WHERE clause
+     * @param params     the parameter list to append bound values to, in SQL order
+     * @param conditions the conditions to render; must be non-null and non-empty
+     * @param skipEmpty  whether to skip conditions whose {@code isEmpty()} is true
+     */
+    private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
+                                   boolean skipEmpty) {
+        boolean first = true;
+        for (WhereCondition condition : conditions) {
+            if (skipEmpty && condition.isEmpty()) {
+                continue;
+            }
+            if (first) {
+                sql.append(" WHERE ");
+                first = false;
+            } else {
+                sql.append(" AND ");
+            }
+            sql.append(condition.getColumn()).append(sqlOperatorFor(condition.getComparison()));
+            params.add(likeWrappedValue(condition));
+        }
+    }
+
     @Override
     public boolean exist(T object) {
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
@@ -150,15 +241,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         try {
             Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
@@ -191,21 +274,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            // Filter out empty conditions
-            boolean first = true;
-            for (WhereCondition condition : whereConditions) {
-                if (condition.isEmpty()) {
-                    continue;
-                }
-                if (first) {
-                    sql.append(" WHERE ");
-                    first = false;
-                } else {
-                    sql.append(" AND ");
-                }
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-            }
+            appendConditions(sql, params, whereConditions, true);
         }
         try {
             return queryRunner.query(sql.toString(), getListHandler(), params.toArray());
@@ -243,15 +312,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         sql.append(" LIMIT ? OFFSET ?");
         params.add(size);
@@ -316,15 +377,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("DELETE FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         try {
             queryRunner.update(sql.toString(), params.toArray());
