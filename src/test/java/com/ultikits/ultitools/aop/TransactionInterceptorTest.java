@@ -374,6 +374,25 @@ class TransactionInterceptorTest {
             throw new RuntimeException("boom - inner REQUIRES_NEW, self-invocation");
         }
 
+        /**
+         * Outer REQUIRED transaction that self-invokes a REQUIRES_NEW method that succeeds -
+         * the self-invocation counterpart of {@link #requiresNewExternalSucceeds()}, pairing with
+         * it so connection-identity preservation is proven both ways even on the non-throwing path.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesRequiresNewThatSucceeds() {
+            capturedOuterConnectionBeforeInner = txManager.getConnection();
+            write(5);
+            innerRequiresNewSucceedsSelf();
+            capturedOuterConnectionAfterInner = txManager.getConnection();
+            write(6);
+        }
+
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void innerRequiresNewSucceedsSelf() {
+            write(98);
+        }
+
         /** Externally-called REQUIRES_NEW method that writes and returns normally. */
         @Transactional(propagation = Propagation.REQUIRES_NEW)
         public void requiresNewExternalSucceeds() {
@@ -1355,6 +1374,27 @@ class TransactionInterceptorTest {
             assertThat(rowExists(99)).isFalse();
 
             // No suspended frame left behind: a fresh begin() on this thread reports depth 1.
+            realManager.begin();
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (self-invocation): a successful inner transaction still "
+                + "preserves outer Connection identity")
+        void requiresNewSelfInvocationSuccessPreservesConnectionIdentity() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            bean.outerRequiredThenSelfInvokesRequiresNewThatSucceeds();
+
+            assertThat(bean.capturedOuterConnectionAfterInner)
+                    .isSameAs(bean.capturedOuterConnectionBeforeInner);
+            // Outer's writes (5, 6) and the inner's own write (98) all committed independently.
+            assertThat(countRows()).isEqualTo(3);
+            assertThat(rowExists(5)).isTrue();
+            assertThat(rowExists(6)).isTrue();
+            assertThat(rowExists(98)).isTrue();
+
             realManager.begin();
             assertThat(realManager.getTransactionDepth()).isEqualTo(1);
             realManager.rollback();
