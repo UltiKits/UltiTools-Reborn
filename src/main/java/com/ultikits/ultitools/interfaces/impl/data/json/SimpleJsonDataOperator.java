@@ -9,6 +9,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -29,6 +30,10 @@ import org.bukkit.ChatColor;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonNull;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
@@ -51,7 +56,25 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @version 1.0.0
  */
 public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T>, Cached {
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /**
+     * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
+     * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
+     * system refuses without {@code --add-opens java.base/java.time}, throwing
+     * {@code JsonIOException} the first time this operator serializes an entity carrying a
+     * non-null {@code LocalDateTime}-typed {@code @Column} (02-08 --
+     * {@code AuditableDataEntity#createdAt}/{@code updatedAt} were always {@code null} before
+     * this plan, so the whole-entity {@code GSON.toJson(...)} calls below never reached this type
+     * until the lifecycle hooks started populating it). Mirrors
+     * {@code AbstractRelationalDataOperator}'s identical adapter (02-08), serializing to/from
+     * {@link LocalDateTime#toString()}'s ISO-8601 form.
+     */
+    private static final Gson GSON = new GsonBuilder()
+            .setPrettyPrinting()
+            .registerTypeAdapter(LocalDateTime.class, (JsonSerializer<LocalDateTime>) (src, type, context) ->
+                    src == null ? JsonNull.INSTANCE : new JsonPrimitive(src.toString()))
+            .registerTypeAdapter(LocalDateTime.class, (JsonDeserializer<LocalDateTime>) (json, type, context) ->
+                    json.isJsonNull() ? null : LocalDateTime.parse(json.getAsString()))
+            .create();
 
     private final String storeLocation;
     private final Class<T> type;
@@ -205,12 +228,18 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public boolean exist(WhereCondition... whereConditions) {
-        return !getAll(whereConditions).isEmpty();
+        // getAllRaw, not getAll: an existence check is not a read that returns entities to the
+        // caller, so it must not fire onLoad() as a side effect of computing a boolean.
+        return !getAllRaw(whereConditions).isEmpty();
     }
 
     @Override
     public T getById(Object id) {
-        return cache.get(id);
+        T entity = cache.get(id);
+        if (entity != null) {
+            entity.onLoad();
+        }
+        return entity;
     }
 
     @Override
@@ -218,8 +247,23 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         return getAll(WhereCondition.empty());
     }
 
+    /**
+     * Fires {@code onLoad()} once per entity actually returned to the caller. Delegates the
+     * matching logic to {@link #getAllRaw}, which {@link #exist(WhereCondition...)} and
+     * {@link #page} also call directly -- {@code exist} because a boolean check should not fire
+     * a load hook, and {@code page} because firing on every matched row (rather than only the
+     * page's slice) would fire {@code onLoad()} for entities the caller never actually receives.
+     */
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
+        List<T> results = getAllRaw(whereConditions);
+        for (T entity : results) {
+            entity.onLoad();
+        }
+        return results;
+    }
+
+    private List<T> getAllRaw(WhereCondition... whereConditions) {
         // 空条件表示「不施加过滤」，先摘出去，免得它出现在第二个位置时中途返回全量。
         List<WhereCondition> effective = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
@@ -293,12 +337,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     break;
             }
         }
+        for (T entity : res) {
+            entity.onLoad();
+        }
         return res;
     }
 
     @Override
     public List<T> page(int page, int size, WhereCondition... whereConditions) {
-        List<T> all = new ArrayList<>(getAll(whereConditions));
+        // getAllRaw, not getAll: firing onLoad() on every matched row here (rather than only
+        // the slice actually returned below) would fire the hook for entities outside the
+        // requested page -- mirrors AbstractRelationalDataOperator's LIMIT/OFFSET behavior,
+        // which only ever materializes the page it returns.
+        List<T> all = new ArrayList<>(getAllRaw(whereConditions));
         int start = (page - 1) * size;
         int end = page * size;
         if (start > all.size()) {
@@ -307,7 +358,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (end > all.size()) {
             end = all.size();
         }
-        return all.subList(start, end);
+        List<T> slice = all.subList(start, end);
+        for (T entity : slice) {
+            entity.onLoad();
+        }
+        return slice;
     }
 
     @Override
@@ -321,9 +376,22 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (obj.getId() == null) {
             obj.setId(UUID.randomUUID().toString());
         }
+        // Fires before the cache is touched, mirroring AbstractRelationalDataOperator.insert:
+        // whatever onCreate() writes (e.g. AuditableDataEntity's createdAt/createdBy) is exactly
+        // what ends up cached (and, on flush(), persisted) -- obj is the same instance stored
+        // below, not a copy.
+        obj.onCreate();
         cache.putIfAbsent(obj.getId(), obj);
     }
 
+    /**
+     * Deletes by predicate, without loading matched entries into entities first. Consequently
+     * this overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to
+     * fire it on without fabricating one, and this class does not fabricate entities to satisfy
+     * a hook. {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()}
+     * on it (02-08-PLAN.md's delete-hook-path split, mirrored from
+     * {@code AbstractRelationalDataOperator}).
+     */
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
         beforeMutate();
@@ -362,9 +430,20 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         }
     }
 
+    /**
+     * Deletes by id, fetching the entity first so {@code onDelete()} can fire on it -- unlike
+     * {@link #del(WhereCondition...)}, which deletes by predicate without materializing entries
+     * and therefore does not fire the hook. If no entry matches {@code id}, nothing fires. Reads
+     * the cache directly (not {@link #getById}) so this does not also fire {@code onLoad()} --
+     * deleting is not loading.
+     */
     @Override
     public synchronized void delById(Object id) {
         beforeMutate();
+        T entity = cache.get(id);
+        if (entity != null) {
+            entity.onDelete();
+        }
         cache.remove(id);
     }
 
@@ -392,6 +471,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
             old = cache.get(id.toString());
         }
         BeanCopyUtil.copyProperties(obj, old, "id");
+        // Fires on old (the instance actually cached below), after the incoming obj's fields have
+        // been copied onto it -- callers may pass either the same cached instance (the common
+        // get-mutate-update pattern) or a fresh detached instance with the same id; either way,
+        // whatever onUpdate() writes on the entity that ends up cached is what persists. Mirrors
+        // AbstractRelationalDataOperator.update(T)'s "fires before the row is written" ordering.
+        old.onUpdate();
         cache.put(old.getId(), old);
     }
 
