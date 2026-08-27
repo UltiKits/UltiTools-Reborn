@@ -46,6 +46,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.AnnotationUtils;
@@ -602,14 +603,17 @@ public class PluginManager {
      * Must be called before {@link SimpleContainer#refresh()}: the resolver participates in bean
      * instantiation, so beans created earlier are never proxied.
      * <p>
-     * {@code @ExceptionCatch} and {@code @Transactional} are both wired in this release, for the
-     * JDBC backends (SQLite, MySQL). {@code DataStore} now exposes the plugin's {@code DataSource}
-     * via {@code getDataSource(DataScope)}, keyed by database file rather than by entity class,
-     * and this method builds one {@code TransactionManager} per plugin container from it and
-     * registers a {@code TransactionInterceptor} advisor for that manager. Issues #195 and #196
-     * are both addressed for the JDBC backends. The JSON backend does not implement
-     * {@code getDataSource(DataScope)} yet, so {@code @Transactional} stays declared unavailable
-     * there until a snapshot-based transaction manager lands.
+     * {@code @ExceptionCatch} and {@code @Transactional} are both wired in this release, on all
+     * three backends. {@code DataStore} now exposes the plugin's {@code DataSource} via
+     * {@code getDataSource(DataScope)}, keyed by database file rather than by entity class, and
+     * this method builds one {@code TransactionManager} per plugin container from it and
+     * registers a {@code TransactionInterceptor} advisor for that manager, for the two JDBC
+     * backends (SQLite, MySQL). Issues #195 and #196 are both addressed for the JDBC backends.
+     * The JSON backend has its own {@code TransactionManager} instead (02-05, D-03): a per-plugin
+     * snapshot manager that rolls back every JSON operator a {@code @Transactional} method
+     * touched, obtained from {@code JsonStore} when {@code getDataSource(DataScope)} throws. Only
+     * a {@code DataStore} that can supply neither a {@code DataSource} nor its own
+     * {@code TransactionManager} still declares {@code @Transactional} unavailable.
      * <p>
      * <b>Scope limit 1 — {@code registerSingleton} bypasses this entirely.</b> Only beans the
      * container constructs itself (through {@code registerBean} or component scanning) are ever
@@ -651,12 +655,14 @@ public class PluginManager {
      * {@code @ExceptionCatch} silently does nothing there and {@code @Transactional} is not
      * even refused. Unchanged from 6.2.x, and not fixed here.
      * <p>
-     * 本版本同时接线 @ExceptionCatch 与 @Transactional（面向 SQLite、MySQL 两个 JDBC 后端）。
+     * 本版本同时接线 @ExceptionCatch 与 @Transactional（覆盖全部三种后端）。
      * DataStore 现在通过 getDataSource(DataScope) 暴露插件的 DataSource——按数据库文件而非
      * 实体类分池，本方法据此为每个插件容器构建一个 TransactionManager，并为其注册
-     * TransactionInterceptor 通知器。issue #195、#196 在 JDBC 后端上均已解决。JSON 后端尚未
-     * 实现 getDataSource(DataScope)，因此 @Transactional 在该后端仍声明为不可用，直到基于
-     * 快照的事务管理器落地。
+     * TransactionInterceptor 通知器，覆盖 SQLite、MySQL 两个 JDBC 后端。issue #195、#196
+     * 在 JDBC 后端上均已解决。JSON 后端改为拥有自己的 TransactionManager（02-05，D-03）：
+     * 一个按插件快照的管理器，回滚 @Transactional 方法触碰过的每一个 JSON 操作器；
+     * 当 getDataSource(DataScope) 抛出异常时从 JsonStore 获取。只有既不能提供 DataSource
+     * 也不能提供自身 TransactionManager 的 DataStore，才仍会把 @Transactional 声明为不可用。
      * <p>
      * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
      * {@code @ContextEntry} bean（反射手工构造）、config 实体、{@code @Configuration} 类
@@ -715,13 +721,18 @@ public class PluginManager {
     }
 
     /**
-     * Builds and registers the {@code @Transactional} advisor for one plugin container, or
-     * declares the annotation unavailable if the configured backend cannot supply a
-     * {@code DataSource} yet (the JSON backend, until 02-05's snapshot-based manager lands).
+     * Builds and registers the {@code @Transactional} advisor for one plugin container. For a
+     * backend whose {@code DataStore} exposes a JDBC {@code DataSource} (SQLite, MySQL), the
+     * advisor is bound to a {@link DataSourceTransactionManager}. For the JSON backend, it is
+     * bound to a per-plugin snapshot {@code JsonTransactionManager} instead (02-05, D-03),
+     * obtained from the store itself. A {@code DataStore} that can supply neither still declares
+     * the annotation unavailable, naming the configured backend.
      * <p>
-     * 为一个插件容器构建并注册 {@code @Transactional} 通知器；若配置的后端还不能提供
-     * {@code DataSource}（JSON 后端，直到 02-05 的快照式管理器落地为止），则将该注解声明为
-     * 不可用。
+     * 为一个插件容器构建并注册 {@code @Transactional} 通知器。对于其 {@code DataStore} 暴露
+     * JDBC {@code DataSource} 的后端（SQLite、MySQL），通知器绑定到
+     * {@link DataSourceTransactionManager}；对于 JSON 后端，则改为绑定到按插件快照的
+     * {@code JsonTransactionManager}（02-05，D-03），从该存储自身获取。既不能提供以上任何一种的
+     * {@code DataStore}，仍会声明该注解不可用，并指明所配置的后端。
      *
      * @param context  the plugin container, before refresh <br> 插件容器，尚未 refresh
      * @param scope    the identity token used to resolve the plugin's {@code DataSource}
@@ -734,10 +745,22 @@ public class PluginManager {
         try {
             dataSource = dataStore.getDataSource(scope);
         } catch (UnsupportedOperationException e) {
+            // Branch on the store's own capability, not on a string comparison of
+            // datasource.type (D-04's split already removed backend-name knowledge from this
+            // bootstrap; an instanceof check here is the smallest re-introduction of that
+            // knowledge that still avoids it living inside JsonStore's own construction logic --
+            // see 02-05's SUMMARY for why an interface method on DataStore was out of this plan's
+            // scope). A store that is neither JDBC-capable nor JsonStore keeps the pre-6.3.0
+            // refusal, naming itself so a third-party DataStore gets an honest answer instead of
+            // an NPE.
+            if (dataStore instanceof JsonStore) {
+                wireJsonTransactional(context, scope, resolver, (JsonStore) dataStore);
+                return;
+            }
             resolver.addUnavailableAnnotation(Transactional.class,
-                    "@Transactional needs a TransactionManager bound to a DataSource. The "
-                            + "configured datasource.type (" + dataStore.getStoreType() + ") does "
-                            + "not expose one yet. Until then use "
+                    "@Transactional needs a TransactionManager. The configured datasource.type ("
+                            + dataStore.getStoreType() + ") does not expose a DataSource or a "
+                            + "snapshot-based TransactionManager of its own. Until then use "
                             + "DataOperator.transaction(Callable) explicitly.");
             return;
         }
@@ -763,6 +786,42 @@ public class PluginManager {
         // matching the documented interceptor order Transaction -> Exception -> target, and the
         // "Transaction advisors typically use order 100" convention AopAdvisor#getOrder already
         // documents.
+        resolver.addAdvisor(AopAdvisor.forAnnotation(
+                Transactional.class, transactionInterceptor, 100, transactionalCache));
+    }
+
+    /**
+     * Builds and registers the {@code @Transactional} advisor for a plugin container backed by
+     * the JSON store, once {@link #wireTransactional} has determined {@code dataStore} cannot
+     * supply a JDBC {@code DataSource} but is a {@link JsonStore} (02-05, D-03).
+     * <p>
+     * 为由 JSON 存储支撑的插件容器构建并注册 {@code @Transactional} 通知器——在
+     * {@link #wireTransactional} 判定 {@code dataStore} 无法提供 JDBC {@code DataSource}
+     * 但确实是 {@link JsonStore} 之后调用（02-05，D-03）。
+     *
+     * @param context   the plugin container, before refresh <br> 插件容器，尚未 refresh
+     * @param scope     the identity token used to resolve the manager <br> 用于解析管理器的身份令牌
+     * @param resolver  the resolver {@code wireAop} is assembling <br> {@code wireAop} 正在组装的解析器
+     * @param jsonStore the JSON store to obtain the per-identity manager from <br>
+     *                  用于获取按身份划分的管理器的 JSON 存储
+     */
+    private static void wireJsonTransactional(SimpleContainer context, DataScope scope,
+            AopProxyResolver resolver, JsonStore jsonStore) {
+        // Same reasoning as the shared exceptionCatchCache above (D-38): one AnnotationLookupCache
+        // instance per plugin container, constructor-injected into the interceptor, never static.
+        AnnotationLookupCache<Transactional> transactionalCache =
+                new AnnotationLookupCache<>(Transactional.class);
+
+        // jsonStore.transactionManagerFor(scope) shares one JsonTransactionManager instance with
+        // every SimpleJsonDataOperator that store hands out for this identity (JsonStore binds it
+        // at getOperator() time), so a single @Transactional method's writes across several of
+        // this plugin's entities are governed by the same transaction (D-03).
+        TransactionManager transactionManager = jsonStore.transactionManagerFor(scope);
+        context.registerType(TransactionManager.class, transactionManager);
+
+        TransactionInterceptor transactionInterceptor = new TransactionInterceptor(transactionManager);
+        // Same order as the JDBC path above -- the interceptor does not know or care which
+        // backend built the manager it was given.
         resolver.addAdvisor(AopAdvisor.forAnnotation(
                 Transactional.class, transactionInterceptor, 100, transactionalCache));
     }
