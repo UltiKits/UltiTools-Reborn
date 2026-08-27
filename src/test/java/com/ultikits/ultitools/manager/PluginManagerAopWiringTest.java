@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,8 @@ import java.lang.annotation.Annotation;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +27,9 @@ import org.mockito.Answers;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
+import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopEligibility;
@@ -32,6 +37,7 @@ import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 
@@ -39,16 +45,18 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 class PluginManagerAopWiringTest {
 
     // wireAop now resolves a DataSource through UltiTools.getInstance().getDataStore() (D-01).
-    // Every test in this file exercises @ExceptionCatch wiring or annotation-coverage plumbing,
-    // not @Transactional's JDBC path, so the JSON store's UnsupportedOperationException branch
-    // (declare-unavailable, matching pre-6.3.0 behavior) is the right stand-in here.
+    // Every test in this file except the JSON-backend-specific ones below exercises
+    // @ExceptionCatch wiring or annotation-coverage plumbing, not @Transactional -- the JSON
+    // store is the stand-in DataStore for all of them, and since 02-05 it is genuinely wired
+    // rather than declared unavailable (D-03).
     private MockedStatic<UltiTools> ultiToolsMock;
     private DataScope scope;
+    private JsonStore jsonStore;
 
     @BeforeEach
     void setUpDataStore() {
         UltiTools mockUltiTools = mock(UltiTools.class);
-        DataStore jsonStore = new JsonStore("build/test-wireaop-json");
+        jsonStore = new JsonStore("build/test-wireaop-json");
         when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
@@ -77,19 +85,62 @@ class PluginManagerAopWiringTest {
         public String work() { return "plain"; }
     }
 
+    @Table("plugin_manager_aop_wiring_test")
+    public static class JsonTestEntity extends BaseDataEntity<String> {
+        private String name;
+
+        public JsonTestEntity() {
+        }
+
+        public JsonTestEntity(String id, String name) {
+            setId(id);
+            this.name = name;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A bean carrying a real @Transactional write against a real JSON-backed DataOperator. */
+    public static class JsonTransactionally {
+        private final DataOperator<JsonTestEntity> operator;
+
+        public JsonTransactionally(DataOperator<JsonTestEntity> operator) {
+            this.operator = operator;
+        }
+
+        @Transactional
+        public void writeThenFail() {
+            operator.insert(new JsonTestEntity("json-tx-fail", "before-rollback"));
+            throw new RuntimeException("boom - json backend");
+        }
+
+        @Transactional
+        public void writeThenSucceed() {
+            operator.insert(new JsonTestEntity("json-tx-success", "after-commit"));
+        }
+    }
+
     @Test
-    @DisplayName("Should register exactly one advisor, for @ExceptionCatch")
-    void shouldRegisterExceptionCatchAdvisorOnly() {
+    @DisplayName("Should register both advisors -- @ExceptionCatch and @Transactional -- for the JSON backend")
+    void shouldRegisterBothAdvisorsForJsonBackend() {
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
 
         AopProxyResolver resolver = context.getAopProxyResolver();
         assertNotNull(resolver, "wireAop must attach a resolver");
         List<AopAdvisor> advisors = resolver.getAdvisors();
-        assertEquals(1, advisors.size(),
-                "@Transactional is declared unavailable this release, so only one advisor");
-        assertEquals(ExceptionCatch.class, advisors.get(0).getAnnotationType(),
-                "the one registered advisor must actually be the one that serves @ExceptionCatch");
+        assertEquals(2, advisors.size(),
+                "@Transactional is wired on the JSON backend since 02-05 (D-03), so both advisors register");
+        Set<Class<? extends Annotation>> annotationTypes =
+                advisors.stream().map(AopAdvisor::getAnnotationType).collect(Collectors.toSet());
+        assertTrue(annotationTypes.contains(ExceptionCatch.class), annotationTypes.toString());
+        assertTrue(annotationTypes.contains(Transactional.class), annotationTypes.toString());
     }
 
     @Test
@@ -118,16 +169,41 @@ class PluginManagerAopWiringTest {
     }
 
     @Test
-    @DisplayName("Should reject a bean using @Transactional when the backend has no DataSource yet (JSON)")
-    void shouldRejectTransactionalBean() {
+    @DisplayName("A @Transactional method on the JSON backend that writes then throws leaves "
+            + "the operator's contents unchanged (D-03, flipped from the pre-02-05 rejection case)")
+    void shouldRollBackOnJsonBackendWhenTransactionalMethodThrows() {
+        DataOperator<JsonTestEntity> operator =
+                jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
+
         SimpleContainer context = new SimpleContainer();
         PluginManager.wireAop(context, scope);
-        context.registerBean(Transactionally.class);
+        context.registerType(DataOperator.class, operator);
+        context.registerBean(JsonTransactionally.class);
+        context.refresh();
 
-        RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
-        String message = rootMessage(thrown);
-        assertTrue(message.contains("Transactional"), message);
-        assertTrue(message.contains("datasource.type"), message);
+        JsonTransactionally bean = context.getBean(JsonTransactionally.class);
+
+        assertThrows(RuntimeException.class, bean::writeThenFail);
+        assertNull(operator.getById("json-tx-fail"), "the insert must have been rolled back");
+    }
+
+    @Test
+    @DisplayName("A @Transactional method on the JSON backend that writes and returns normally "
+            + "leaves the write committed")
+    void shouldCommitOnJsonBackendWhenTransactionalMethodSucceeds() {
+        DataOperator<JsonTestEntity> operator =
+                jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
+
+        SimpleContainer context = new SimpleContainer();
+        PluginManager.wireAop(context, scope);
+        context.registerType(DataOperator.class, operator);
+        context.registerBean(JsonTransactionally.class);
+        context.refresh();
+
+        JsonTransactionally bean = context.getBean(JsonTransactionally.class);
+
+        bean.writeThenSucceed();
+        assertNotNull(operator.getById("json-tx-success"), "the insert must have been committed");
     }
 
     @Test

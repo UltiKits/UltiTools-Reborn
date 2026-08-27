@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.aop;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -39,7 +40,6 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.ModuleEvent;
-import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import com.ultikits.ultitools.manager.DataScope;
@@ -219,10 +219,10 @@ class AopActivationTest {
      * {@link DataScope} is also package-private-constructed in {@code manager}; reflection builds
      * one here too. {@code UltiTools.getInstance().getDataStore()} is stubbed to a {@link JsonStore}
      * for the duration of the call only (this file is about {@code @ExceptionCatch}, not the
-     * {@code @Transactional} JDBC path added in 02-01) - a {@link JsonStore} does not override
-     * {@code getDataSource(DataScope)}, so it throws {@link UnsupportedOperationException} and
-     * {@code wireAop} falls back to declaring {@code @Transactional} unavailable, exactly the
-     * pre-6.3.0 behavior {@link #shouldRefuseInheritedTransactional()} still asserts.
+     * {@code @Transactional} JDBC path added in 02-01) - since 02-05 (D-03) a {@link JsonStore}
+     * gets a real snapshot-based {@code TransactionManager} from {@code wireAop}'s JSON branch, so
+     * {@code @Transactional} is genuinely wired here too, not merely declared unavailable. See
+     * {@link #shouldInterceptInheritedTransactionalMethod()}.
      */
     private static void invokeWireAop(SimpleContainer context) {
         try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
@@ -451,32 +451,18 @@ class AopActivationTest {
     }
 
     @Test
-    @DisplayName("@Transactional on a superclass method must trigger the load-time refusal")
-    void shouldRefuseInheritedTransactional() {
-        SimpleContainer context = new SimpleContainer();
-        invokeWireAop(context);
-        context.registerBean(InheritsTransactionalBean.class);
+    @DisplayName("A method-level @Transactional declared on a superclass must be intercepted "
+            + "(flipped from a pre-02-05 refusal case, D-03: JSON now wires @Transactional "
+            + "instead of declaring it unavailable, exactly like @ExceptionCatch's sibling case "
+            + "above)")
+    void shouldInterceptInheritedTransactionalMethod() {
+        SimpleContainer context = wiredContainer(InheritsTransactionalBean.class);
 
-        // SimpleContainer.createBean catches Exception and rewraps it, and ContainerException is
-        // itself a RuntimeException, so the refusal arrives wrapped and its text is no longer the
-        // top-level message. The chain is searched rather than the assertion being loosened to
-        // RuntimeException, which any unrelated container failure would also satisfy.
-        RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
-        ContainerException refusal = null;
-        Throwable cursor = thrown;
-        for (int depth = 0; cursor != null && depth < 16; depth++) {
-            if (cursor instanceof ContainerException) {
-                refusal = (ContainerException) cursor;
-                break;
-            }
-            cursor = cursor.getCause();
-        }
-
-        assertNotNull(refusal, "the cause chain must contain the refusal, but was: " + thrown);
-        assertTrue(refusal.getMessage().contains("Transactional"),
-                "the refusal must name the annotation: " + refusal.getMessage());
-        assertTrue(refusal.getMessage().contains("transactionalOnBase"),
-                "the refusal must name the inherited method, not just the bean: "
-                        + refusal.getMessage());
+        InheritsTransactionalBean bean = context.getBean(InheritsTransactionalBean.class);
+        assertTrue(ProxyFactory.isProxyClass(bean.getClass()),
+                "neither @ExceptionCatch nor @Transactional is @Inherited, so this only proxies "
+                        + "if the scan walks the hierarchy itself");
+        assertDoesNotThrow(bean::transactionalOnBase,
+                "the inherited @Transactional method must actually be reachable through the proxy");
     }
 }
