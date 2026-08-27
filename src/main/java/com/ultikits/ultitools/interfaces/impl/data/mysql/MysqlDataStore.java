@@ -79,6 +79,7 @@ public class MysqlDataStore implements DataStore {
     @Override
     @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+        checkOwnership(plugin, dataEntity);
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
@@ -89,6 +90,7 @@ public class MysqlDataStore implements DataStore {
     @Override
     @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        checkOwnership(dataFolder, dataEntity);
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
