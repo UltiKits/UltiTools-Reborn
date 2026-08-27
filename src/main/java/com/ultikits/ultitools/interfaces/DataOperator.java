@@ -105,7 +105,16 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     /**
      * Delete data record by conditions.
      * <p>
+     * Since 6.3.0, a call with no conditions (a {@code null} or zero-length
+     * {@code whereConditions}) is rejected with a {@code DataAccessException} instead of
+     * deleting every row of the table — this is a behavioral change with no migration period
+     * (COMPATIBILITY.md's security-fix channel); see 02-CONTEXT.md D-12.
+     * <p>
      * 按照条件删除记录
+     * <br>
+     * 自 6.3.0 起，不带任何条件调用（{@code whereConditions} 为 {@code null} 或空数组）会直接
+     * 抛出 {@code DataAccessException}，而不是清空整张表——这是一项没有迁移期的行为变更
+     * （COMPATIBILITY.md 的安全修复通道），详见 02-CONTEXT.md D-12。
      *
      * @param whereConditions Conditions <br> 条件参数
      */

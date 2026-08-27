@@ -509,6 +509,49 @@ class SQLiteDataOperatorTest {
     }
 
     @Nested
+    @DisplayName("列名白名单测试（T-02-SQLI-1）")
+    class ColumnValidationTests {
+
+        @BeforeEach
+        void insertOneRow() {
+            TestEntity entity = new TestEntity();
+            entity.setId("colval-1");
+            entity.setName("ColVal");
+            entity.setAge(20);
+            operator.insert(entity);
+        }
+
+        @Test
+        @DisplayName("未知列名在 getAll 上被拒绝，消息包含列名与实体类型")
+        void getAllWithUnknownColumnShouldBeRejected() {
+            assertThatThrownBy(() -> operator.getAll(
+                    WhereCondition.builder().column("no_such_column").value("x").build()))
+                    .isInstanceOf(DataAccessException.class)
+                    .hasMessageContaining("no_such_column")
+                    .hasMessageContaining(TestEntity.class.getName());
+        }
+
+        @Test
+        @DisplayName("未知列名在 exist/page/del 上同样被拒绝")
+        void unknownColumnShouldBeRejectedOnExistPageAndDel() {
+            WhereCondition badCondition = WhereCondition.builder().column("no_such_column").value("x").build();
+
+            assertThatThrownBy(() -> operator.exist(badCondition)).isInstanceOf(DataAccessException.class);
+            assertThatThrownBy(() -> operator.page(1, 10, badCondition)).isInstanceOf(DataAccessException.class);
+            assertThatThrownBy(() -> operator.del(badCondition)).isInstanceOf(DataAccessException.class);
+        }
+
+        @Test
+        @DisplayName("正对照：真实 @Column 名不受影响")
+        void realColumnNameShouldNotBeAffected() {
+            List<TestEntity> result = operator.getAll(
+                    WhereCondition.builder().column("name").value("ColVal").build());
+
+            assertThat(result).extracting(TestEntity::getName).containsExactly("ColVal");
+        }
+    }
+
+    @Nested
     @DisplayName("update 方法测试")
     class UpdateTests {
 

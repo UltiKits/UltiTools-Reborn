@@ -6,10 +6,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.logging.Logger;
 
@@ -53,6 +56,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     protected final String tableName;
     protected final QueryRunner queryRunner;
     protected TransactionManager transactionManager;
+    /**
+     * The entity's own {@code @Column} names, reflected once at construction. The allow-list
+     * {@link #validateColumn(String)} checks every WHERE-clause column identifier against
+     * before it is concatenated into SQL text (T-02-SQLI-1).
+     */
+    private final Set<String> knownColumns;
 
     /**
      * Creates a new data operator.
@@ -73,7 +82,44 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     "Entity class " + type.getName() + " must have @Table annotation");
         }
         this.tableName = tableAnnotation.value();
+        this.knownColumns = buildKnownColumns(type);
         initializeTable();
+    }
+
+    /**
+     * Reflects the entity's {@code @Column} mappings once, for {@link #validateColumn(String)}'s
+     * allow-list. This mirrors the same reflected metadata {@link #buildColumnDefinitions(Class)}
+     * and {@link #getColumnMappings()} already read from the entity class — a dedicated pass over
+     * it, not a second scan of anything already cached.
+     *
+     * @param entityType the entity class
+     * @return an unmodifiable set of every {@code @Column} SQL name declared on {@code entityType}
+     *         (including inherited fields, e.g. {@code AbstractDataEntity}'s {@code id})
+     */
+    private static Set<String> buildKnownColumns(Class<?> entityType) {
+        Set<String> columns = new HashSet<>();
+        for (Field field : ReflectionUtil.getFields(entityType)) {
+            if (field.isAnnotationPresent(Column.class)) {
+                columns.add(field.getAnnotation(Column.class).value());
+            }
+        }
+        return Collections.unmodifiableSet(columns);
+    }
+
+    /**
+     * Refuses a column identifier that is not among the entity's own reflected {@code @Column}
+     * mappings, before it can be concatenated into SQL text (T-02-SQLI-1). Called from
+     * {@link #appendConditions} on behalf of all four relational WHERE builders.
+     *
+     * @param column the column name from a caller-supplied {@link WhereCondition}
+     * @throws DataAccessException if {@code column} is not a known column of {@link #type}
+     */
+    private void validateColumn(String column) {
+        if (!knownColumns.contains(column)) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Unknown column '" + column + "' for entity " + type.getName()
+                            + " -- it is not among the entity's @Column mappings.");
+        }
     }
 
     /**
@@ -220,6 +266,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             if (skipEmpty && condition.isEmpty()) {
                 continue;
             }
+            validateColumn(condition.getColumn());
             if (first) {
                 sql.append(" WHERE ");
                 first = false;
@@ -374,11 +421,19 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void del(WhereCondition... whereConditions) {
+        // T-02-TAM-1 / SILENT-01 / D-12: refuse before any SQL text is built and before any
+        // QueryRunner interaction. The varargs no-arg call produces a zero-length array, not
+        // null -- both shapes are refused here. Stateless: every call re-checks, so this is
+        // not a one-shot latch and cannot partially execute on a retry.
+        if (whereConditions == null || whereConditions.length == 0) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to delete every row of table '" + tableName + "' with no WhereCondition. "
+                            + "Pass an explicit condition, or use a dedicated full-table operation "
+                            + "if one genuinely exists.");
+        }
         StringBuilder sql = new StringBuilder("DELETE FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
-        if (whereConditions != null && whereConditions.length > 0) {
-            appendConditions(sql, params, whereConditions, false);
-        }
+        appendConditions(sql, params, whereConditions, false);
         try {
             queryRunner.update(sql.toString(), params.toArray());
         } catch (SQLException e) {
