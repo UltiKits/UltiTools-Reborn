@@ -7,10 +7,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 
+import org.bukkit.Bukkit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +28,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.interfaces.IPlugin;
 
 /**
@@ -34,6 +44,8 @@ class PluginManagerClassScanningTest {
     File tempDir;
 
     private PluginManager pluginManager;
+    private final List<LogRecord> bukkitLogs = new ArrayList<>();
+    private Handler captureHandler;
 
     @BeforeEach
     void setUp() {
@@ -42,10 +54,30 @@ class PluginManagerClassScanningTest {
         MockBukkit.createMockPlugin();
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         pluginManager = new PluginManager();
+
+        bukkitLogs.clear();
+        captureHandler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                bukkitLogs.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        };
+        Bukkit.getLogger().addHandler(captureHandler);
     }
 
     @AfterEach
     void tearDown() {
+        Bukkit.getLogger().removeHandler(captureHandler);
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
@@ -74,6 +106,121 @@ class PluginManagerClassScanningTest {
 
         assertThat(invokeLoadPluginMainClass(badJar)).isNull();
         assertThat(invokeLoadPluginMainClass(validJar)).isEqualTo(ConcretePlugin.class);
+    }
+
+    @Test
+    @DisplayName("扫描应只收集本 JAR 中携带 @Table 的类，忽略非 @Table 类")
+    void shouldScanTableAnnotatedClassesAndOnlyThoseInThisJar() throws Exception {
+        File pluginJar = createJar("entity-plugin.jar", EntityA.class, EntityB.class, PlainPlugin.class);
+
+        Set<Class<?>> scanned = invokeScanEntitiesInJar(pluginJar);
+
+        assertThat(scanned).containsExactlyInAnyOrder(EntityA.class, EntityB.class);
+
+        DataScope scope = DataScope.forExternal("entity-plugin", tempDir, scanned);
+        assertThat(scope.owns(EntityA.class)).isTrue();
+        assertThat(scope.owns(EntityB.class)).isTrue();
+        assertThat(scope.owns(UnrelatedEntity.class)).isFalse();
+    }
+
+    @Test
+    @DisplayName("零 @Table 类的 JAR 扫描出空集合，不影响插件加载")
+    void shouldReturnEmptySetForJarWithNoTableClasses() throws Exception {
+        File pluginJar = createJar("no-entity-plugin.jar", ConcretePlugin.class);
+
+        Set<Class<?>> scanned = invokeScanEntitiesInJar(pluginJar);
+
+        assertThat(scanned).isNotNull().isEmpty();
+    }
+
+    @Test
+    @DisplayName("超过 1000 类上限只报告、不截断——扫描完整跑完并记录一条 WARNING")
+    void shouldReportWithoutTruncatingWhenClassCountExceedsCap() throws Exception {
+        File pluginJar = new File(tempDir, "oversized-plugin.jar");
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(pluginJar.toPath()))) {
+            for (int i = 0; i < 1001; i++) {
+                output.putNextEntry(new JarEntry(
+                        "com/ultikits/ultitools/manager/scanfixture/SyntheticClass" + i + ".class"));
+                output.closeEntry();
+            }
+        }
+
+        Set<Class<?>> scanned = invokeScanEntitiesInJar(pluginJar);
+
+        assertThat(scanned).isNotNull();
+        boolean warned = bukkitLogs.stream().anyMatch(record ->
+                Level.WARNING.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains("1000"));
+        assertThat(warned).as("expected a WARNING naming the jar and the 1000-class cap, got: %s", bukkitLogs)
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("@UltiToolsModule#additionalEntities 声明的实体并入插件的 scope")
+    void additionalEntitiesAttributeShouldBeAddedToPluginScope() throws Exception {
+        // Objenesis bypasses every UltiToolsPlugin constructor (all of which do real plugin.yml/
+        // language/config I/O against UltiTools.getInstance()) so this test exercises only what
+        // scanPluginEntities actually reads: plugin.getClass() -- for the CodeSource-based jar
+        // resolution and the @UltiToolsModule annotation lookup. Mockito's mock() cannot stand in
+        // here: getClass() is final on Object, so a mock's generated subclass never carries the
+        // literal ModuleWithAdditionalEntities class -- and @UltiToolsModule is not @Inherited.
+        ModuleWithAdditionalEntities plugin =
+                new org.objenesis.ObjenesisStd().newInstance(ModuleWithAdditionalEntities.class);
+
+        Set<Class<?>> scanned = invokeScanPluginEntities(plugin);
+
+        assertThat(scanned).contains(UnrelatedEntity.class);
+    }
+
+    @Test
+    @DisplayName("没有声明任何实体的插件得到空集合而非 null，owns() 不抛异常")
+    void pluginWithNoEntitiesGetsEmptySetNotNull() throws Exception {
+        ConcretePlugin plugin = new org.objenesis.ObjenesisStd().newInstance(ConcretePlugin.class);
+
+        Set<Class<?>> scanned = invokeScanPluginEntities(plugin);
+
+        assertThat(scanned).isNotNull().isEmpty();
+        DataScope scope = DataScope.forExternal("no-entities-plugin", tempDir, scanned);
+        assertThat(scope.owns(EntityA.class)).isFalse();
+    }
+
+    @Test
+    @DisplayName("connect(plugin, additionalEntities) 声明的实体并入外部插件的 scope")
+    void externalConnectAdditionalEntitiesShouldBeAddedToScope() throws Exception {
+        org.bukkit.plugin.java.JavaPlugin mockPlugin = MockBukkit.createMockPlugin("ExternalScanFixture");
+        com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
+                new com.ultikits.ultitools.api.ExternalPluginAdapter(mockPlugin);
+
+        Set<Class<?>> scanned = invokeScanExternalEntities(adapter, new Class<?>[]{EntityA.class});
+
+        assertThat(scanned).contains(EntityA.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Class<?>> invokeScanEntitiesInJar(File pluginJar) throws Exception {
+        Method method = PluginManager.class.getDeclaredMethod("scanEntitiesInJar", File.class);
+        method.setAccessible(true);
+        return (Set<Class<?>>) method.invoke(pluginManager, pluginJar);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Class<?>> invokeScanPluginEntities(UltiToolsPlugin plugin) throws Exception {
+        Method method = PluginManager.class.getDeclaredMethod("scanPluginEntities", UltiToolsPlugin.class);
+        method.setAccessible(true);
+        return (Set<Class<?>>) method.invoke(pluginManager, plugin);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Class<?>> invokeScanExternalEntities(
+            com.ultikits.ultitools.api.ExternalPluginAdapter adapter, Class<?>[] additionalEntities
+    ) throws Exception {
+        Method method = PluginManager.class.getDeclaredMethod(
+                "scanExternalEntities", com.ultikits.ultitools.api.ExternalPluginAdapter.class, Class[].class
+        );
+        method.setAccessible(true);
+        return (Set<Class<?>>) method.invoke(pluginManager, adapter, additionalEntities);
     }
 
     private Class<? extends UltiToolsPlugin> invokeLoadPluginMainClass(File pluginJar) throws Exception {
@@ -137,6 +284,26 @@ class PluginManagerClassScanningTest {
     }
 
     static class ConcretePlugin extends UltiToolsPlugin {
+        @Override
+        public boolean registerSelf() {
+            return true;
+        }
+    }
+
+    @Table("scan_entity_a")
+    static class EntityA {
+    }
+
+    @Table("scan_entity_b")
+    static class EntityB {
+    }
+
+    @Table("scan_entity_other")
+    static class UnrelatedEntity {
+    }
+
+    @UltiToolsModule(additionalEntities = {UnrelatedEntity.class})
+    static class ModuleWithAdditionalEntities extends UltiToolsPlugin {
         @Override
         public boolean registerSelf() {
             return true;

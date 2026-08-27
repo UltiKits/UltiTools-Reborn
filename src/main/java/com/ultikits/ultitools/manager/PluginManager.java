@@ -219,7 +219,7 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
-            wireAop(pluginContext, DataScope.forPlugin(plugin));
+            wireAop(pluginContext, DataScope.forPlugin(plugin, scanPluginEntities(plugin)));
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
@@ -413,6 +413,162 @@ public class PluginManager {
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
         }
         return null;
+    }
+
+    /**
+     * Scans a plugin's own JAR for classes carrying {@code @Table}, independently of {@link
+     * #loadPluginMainClass}'s scan (which returns as soon as it finds the module's main class and
+     * discards its own {@code scannedClasses} set). This pass visits every entry so a truncated
+     * result never makes a legitimate entity look unowned -- under D-15's fail-closed rule that
+     * would refuse a module that did nothing wrong. {@link #loadPluginMainClass}'s 1,000-class cap
+     * is reported here, not enforced: crossing it produces one WARNING naming the jar and the
+     * count, and the scan continues to the end of the jar regardless.
+     * <p>
+     * 独立于 {@link #loadPluginMainClass} 的扫描（后者一找到模块主类就 return，并丢弃自己的
+     * {@code scannedClasses} 集合），扫描 {@code pluginJar} 中所有携带 {@code @Table} 注解的类。
+     * 本次扫描会遍历每一个条目——截断的结果会让一个合法实体看起来「无主」，而 D-15 的
+     * fail-closed 规则会因此拒绝一个完全无辜的模块。给 {@link #loadPluginMainClass} 设置上限的
+     * 1000 这个数字，在这里只报告、不强制——超过时只产生一条 WARNING（点名 jar 和数量），
+     * 扫描仍会继续到 jar 结尾。
+     *
+     * @param pluginJar the module's own jar file <br> 模块自身的 jar 文件
+     * @return every {@code @Table}-annotated class found, never null <br> 找到的每一个携带
+     *         {@code @Table} 的类，不会为 null
+     */
+    private Set<Class<?>> scanEntitiesInJar(File pluginJar) {
+        Set<Class<?>> entities = new HashSet<>();
+        if (pluginJar == null || !pluginJar.isFile()) {
+            return entities;
+        }
+        try (JarFile jarFile = new JarFile(pluginJar)) {
+            Enumeration<JarEntry> entryEnumeration = jarFile.entries();
+            Set<String> scannedClasses = new HashSet<>();
+            boolean warnedOverCap = false;
+
+            while (entryEnumeration.hasMoreElements()) {
+                JarEntry entry = entryEnumeration.nextElement();
+                if (!entry.getName().endsWith(".class") || entry.getName().contains("META-INF")) {
+                    continue;
+                }
+
+                String className = entry
+                        .getName()
+                        .replace('/', '.')
+                        .replace(".class", "");
+
+                if (!scannedClasses.add(className)) {
+                    continue;
+                }
+
+                if (!warnedOverCap && scannedClasses.size() > 1000) {
+                    warnedOverCap = true;
+                    Bukkit.getLogger().log(Level.WARNING,
+                        "[UltiTools-API] Entity scan of " + pluginJar.getName() + " has passed 1000 "
+                            + "classes -- the scan continues to completion (the cap is reported here, "
+                            + "not enforced, so no entity is silently dropped).");
+                }
+
+                try {
+                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
+                    if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
+                        entities.add(aClass);
+                    }
+                } catch (ClassNotFoundException | LinkageError e) {
+                    Bukkit.getLogger().log(Level.FINE,
+                        "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
+                } catch (SecurityException e) {
+                    Bukkit.getLogger().log(Level.WARNING,
+                        "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
+                }
+            }
+        } catch (IOException | LinkageError | RuntimeException e) {
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API] Failed to scan jar for entities: " + pluginJar.getName(), e);
+        }
+        return entities;
+    }
+
+    /**
+     * Best-effort resolution of the jar file {@code aClass} was loaded from, via its {@link
+     * java.security.CodeSource}. Never throws; returns {@code null} when the code source is
+     * unavailable or does not point at a real jar (e.g. exploded test classes) -- the same
+     * "best effort, class-name fallback" posture {@link UltiToolsPlugin#resolveJarFileNameForError()}
+     * already uses for the same lookup.
+     * <p>
+     * 通过 {@link java.security.CodeSource} 尽力解析 {@code aClass} 的加载来源 jar 文件。永不抛出
+     * 异常；代码源不可用，或并未指向真实 jar 文件时（例如测试中未打包的 class），返回
+     * {@code null}，与 {@link UltiToolsPlugin#resolveJarFileNameForError()} 对同一查找的既有
+     * "尽力而为、回退类名" 做法一致。
+     *
+     * @param aClass the class whose jar should be resolved <br> 待解析所属 jar 的类
+     * @return the jar file, or null if it cannot be resolved <br> jar 文件，无法解析时为 null
+     */
+    private static File resolveOwnJarFile(Class<?> aClass) {
+        try {
+            java.security.CodeSource src = aClass.getProtectionDomain().getCodeSource();
+            if (src == null || src.getLocation() == null) {
+                return null;
+            }
+            File file = new File(src.getLocation().toURI());
+            return file.isFile() && file.getName().endsWith(".jar") ? file : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Builds the entity set a {@link DataScope} for {@code plugin} should carry (D-19): every
+     * {@code @Table} class found by scanning the module's own jar, plus anything declared via
+     * {@code @UltiToolsModule#additionalEntities()} for entities that legitimately live elsewhere.
+     * Never throws -- a plugin whose jar cannot be resolved (e.g. a directly-constructed test
+     * instance with no real jar) simply gets an entity set built from its declared
+     * {@code additionalEntities()} alone, which is empty by default.
+     * <p>
+     * 为 {@code plugin} 的 {@link DataScope} 构建实体集合（D-19）：扫描模块自身 jar 得到的每一个
+     * {@code @Table} 类，加上模块通过 {@code @UltiToolsModule#additionalEntities()} 声明的、
+     * 合法存放在别处的实体。永不抛出异常——jar 无法解析时（例如直接构造、没有真实 jar 的测试
+     * 实例），实体集合仅由其声明的 {@code additionalEntities()} 构成，默认为空。
+     *
+     * @param plugin the plugin whose scope is being minted <br> 正在铸造 scope 的插件
+     * @return the entity set for that plugin's scope <br> 该插件 scope 的实体集合
+     */
+    private Set<Class<?>> scanPluginEntities(UltiToolsPlugin plugin) {
+        Set<Class<?>> entities = new HashSet<>();
+        File jarFile = resolveOwnJarFile(plugin.getClass());
+        if (jarFile != null) {
+            entities.addAll(scanEntitiesInJar(jarFile));
+        }
+        UltiToolsModule module = plugin.getClass().getAnnotation(UltiToolsModule.class);
+        if (module != null) {
+            Collections.addAll(entities, module.additionalEntities());
+        }
+        return entities;
+    }
+
+    /**
+     * Builds the entity set a {@link DataScope} for an external plugin should carry (D-19): every
+     * {@code @Table} class found by scanning the plugin's own jar, plus whatever it declared via
+     * {@code UltiToolsAPI.connect(plugin, additionalEntities)}.
+     * <p>
+     * 为外部插件的 {@link DataScope} 构建实体集合（D-19）：扫描插件自身 jar 得到的每一个
+     * {@code @Table} 类，加上通过 {@code UltiToolsAPI.connect(plugin, additionalEntities)} 声明的
+     * 实体。
+     *
+     * @param adapter            the external plugin adapter <br> 外部插件适配器
+     * @param additionalEntities entity classes declared via {@code connect(...)} <br> 通过
+     *                           {@code connect(...)} 声明的实体类
+     * @return the entity set for that external plugin's scope <br> 该外部插件 scope 的实体集合
+     */
+    private Set<Class<?>> scanExternalEntities(ExternalPluginAdapter adapter, Class<?>[] additionalEntities) {
+        Set<Class<?>> entities = new HashSet<>();
+        File jarFile = resolveOwnJarFile(adapter.getJavaPlugin().getClass());
+        if (jarFile != null) {
+            entities.addAll(scanEntitiesInJar(jarFile));
+        }
+        if (additionalEntities != null) {
+            Collections.addAll(entities, additionalEntities);
+        }
+        return entities;
     }
     
     /**
@@ -907,7 +1063,7 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
-            wireAop(pluginContext, DataScope.forPlugin(plugin));
+            wireAop(pluginContext, DataScope.forPlugin(plugin, scanPluginEntities(plugin)));
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -1087,6 +1243,23 @@ public class PluginManager {
      * @since 6.2.2
      */
     public void registerExternal(ExternalPluginAdapter adapter) {
+        registerExternal(adapter, new Class<?>[0]);
+    }
+
+    /**
+     * Register an external Bukkit plugin adapter with the framework, declaring entity classes
+     * that legitimately live outside the plugin's own JAR (D-19), in addition to the entities
+     * found by scanning the plugin's own JAR for {@code @Table} classes.
+     * <p>
+     * 注册外部 Bukkit 插件适配器到框架中，并声明合法存放在插件自身 JAR 之外的实体类（D-19），
+     * 作为对扫描插件自身 JAR 得到的 {@code @Table} 实体集合的补充。
+     *
+     * @param adapter            the external plugin adapter <br> 外部插件适配器
+     * @param additionalEntities entity classes owned by this plugin that live outside its own JAR
+     *                           <br> 该插件拥有、但存放在自身 JAR 之外的实体类
+     * @since 6.3.0
+     */
+    public void registerExternal(ExternalPluginAdapter adapter, Class<?>[] additionalEntities) {
         // 1. Create child IoC container
         SimpleContainer context = new SimpleContainer();
         context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
@@ -1099,8 +1272,9 @@ public class PluginManager {
         }
 
         // 3. Refresh container to instantiate beans
-        wireAop(context, DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
-                Collections.emptySet()));
+        DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
+                scanExternalEntities(adapter, additionalEntities));
+        wireAop(context, scope);
         context.refresh();
         adapter.setContext(context);
 

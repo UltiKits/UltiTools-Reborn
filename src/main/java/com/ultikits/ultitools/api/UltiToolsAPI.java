@@ -47,6 +47,29 @@ public final class UltiToolsAPI {
      * @throws IllegalStateException if UltiTools is not loaded
      */
     public static void connect(JavaPlugin plugin) {
+        connect(plugin, new Class<?>[0]);
+    }
+
+    /**
+     * Connect an external Bukkit plugin to UltiTools framework, declaring entity classes that
+     * legitimately live outside the plugin's own JAR (D-19) -- a shared library JAR, or a
+     * multi-module build's common artifact. The plugin's own JAR is always scanned for
+     * {@code @Table} classes automatically; {@code additionalEntities} is additive to that scan,
+     * not a replacement for it. The single-argument {@link #connect(JavaPlugin)} overload is
+     * unchanged and delegates here with an empty array.
+     * <p>
+     * 将外部 Bukkit 插件连接到 UltiTools 框架，并声明合法存放在插件自身 JAR 之外的实体类
+     * （D-19）——共享库 JAR，或多模块构建的公共产物。插件自身 JAR 中的 {@code @Table} 类始终会
+     * 被自动扫描；{@code additionalEntities} 是对该扫描结果的补充，而非替代。单参数的
+     * {@link #connect(JavaPlugin)} 重载保持不变，以空数组委托到本方法。
+     *
+     * @param plugin            the external JavaPlugin to connect <br> 待连接的外部 JavaPlugin
+     * @param additionalEntities entity classes owned by this plugin that live outside its own JAR
+     *                            <br> 该插件拥有、但存放在自身 JAR 之外的实体类
+     * @throws IllegalStateException if UltiTools is not loaded
+     * @since 6.3.0
+     */
+    public static void connect(JavaPlugin plugin, Class<?>... additionalEntities) {
         if (UltiTools.getInstance() == null) {
             throw new IllegalStateException("UltiTools is not loaded! Add 'depend: [UltiTools]' to your plugin.yml");
         }
@@ -60,7 +83,7 @@ public final class UltiToolsAPI {
         adapters.put(plugin, adapter);
 
         try {
-            UltiTools.getInstance().getPluginManager().registerExternal(adapter);
+            UltiTools.getInstance().getPluginManager().registerExternal(adapter, additionalEntities);
             adapter.setConnected(true);
             Bukkit.getLogger().log(Level.INFO,
                     "[UltiTools-API] External plugin connected: " + plugin.getName() + " v" + adapter.getVersion());

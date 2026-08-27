@@ -45,18 +45,21 @@ public final class DataScope {
     /**
      * Mints a scope for an internal {@link UltiToolsPlugin} module.
      * <p>
-     * The entity set is left empty here — populating it from the plugin's own JAR is D-19's work
-     * in a later plan, not this one.
+     * {@code ownedEntities} is the result of {@code PluginManager}'s D-19 scan of the plugin's own
+     * JAR (classes carrying {@code @Table}), unioned with anything declared via
+     * {@code @UltiToolsModule#additionalEntities()}.
      * <p>
-     * 为内部 {@link UltiToolsPlugin} 模块铸造一个 scope。实体集合在此留空——从插件自身 JAR
-     * 中扫描填充是 D-19 在后续计划里的工作，不属于本计划。
+     * 为内部 {@link UltiToolsPlugin} 模块铸造一个 scope。{@code ownedEntities} 是
+     * {@code PluginManager} 对插件自身 JAR 做 D-19 扫描（携带 {@code @Table} 的类）的结果，
+     * 并与通过 {@code @UltiToolsModule#additionalEntities()} 声明的实体取并集。
      *
-     * @param plugin the internal plugin module <br> 内部插件模块
+     * @param plugin        the internal plugin module <br> 内部插件模块
+     * @param ownedEntities the entity classes this plugin owns <br> 该插件拥有的实体类
      * @return a scope identifying that plugin <br> 标识该插件的 scope
      */
-    static DataScope forPlugin(UltiToolsPlugin plugin) {
+    static DataScope forPlugin(UltiToolsPlugin plugin, Set<Class<?>> ownedEntities) {
         return new DataScope(plugin.getPluginName(), UltiTools.getInstance().getDataFolder(),
-                Collections.emptySet());
+                ownedEntities);
     }
 
     /**
