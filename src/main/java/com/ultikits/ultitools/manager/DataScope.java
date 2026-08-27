@@ -16,14 +16,14 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * Unlike a raw {@link File}, a {@code DataScope} cannot be constructed outside this package: both
  * the constructor and the static factories are package-private, so the only way to obtain one is
  * through {@code PluginManager} (internal modules) or {@code DataStoreManager} / the external
- * plugin registration path (external plugins). {@link com.ultikits.ultitools.UltiTools#getDataStore()}
+ * plugin registration path (external plugins). {@code UltiTools#getDataStore()}
  * being {@code public} in the published jar is therefore no longer a bypass: a caller outside the
  * framework has no way to mint the token {@code DataStore.getOperator(DataScope, Class)} requires.
  * <p>
  * 框架签发的身份凭证，标识调用 {@link com.ultikits.ultitools.interfaces.DataStore} 方法的一方。
  * 与裸露的 {@link File} 不同，{@code DataScope} 无法在本包之外被构造——构造器和静态工厂方法均为
  * 包私有，只能经由 {@code PluginManager}（内部模块）或 {@code DataStoreManager} /
- * 外部插件注册路径（外部插件）获得。这使得 {@link com.ultikits.ultitools.UltiTools#getDataStore()}
+ * 外部插件注册路径（外部插件）获得。这使得 {@code UltiTools#getDataStore()}
  * 在已发布 jar 中是 {@code public} 这一事实不再构成绕过：框架之外的调用方没有任何办法铸造
  * {@code DataStore.getOperator(DataScope, Class)} 所需要的令牌。
  *

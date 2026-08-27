@@ -246,7 +246,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
      * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
      * <p>
-     * When {@code skipEmpty} is {@code true}, conditions whose {@link WhereCondition#isEmpty()}
+     * When {@code skipEmpty} is {@code true}, conditions whose {@code WhereCondition#isEmpty()}
      * is {@code true} are skipped — {@link #getAll(WhereCondition...)}'s pre-existing behavior,
      * preserved here rather than changed. {@link #exist(WhereCondition...)},
      * {@link #page(int, int, WhereCondition...)}, and {@link #del(WhereCondition...)} do not
