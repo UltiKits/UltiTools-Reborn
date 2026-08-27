@@ -37,6 +37,32 @@ by default since JDK 9**, while `-Xlint:deprecation` is **off by default**. An A
 produces a single summary line with no API name and no line number. We therefore treat "you were
 warned by name" as a precondition for removal.
 
+#### Exception: removal in the same release that announces it
+
+The two conditions above are the rule for the ordinary case: a working API that downstream code may
+reasonably depend on. They have exactly one general exception, stated here once rather than argued
+case-by-case at each occurrence: **an API may be removed in the same release that first carries
+`@Deprecated(forRemoval = true)` on it — skipping condition 2 entirely — when at least one of these
+two clauses holds, and the removal's own entry states which one and its evidence:**
+
+1. **The API is proven non-functional on the currently released version.** "Proven" means a
+   **reproduction** — a run whose output shows the API failing on the version currently published —
+   quoted in that removal's own entry. An argument that the API *looks* broken, without a run that
+   shows it, does not satisfy this clause. Loosen this standard even once and the clause stops being
+   an exception and becomes a second, unwritten removal window that retires the one-MINOR window a
+   use at a time, each individual use looking reasonable on its own.
+2. **The API was never published in a tagged release, or was shipped but never wired into anything
+   that calls it.** There is no working behaviour for a deprecation window to warn anyone away from,
+   because no released version could ever have exercised it.
+
+The three AOP removals in the [AOP](#aop) table above are existing instances of this rule, not new
+permissions granted by writing it down: `aop.CglibProxyFactory` under clause 1
+(`--add-opens java.base/java.lang=ALL-UNNAMED` is not a flag a Paper server sets, so the class
+throws `ExceptionInInitializerError` on first use — the constructor throwing on every call is
+itself the reproduction), and `aop.ProxyFactory.createProxy(T)`/`createProxy(Class<T>, T)` plus
+`aop.AopProxyBeanPostProcessor` under clause 2 (neither ever reached a tagged release, or shipped
+but had zero callers in `src/main`).
+
 ### Two deliberate deviations from semver
 
 The `MAJOR.MINOR.PATCH` format invites [semver](https://semver.org/spec/v2.0.0.html) expectations.
@@ -330,6 +356,99 @@ This falls under "no migration period" above: the previous behaviour — a decla
 method silently not being registered — was never a documented contract, so there is no default or
 timing to phase out. It is recorded for the same reason as the AOP proxy naming change above: real
 breakage for code that depended on the gap, even though the gap itself was never guaranteed.
+
+### Recorded instance: `@CmdTarget` class/method composition is now override-with-fail-on-widening (6.3.0)
+
+Before 6.3.0 the two command-executor generations disagreed with each other about what a
+class-level `@CmdTarget` combined with a method-level one actually meant. The deprecated
+`abstracts.AbstractCommandExecutor` path ran an **intersection**: the class-level check and the
+method-level check both had to pass independently. The current `abstracts.command.BaseCommandExecutor`
+path, through `SenderTypeValidator.determineTargetType`, already ran an **override**: whenever a
+method carried its own `@CmdTarget`, the class-level value was ignored entirely, with no widening
+check at all. 6.3.0 makes both generations share one rule,
+`abstracts.command.validation.CmdTargetComposition`: the method-level value **overrides** the
+class-level one when it narrows, and any combination that is not a narrowing — a class-level
+restriction widened by a method-level `BOTH`, or switched laterally between `PLAYER` and `CONSOLE`
+— is refused rather than silently resolved either way.
+
+**Worked example, built from a real command class.** UltiKits's own UltiMenu module ships
+`com.ultikits.plugins.menu.commands.MenuCommands`, on the deprecated `AbstractCommandExecutor`
+generation, class-level `@CmdTarget(BOTH)`, with its `open <name>` mapping narrowed to
+`@CmdTarget(PLAYER)`:
+
+- **On 6.2.5** (intersection): a console sender running `/menu open <name>` is checked against
+  `BOTH` (class-level, passes) AND `PLAYER` (method-level, fails) — the AND fails, so the command
+  is **refused**.
+- **After 6.3.0** (override with narrowing): the method-level `PLAYER` value narrows the
+  class-level `BOTH`, so the effective restriction is `PLAYER` — a console sender is **refused**,
+  the same outcome.
+
+For every mapping that only narrows — which `MenuCommands` exclusively does — intersection and
+override-with-narrowing always agree: a set intersected with its own subset equals the subset,
+which is exactly what override-with-narrowing resolves to. This is why the two generations could
+disagree on the *general* rule for years while every downstream command class that only narrows
+never noticed the difference.
+
+**The mirror case.** `UltiSideBar`'s `com.ultikits.plugins.sidebar.commands.SideBarCommand` carries
+the identical annotation shape — class-level `@CmdTarget(BOTH)`, with `toggle`, `on` and `off` each
+narrowed to `@CmdTarget(PLAYER)` — but on the **current** `BaseCommandExecutor` generation, which
+already ran override before this change. Its resolved sender restriction is identical to
+`MenuCommands`'s. A class migrating from `AbstractCommandExecutor` to `BaseCommandExecutor` without
+editing its `@CmdTarget` annotations therefore resolves to the same sender restriction on both
+sides of the migration, as long as it only narrows — which is the common case.
+
+**What does change.** Two shapes stop registering entirely: a class-level restriction *widened* by
+a method-level `BOTH` (for example class-level `PLAYER`, method-level `BOTH`), and a class-level
+restriction *switched laterally* by a method-level opposite value (class-level `PLAYER`,
+method-level `CONSOLE` — `CmdTargetType` is a three-value enum, not a total order, so this is
+neither a narrowing nor a widening). Before 6.3.0 these were ambiguous and generation-dependent:
+intersection could resolve them to a non-empty or an empty set depending on the values involved,
+while override just took the method's value with no widening check at all. From 6.3.0,
+`ComponentScanner` refuses to register **that command class only** at plugin load — the error
+names the class and the offending method, and the rest of the module still loads. If your command
+class has a mapping whose method-level `@CmdTarget` widens or laterally switches the class-level
+one, edit the annotations so the method narrows or matches the class-level value.
+
+### Recorded instance: the six-argument connector constructor has failed on every release since 6.2.0
+
+This is not itself a 6.3.0 change — it is recorded here because it is the evidentiary basis for
+that constructor's [same-release removal exception](#when-a-public-api-becomes-eligible-for-removal)
+below, and because a downstream connector author deserves the same evidence a maintainer would
+need, not a bare "it doesn't work" assertion.
+
+`abstracts.UltiToolsPlugin`'s six-argument constructor (`(String, String, List, List, int, String)`)
+is reached through `manager.PluginManager.register(...)`'s with-args branch inside
+`initializePlugin`. Before 6.2.0, `initializePlugin` used Spring's
+`AnnotationConfigApplicationContext.registerBean(pluginClass, constructorArgs)`, whose constructor
+resolver does compatible type matching — unboxing and widening included. Release commit `0286e26`
+(v6.2.0) replaced that with hand-written matching that is still present verbatim:
+
+```java
+paramTypes[i] = constructorArgs[i].getClass();
+// ...
+Constructor<? extends UltiToolsPlugin> constructor =
+    pluginClass.getDeclaredConstructor(paramTypes);
+```
+
+`getDeclaredConstructor` requires an **exact** parameter-type match. Measured, not inferred: a
+probe reproducing the six-argument call shape yields
+`paramTypes = [String, String, ArrayList, ArrayList, Integer, String]` against a constructor
+declared `(String, String, List, List, int, String)`. Three of the six parameter positions can
+never match: `ArrayList` is never assignable-checked against the declared `List` parameter — the
+declared type must match literally, not merely be assignable — twice; and the autoboxed `Integer`
+never equals the declared primitive `int`, once. `getDeclaredConstructor` therefore always throws
+`NoSuchMethodException` for this call shape.
+
+The failure is swallowed on its way out: the reflective exception is wrapped in an
+`IllegalStateException` (`PluginManager.java:738`), caught by `register(...)`'s own
+`catch (Exception | Error e)` (`:178`), logged at `WARNING`, and turned into a `false` return. The
+caller sees no exception — only a boolean.
+
+**The overload has therefore failed 100% of the time on every release since 6.2.0.** There is no
+argument shape by which the six-argument call can ever satisfy `getDeclaredConstructor`'s
+exact-match requirement. Connector authors hitting this should use
+`api.UltiToolsAPI.connect(JavaPlugin)` instead, which does not go through reflective constructor
+resolution at all.
 
 ### Recorded instance: `@Transactional` now refuses to load a module (6.3.0)
 
@@ -682,13 +801,20 @@ descriptor changes can only be recorded after the fact; we cannot guarantee to c
 
 ### Where runtime dependencies come from
 
-The framework JAR bundles exactly three libraries: obliviate-invs (GUI), XSeries (cross-version) and
-UniversalScheduler (scheduling). Everything else is not in the JAR and arrives by one of two routes:
+The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and UniversalScheduler
+(scheduling). Everything else is not in the JAR and arrives by one of two routes:
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, ByteBuddy |
+| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, ByteBuddy, XSeries |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
+
+**XSeries moved out of the bundled JAR in 6.3.0.** Through 6.2.5 it was shaded in — the sentence
+above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
+delivered through the `libraries:` route in the table instead, the same way Gson and HikariCP
+already were. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
+along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.0.0`, or your own
+pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
 category, pinning a version in this repository is an effective fix. For anything in the second, the
@@ -742,6 +868,29 @@ If you disagree with this policy, or your module is affected by the removals abo
 **默认开启**，`-Xlint:deprecation` **默认关闭**。带 `forRemoval` 的 API 会在你的构建里
 逐处点名报警；只带普通 `@Deprecated` 的则只有一句不含 API 名、不含行号的笼统提示。
 所以我们把「你确实被点名警告过」当作可以移除的前提。
+
+#### 例外：在宣布的同一个发布里移除
+
+上面两条是**一般情形**的规则——面向一个下游代码可能合理依赖的、能正常工作的 API。
+它们只有一个总的例外，在这里统一说明一次，而不是每次出现时都单独论证一遍：
+**当以下两条中至少一条成立，且该移除条目自己注明是哪一条、附带证据时，一个 API 可以在
+它第一次带上 `@Deprecated(forRemoval = true)` 的同一个发布里被移除——完全跳过第 2 条。**
+
+1. **该 API 在当前已发布版本上被证明不可用。**「证明」指的是**复现**——一次运行，
+   其输出显示该 API 在当前已发布版本上确实失败——并原样引用在该移除条目自己的记录里。
+   仅仅论证「它看起来是坏的」而没有一次实际运行支撑，不满足这一条。这个标准只要松一次，
+   这条例外就不再是例外，而会变成一个未写明的第二套移除窗口，一次看似合理的使用接一次地
+   悄悄废掉那个一个 MINOR 的等待期。
+2. **该 API 从未在任何已打标签的发布里对外发布过，或者发布了但从未被任何调用它的地方接线。**
+   没有任何已发布版本曾经真正运行过它的行为，因此也就没有什么行为需要一个废弃期去提醒任何人
+   远离。
+
+上面 [AOP](#aop) 表里的三项移除是这条规则的既有实例，不是写下规则之后新增的许可：
+`aop.CglibProxyFactory` 属于第 1 条（`--add-opens java.base/java.lang=ALL-UNNAMED` 不是 Paper
+服务端会设置的参数，所以这个类第一次使用就抛 `ExceptionInInitializerError`——构造器每次调用
+都抛异常，这本身就是复现）；`aop.ProxyFactory.createProxy(T)`/`createProxy(Class<T>, T)` 和
+`aop.AopProxyBeanPostProcessor` 属于第 2 条（两者都从未进入过已打标签的发布，或者发布了但在
+`src/main` 里零调用方）。
 
 ### 与 semver 的两处明确偏离
 
@@ -1007,6 +1156,84 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 按上面的分类，这属于「不需要迁移期」：此前「声明了 `@CmdMapping` 却被静默漏注册」从来不是
 文档承诺的契约，没有默认值或时机需要逐步淘汰。记录它的理由与上面的 AOP 代理类命名变更一致：
 对依赖了这个缺口的代码是真实破坏，尽管这个缺口本身从未被保证过。
+
+### 已记录的实例：`@CmdTarget` 类级/方法级组合语义改为「覆盖并对放宽拒绝」（6.3.0）
+
+6.3.0 之前，两代命令执行器对「类级 `@CmdTarget` 加上方法级 `@CmdTarget` 到底意味着什么」
+互相不一致。已废弃的 `abstracts.AbstractCommandExecutor` 路径走的是**交集**：类级检查和
+方法级检查必须**各自独立**通过。当前的 `abstracts.command.BaseCommandExecutor` 路径，
+通过 `SenderTypeValidator.determineTargetType`，走的已经是**覆盖**：只要方法自己带了
+`@CmdTarget`，类级的值就完全被忽略，也完全没有放宽检查。6.3.0 让两代共用同一条规则
+`abstracts.command.validation.CmdTargetComposition`：方法级的值在**收窄**类级值时**覆盖**它；
+任何不是收窄的组合——类级限制被方法级 `BOTH` **放宽**，或者在 `PLAYER` 与 `CONSOLE` 之间
+**横向切换**——都会被拒绝，而不是被悄悄解析成某一边。
+
+**用真实命令类构造的前后对比。** UltiKits 自己的 UltiMenu 模块里，
+`com.ultikits.plugins.menu.commands.MenuCommands` 就在已废弃的 `AbstractCommandExecutor`
+一代上，类级 `@CmdTarget(BOTH)`，其中 `open <name>` 这条映射用方法级 `@CmdTarget(PLAYER)`
+收窄：
+
+- **在 6.2.5 上**（交集）：控制台执行 `/menu open <name>` 会同时对 `BOTH`（类级，通过）
+  和 `PLAYER`（方法级，不通过）做检查——AND 失败，命令被**拒绝**。
+- **6.3.0 之后**（覆盖并收窄）：方法级的 `PLAYER` 收窄了类级的 `BOTH`，有效限制变成
+  `PLAYER`——控制台仍被**拒绝**，结果相同。
+
+对任何只做收窄的映射——`MenuCommands` 全部映射都是如此——交集和「覆盖并收窄」永远一致：
+一个集合和自己的子集取交集，结果就是那个子集，这恰好也是「覆盖并收窄」解析出的结果。
+这正是两代实现在*一般规则*上能不一致地共存这么多年、而每一个只做收窄的下游命令类
+却从未察觉差异的原因。
+
+**镜像案例。** `UltiSideBar` 的 `com.ultikits.plugins.sidebar.commands.SideBarCommand`
+带着完全相同的注解形状——类级 `@CmdTarget(BOTH)`，`toggle`、`on`、`off` 各自用
+`@CmdTarget(PLAYER)` 收窄——但它在**当前**的 `BaseCommandExecutor` 一代上，这一代在
+本次变更之前就已经是覆盖语义。它解析出的发送者限制和 `MenuCommands` 完全一样。
+所以一个类从 `AbstractCommandExecutor` 迁到 `BaseCommandExecutor`、不改动其
+`@CmdTarget` 注解，只要它只做收窄——这是常见情形——迁移前后解析出的发送者限制不变。
+
+**真正会变的地方。** 有两种形状会彻底不再注册：类级限制被方法级 `BOTH` **放宽**
+（例如类级 `PLAYER`、方法级 `BOTH`），以及类级限制被方法级的相反值**横向切换**
+（类级 `PLAYER`、方法级 `CONSOLE`——`CmdTargetType` 是三值枚举，不是全序，所以这既不是
+收窄也不是放宽）。6.3.0 之前这两种是歧义的，且结果因代而异：交集会按具体取值解析成
+非空或空集合，覆盖则直接取方法值、完全不做放宽检查。从 6.3.0 起，`ComponentScanner`
+会在插件加载时**只拒绝那一个命令类**——错误信息点名该类和出问题的方法，模块的其余部分
+照常加载。如果你的命令类里有某个映射的方法级 `@CmdTarget` 放宽或横向切换了类级值，
+把注解改成方法收窄或匹配类级值即可。
+
+### 已记录的实例：六参数连接器构造器自 6.2.0 起在每一个发布上都失败
+
+这本身**不是**一个 6.3.0 变更——之所以记在这里，是因为它是该构造器
+[同一发布内移除例外](#一个公开-api-何时可以被移除)的证据基础，也是因为下游连接器作者
+应当得到和维护者一样的证据，而不是一句「它不能用」的断言。
+
+`abstracts.UltiToolsPlugin` 的六参数构造器（`(String, String, List, List, int, String)`）
+是通过 `manager.PluginManager.register(...)` 里 `initializePlugin` 的带参分支到达的。
+6.2.0 之前，`initializePlugin` 用的是 Spring 的
+`AnnotationConfigApplicationContext.registerBean(pluginClass, constructorArgs)`，
+它的构造器解析器做兼容类型匹配——包括拆箱和拓宽。发布提交 `0286e26`（v6.2.0）把它换成了
+手写匹配，至今原样保留：
+
+```java
+paramTypes[i] = constructorArgs[i].getClass();
+// ...
+Constructor<? extends UltiToolsPlugin> constructor =
+    pluginClass.getDeclaredConstructor(paramTypes);
+```
+
+`getDeclaredConstructor` 要求**精确**的参数类型匹配。实测而非推断：复现六参数调用形状得到
+`paramTypes = [String, String, ArrayList, ArrayList, Integer, String]`，对上声明为
+`(String, String, List, List, int, String)` 的构造器。六个参数位里有三个永远匹配不上：
+`ArrayList` 从不会按可赋值性去匹配声明的 `List` 参数——声明类型必须字面相同，不能只是
+可赋值——出现两次；自动装箱的 `Integer` 永远不等于声明的基本类型 `int`，出现一次。
+`getDeclaredConstructor` 对这个调用形状因此必定抛出 `NoSuchMethodException`。
+
+这个失败在向外传播的路上被吞掉：反射异常被包进 `IllegalStateException`
+（`PluginManager.java:738`），被 `register(...)` 自己的 `catch (Exception | Error e)`
+（`:178`）捕获，按 `WARNING` 级别记日志，然后变成一个 `false` 返回值。调用方看不到任何异常，
+只看到一个布尔值。
+
+**所以这个重载自 6.2.0 起，在每一个发布上都是 100% 失败的。** 不存在任何一种参数形状能让
+六参数调用满足 `getDeclaredConstructor` 的精确匹配要求。命中这个问题的连接器作者应改用
+`api.UltiToolsAPI.connect(JavaPlugin)`，它完全不走反射构造器解析这条路。
 
 ### 已记录的实例：`@Transactional` 现在会直接拒绝加载模块（6.3.0）
 
@@ -1303,13 +1530,19 @@ Java 是惰性解析的，所以「装上去能起来」不构成证据——不
 
 ### 运行时依赖来自哪里
 
-框架 JAR 里只打包三个库：obliviate-invs（GUI）、XSeries（跨版本）、UniversalScheduler（调度）。
+框架 JAR 里只打包两个库：obliviate-invs（GUI）、UniversalScheduler（调度）。
 其余依赖一个都不在 JAR 里，而是走下面两条路之一：
 
 | 投送方式 | 版本由谁决定 | 例子 |
 |---|---|---|
-| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、ByteBuddy |
+| `plugin.yml` 的 `libraries:` 块，Paper 按坐标下载 | **本仓库** | Gson、MySQL Connector/J、HikariCP、Java-WebSocket、ByteBuddy、XSeries |
 | Paper 服务端自身携带 | **服主所装的 Paper 版本** | log4j、Paper 内部实现 `libraries:` 用的 Maven resolver 及其依赖 |
+
+**XSeries 在 6.3.0 里被移出了打包的 JAR。** 到 6.2.5 为止它还是被 shade 进去的——上面这句话
+原来写的是「三个库」，XSeries 是其中之一。从 6.3.0 起它改为 `provided` 作用域，
+走上表里的 `libraries:` 那条路投送，和 Gson、HikariCP 一样。如果你把本框架的 jar shade 进
+自己的 uber-jar，XSeries 不会再跟着一起进去：如果你的模块用到它，需要自己声明
+（`com.github.cryptomorin:XSeries:13.0.0`，或你自己钉的版本）。
 
 这条分界决定了第三方安全告警该由谁修。命中第一类的，在本仓库钉版本是有效的修复；
 命中第二类的，唯一的修法是**升级 Paper** —— 在 `pom.xml` 里怎么写都不会改变服务器上
