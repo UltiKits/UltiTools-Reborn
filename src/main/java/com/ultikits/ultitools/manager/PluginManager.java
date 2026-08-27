@@ -49,6 +49,8 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.AnnotationUtils;
@@ -987,14 +989,19 @@ public class PluginManager {
     /**
      * Builds and registers the {@code @Transactional} advisor for one plugin container. For a
      * backend whose {@code DataStore} exposes a JDBC {@code DataSource} (SQLite, MySQL), the
-     * advisor is bound to a {@link DataSourceTransactionManager}. For the JSON backend, it is
-     * bound to a per-plugin snapshot {@code JsonTransactionManager} instead (02-05, D-03),
-     * obtained from the store itself. A {@code DataStore} that can supply neither still declares
-     * the annotation unavailable, naming the configured backend.
+     * advisor is bound to a {@link DataSourceTransactionManager} -- resolved via {@link
+     * #resolveJdbcTransactionManager}, which for these two shipped backends is the SAME instance
+     * the store itself wires onto the {@code DataOperator}s it hands out (02-09, T-02-TAM-11), not
+     * an independent second one. For the JSON backend, it is bound to a per-plugin snapshot
+     * {@code JsonTransactionManager} instead (02-05, D-03), obtained from the store itself. A
+     * {@code DataStore} that can supply neither still declares the annotation unavailable, naming
+     * the configured backend.
      * <p>
      * 为一个插件容器构建并注册 {@code @Transactional} 通知器。对于其 {@code DataStore} 暴露
      * JDBC {@code DataSource} 的后端（SQLite、MySQL），通知器绑定到
-     * {@link DataSourceTransactionManager}；对于 JSON 后端，则改为绑定到按插件快照的
+     * {@link DataSourceTransactionManager}——通过 {@link #resolveJdbcTransactionManager} 解析，
+     * 对这两个自带后端而言，与该存储自身绑定到其分发的 {@code DataOperator} 上的实例完全相同
+     * （02-09，T-02-TAM-11），而非独立构造的第二个；对于 JSON 后端，则改为绑定到按插件快照的
      * {@code JsonTransactionManager}（02-05，D-03），从该存储自身获取。既不能提供以上任何一种的
      * {@code DataStore}，仍会声明该注解不可用，并指明所配置的后端。
      *
@@ -1034,15 +1041,20 @@ public class PluginManager {
         AnnotationLookupCache<Transactional> transactionalCache =
                 new AnnotationLookupCache<>(Transactional.class);
 
-        // One DataSourceTransactionManager per plugin container (D-01/D-02, FOUND-04): built here,
-        // from this plugin's own DataSource, so two plugin containers can never share transaction
-        // state. Typed as JdbcTransactionManager here (02-04, D-04) even though the interceptor's
-        // own constructor still takes the base TransactionManager type - the local's type is what
-        // documents that this advisor is bound to a JDBC-backed manager, not a future JSON one.
-        // Registered into the container under the base TransactionManager type so DataOperator/
-        // service beans that need to join the active transaction (e.g. via setTransactionManager)
-        // can resolve it regardless of backend.
-        JdbcTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        // One DataSourceTransactionManager per plugin container (D-01/D-02, FOUND-04), so two
+        // plugin containers can never share transaction state. Typed as JdbcTransactionManager
+        // here (02-04, D-04) even though the interceptor's own constructor still takes the base
+        // TransactionManager type - the local's type is what documents that this advisor is bound
+        // to a JDBC-backed manager, not a future JSON one. Registered into the container under
+        // the base TransactionManager type so DataOperator/service beans that need to join the
+        // active transaction (e.g. via setTransactionManager) can resolve it regardless of
+        // backend.
+        //
+        // resolveJdbcTransactionManager (02-09, T-02-TAM-11) resolves the SAME instance
+        // SQLiteDataStore/MysqlDataStore wire onto the operators they hand out for this scope's
+        // own database file/identity, instead of constructing an independent second manager here
+        // - a @Transactional method calling insertAll must open exactly one transaction, not two.
+        JdbcTransactionManager transactionManager = resolveJdbcTransactionManager(dataStore, scope, dataSource);
         context.registerType(TransactionManager.class, transactionManager);
 
         TransactionInterceptor transactionInterceptor = new TransactionInterceptor(transactionManager);
@@ -1052,6 +1064,49 @@ public class PluginManager {
         // documents.
         resolver.addAdvisor(AopAdvisor.forAnnotation(
                 Transactional.class, transactionInterceptor, 100, transactionalCache));
+    }
+
+    /**
+     * Resolves the {@link JdbcTransactionManager} {@link #wireTransactional} should bind the AOP
+     * interceptor to, for a JDBC-capable {@code dataStore} (02-09, T-02-TAM-11).
+     * <p>
+     * For the two backends this framework ships, {@code dataStore} itself owns a per-identity
+     * registry of these managers -- {@code SQLiteDataStore.transactionManagerFor(DataScope)} /
+     * {@code MysqlDataStore.transactionManagerFor(DataScope)} -- and every {@code getOperator}
+     * call on that same store resolves a manager through the identical registry before handing an
+     * operator to a module author. Calling that method here, instead of constructing a fresh
+     * {@code new DataSourceTransactionManager(dataSource)}, is what makes the two paths converge
+     * on one shared instance: a {@code @Transactional} method that calls {@code
+     * DataOperator.insertAll} joins the same transaction the interceptor already opened, rather
+     * than opening an independent second one on its own connection (a defect worse than no
+     * transaction at all, because it looks correct).
+     * <p>
+     * A third-party {@code DataStore} that supplies a JDBC {@code DataSource} but is neither of
+     * the two concrete types this framework ships has no such registry to share -- this method
+     * falls back to a manager scoped only to the AOP interceptor, exactly {@code
+     * wireTransactional}'s pre-6.3.0 behavior. A {@code DataOperator} that store hands out
+     * separately (if any) would not join this manager's transactions; there is no seam on the
+     * {@code DataStore} interface (out of this plan's file scope) to close that gap generically.
+     *
+     * @param dataStore  the store {@link #wireTransactional} resolved a {@code DataSource} from
+     *                    <br> {@link #wireTransactional} 解析出 {@code DataSource} 的存储
+     * @param scope      the identity token used to resolve the manager <br> 用于解析管理器的身份令牌
+     * @param dataSource the {@code DataSource} {@code dataStore.getDataSource(scope)} returned,
+     *                    used only for the third-party fallback <br> {@code
+     *                    dataStore.getDataSource(scope)} 返回的 {@code DataSource}，仅供第三方
+     *                    回退分支使用
+     * @return the {@link JdbcTransactionManager} to bind the interceptor to <br> 应绑定到通知器的
+     *         {@link JdbcTransactionManager}
+     */
+    private static JdbcTransactionManager resolveJdbcTransactionManager(
+            DataStore dataStore, DataScope scope, DataSource dataSource) {
+        if (dataStore instanceof SQLiteDataStore) {
+            return ((SQLiteDataStore) dataStore).transactionManagerFor(scope);
+        }
+        if (dataStore instanceof MysqlDataStore) {
+            return ((MysqlDataStore) dataStore).transactionManagerFor(scope);
+        }
+        return new DataSourceTransactionManager(dataSource);
     }
 
     /**
