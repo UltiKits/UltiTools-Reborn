@@ -49,6 +49,10 @@
             profile in ~/.m2/settings.xml. Do not hard-code a machine-specific path here.
         -->
         <ultitools.deploy.folder>${project.build.directory}/deploy</ultitools.deploy.folder>
+        <!-- Last released artifact on Maven Central (v6.2.5 tag) that the japicmp binary-compatibility
+             gate below diffs against. Override with -Djapicmp.baseline.version= to compare against a
+             different released version. -->
+        <japicmp.baseline.version>6.2.5</japicmp.baseline.version>
     </properties>
 
     <distributionManagement>
@@ -153,6 +157,55 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- maven-dependency-plugin analyze-only (FOUND-05, T-01-03b) - fails the build
+                 when framework code uses a class from a dependency that is not explicitly
+                 declared in pom.xml (only pulled in transitively, or not resolved at all). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>analyze-dependencies</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>analyze-only</goal>
+                        </goals>
+                        <configuration>
+                            <failOnWarning>true</failOnWarning>
+                            <ignoreNonCompile>true</ignoreNonCompile>
+                            <!-- These arrive transitively through paper-api (provided) or via
+                                 obliviate-invs' own multi-module jitpack split. Paper is the
+                                 sanctioned API boundary and already resolves them at runtime, so
+                                 declaring each one directly here would be redundant noise, not a
+                                 real supply-chain risk - unlike the slf4j-api case this plugin
+                                 execution exists to catch. -->
+                            <ignoredUsedUndeclaredDependencies>
+                                <ignoredUsedUndeclaredDependency>com.google.code.findbugs:jsr305</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>net.md-5:bungeecord-chat</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.yaml:snakeyaml</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-legacy</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-plain</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>net.kyori:adventure-api</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>com.google.guava:guava</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>com.github.hamza-cskn.obliviate-invs:core</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>com.github.hamza-cskn.obliviate-invs:pagination</ignoredUsedUndeclaredDependency>
+                            </ignoredUsedUndeclaredDependencies>
+                            <!-- obliviate-invs is the parent aggregator whose own classes framework
+                                 code never references directly (only its core/pagination submodules
+                                 above). UniversalScheduler is pulled in solely so the shade plugin
+                                 can exclude its duplicate classes bundled inside obliviate-invs (see
+                                 the shade <filters> block below) and is invoked by obliviate-invs at
+                                 runtime via reflection, never from this framework's own compiled
+                                 classes - analyze-only's static bytecode scan cannot see that. -->
+                            <ignoredUnusedDeclaredDependencies>
+                                <ignoredUnusedDeclaredDependency>com.github.hamza-cskn:obliviate-invs</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>com.github.Anon8281:UniversalScheduler</ignoredUnusedDeclaredDependency>
+                            </ignoredUnusedDeclaredDependencies>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -216,6 +269,59 @@
                         <exclude>**/entity/*Entity.class</exclude>
                     </excludes>
                 </configuration>
+            </plugin>
+            <!-- japicmp binary-compatibility gate (GATE-01, stage 1 of 3). Report-only: it never
+                 breaks the build. Diffs against the last released 6.2.5 artifact, watching only
+                 com.ultikits.ultitools itself.
+                 japicmp 二进制兼容性门（GATE-01，阶段 1/3）。仅报告，不阻断构建。
+                 对比对象是上一个已发布的 6.2.5，比较范围仅限 com.ultikits.ultitools 本身。 -->
+            <plugin>
+                <groupId>com.github.siom79.japicmp</groupId>
+                <artifactId>japicmp-maven-plugin</artifactId>
+                <version>0.26.1</version>
+                <configuration>
+                    <oldVersion>
+                        <dependency>
+                            <groupId>com.ultikits</groupId>
+                            <artifactId>UltiTools-API</artifactId>
+                            <version>${japicmp.baseline.version}</version>
+                            <type>jar</type>
+                        </dependency>
+                    </oldVersion>
+                    <newVersion>
+                        <file>
+                            <path>${project.build.directory}/${project.artifactId}-${project.version}.${project.packaging}</path>
+                        </file>
+                    </newVersion>
+                    <parameter>
+                        <accessModifier>public</accessModifier>
+                        <!-- The 6.2.5 baseline jar predates several planned removals; without this flag
+                             japicmp fails outright instead of reporting a clean diff for any symbol that
+                             genuinely did not exist on the old side. -->
+                        <ignoreMissingOldVersion>true</ignoreMissingOldVersion>
+                        <!-- Default is true, which would make a class merely referencing an excluded class
+                             still trip the gate - defeating the exclusion list Phase 7 will author. -->
+                        <breakBuildIfCausedByExclusion>false</breakBuildIfCausedByExclusion>
+                        <!-- The released 6.2.5 baseline still references CGLIB (net.sf.cglib.proxy.*),
+                             which this 6.3.0-SNAPSHOT tree no longer depends on after the ByteBuddy
+                             migration (commit 3134e95). Without this flag japicmp aborts entirely -
+                             "Class not found: net.sf.cglib.proxy.MethodInterceptor" - instead of
+                             reporting a diff; this is a classpath-resolution gap for the comparison
+                             tool itself, not a build or gate defect. -->
+                        <ignoreMissingClasses>true</ignoreMissingClasses>
+                        <includes>
+                            <include>com.ultikits.ultitools</include>
+                        </includes>
+                    </parameter>
+                </configuration>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>cmp</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <!--发布源码插件 -->
             <!--            <plugin>-->
@@ -549,17 +655,51 @@
             <version>2.11.6</version>
             <scope>provided</scope>
         </dependency>
-        <!-- XSeries for cross-version compatibility (1.8.8 - 1.21+) -->
+        <!-- XSeries for cross-version compatibility (1.8.8 - 1.21+). provided scope (D-23/D-24,
+             FOUND-05): 276 of the released 6.2.5 jar's 720 classes were XSeries - moving it out of
+             the shaded artifact removes 38% of the jar with zero API break. plugin.yml's libraries:
+             block below carries the matching entry so Paper downloads it at runtime; the two edits
+             land together deliberately, because provided scope alone compiles and packages cleanly
+             and only fails at server startup if the libraries: entry is missing.
+             No shade-plugin package renaming is added for XSeries here - see 01-ADJUDICATION.md's
+             #211 row and vendored-type leak audit table: ItemStackBuilder exposes XMaterial/
+             XEnchantment in three public entry points, so that technique's precondition (no vendored
+             type in a public signature) does not hold. The resulting classpath-shadowing risk is
+             accepted with zero observed instances (D-24). -->
         <dependency>
             <groupId>com.github.cryptomorin</groupId>
             <artifactId>XSeries</artifactId>
             <version>13.0.0</version>
+            <scope>provided</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.zaxxer/HikariCP -->
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <version>5.1.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- slf4j-api - explicitly declared so it is no longer an undeclared-but-used dependency
+             (FOUND-05, T-01-03b). HikariCP above is the real consumer (it calls
+             org.slf4j.LoggerFactory.getLogger internally) but is itself provided-scope, and Maven
+             does not propagate a provided dependency's own compile-scope transitives - so slf4j-api
+             was never actually on this project's classpath at all until this declaration, only
+             listed in plugin.yml's libraries: block for Paper to download at runtime. 2.0.x is the
+             current stable line; 1.8.0-beta4 (the version that plugin.yml previously named) was
+             never finalised. provided scope: Paper downloads it at runtime via the libraries: entry
+             below, it does not enter the shaded artifact.
+             slf4j-api —— 显式声明,使其不再是“已使用但未声明”的依赖(FOUND-05, T-01-03b)。
+             上面的 HikariCP 是真正的使用方(内部调用 org.slf4j.LoggerFactory.getLogger),但
+             HikariCP 自身是 provided 作用域,而 Maven 不会传递一个 provided 依赖自身的
+             compile 作用域传递依赖——所以 slf4j-api 此前从未真正出现在本项目的 classpath
+             上,只是被 plugin.yml 的 libraries: 块列出供 Paper 在运行时下载。2.0.x 是当前
+             稳定线;plugin.yml 此前记录的 1.8.0-beta4 是一个从未定稿的 beta 版本。
+             provided 作用域:Paper 通过下面 plugin.yml 里的 libraries 条目在运行时下载,
+             不会进入 shaded 产物。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.17</version>
             <scope>provided</scope>
         </dependency>
         <!-- JUnit 5 dependencies for testing -->

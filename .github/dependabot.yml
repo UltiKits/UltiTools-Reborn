@@ -1,0 +1,41 @@
+# Dependabot configuration for UltiTools-API.
+#
+# Two ecosystems are tracked, both on a weekly schedule against this repository's default
+# branch (alpha): Maven (this project's own dependencies) and GitHub Actions (the workflows
+# under .github/workflows/).
+#
+# UltiTools-API 的 Dependabot 配置。
+# 跟踪两个生态,均对默认分支(alpha)按周计划:Maven(本项目自身依赖)与
+# GitHub Actions(.github/workflows/ 下的工作流)。
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    ignore:
+      # protobuf-java is pinned deliberately, not just an outdated direct dependency. It exists
+      # solely to override the vulnerable protobuf-java 3.25.1 that mysql-connector-j 8.3.0 pulls
+      # in transitively (GHSA-735f-pc8j-v9w8, a high-severity parsing denial-of-service). The
+      # explicit top-level entry at depth 1 wins over the depth-2 transitive resolution under
+      # Maven's nearest-wins rule. Upgrading mysql-connector-j alone does not fix this - 8.4.0
+      # still resolves the vulnerable 3.25.1, and a 9.x major bump needs a live-MySQL regression
+      # pass before it can be attempted (tracked separately as issue #220). A routine Dependabot
+      # bump here would look like ordinary hygiene and silently reopen the CVE the pin exists to
+      # close - see the matching comment in src/main/resources/plugin.yml and pom.xml.
+      #
+      # protobuf-java 是刻意钉住的版本,不是普通的过期直接依赖。它的唯一作用是覆盖
+      # mysql-connector-j 8.3.0 传递引入的存在漏洞的 protobuf-java 3.25.1
+      # (GHSA-735f-pc8j-v9w8,解析畸形输入时的高危拒绝服务)。这条深度为 1 的显式声明,
+      # 按 Maven 的 nearest-wins 规则会压过深度为 2 的传递解析结果。仅升级
+      # mysql-connector-j 无法解决问题——8.4.0 传递的仍是有漏洞的 3.25.1,要真正修复需要跳
+      # 到 9.x 大版本,而这需要一次真机 MySQL 回归测试才能进行(另见 issue #220)。若放任
+      # Dependabot 在此自动发起常规升级 PR,外观上与普通维护无异,实际会悄悄重新打开这条
+      # CVE 修复所封堵的漏洞——参见 plugin.yml 与 pom.xml 中对应的注释。
+      - dependency-name: "com.google.protobuf:protobuf-java"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

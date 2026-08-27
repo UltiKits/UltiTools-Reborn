@@ -1,8 +1,10 @@
 package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -373,6 +375,103 @@ class ProxyFactoryTest {
             assertEquals("method1", proxy.method1());
             assertEquals("method2", proxy.method2());
             assertEquals("method3", proxy.method3());
+        }
+    }
+
+    @Nested
+    @DisplayName("Proxy identity (@ProxyOf marker)")
+    class ProxyIdentityTests {
+
+        @Test
+        @DisplayName("Should attach @ProxyOf naming the target on the generated class")
+        void shouldAttachProxyOfMarkerNamingTheTarget() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            Class<? extends SimpleTarget> proxyClass =
+                    factory.createProxyClass(SimpleTarget.class, intercepted);
+
+            ProxyOf marker = proxyClass.getAnnotation(ProxyOf.class);
+            assertNotNull(marker, "a generated proxy must carry @ProxyOf");
+            assertEquals(SimpleTarget.class, marker.value());
+        }
+
+        @Test
+        @DisplayName("Should recognise only an actual proxy: not the target, not Object, not null")
+        void shouldRecognizeOnlyAnActualProxy() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Class<? extends SimpleTarget> proxyClass =
+                    factory.createProxyClass(SimpleTarget.class, intercepted);
+
+            assertTrue(ProxyFactory.isProxyClass(proxyClass));
+            assertFalse(ProxyFactory.isProxyClass(SimpleTarget.class));
+            assertFalse(ProxyFactory.isProxyClass(Object.class));
+            assertFalse(ProxyFactory.isProxyClass(null));
+        }
+
+        @Test
+        @DisplayName("Should unwrap a proxy to its target, and leave a non-proxy and null unchanged")
+        void shouldUnwrapProxyToTarget() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Class<? extends SimpleTarget> proxyClass =
+                    factory.createProxyClass(SimpleTarget.class, intercepted);
+
+            assertEquals(SimpleTarget.class, ProxyFactory.unwrap(proxyClass));
+            assertEquals(SimpleTarget.class, ProxyFactory.unwrap(SimpleTarget.class));
+            assertNull(ProxyFactory.unwrap(null));
+        }
+
+        @Test
+        @DisplayName("Should carry exactly one @ProxyOf, naming the original target, when proxying a proxy")
+        void shouldCarryExactlyOneMarkerWhenProxyingAProxy() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Class<? extends SimpleTarget> proxyClass =
+                    factory.createProxyClass(SimpleTarget.class, intercepted);
+
+            @SuppressWarnings("unchecked")
+            Class<? extends SimpleTarget> proxyOfProxyClass =
+                    (Class<? extends SimpleTarget>) factory.createProxyClass(proxyClass, intercepted);
+
+            ProxyOf[] markers = proxyOfProxyClass.getAnnotationsByType(ProxyOf.class);
+            assertEquals(1, markers.length,
+                    "proxying an already-proxied class must not duplicate the marker");
+            assertEquals(SimpleTarget.class, markers[0].value(),
+                    "the marker must name the original target, not the intermediate proxy");
+        }
+
+        @Test
+        @DisplayName("Should unwrap a proxy of a proxy to the original target in a single step")
+        void shouldUnwrapProxyOfProxyInOneStep() throws Exception {
+            Set<Method> intercepted = Collections.singleton(SimpleTarget.class.getMethod("getValue"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+            Class<? extends SimpleTarget> proxyClass =
+                    factory.createProxyClass(SimpleTarget.class, intercepted);
+
+            @SuppressWarnings("unchecked")
+            Class<? extends SimpleTarget> proxyOfProxyClass =
+                    (Class<? extends SimpleTarget>) factory.createProxyClass(proxyClass, intercepted);
+
+            assertEquals(SimpleTarget.class, ProxyFactory.unwrap(proxyOfProxyClass),
+                    "a proxy of a proxy must resolve straight to the original target");
+        }
+
+        @Test
+        @DisplayName("Should keep unrelated type annotations on the proxy alongside @ProxyOf")
+        void shouldPreserveUnrelatedAnnotationsAlongsideMarker() throws Exception {
+            Set<Method> intercepted = Collections.singleton(
+                    AnnotatedTarget.class.getMethod("annotated"));
+            ProxyFactory factory = new ProxyFactory(Collections.emptyList());
+
+            Class<? extends AnnotatedTarget> proxyClass =
+                    factory.createProxyClass(AnnotatedTarget.class, intercepted);
+
+            assertNotNull(proxyClass.getAnnotation(MarkerType.class),
+                    "the filter must remove only @ProxyOf, not the target's own annotations");
+            assertNotNull(proxyClass.getAnnotation(ProxyOf.class));
+            assertEquals(AnnotatedTarget.class, proxyClass.getAnnotation(ProxyOf.class).value());
         }
     }
 }

@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Decides whether a class can be proxied, and explains why not when it cannot.
@@ -73,26 +74,46 @@ public final class AopEligibility {
      * annotation happened to cover. Class-level coverage is resolved by
      * {@code AopProxyResolver.collectInterceptedMethods} instead. See issue #309.
      * <p>
+     * Scans the class itself - callers on the startup path that already hold a
+     * {@link MethodScan} should call {@link #findAopAnnotatedMethods(MethodScan)} instead, so the
+     * hierarchy is not walked a second time (D-37).
+     * <p>
      * 只收集<b>方法本身</b>带 AOP 注解的方法，并遍历整个继承层级。类级注解有意不在此体现：
      * 本方法的结果会送进 check，而 check 会把不可代理的条目变成加载失败——对作者显式点名的方法
      * 是对的，对被类级注解顺带覆盖到的方法则是误伤。类级覆盖改由 AopProxyResolver 处理。
+     * 已经持有 MethodScan 的调用方应改用 findAopAnnotatedMethods(MethodScan)，避免重复扫描。
      *
      * @param beanClass the class to scan
      * @return the methods carrying a method-level AOP annotation, subclass overrides first
      */
     public static Set<Method> findAopAnnotatedMethods(Class<?> beanClass) {
-        Set<Method> result = new LinkedHashSet<>();
         if (beanClass == null) {
+            return new LinkedHashSet<>();
+        }
+        return findAopAnnotatedMethods(MethodScan.of(beanClass));
+    }
+
+    /**
+     * Same as {@link #findAopAnnotatedMethods(Class)}, but reads from a scan the caller already
+     * has instead of walking the hierarchy again.
+     * <p>
+     * {@link AopProxyResolver#resolve(Class)} builds one {@link MethodScan} per resolve and hands
+     * it to this method, the intercepted-method collector, and the diagnostic pass, instead of each
+     * repeating the reflective hierarchy walk {@code MethodScan} already carries the result of
+     * (D-37).
+     *
+     * @param scan the scan to read from
+     * @return the methods carrying a method-level AOP annotation, subclass overrides first
+     */
+    static Set<Method> findAopAnnotatedMethods(MethodScan scan) {
+        Set<Method> result = new LinkedHashSet<>();
+        if (scan == null) {
             return result;
         }
-        // One hierarchy walk, not one per annotation. getAllMethods builds an override-slot map
-        // over every declared method of every superclass, and the result does not vary with the
-        // annotation being looked for; calling it inside the loop repeated that work for each
-        // entry in AOP_ANNOTATIONS, on the startup path, for every bean of every module.
-        // getAllMethods already drops bridge and synthetic declarations.
-        List<Method> methods = ReflectionUtil.getAllMethods(beanClass);
+        // One pass over the given scan, not one per annotation - the scan does not vary with the
+        // annotation being looked for, so looping annotations on the outside avoids rescanning.
         for (Class<? extends Annotation> annotation : AOP_ANNOTATIONS) {
-            for (Method method : methods) {
+            for (Method method : scan.getMethods()) {
                 // Includes a declaration this method overrides - that annotation governs the
                 // override, which is the declaration that actually runs.
                 if (AopAdvisor.findMethodLevelAnnotation(method, annotation) != null) {
@@ -142,56 +163,14 @@ public final class AopEligibility {
             // method may come from a superclass, and naming the bean would point the author
             // at a file that does not contain the annotation being complained about.
             String location = method.getDeclaringClass().getName() + "#" + method.getName();
-            int modifiers = method.getModifiers();
-            if (Modifier.isStatic(modifiers)) {
-                problems.add(new Problem(Problem.Kind.STATIC_METHOD, location,
-                        "Static methods have no bean instance, so transactions and exception "
-                                + "handling have nothing to apply to. Remove the AOP annotation, "
-                                + "or make the method an instance method."));
-            } else if (Modifier.isPrivate(modifiers)) {
-                // Package-private is only a valid remedy when the declaration is in the bean's own
-                // package; suggesting it across packages would send the author straight into an
-                // INACCESSIBLE_METHOD failure on the next startup.
-                boolean samePackage = ReflectionUtil.packageNameOf(method.getDeclaringClass())
-                        .equals(ReflectionUtil.packageNameOf(beanClass));
-                problems.add(new Problem(Problem.Kind.PRIVATE_METHOD, location,
-                        "Private methods are dispatched with invokespecial and cannot be "
-                                + "intercepted by any inheritance-based AOP framework. Remove the "
-                                + "AOP annotation, or widen the method to "
-                                + (samePackage ? "package-private." : "protected or public - it is "
-                                        + "declared in a different package than the bean, so "
-                                        + "package-private would still be unreachable.")));
-            } else if (Modifier.isFinal(modifiers)) {
-                // Same trap as the private branch above: dropping 'final' on a package-private
-                // method declared elsewhere leaves it unreachable for a second, different reason.
-                problems.add(new Problem(Problem.Kind.FINAL_METHOD, location,
-                        "Remove the 'final' keyword from the method and mark it @Final instead, "
-                                + "which keeps the non-overridable contract while allowing AOP."
-                                + (isInaccessible(method, beanClass)
-                                        ? " It is also package-private and declared in a different "
-                                                + "package than the bean, so it must be widened to "
-                                                + "protected or public as well."
-                                        : "")));
-            } else if (isInaccessible(method, beanClass)) {
-                problems.add(new Problem(Problem.Kind.INACCESSIBLE_METHOD, location,
-                        "The generated proxy lives in "
-                                + ReflectionUtil.packageNameOf(beanClass) + ", so it cannot "
-                                + "override a package-private method declared in "
-                                + ReflectionUtil.packageNameOf(method.getDeclaringClass())
-                                + ". Widen the method to "
-                                + "protected or public, move the two classes into one package, or "
-                                + "remove the AOP annotation."));
-            } else if (isShadowed(method, beanClass)) {
-                // Reported, but never fatal. What shadows a declaration is a bridge the compiler
-                // generated, not anything the author wrote, so refusing to load would have told
-                // them to move an annotation that has nowhere else to go. Silence is not the
-                // alternative: the annotation genuinely does nothing here, and saying so is the
-                // whole point of reporting. See issue #309.
-                problems.add(new Problem(Problem.Kind.SHADOWED_METHOD, location,
-                        "A nearer declaration - usually the bridge method a generic override "
-                                + "generates - hides this one, so the proxy cannot reach it "
-                                + "through super. Move the annotation onto the overriding method, "
-                                + "which is the declaration that actually runs."));
+            // Rule order matches the previous if/else-if chain exactly: the first rule that
+            // violates wins, and every later rule is skipped for this method - see Rule's own
+            // javadoc for why that order is fixed, not merely conventional.
+            for (Rule rule : RULES) {
+                if (rule.violates(method, beanClass)) {
+                    problems.add(new Problem(rule.kind, location, rule.describe(method, beanClass)));
+                    break;
+                }
             }
         }
         return problems;
@@ -201,18 +180,26 @@ public final class AopEligibility {
      * Whether an inheritance-based proxy generated for {@code beanClass} can intercept the given
      * method - meaning it can both override it and reach the original through {@code super}.
      * <p>
-     * Shares its rules with {@link #check(Class, Set)}, which is why the two must be changed
-     * together. They exist separately because they serve opposite audiences. A method-level
-     * annotation is an explicit request, so an unproxyable one becomes a startup failure. A
-     * class-level annotation is a bulk request the author never vetted method by method, so the
-     * class-level path filters with this predicate instead of failing the whole module.
+     * Walks the same {@link Rule} enum as {@link #check(Class, Set)}, which is what replaces the
+     * old javadoc sentence asking a human to keep the two in sync: adding a sixth rule fails to
+     * compile until it supplies both {@code violates()} and {@code describe()}, so the two callers
+     * cannot drift apart again. They exist separately because they serve opposite audiences. A
+     * method-level annotation is an explicit request, so an unproxyable one becomes a startup
+     * failure. A class-level annotation is a bulk request the author never vetted method by method,
+     * so the class-level path filters with this predicate instead of failing the whole module.
+     * <p>
+     * Only {@link Rule#violates(Method, Class)} runs here - never {@link Rule#describe(Method,
+     * Class)}, which builds the remediation string and is reserved for {@link #check}'s reporting
+     * path. This method runs once per method per bean on the startup path, so it must cost nothing
+     * to call even for a method that fails every rule. See issue #309 and issue #317.
      * <p>
      * The bean class is a parameter rather than being derived from the method because two of the
      * five rules are relative to it. A method is not intrinsically unproxyable; it is unproxyable
      * <em>from a particular subclass</em>. See issue #309.
      * <p>
-     * 判断为 beanClass 生成的继承式代理能否拦截该方法——既能覆写，也能经 super 调到原实现。
-     * 与 check 共用同一组规则，两者必须同步修改。bean 类是参数而非从方法推导，因为五条规则里
+     * 与 check 共用同一枚 Rule 规则；新增第六条规则若缺少 violates 或 describe 任意一半都无法
+     * 编译，这取代了旧版靠注释提醒人工同步的做法。此方法只调用 violates，从不调用会拼接字符串
+     * 的 describe——后者只留给 check 的报告路径。bean 类是参数而非从方法推导，因为五条规则里
      * 有两条是相对于它的：一个方法不是天然不可代理，而是<em>相对某个子类</em>不可代理。
      *
      * @param method    the method to test, may be null
@@ -223,12 +210,12 @@ public final class AopEligibility {
         if (method == null || beanClass == null) {
             return false;
         }
-        int modifiers = method.getModifiers();
-        if (Modifier.isStatic(modifiers) || Modifier.isPrivate(modifiers)
-                || Modifier.isFinal(modifiers)) {
-            return false;
+        for (Rule rule : RULES) {
+            if (rule.violates(method, beanClass)) {
+                return false;
+            }
         }
-        return !isInaccessible(method, beanClass) && !isShadowed(method, beanClass);
+        return true;
     }
 
     /**
@@ -290,6 +277,195 @@ public final class AopEligibility {
         return false;
     }
 
+    /**
+     * Counts how many times a rule's remediation text has been built, process-wide.
+     * <p>
+     * Exists only so {@link #isProxyable(Method, Class)}'s own test can prove it never reaches
+     * {@link Rule#describe(Method, Class)}: a counter that stays at zero across a call is stronger
+     * evidence than reading the method body, because it also catches a future edit that
+     * accidentally reintroduces the cost. Nothing in production code reads this value.
+     * <p>
+     * 记录规则说明文本被构建的次数，仅用于测试证明 isProxyable 从不触达 describe；
+     * 生产代码不读取该值。
+     */
+    private static final AtomicInteger DESCRIBE_CALLS = new AtomicInteger();
+
+    /**
+     * Test-only read of {@link #DESCRIBE_CALLS}. Package-private and read-only: nothing outside
+     * this package, and nothing in production code at all, depends on its value.
+     *
+     * @return how many times a rule's remediation text has been built since the JVM started
+     */
+    static int describeInvocationCountForTesting() {
+        return DESCRIBE_CALLS.get();
+    }
+
+    /**
+     * The five proxy-eligibility rules, unified per D-36.
+     * <p>
+     * {@link #check(Class, Set)} and {@link #isProxyable(Method, Class)} used to restate these
+     * five conditions as two separately maintained {@code if}/{@code else if} chains, kept in sync
+     * only by a javadoc sentence asking a human to remember. Each constant here supplies both
+     * halves - {@link #violates(Method, Class)} and {@link #describe(Method, Class)} - as abstract
+     * members, so a sixth rule fails to compile until both exist. That is what replaces the
+     * sentence.
+     * <p>
+     * The two halves have deliberately different costs. {@code violates} does no string work at
+     * all and is safe to call once per method per bean on the startup path. {@code describe} builds
+     * the remediation text by concatenation and is called only when {@code violates} already
+     * returned true, and only from {@link #check}'s reporting path - never from
+     * {@link #isProxyable}, which is the boolean query. Issue #317's literal proposal, a single
+     * method returning a {@link Problem} with {@code isProxyable} defined as that result being
+     * absent, is rejected for exactly this reason: it would build and discard every rule's
+     * diagnostic text on every boolean call. See issue #309.
+     * <p>
+     * Enum order is the previous chain's order, and {@link #check} and {@link #isProxyable} both
+     * stop at the first violated rule - preserving the old chain's else-if semantics, where only
+     * one problem is ever reported per method.
+     * <p>
+     * 五条代理资格规则的统一实现（对应 D-36）。check 与 isProxyable 曾经各自维护一条
+     * if/else-if 链，仅靠一句注释提醒「必须同步修改」。这里每个枚举常量同时提供 violates 与
+     * describe 两半，新增第六条规则若缺任意一半都无法编译。violates 不做任何字符串拼接，
+     * 可在启动路径上安全地每方法每 bean 调用一次；describe 只在 violates 已经为真、且仅从
+     * check 的报告路径被调用。
+     */
+    private enum Rule {
+        /** Static methods are dispatched with {@code invokestatic}, which bypasses the proxy. */
+        STATIC_METHOD(Problem.Kind.STATIC_METHOD) {
+            @Override
+            boolean violates(Method method, Class<?> beanClass) {
+                return Modifier.isStatic(method.getModifiers());
+            }
+
+            @Override
+            String describeViolation(Method method, Class<?> beanClass) {
+                return "Static methods have no bean instance, so transactions and exception "
+                        + "handling have nothing to apply to. Remove the AOP annotation, "
+                        + "or make the method an instance method.";
+            }
+        },
+        /** Private methods are dispatched with {@code invokespecial}, which bypasses the proxy. */
+        PRIVATE_METHOD(Problem.Kind.PRIVATE_METHOD) {
+            @Override
+            boolean violates(Method method, Class<?> beanClass) {
+                return Modifier.isPrivate(method.getModifiers());
+            }
+
+            @Override
+            String describeViolation(Method method, Class<?> beanClass) {
+                // Package-private is only a valid remedy when the declaration is in the bean's own
+                // package; suggesting it across packages would send the author straight into an
+                // INACCESSIBLE_METHOD failure on the next startup.
+                boolean samePackage = ReflectionUtil.packageNameOf(method.getDeclaringClass())
+                        .equals(ReflectionUtil.packageNameOf(beanClass));
+                return "Private methods are dispatched with invokespecial and cannot be "
+                        + "intercepted by any inheritance-based AOP framework. Remove the "
+                        + "AOP annotation, or widen the method to "
+                        + (samePackage ? "package-private." : "protected or public - it is "
+                                + "declared in a different package than the bean, so "
+                                + "package-private would still be unreachable.");
+            }
+        },
+        /** Final methods cannot be overridden, so the proxy cannot intercept them. */
+        FINAL_METHOD(Problem.Kind.FINAL_METHOD) {
+            @Override
+            boolean violates(Method method, Class<?> beanClass) {
+                return Modifier.isFinal(method.getModifiers());
+            }
+
+            @Override
+            String describeViolation(Method method, Class<?> beanClass) {
+                // Same trap as the private rule above: dropping 'final' on a package-private
+                // method declared elsewhere leaves it unreachable for a second, different reason.
+                return "Remove the 'final' keyword from the method and mark it @Final instead, "
+                        + "which keeps the non-overridable contract while allowing AOP."
+                        + (isInaccessible(method, beanClass)
+                                ? " It is also package-private and declared in a different "
+                                        + "package than the bean, so it must be widened to "
+                                        + "protected or public as well."
+                                : "");
+            }
+        },
+        /**
+         * Package-private and declared in a different package than the bean - relative to the bean
+         * class, not intrinsic to the method.
+         */
+        INACCESSIBLE_METHOD(Problem.Kind.INACCESSIBLE_METHOD) {
+            @Override
+            boolean violates(Method method, Class<?> beanClass) {
+                return isInaccessible(method, beanClass);
+            }
+
+            @Override
+            String describeViolation(Method method, Class<?> beanClass) {
+                return "The generated proxy lives in "
+                        + ReflectionUtil.packageNameOf(beanClass) + ", so it cannot "
+                        + "override a package-private method declared in "
+                        + ReflectionUtil.packageNameOf(method.getDeclaringClass())
+                        + ". Widen the method to "
+                        + "protected or public, move the two classes into one package, or "
+                        + "remove the AOP annotation.";
+            }
+        },
+        /**
+         * Hidden by a nearer declaration - usually the bridge method a generic override generates
+         * - also relative to the bean class.
+         */
+        SHADOWED_METHOD(Problem.Kind.SHADOWED_METHOD) {
+            @Override
+            boolean violates(Method method, Class<?> beanClass) {
+                return isShadowed(method, beanClass);
+            }
+
+            @Override
+            String describeViolation(Method method, Class<?> beanClass) {
+                return "A nearer declaration - usually the bridge method a generic override "
+                        + "generates - hides this one, so the proxy cannot reach it "
+                        + "through super. Move the annotation onto the overriding method, "
+                        + "which is the declaration that actually runs.";
+            }
+        };
+
+        private final Problem.Kind kind;
+
+        Rule(Problem.Kind kind) {
+            this.kind = kind;
+        }
+
+        /**
+         * Cheap, string-free predicate. Safe to call once per method per bean on the startup path.
+         *
+         * @param method    the annotated method
+         * @param beanClass the class the proxy would extend
+         * @return true if this method violates this rule
+         */
+        abstract boolean violates(Method method, Class<?> beanClass);
+
+        /**
+         * Builds this rule's remediation text. Only ever called after {@link #violates} already
+         * returned true for the same arguments.
+         *
+         * @param method    the annotated method
+         * @param beanClass the class the proxy would extend
+         * @return actionable instructions for the module author
+         */
+        abstract String describeViolation(Method method, Class<?> beanClass);
+
+        /**
+         * Builds this rule's remediation text and records that it did so.
+         * <p>
+         * The only caller is {@link #check(Class, Set)}'s reporting path; {@link #isProxyable} must
+         * never reach this method. {@link #DESCRIBE_CALLS} is what lets a test prove that directly
+         * rather than only by reading the method body.
+         */
+        final String describe(Method method, Class<?> beanClass) {
+            DESCRIBE_CALLS.incrementAndGet();
+            return describeViolation(method, beanClass);
+        }
+    }
+
+    /** Cached once; {@link Rule#values()} clones its backing array on every call. */
+    private static final Rule[] RULES = Rule.values();
 
     /**
      * A single reason a class cannot be proxied.

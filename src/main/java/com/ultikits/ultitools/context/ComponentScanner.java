@@ -13,12 +13,14 @@ import java.util.jar.JarFile;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Component;
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 
@@ -250,9 +252,33 @@ public class ComponentScanner {
      * Register a component class.
      * <br>
      * 注册组件类。
+     * <p>
+     * For a class carrying {@code @CmdExecutor}, the {@code @CmdTarget} class-versus-method
+     * composition is checked here - pure reflection, before {@code registerBeanDefinition}, and
+     * inside this method's own try/catch - because this is the isolation primitive: a check that
+     * lived in {@code processClass} (no try/catch, aborts the whole scan) or in the executor's
+     * own constructor (runs inside {@code preInstantiateSingletons}, no per-bean isolation, would
+     * fail the whole plugin) would take down every command in the module instead of just this
+     * one class. See T-01-01b in this plan's threat model and D-03.
+     * <br>
+     * 对携带 @CmdExecutor 的类，在此处——纯反射、先于 registerBeanDefinition、且在本方法
+     * 自身的 try/catch 内——检查 @CmdTarget 的类/方法组合，因为这里才是隔离原语：
+     * 放在 processClass（无 try/catch，整次扫描中止）或执行器自身构造函数
+     * （运行于 preInstantiateSingletons，无逐 bean 隔离，会拖垮整个插件）都会
+     * 把爆炸半径从一个指令类扩大到整个模块。
      */
     private void registerComponent(Class<?> clazz) {
         try {
+            if (clazz.isAnnotationPresent(CmdExecutor.class)) {
+                List<String> violations = CmdTargetComposition.check(clazz);
+                if (!violations.isEmpty()) {
+                    for (String violation : violations) {
+                        System.err.println("Refused to register command class due to ambiguous "
+                                + "@CmdTarget composition: " + violation);
+                    }
+                    return;
+                }
+            }
             String beanName = getBeanName(clazz);
             BeanDefinition definition = new BeanDefinition(clazz, beanName);
             container.registerBeanDefinition(beanName, definition);

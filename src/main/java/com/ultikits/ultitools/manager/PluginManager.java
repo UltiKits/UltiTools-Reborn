@@ -31,6 +31,7 @@ import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ExceptionInterceptor;
@@ -673,12 +674,21 @@ public class PluginManager {
     static void wireAop(SimpleContainer context) {
         AopProxyResolver resolver = new AopProxyResolver();
 
+        // One AnnotationLookupCache instance per annotation type, shared between the advisor and
+        // the interceptor instead of each building its own (D-38). The two still ask different
+        // questions of it - the advisor's match collapses own-and-inherited into a single presence
+        // check, while the interceptor resolves own-method, then class-level, then
+        // inherited-method - only the memoized class-level and inherited-method answers are shared.
+        AnnotationLookupCache<ExceptionCatch> exceptionCatchCache =
+                new AnnotationLookupCache<>(ExceptionCatch.class);
+
         // The interceptor resolves @ExceptionCatch(handler = "...") beans from THIS container.
         // Reading the global ContextHolder instead would let the last plugin to initialise
         // overwrite every earlier plugin's handler lookup. See issue #190.
         ExceptionInterceptor exceptionInterceptor =
-                new ExceptionInterceptor(Collections.emptyList(), context);
-        resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, exceptionInterceptor, 200));
+                new ExceptionInterceptor(Collections.emptyList(), context, exceptionCatchCache);
+        resolver.addAdvisor(AopAdvisor.forAnnotation(
+                ExceptionCatch.class, exceptionInterceptor, 200, exceptionCatchCache));
 
         resolver.addUnavailableAnnotation(Transactional.class,
                 "@Transactional needs a TransactionManager bound to a DataSource. The framework "
