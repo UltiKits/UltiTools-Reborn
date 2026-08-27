@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -62,6 +64,21 @@ public class JsonTransactionManager implements TransactionManager {
      * {@code JsonStore}, so two identities can never cross transaction state.
      */
     private final ThreadLocal<Context> contextHolder = new ThreadLocal<>();
+
+    /**
+     * ThreadLocal holding the stack of contexts {@link #suspend()} has detached and not yet
+     * {@link #resume(Object)}d, most-recently-suspended on top -- the JSON analogue of {@code
+     * DataSourceTransactionManager}'s field of the same name (02-11, D-09).
+     * <p>
+     * Deliberately a sibling of {@link #contextHolder} rather than folding the active context
+     * into the same structure: {@link #getTransactionDepth()}, {@link #hasActiveTransaction()},
+     * {@link #commit()} and {@link #rollback()} all read the single active context and stay
+     * completely unchanged by this field's existence. Only {@link #suspend()}/
+     * {@link #resume(Object)} ever touch it. Never left holding an empty {@link Deque} -- the
+     * last pop calls {@code ThreadLocal.remove()} so a Bukkit worker thread returned to the pool
+     * does not carry a stale frame.
+     */
+    private final ThreadLocal<Deque<Context>> suspendedStack = new ThreadLocal<>();
 
     /**
      * Constructed only by {@code JsonStore} (a different package, hence {@code public}) when it
@@ -167,6 +184,72 @@ public class JsonTransactionManager implements TransactionManager {
     public int getTransactionDepth() {
         Context ctx = contextHolder.get();
         return ctx != null ? ctx.depth : 0;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Detaches the current {@code Context} (captured restorers included) from this thread and
+     * pushes it onto {@code suspendedStack}, leaving {@link #hasActiveTransaction()} {@code
+     * false}. A {@link #begin()} that runs while the original stays suspended opens a fully
+     * independent transaction with its own empty snapshot map -- the suspended one is never
+     * touched until {@link #resume(Object)} restores it.
+     * <p>
+     * Like everything else this class does, this is in-process suspension of cached state, not a
+     * durable one: nothing here changes what is on disk, and a server killed mid-suspension still
+     * has whatever the flush scheduler last wrote.
+     */
+    @Override
+    public Object suspend() {
+        Context current = contextHolder.get();
+        if (current == null) {
+            return null;
+        }
+        Deque<Context> stack = suspendedStack.get();
+        if (stack == null) {
+            stack = new ArrayDeque<>();
+            suspendedStack.set(stack);
+        }
+        stack.push(current);
+        contextHolder.remove();
+        LOGGER.fine("JSON transaction suspended for " + identity + ", depth: " + current.depth);
+        return current;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * {@code null} is a no-op -- {@link #suspend()} found nothing active in the first place, so
+     * there is nothing on {@code suspendedStack} for this call to pop. A non-null handle must be
+     * exactly what this manager's own {@link #suspend()} most recently returned; restoring it
+     * sets it back as the active context (same {@code Context} instance, same depth, same
+     * captured restorers) and pops it off {@code suspendedStack}, removing the {@code
+     * ThreadLocal} entirely once the stack is empty rather than leaving a dangling empty
+     * {@code Deque} behind.
+     *
+     * @throws IllegalArgumentException if {@code suspended} is non-null but was not produced by
+     *                                   this manager's own {@link #suspend()}
+     */
+    @Override
+    public void resume(Object suspended) {
+        if (suspended == null) {
+            return;
+        }
+        if (!(suspended instanceof Context)) {
+            throw new IllegalArgumentException(
+                    "resume() called with a handle this JsonTransactionManager (identity: " + identity
+                            + ") did not produce: " + suspended);
+        }
+        Context ctx = (Context) suspended;
+        Deque<Context> stack = suspendedStack.get();
+        if (stack != null) {
+            stack.remove(ctx);
+            if (stack.isEmpty()) {
+                suspendedStack.remove();
+            }
+        }
+        contextHolder.set(ctx);
+        LOGGER.fine("JSON transaction resumed for " + identity + ", depth: " + ctx.depth);
     }
 
     /**
