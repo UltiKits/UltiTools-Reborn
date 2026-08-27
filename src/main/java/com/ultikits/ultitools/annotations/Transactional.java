@@ -90,17 +90,24 @@ public @interface Transactional {
      * <p>
      * Defaults to -1 (no timeout / use database default). Only a value greater than 0 is ever
      * acted on at all -- the interceptor skips calling {@code TransactionManager.setTimeout(int)}
-     * entirely for -1 or 0, so both mean exactly "no timeout requested."
+     * entirely for -1 or 0, so both mean exactly "no timeout requested," on every backend.
      * <p>
-     * <b>Not currently enforced as a bound on the method body, and not currently enforced at
-     * all on two of the three backends.</b> This attribute is <em>not</em>, and will never be,
-     * a wall-clock limit on how long the annotated method may run -- that would require
-     * cancelling or interrupting work already in flight, which plain JDBC does not support
-     * (see {@code REQUIREMENTS.md}'s "out of scope" section). Per backend, today:
+     * <b>The bound is per statement against a shared, shrinking budget -- not a wall-clock
+     * limit on the method body.</b> (D-10, Spring's approach.) When a value greater than 0 is
+     * set, the transaction gets a deadline {@code N} seconds out from when it began. Every
+     * individual JDBC statement issued afterward -- through the ORM's normal read/write methods,
+     * and through the direct batch paths in {@code insertAll}/{@code updateAll} -- is given a
+     * query timeout equal to whatever time is <em>left</em> in that budget when the statement is
+     * prepared, floored at 1 second so an exhausted budget still fails fast rather than becoming
+     * unlimited ({@code setQueryTimeout(0)} means "no limit" in the JDBC contract). This is
+     * deliberately <em>not</em> a wall-clock bound on the method as a whole: non-database work
+     * inside the method (a slow computation, a network call to something else) is never
+     * interrupted, because plain JDBC has no mechanism to cancel work already in flight, and
+     * this framework does not add one (see {@code REQUIREMENTS.md}'s "out of scope" section).
+     * <p>
+     * Per backend:
      * <ul>
-     *   <li>SQLite, MySQL (JDBC-backed): a positive value is accepted but currently has no
-     *       effect. {@code DataSourceTransactionManager.setTimeout(int)} only logs it; no
-     *       statement issued inside the transaction carries any query timeout as a result.</li>
+     *   <li>SQLite, MySQL (JDBC-backed): enforced exactly as described above.</li>
      *   <li>JSON-backed: a positive value makes the transaction fail outright.
      *       {@code JsonTransactionManager.setTimeout(int)} throws
      *       {@link UnsupportedOperationException} unconditionally, since a snapshot-based
