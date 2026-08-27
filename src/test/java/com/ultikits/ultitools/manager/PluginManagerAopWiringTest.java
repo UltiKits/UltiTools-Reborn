@@ -71,6 +71,29 @@ class PluginManagerAopWiringTest {
         }
     }
 
+    /**
+     * 02-12 Task 2: {@code JsonStore.getOperator(File, Class)} now calls {@code checkOwnership}
+     * as its first statement, so the two JSON-backend tests below (which call it directly,
+     * bypassing {@code getOperator(DataScope, Class)}) need a {@code PluginManager} whose {@code
+     * findScopeForDataFolder} resolves {@code "build/test-wireaop-json"} back to a scope that owns
+     * {@link JsonTestEntity} -- otherwise the call refuses before ever reaching the write it is
+     * actually testing. {@link #scope} itself is left with its pre-existing empty owned-entity set
+     * (it is also used by every other test in this file for {@code wireAop}, which does not
+     * examine that set); a separate scope carries the ownership these two tests specifically need.
+     */
+    private void stubJsonTestFolderOwnership() {
+        File dataFolder = new File("build/test-wireaop-json");
+        DataScope entityScope = DataScope.forExternal("PluginManagerAopWiringTest", dataFolder,
+                Collections.singleton(JsonTestEntity.class));
+        PluginManager pluginManager = mock(PluginManager.class);
+        when(pluginManager.findScopeForDataFolder(dataFolder)).thenReturn(entityScope);
+
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
+        when(mockUltiTools.getPluginManager()).thenReturn(pluginManager);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+    }
+
     public static class Guarded {
         @ExceptionCatch(silent = true)
         public String boom() { throw new IllegalStateException("boom"); }
@@ -172,6 +195,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("A @Transactional method on the JSON backend that writes then throws leaves "
             + "the operator's contents unchanged (D-03, flipped from the pre-02-05 rejection case)")
     void shouldRollBackOnJsonBackendWhenTransactionalMethodThrows() {
+        stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
                 jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
 
@@ -191,6 +215,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("A @Transactional method on the JSON backend that writes and returns normally "
             + "leaves the write committed")
     void shouldCommitOnJsonBackendWhenTransactionalMethodSucceeds() {
+        stubJsonTestFolderOwnership();
         DataOperator<JsonTestEntity> operator =
                 jsonStore.getOperator(new File("build/test-wireaop-json"), JsonTestEntity.class);
 

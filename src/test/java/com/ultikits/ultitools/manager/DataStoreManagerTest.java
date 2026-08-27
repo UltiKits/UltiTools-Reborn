@@ -1050,12 +1050,14 @@ class DataStoreManagerTest {
         @Test
         @DisplayName("外部插件经 UltiToolsAPI.getDataOperator 解析到的存储位置，路由前后完全一致（SQLite）")
         void externalPluginStorageLocationShouldBeUnchangedBySqliteRouting() throws Exception {
-            // Proves the D-18 routing change moves no data: SQLiteDataStore.getOperator(File,
-            // Class) itself is byte-for-byte untouched by this plan (git diff confirms zero
-            // changes to SQLiteDataStore.java), and UltiToolsAPI.getDataOperator's final
-            // delegating line is the same call it always was -- the new ownership check only runs
+            // Proves the D-18 routing change moves no data: UltiToolsAPI.getDataOperator's final
+            // delegating line is the same call it always was -- its own ownership check only runs
             // BEFORE it. Both the pre-Task-3 call shape (direct File overload) and the
             // post-Task-3 shape (through UltiToolsAPI) must resolve to the exact same pool.
+            // (02-12 note: SQLiteDataStore.getOperator(File, Class) itself is no longer
+            // byte-for-byte untouched -- 02-12 Task 2 adds a checkOwnership() call as its first
+            // statement, which is why this test now also stubs findScopeForDataFolder below. The
+            // path-resolution and pool-caching logic after that first line remains unchanged.)
             org.bukkit.plugin.java.JavaPlugin externalPlugin =
                     org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("SqlitePathPreservationFixture");
             com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
@@ -1064,6 +1066,14 @@ class DataStoreManagerTest {
                     java.util.Collections.singleton(OwnedEntity.class), adapter.getDataFolder());
             adapter.setDataScope(scope);
             putAdapter(externalPlugin, adapter);
+
+            // 02-12 Task 2: SQLiteDataStore.getOperator(File, Class) now calls checkOwnership()
+            // as its first statement too, so even the "raw, unchecked" pre-Task-3 call shape
+            // below needs a PluginManager whose findScopeForDataFolder resolves this adapter's
+            // folder back to the same owning scope -- otherwise it refuses before ever reaching
+            // the pool/operator construction this test is actually about.
+            PluginManager pluginManager = mock(PluginManager.class);
+            when(pluginManager.findScopeForDataFolder(adapter.getDataFolder())).thenReturn(scope);
 
             try {
                 SQLiteDataStore sqliteStore = new SQLiteDataStore();
@@ -1075,11 +1085,18 @@ class DataStoreManagerTest {
                              mockedOperator = org.mockito.Mockito.mockConstruction(
                                      (Class<com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator<OwnedEntity>>)
                                              (Class<?>) com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator.class)) {
-                    // Pre-Task-3 shape: the raw, unchecked File overload.
+                    com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                            ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
+
+                    // Pre-Task-3 shape: the raw File overload -- unchecked before 02-12, now also
+                    // ownership-checked via checkOwnership(File, Class).
                     Object beforeOperator = sqliteStore.getOperator(adapter.getDataFolder(), OwnedEntity.class);
 
                     com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                            ultiTools -> when(ultiTools.getDataStore()).thenReturn(sqliteStore));
+                            ultiTools -> {
+                                when(ultiTools.getDataStore()).thenReturn(sqliteStore);
+                                when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+                            });
 
                     // Post-Task-3 shape: through UltiToolsAPI's now ownership-checked wrapper.
                     Object afterOperator = com.ultikits.ultitools.api.UltiToolsAPI.getDataOperator(
