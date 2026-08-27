@@ -218,12 +218,36 @@ public interface DataStore {
      * reaching {@code UltiTools#getDataStore()} directly -- {@code public} in the published jar --
      * still cannot obtain an operator for an entity it does not own.
      * <p>
+     * As of 02-12, the two legacy overloads also refuse an unowned entity -- {@link
+     * #checkOwnership(UltiToolsPlugin, Class)} and {@link #checkOwnership(java.io.File, Class)} run
+     * as the first statement of every backend this framework ships. The distinction this
+     * paragraph draws is narrower than it once was, but still real: this method's credential is
+     * unforgeable by construction, so calling it correctly is impossible to get wrong. The legacy
+     * overloads instead resolve the caller after the fact -- a reverse folder lookup, or an
+     * entity-ownership registry consult -- which only protects a caller when the {@code DataStore}
+     * implementation it reaches has actually wired that resolution in; a hypothetical fourth
+     * implementation that overrides {@link #getOperator(UltiToolsPlugin, Class)} directly without
+     * calling {@link #checkOwnership(UltiToolsPlugin, Class)} would reopen the bypass for that one
+     * overload, with nothing but convention (and this javadoc) stopping it. No such gap exists for
+     * this method: there is no credential to skip checking, because there is no way to obtain one
+     * that was not already checked at minting time.
+     * <p>
      * 获取 {@code scope} 拥有的实体的数据操作器，不拥有时直接拒绝（D-14）。该凭证由框架签发且
      * 无法伪造（{@code DataScope} 的构造器和静态工厂方法对 {@code manager} 包之外均为包私有），
      * 因此这是受支持的路径：与 {@link #getOperator(UltiToolsPlugin, Class)} 和
      * {@link #getOperator(java.io.File, Class)} 不同，没有只有框架才能签发的 scope 就无法到达
      * 这里——即便调用方直接拿到已发布 jar 中 {@code public} 的 {@code UltiTools#getDataStore()}，
      * 也无法获得一个它不拥有的实体的操作器。
+     * <p>
+     * 从 02-12 起，两个旧重载也会拒绝未拥有的实体——{@link #checkOwnership(UltiToolsPlugin, Class)}
+     * 和 {@link #checkOwnership(java.io.File, Class)} 会作为本框架自带每个后端方法体的第一条语句
+     * 运行。本段落划出的界线比过去窄了，但依然真实：本方法的凭证从构造上就无法伪造，因此正确调用
+     * 它不可能出错。旧重载则是事后解析调用方——反向文件夹查找，或查询实体所有权登记表——这只在
+     * 到达的 {@code DataStore} 实现真的接入了这套解析逻辑时才起保护作用；一个假想的第四个实现，
+     * 如果直接覆写 {@link #getOperator(UltiToolsPlugin, Class)} 却不调用
+     * {@link #checkOwnership(UltiToolsPlugin, Class)}，就会为那一个重载重新打开绕过的口子——
+     * 除了约定（以及这段 javadoc）之外，没有任何机制能拦住它。本方法不存在这种缺口：没有凭证可以
+     * 跳过校验，因为根本不存在一种获取凭证的方式，而这种方式在铸造时没有被校验过。
      *
      * @param scope      the requesting scope <br> 请求方的 scope
      * @param dataEntity data entity class <br> 数据实体类
