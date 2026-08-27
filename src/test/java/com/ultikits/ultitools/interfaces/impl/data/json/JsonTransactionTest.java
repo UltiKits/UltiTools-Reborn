@@ -7,10 +7,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -29,6 +31,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.annotations.Propagation;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopProxyResolver;
+import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 
@@ -74,6 +81,95 @@ class JsonTransactionTest {
         public void setName(String name) { this.name = name; }
         public int getValue() { return value; }
         public void setValue(int value) { this.value = value; }
+    }
+
+    /**
+     * Fixture for {@link RequiresNewAndNotSupportedIntegrationTests} (02-11): proves REQUIRES_NEW
+     * and NOT_SUPPORTED genuinely suspend on the JSON backend, mirroring
+     * {@code TransactionInterceptorTest.PropagationBean}'s JDBC shape. Declared at the top level
+     * (not inside the {@code @Nested} test class) for the same Java 8 / JUnit 5 reason documented
+     * on that JDBC fixture -- a {@code static} member class cannot live inside a non-static
+     * {@code @Nested} class on this project's Java 8 target.
+     * <p>
+     * Writes to two <em>different</em> operators deliberately -- {@code outerOperator} for the
+     * outer scope's own writes, {@code innerOperator} for the inner REQUIRES_NEW/NOT_SUPPORTED
+     * scope's writes. This is not an artifact of the test but a consequence of how
+     * {@link JsonTransactionManager} rolls back: it restores an operator's <em>entire</em> cache
+     * from a snapshot captured at that operator's first touch inside a given transaction context
+     * (see {@code SimpleJsonDataOperator#restoreCache}), so proving genuine independence between
+     * an outer scope and a REQUIRES_NEW/NOT_SUPPORTED inner scope requires them to touch different
+     * operators -- exactly the same distinction
+     * {@code PerPluginTransactionScopeTests#untouchedOperatorNotSnapshotted} already establishes
+     * for a concurrent external write. Two operators sharing one {@link JsonTransactionManager} is
+     * exactly how one plugin's several JSON-backed entities behave in production.
+     */
+    public static class JsonPropagationBean {
+        private final SimpleJsonDataOperator<TestData> outerOperator;
+        private final SimpleJsonDataOperator<TestData> innerOperator;
+        private final JsonTransactionManager txManager;
+
+        /** Captured inside {@link #innerNotSupportedWriteSelf()}/{@link #notSupportedExternalWrite()}. */
+        volatile boolean hasActiveTxInsideNotSupported;
+
+        /** Captured immediately after the self-invoked NOT_SUPPORTED call returns, still inside the
+         *  outer transaction -- proves the outer is intact at its original depth afterwards. */
+        volatile int depthAfterNotSupportedReturnsSelf;
+
+        public JsonPropagationBean(SimpleJsonDataOperator<TestData> outerOperator,
+                SimpleJsonDataOperator<TestData> innerOperator, JsonTransactionManager txManager) {
+            this.outerOperator = outerOperator;
+            this.innerOperator = innerOperator;
+            this.txManager = txManager;
+        }
+
+        /**
+         * Outer REQUIRED transaction that self-invokes a REQUIRES_NEW method whose write commits,
+         * then itself throws so the outer rolls back. The inner's committed write must survive.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesRequiresNewThenFails() {
+            outerOperator.insert(new TestData("outer", "Outer", 1));
+            innerRequiresNewSucceedsSelf();
+            throw new RuntimeException(
+                    "boom - outer rolls back after inner REQUIRES_NEW commit, self-invocation");
+        }
+
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void innerRequiresNewSucceedsSelf() {
+            innerOperator.insert(new TestData("inner", "Inner", 99));
+        }
+
+        /** Externally-called REQUIRES_NEW method that writes and commits independently. */
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void requiresNewExternalSucceeds() {
+            innerOperator.insert(new TestData("external-inner", "ExternalInner", 100));
+        }
+
+        /**
+         * Outer REQUIRED transaction that self-invokes a NOT_SUPPORTED write, then itself throws
+         * so the outer rolls back. The NOT_SUPPORTED write must survive the outer's rollback.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesNotSupportedThenFails() {
+            outerOperator.insert(new TestData("outer-nsw", "OuterNsw", 4));
+            innerNotSupportedWriteSelf();
+            depthAfterNotSupportedReturnsSelf = txManager.getTransactionDepth();
+            throw new RuntimeException(
+                    "boom - outer rolls back after NOT_SUPPORTED write, self-invocation");
+        }
+
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        public void innerNotSupportedWriteSelf() {
+            hasActiveTxInsideNotSupported = txManager.hasActiveTransaction();
+            innerOperator.insert(new TestData("not-supported", "NotSupported", 102));
+        }
+
+        /** Externally-called NOT_SUPPORTED write. */
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        public void notSupportedExternalWrite() {
+            hasActiveTxInsideNotSupported = txManager.hasActiveTransaction();
+            innerOperator.insert(new TestData("external-not-supported", "ExternalNotSupported", 103));
+        }
     }
 
     // ===== Transaction Commit Tests =====
@@ -555,6 +651,221 @@ class JsonTransactionTest {
             assertThatThrownBy(manager::getConnection).isInstanceOf(UnsupportedOperationException.class);
             assertThatThrownBy(() -> manager.setIsolationLevel(1)).isInstanceOf(UnsupportedOperationException.class);
             assertThatThrownBy(() -> manager.setReadOnly(true)).isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    // ===== suspend()/resume() -- REQUIRES_NEW/NOT_SUPPORTED's suspension mechanism (02-11) =====
+
+    /**
+     * Unit-level tests against {@link JsonTransactionManager#suspend()}/{@link
+     * JsonTransactionManager#resume(Object)} directly, mirroring
+     * {@code DataSourceTransactionManagerTest.SuspendResumeTests} (D-09) one-for-one on the JSON
+     * side. No operator is needed here -- these four properties live entirely on {@code
+     * contextHolder}/{@code suspendedStack}.
+     */
+    @Nested
+    @DisplayName("suspend()/resume() -- the mechanism REQUIRES_NEW/NOT_SUPPORTED need (02-11, D-09)")
+    class SuspendResumeTests {
+
+        private JsonTransactionManager manager;
+
+        @BeforeEach
+        void setUpManager() {
+            manager = new JsonTransactionManager("suspend-resume-unit-test");
+        }
+
+        @Test
+        @DisplayName("suspend() with no active transaction returns null and does nothing")
+        void suspendWithNothingActiveReturnsNull() {
+            Object suspended = manager.suspend();
+
+            assertThat(suspended).isNull();
+        }
+
+        @Test
+        @DisplayName("resume(null) is a no-op")
+        void resumeWithNullIsNoOp() {
+            assertThatCode(() -> manager.resume(null)).doesNotThrowAnyException();
+            assertThat(manager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() detaches the current context; hasActiveTransaction() becomes false")
+        void suspendDetachesCurrentContext() {
+            manager.begin();
+            assertThat(manager.hasActiveTransaction()).isTrue();
+
+            Object suspended = manager.suspend();
+
+            assertThat(suspended).isNotNull();
+            assertThat(manager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() -> begin() -> commit() -> resume(saved): original context restored "
+                + "at its original depth, not depth 1")
+        void suspendThenResumeRestoresOriginalDepth() {
+            manager.begin(); // outer, depth 1
+            manager.begin(); // outer, depth 2 (still the same context)
+            assertThat(manager.getTransactionDepth()).isEqualTo(2);
+
+            Object suspended = manager.suspend();
+            assertThat(manager.hasActiveTransaction()).isFalse();
+
+            manager.begin(); // inner, independent, depth 1
+            assertThat(manager.getTransactionDepth()).isEqualTo(1);
+            manager.commit(); // inner finishes and discards its own context completely
+            assertThat(manager.hasActiveTransaction()).isFalse();
+
+            manager.resume(suspended);
+
+            assertThat(manager.hasActiveTransaction()).isTrue();
+            assertThat(manager.getTransactionDepth()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("resume() with a handle this manager did not produce throws "
+                + "IllegalArgumentException naming the problem, rather than accepting it silently")
+        void resumeWithForeignHandleThrows() {
+            assertThatThrownBy(() -> manager.resume("not a Context"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("did not produce");
+        }
+
+        @Test
+        @DisplayName("Suspended-stack ThreadLocal leaves no dangling frame once the last one is "
+                + "popped (T-02-DOS-5 parity)")
+        void suspendedStackLeavesNoDanglingFrameAfterResume() throws Exception {
+            manager.begin();
+            Object suspended = manager.suspend();
+            manager.resume(suspended);
+
+            assertThat(suspendedStackValue()).isNull();
+        }
+
+        private Deque<?> suspendedStackValue() throws Exception {
+            Field field = JsonTransactionManager.class.getDeclaredField("suspendedStack");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            ThreadLocal<Deque<?>> threadLocal = (ThreadLocal<Deque<?>>) field.get(manager);
+            return threadLocal.get();
+        }
+    }
+
+    // ===== REQUIRES_NEW/NOT_SUPPORTED through TransactionInterceptor, on the JSON backend (02-11) =====
+
+    /**
+     * End-to-end tests driving {@link JsonPropagationBean} through a real
+     * {@link com.ultikits.ultitools.aop.AopProxyResolver}-built ByteBuddy proxy and a real
+     * {@link TransactionInterceptor}, exactly mirroring {@code
+     * TransactionInterceptorTest.PropagationSuspendResumeTests}'s JDBC shape (D-09) but on
+     * {@link JsonTransactionManager}. Each behavior is proven twice -- once through an external
+     * call (the test itself, standing in for a caller on a thread that already has a transaction
+     * active from elsewhere, dispatched directly onto the proxy) and once through a
+     * self-invocation call -- the same distinction {@code SelfInvocationAndExternalCallTests}
+     * draws, and self-invocation IS intercepted in this framework (the generated subclass is the
+     * bean, not a delegate).
+     */
+    @Nested
+    @DisplayName("REQUIRES_NEW/NOT_SUPPORTED genuinely suspend on the JSON backend (02-11, D-09)")
+    class RequiresNewAndNotSupportedIntegrationTests {
+
+        private SimpleJsonDataOperator<TestData> outerOperator;
+        private SimpleJsonDataOperator<TestData> innerOperator;
+        private JsonTransactionManager propagationManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUpPropagationFixture() throws Exception {
+            File outerDir = Files.createDirectory(tempDir.resolve("propagation-outer-" + System.nanoTime())).toFile();
+            File innerDir = Files.createDirectory(tempDir.resolve("propagation-inner-" + System.nanoTime())).toFile();
+            outerOperator = new SimpleJsonDataOperator<>(outerDir.getAbsolutePath(), TestData.class);
+            innerOperator = new SimpleJsonDataOperator<>(innerDir.getAbsolutePath(), TestData.class);
+            propagationManager = new JsonTransactionManager("propagation-integration-test");
+            outerOperator.bindTransactionManager(propagationManager);
+            innerOperator.bindTransactionManager(propagationManager);
+
+            TransactionInterceptor interceptor = new TransactionInterceptor(propagationManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, interceptor, 100));
+        }
+
+        private JsonPropagationBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(JsonPropagationBean.class);
+            return (JsonPropagationBean) proxyClass
+                    .getDeclaredConstructor(SimpleJsonDataOperator.class, SimpleJsonDataOperator.class,
+                            JsonTransactionManager.class)
+                    .newInstance(outerOperator, innerOperator, propagationManager);
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (self-invocation): the inner transaction's commit survives the "
+                + "outer transaction's rollback")
+        void requiresNewSelfInvocationInnerCommitSurvivesOuterRollback() throws Exception {
+            JsonPropagationBean bean = newProxiedBean();
+
+            assertThatThrownBy(bean::outerRequiredThenSelfInvokesRequiresNewThenFails)
+                    .isInstanceOf(RuntimeException.class);
+
+            assertThat(outerOperator.getById("outer")).isNull();
+            assertThat(innerOperator.getById("inner")).isNotNull();
+            assertThat(propagationManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (external call): commits independently of a separately-active "
+                + "outer transaction that later rolls back")
+        void requiresNewExternalCallInnerCommitSurvivesOuterRollback() throws Exception {
+            JsonPropagationBean bean = newProxiedBean();
+
+            propagationManager.begin(); // simulates a transaction already active from an external caller
+            outerOperator.insert(new TestData("outer-ext", "OuterExt", 1));
+
+            bean.requiresNewExternalSucceeds(); // external call: outside JsonPropagationBean entirely
+
+            // No suspended frame left behind: the outer is exactly where it was before.
+            assertThat(propagationManager.getTransactionDepth()).isEqualTo(1);
+
+            propagationManager.rollback();
+
+            assertThat(outerOperator.getById("outer-ext")).isNull();
+            assertThat(innerOperator.getById("external-inner")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("NOT_SUPPORTED (self-invocation): the body runs with no active transaction, "
+                + "and the outer transaction is intact at its original depth afterwards")
+        void notSupportedSelfInvocationRunsWithNoActiveTransaction() throws Exception {
+            JsonPropagationBean bean = newProxiedBean();
+
+            assertThatThrownBy(bean::outerRequiredThenSelfInvokesNotSupportedThenFails)
+                    .isInstanceOf(RuntimeException.class);
+
+            assertThat(bean.hasActiveTxInsideNotSupported).isFalse();
+            assertThat(bean.depthAfterNotSupportedReturnsSelf).isEqualTo(1);
+            assertThat(innerOperator.getById("not-supported")).isNotNull();
+            assertThat(outerOperator.getById("outer-nsw")).isNull();
+        }
+
+        @Test
+        @DisplayName("NOT_SUPPORTED (external call): the body runs with no active transaction, and "
+                + "the separately-active outer transaction is intact at its original depth afterwards")
+        void notSupportedExternalCallRunsWithNoActiveTransaction() throws Exception {
+            JsonPropagationBean bean = newProxiedBean();
+
+            propagationManager.begin(); // depth 1, simulates an external caller's active transaction
+            outerOperator.insert(new TestData("outer-ext-nsw", "OuterExtNsw", 1));
+
+            bean.notSupportedExternalWrite(); // external call: outside JsonPropagationBean entirely
+
+            assertThat(bean.hasActiveTxInsideNotSupported).isFalse();
+            assertThat(propagationManager.hasActiveTransaction()).isTrue();
+            assertThat(propagationManager.getTransactionDepth()).isEqualTo(1);
+
+            propagationManager.rollback();
+
+            assertThat(outerOperator.getById("outer-ext-nsw")).isNull();
+            assertThat(innerOperator.getById("external-not-supported")).isNotNull();
         }
     }
 }
