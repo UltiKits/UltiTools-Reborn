@@ -2,6 +2,7 @@ package com.ultikits.ultitools.interfaces.impl.data.mysql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
@@ -32,7 +35,10 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Data;
@@ -57,6 +63,12 @@ class MysqlDataStoreTest {
 
     @Mock
     private UltiToolsPlugin mockPlugin;
+
+    @Mock
+    private PluginManager mockPluginManager;
+
+    @TempDir
+    File tempDir;
 
     private MockedStatic<UltiTools> ultiToolsStaticMock;
 
@@ -125,6 +137,18 @@ class MysqlDataStoreTest {
         // (constructor/getStoreType/getDataSource/destroyAllOperators tests) aren't flagged for an
         // unused stub under Mockito's strict-stubs default.
         lenient().when(mockPlugin.getPluginName()).thenReturn("test-plugin");
+
+        // 02-12 Task 2: every getOperator(UltiToolsPlugin, Class) call now runs checkOwnership()
+        // first. Default every entity to "owned by whoever mockPlugin currently claims to be" --
+        // an Answer, not a fixed thenReturn, so it stays correct across the different plugin names
+        // individual tests stub onto mockPlugin. Tests exercising a genuine ownership refusal
+        // override this with a more specific, entity-scoped stub (Mockito: the more specific /
+        // later-registered stub wins for a matching call). lenient() for the same reason as above.
+        lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        lenient().when(mockPluginManager.findOwningPlugin(any())).thenAnswer(inv -> mockPlugin.getPluginName());
+        // Backs checkOwnership(File, Class)'s framework-core-folder exemption; lenient() since
+        // only the File-overload tests below actually reach that check.
+        lenient().when(mockUltiTools.getDataFolder()).thenReturn(tempDir);
     }
 
     @AfterEach
@@ -318,13 +342,18 @@ class MysqlDataStoreTest {
         }
 
         @Test
-        @DisplayName("两个插件请求同一实体类应该得到互不相同的 operator (SILENT-04)")
-        void shouldCreateDifferentOperatorsForDifferentPluginsSameEntity() {
-            // Arrange - pins T-02-EOP-1's mitigation: the operator cache key now includes the
-            // requesting plugin's identity, not only the entity class, so two plugins asking for
-            // the same @Table entity no longer share one MysqlDataOperator (and, through it, one
-            // another's rows).
+        @DisplayName("两个插件请求同一实体类：拥有它的插件成功，另一个插件被拒绝 (02-12 更新，取代 SILENT-04 旧断言)")
+        void secondPluginRequestingFirstPluginsEntityShouldBeRefused() {
+            // Was: shouldCreateDifferentOperatorsForDifferentPluginsSameEntity, which asserted that
+            // two DIFFERENT plugins both requesting the SAME @Table entity class each got their own
+            // operator. Under 02-12's ownership model an entity has exactly one owner (02-07's
+            // PluginManager.findOwningPlugin registry, first-registration-wins), so that scenario is
+            // no longer a legitimate one to keep silently working -- it is exactly the case D-14
+            // exists to refuse. The composite (identity, entity) cache key SILENT-04 introduced is
+            // still real and still exercised by shouldCreateDifferentOperatorsForDifferentEntityClasses
+            // above (one plugin, two entities).
             setupMysqlConfig();
+            when(mockPluginManager.findOwningPlugin(TestDataEntity.class)).thenReturn("test-plugin");
             UltiToolsPlugin otherPlugin = mock(UltiToolsPlugin.class);
             when(otherPlugin.getPluginName()).thenReturn("other-plugin");
 
@@ -335,13 +364,18 @@ class MysqlDataStoreTest {
 
                 MysqlDataStore store = new MysqlDataStore();
 
-                // Act
-                DataOperator<TestDataEntity> operatorForFirstPlugin = store.getOperator(mockPlugin, TestDataEntity.class);
-                DataOperator<TestDataEntity> operatorForOtherPlugin = store.getOperator(otherPlugin, TestDataEntity.class);
+                // Act - the owning plugin succeeds...
+                DataOperator<TestDataEntity> operatorForOwner = store.getOperator(mockPlugin, TestDataEntity.class);
 
-                // Assert
-                assertThat(operatorForFirstPlugin).isNotSameAs(operatorForOtherPlugin);
-                assertThat(operatorMock.constructed()).hasSize(2);
+                // ...but a different plugin requesting the same entity is refused, and the refusal
+                // has not created a second operator as a side effect.
+                assertThatThrownBy(() -> store.getOperator(otherPlugin, TestDataEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+                assertThat(operatorForOwner).isNotNull();
+                assertThat(operatorMock.constructed()).hasSize(1);
             }
         }
 
@@ -658,6 +692,59 @@ class MysqlDataStoreTest {
 
                 // Assert
                 assertThat(store).isNotNull();
+            }
+        }
+    }
+
+    /**
+     * 02-12 Task 2: {@code checkOwnership} is now called as the first statement of both legacy
+     * {@code getOperator} overrides -- closing the residual bypass 02-07 disclosed (D-14/D-18). A
+     * refused call must not have created an operator as a side effect.
+     */
+    @Nested
+    @DisplayName("所有权校验测试 (D-14/D-18, 02-12 Task 2)")
+    class OwnershipTests {
+
+        @Test
+        @DisplayName("getOperator(File, Class) 应该拒绝其他插件的未注册文件夹，且不产生任何 operator 缓存副作用")
+        void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() {
+            setupMysqlConfig();
+            File someOtherPluginsFolder = new File(tempDir, "some-other-plugin");
+            when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
+
+            try (MockedConstruction<HikariDataSource> hikariMock = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<MysqlDataOperator> operatorMock = mockConstruction(MysqlDataOperator.class)) {
+
+                MysqlDataStore store = new MysqlDataStore();
+
+                assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, TestDataEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+                assertThat(operatorMock.constructed())
+                        .as("a refused call must not have built an operator")
+                        .isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上仍然豁免")
+        void shouldExemptFrameworkCoreFolderViaFileOverload() {
+            setupMysqlConfig();
+            // mockUltiTools.getDataFolder() is stubbed to tempDir in setUp() -- passing tempDir
+            // itself is exactly the framework-core-folder sentinel checkOwnership(File, Class)
+            // exempts. No PluginManager stub needed for this call to succeed.
+
+            try (MockedConstruction<HikariDataSource> hikariMock = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<MysqlDataOperator> operatorMock = mockConstruction(MysqlDataOperator.class)) {
+
+                MysqlDataStore store = new MysqlDataStore();
+
+                DataOperator<TestDataEntity> operator = store.getOperator(tempDir, TestDataEntity.class);
+
+                assertThat(operator).isNotNull();
+                assertThat(operatorMock.constructed()).hasSize(1);
             }
         }
     }
