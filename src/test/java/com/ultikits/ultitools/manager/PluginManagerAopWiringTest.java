@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,6 +47,8 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 @DisplayName("PluginManager AOP wiring")
 class PluginManagerAopWiringTest {
@@ -58,6 +61,23 @@ class PluginManagerAopWiringTest {
     private MockedStatic<UltiTools> ultiToolsMock;
     private DataScope scope;
     private JsonStore jsonStore;
+
+    // Real H2 DataSource backing the TimedTransactionally tests below (D-10 self-invocation
+    // proof) -- same "fake JDBC-capable DataStore" pattern TransactionalRollbackEndToEndTest
+    // uses for its own tracer test, needed here because a mocked JdbcTransactionManager cannot
+    // run a real begin()/setTimeout()/commit() cycle.
+    private static DataSource timedH2DataSource;
+
+    @BeforeAll
+    static void initTimedH2DataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:h2:mem:pluginmanageraopwiringtest_timed;DB_CLOSE_DELAY=-1;MODE=MySQL");
+        config.setUsername("sa");
+        // Deliberately no setPassword(): the in-memory DB is created password-less on first
+        // connection; an empty-string password reads as a hardcoded credential to static
+        // analysis. There is no credential here.
+        timedH2DataSource = new HikariDataSource(config);
+    }
 
     @BeforeEach
     void setUpDataStore() {
@@ -112,6 +132,47 @@ class PluginManagerAopWiringTest {
 
     public static class Plain {
         public String work() { return "plain"; }
+    }
+
+    /**
+     * Exercises {@code @Transactional(timeout=)} (D-10, 02-09) through both an external call and
+     * a self-invocation call, per the phase's standing obligation for AOP semantic changes.
+     * Reports the deadline the interceptor recorded via {@link TransactionManager#setTimeout} --
+     * the manager-level half of D-10; {@code TransactionDataOperatorTest.PerStatementTimeoutTests}
+     * (in scope for this same plan) separately proves the deadline flows through to an actual
+     * {@code PreparedStatement}'s {@code getQueryTimeout()} once read off the SAME kind of
+     * manager. Self-invocation dispatches through the identical {@code
+     * TransactionInterceptor.executeInNewTransaction} call site as an external call -- this
+     * repository's proxy is a subclass of the bean itself, not a delegate, so there is no second
+     * code path for self-invocation to diverge on (see CLAUDE.md's AOP section).
+     */
+    public static class TimedTransactionally {
+        private final TransactionManager txManager;
+
+        public TimedTransactionally(TransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        @Transactional(timeout = 10)
+        public Long externalDeadline() {
+            return txManager.getTimeoutDeadlineNanos();
+        }
+
+        /** External caller invokes this; it self-invokes {@link #innerDeadline()}. */
+        public Long outerCallsInnerDeadline() {
+            return innerDeadline();
+        }
+
+        @Transactional(timeout = 10)
+        public Long innerDeadline() {
+            return txManager.getTimeoutDeadlineNanos();
+        }
+
+        /** No timeout requested -- the default. Neither call shape should record a deadline. */
+        @Transactional
+        public Long externalDeadlineNoTimeout() {
+            return txManager.getTimeoutDeadlineNanos();
+        }
     }
 
     @Table("plugin_manager_aop_wiring_test")
@@ -332,6 +393,76 @@ class PluginManagerAopWiringTest {
         assertSame(sharedManager, context.getBean(TransactionManager.class),
                 "wireAop must bind the interceptor to the exact manager MysqlDataStore itself "
                         + "resolves for this scope, not a second, independently-constructed one");
+    }
+
+    // ===== @Transactional(timeout=) via external call and self-invocation (D-10, 02-09) =====
+
+    /** Wires a real, working DataSourceTransactionManager -- see {@link #timedH2DataSource}. */
+    private TimedTransactionally buildTimedTransactionallyBean() {
+        DataStore fakeJdbcStore = new DataStore() {
+            @Override
+            public String getStoreType() {
+                return "fake-jdbc-timed";
+            }
+
+            @Override
+            public <T extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String>> DataOperator<T> getOperator(
+                    com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin, Class<T> dataEntity) {
+                throw new UnsupportedOperationException("not needed by this test");
+            }
+
+            @Override
+            public DataSource getDataSource(DataScope scope) {
+                return timedH2DataSource;
+            }
+
+            @Override
+            public void destroyAllOperators() {
+            }
+        };
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        when(mockUltiTools.getDataStore()).thenReturn(fakeJdbcStore);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+        DataScope timedScope = DataScope.forExternal("TimedTransactionally", new File("build/test-wireaop-timed"),
+                Collections.emptySet());
+        SimpleContainer context = new SimpleContainer();
+        PluginManager.wireAop(context, timedScope);
+        context.registerBean(TimedTransactionally.class);
+        context.refresh();
+        return context.getBean(TimedTransactionally.class);
+    }
+
+    @Test
+    @DisplayName("@Transactional(timeout=10) via an external call records a real deadline")
+    void externalCallRecordsTimeoutDeadline() {
+        TimedTransactionally bean = buildTimedTransactionallyBean();
+
+        Long deadline = bean.externalDeadline();
+
+        assertNotNull(deadline, "an external call to a timed @Transactional method must record a deadline");
+    }
+
+    @Test
+    @DisplayName("@Transactional(timeout=10) via self-invocation records a real deadline too")
+    void selfInvocationRecordsTimeoutDeadline() {
+        TimedTransactionally bean = buildTimedTransactionallyBean();
+
+        Long deadline = bean.outerCallsInnerDeadline();
+
+        assertNotNull(deadline, "self-invocation dispatches through the same "
+                + "executeInNewTransaction call site as an external call -- see the class javadoc "
+                + "on TimedTransactionally");
+    }
+
+    @Test
+    @DisplayName("@Transactional() with no timeout (the default) records no deadline, externally called")
+    void externalCallWithNoTimeoutRecordsNoDeadline() {
+        TimedTransactionally bean = buildTimedTransactionallyBean();
+
+        Long deadline = bean.externalDeadlineNoTimeout();
+
+        assertNull(deadline, "the interceptor never calls setTimeout for the default (-1)");
     }
 
     @Test
