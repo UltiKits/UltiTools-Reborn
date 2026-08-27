@@ -166,28 +166,68 @@ public class TransactionInterceptor implements MethodInterceptor {
 
     /**
      * Determines if the transaction should be rolled back for the given exception.
+     * <p>
+     * Additive, depth-ordered combination of {@code rollbackFor} and {@code noRollbackFor}
+     * (D-06/D-07 - confirmed by the maintainer during 02-06's checkpoint, matching Spring's
+     * {@code RuleBasedTransactionAttribute}): each array is checked for its shallowest matching
+     * inheritance depth via {@link #shallowestMatchDepth(Throwable, Class[])}. When both arrays
+     * match, the shallower depth wins; an exact-depth tie - including the same exception class
+     * listed in both arrays - favours rollback. When only one array matches, that one decides.
+     * When neither matches (including when both arrays are empty), this falls through to the
+     * unchanged {@code RuntimeException}/{@code Error} default - a non-empty {@code rollbackFor}
+     * with no match no longer short-circuits to "commit" the way it did before this fix.
      */
     private boolean shouldRollback(Throwable e, Transactional tx) {
-        // Check noRollbackFor first
-        for (Class<? extends Throwable> noRollback : tx.noRollbackFor()) {
-            if (noRollback.isInstance(e)) {
-                return false;
-            }
-        }
+        Integer rollbackDepth = shallowestMatchDepth(e, tx.rollbackFor());
+        Integer noRollbackDepth = shallowestMatchDepth(e, tx.noRollbackFor());
 
-        // Check rollbackFor
-        Class<? extends Throwable>[] rollbackFor = tx.rollbackFor();
-        if (rollbackFor.length > 0) {
-            for (Class<? extends Throwable> rollback : rollbackFor) {
-                if (rollback.isInstance(e)) {
-                    return true;
-                }
-            }
-            // rollbackFor specified but exception doesn't match - don't rollback
+        if (rollbackDepth != null && noRollbackDepth != null) {
+            // Tie favours rollback: this is the "should have rolled back" failure direction,
+            // chosen deliberately over silently committing.
+            return rollbackDepth <= noRollbackDepth;
+        }
+        if (rollbackDepth != null) {
+            return true;
+        }
+        if (noRollbackDepth != null) {
             return false;
         }
 
-        // Default: rollback for RuntimeException and Error
+        // Neither rule matched (or both arrays are empty) - fall through to the default.
         return e instanceof RuntimeException || e instanceof Error;
+    }
+
+    /**
+     * Returns the shallowest inheritance depth at which {@code thrown}'s runtime class matches any
+     * rule in {@code rules}, or {@code null} if none match. Depth 0 is an exact class match; each
+     * step up {@code thrown}'s superclass chain toward a matching rule adds 1.
+     */
+    private Integer shallowestMatchDepth(Throwable thrown, Class<? extends Throwable>[] rules) {
+        Integer shallowest = null;
+        for (Class<? extends Throwable> rule : rules) {
+            if (rule.isInstance(thrown)) {
+                int depth = inheritanceDepth(thrown.getClass(), rule);
+                if (shallowest == null || depth < shallowest) {
+                    shallowest = depth;
+                }
+            }
+        }
+        return shallowest;
+    }
+
+    /**
+     * Walks {@code thrownClass}'s superclass chain to find the depth at which it matches {@code
+     * ruleClass}. Callers only reach this after confirming {@code ruleClass.isInstance(...)} of an
+     * instance of {@code thrownClass} already holds, so the walk is guaranteed to terminate at
+     * {@code ruleClass} rather than at {@code null}.
+     */
+    private int inheritanceDepth(Class<?> thrownClass, Class<?> ruleClass) {
+        int depth = 0;
+        Class<?> current = thrownClass;
+        while (current != null && !current.equals(ruleClass)) {
+            current = current.getSuperclass();
+            depth++;
+        }
+        return depth;
     }
 }

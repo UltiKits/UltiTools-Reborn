@@ -98,20 +98,29 @@ public @interface Transactional {
     boolean readOnly() default false;
 
     /**
-     * Exception types that should trigger a rollback.
+     * Exception types that should trigger a rollback, in addition to the {@code RuntimeException}/
+     * {@code Error} default.
      * <p>
-     * By default, transactions are rolled back for RuntimeException and Error.
-     * Specify additional exception types here if needed.
+     * This is additive, not a replacement: an exception that matches neither {@code rollbackFor}
+     * nor {@code noRollbackFor} still falls through to the unchecked default, exactly as if
+     * neither attribute were set. When an exception matches both this and {@link #noRollbackFor()},
+     * the rule whose listed class is the <b>shallower</b> inheritance-depth match to the thrown
+     * exception wins (Spring's {@code RuleBasedTransactionAttribute} tiebreak); on an exact-depth
+     * tie - including the same class appearing in both arrays - the transaction rolls back.
      *
-     * @return exception types to rollback for
+     * @return exception types to additionally rollback for
+     * @since 6.3.0 additive combination with {@link #noRollbackFor()} and the depth tiebreak
+     *        (D-06, D-07); before 6.3.0 a non-empty, unmatched {@code rollbackFor} silently
+     *        committed instead of falling through to the default.
      */
     Class<? extends Throwable>[] rollbackFor() default {};
 
     /**
-     * Exception types that should NOT trigger a rollback.
+     * Exception types that should NOT trigger a rollback, overriding the {@code RuntimeException}/
+     * {@code Error} default for those types.
      * <p>
-     * Use this to prevent rollback for specific exceptions that would
-     * normally cause a rollback.
+     * Combines with {@link #rollbackFor()} by shallowest-inheritance-depth match, described there;
+     * on an exact-depth tie the transaction still rolls back.
      *
      * @return exception types to not rollback for
      */
