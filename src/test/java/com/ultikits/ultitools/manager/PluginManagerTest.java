@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
@@ -36,6 +37,7 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.DataStore;
 
 import org.bukkit.Bukkit;
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -775,6 +777,15 @@ class PluginManagerTest {
             lenient().when(dependenceManagers.getContext()).thenReturn(new SimpleContainer());
             lenient().when(ultiTools.getDependenceManagers()).thenReturn(dependenceManagers);
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+
+            // wireAop (02-01) now resolves a DataSource through UltiTools.getInstance().getDataStore()
+            // for the @Transactional advisor. This suite is about the compatibility gate, not
+            // persistence, so CALLS_REAL_METHODS lets the interface's own default
+            // getDataSource(DataScope) run and throw UnsupportedOperationException - the same
+            // graceful "declare unavailable" fallback wireAop already has for a backend that
+            // doesn't support one, rather than letting a bare mock's null answer surface as an NPE.
+            DataStore dataStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
+            lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
 
             // getPluginVersion() 走 getEnv() → getInstance().getTextResource("env.yml")，
             // 而那个方法在 JavaPlugin 里是 protected，测试包里打不了桩，所以直接桩静态方法。

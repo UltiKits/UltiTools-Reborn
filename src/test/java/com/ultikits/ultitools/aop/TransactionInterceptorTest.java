@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.aop;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -12,7 +13,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
+import javax.sql.DataSource;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,6 +33,9 @@ import com.ultikits.ultitools.annotations.Isolation;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 /**
  * Unit tests for TransactionInterceptor.
@@ -149,6 +160,53 @@ class TransactionInterceptorTest {
 
         public String method2() {
             return "method2";
+        }
+    }
+
+    /**
+     * Fixture for {@link SelfInvocationAndExternalCallTests}. Un-annotated {@code outerCallsInner()}
+     * self-invokes annotated {@code inner()}, mirroring {@link AopSelfInvocationFixture}'s shape:
+     * the caller method is never overridden by the proxy, so its call to {@code this.inner()} is a
+     * plain virtual dispatch that must still resolve to the proxy's override. Declared at the
+     * top level (not inside the {@code @Nested} class) because JUnit 5 {@code @Nested} classes are
+     * non-static inner classes, and a {@code static} member class cannot be declared inside one on
+     * this project's Java 8 target.
+     */
+    public static class SelfInvocationBean {
+        private final TransactionManager txManager;
+
+        public SelfInvocationBean(TransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        public void outerCallsInner() {
+            inner();
+        }
+
+        @Transactional
+        public void inner() {
+            write(1);
+            throw new RuntimeException("boom - self-invocation");
+        }
+
+        @Transactional
+        public void external() {
+            write(2);
+            throw new RuntimeException("boom - external call");
+        }
+
+        /** Negative control: not @Transactional, so its write must survive the throw. */
+        public void plainWriteThenThrow() {
+            write(3);
+            throw new RuntimeException("boom - not transactional");
+        }
+
+        private void write(int id) {
+            try (Statement st = txManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
@@ -718,6 +776,103 @@ class TransactionInterceptorTest {
 
             assertSame(original, thrown);
             verify(transactionManager).rollback();
+        }
+    }
+
+    /**
+     * WIRE-15: the same rollback must be observed whether a {@code @Transactional} method is
+     * reached by an external caller or by self-invocation from another method on the same bean.
+     * Self-invocation <b>is</b> intercepted in this codebase - the ByteBuddy subclass proxy is
+     * the bean, not a delegate wrapper - re-verified in Phase 1 against the four pre-existing
+     * {@code shouldInterceptSelfInvocation} tests ({@link AopActivationTest},
+     * {@link ProxyFactoryTest}, {@link AopProxyResolverTest}, {@code SimpleContainerAopTest}).
+     * <p>
+     * Unlike the rest of this file, these cases build a real {@link AopProxyResolver}-generated
+     * proxy over a real {@link DataSourceTransactionManager} bound to an in-memory H2
+     * {@link DataSource} - a mocked {@link TransactionManager} cannot distinguish self-invocation
+     * from an external call (the interceptor's own {@code invoke()} body is identical either way;
+     * only the proxy's dispatch differs), so only a real proxy + real JDBC connection can pin this.
+     */
+    @Nested
+    @DisplayName("外部调用与自调用的回滚一致性（WIRE-15）")
+    class SelfInvocationAndExternalCallTests {
+
+        private DataSource h2DataSource;
+        private DataSourceTransactionManager realManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:txinterceptorselfinvoke" + System.nanoTime()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            // Deliberately no setPassword(): see TransactionalRollbackEndToEndTest's identical
+            // comment - the in-memory DB has no credential to hardcode.
+            h2DataSource = new HikariDataSource(config);
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE tx_test (id INT PRIMARY KEY)");
+            }
+
+            realManager = new DataSourceTransactionManager(h2DataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, realInterceptor, 100));
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (h2DataSource instanceof HikariDataSource) {
+                ((HikariDataSource) h2DataSource).close();
+            }
+        }
+
+        private int countRows() throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+
+        private SelfInvocationBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(SelfInvocationBean.class);
+            return (SelfInvocationBean) proxyClass
+                    .getDeclaredConstructor(TransactionManager.class)
+                    .newInstance(realManager);
+        }
+
+        @Test
+        @DisplayName("Should intercept self-invocation and roll back the same as an external call")
+        void shouldInterceptSelfInvocation() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::outerCallsInner);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("Should roll back identically when @Transactional is reached by an external call")
+        void shouldRollBackOnExternalCall() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::external);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("Negative control: a non-@Transactional write survives the throw, proving the "
+                + "rollback above came from the interceptor, not an ambient rollback")
+        void shouldCommitNonTransactionalWriteDespiteThrow() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::plainWriteThenThrow);
+
+            assertThat(countRows()).isEqualTo(1);
         }
     }
 }

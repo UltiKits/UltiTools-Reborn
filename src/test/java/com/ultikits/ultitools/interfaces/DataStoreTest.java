@@ -91,12 +91,23 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 4 methods (3 abstract + 1 default)")
-        void shouldHaveExactlyFourMethods() {
+        @DisplayName("Should have exactly 5 methods (3 abstract + 2 default)")
+        void shouldHaveExactlyFiveMethods() {
+            // 02-01: added default getDataSource(DataScope) (D-01/D-17), alongside the existing
+            // default getOperator(File, Class).
             long count = java.util.Arrays.stream(DataStore.class.getDeclaredMethods())
                     .filter(m -> !m.isSynthetic())
                     .count();
-            assertThat(count).isEqualTo(4);
+            assertThat(count).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("Should have getDataSource(DataScope) as a default method")
+        void shouldHaveGetDataSourceMethod() throws NoSuchMethodException {
+            Method method = DataStore.class.getMethod("getDataSource",
+                    com.ultikits.ultitools.manager.DataScope.class);
+            assertThat(method).isNotNull();
+            assertThat(method.isDefault()).isTrue();
         }
     }
 

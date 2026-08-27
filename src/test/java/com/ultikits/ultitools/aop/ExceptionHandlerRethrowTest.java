@@ -2,15 +2,27 @@ package com.ultikits.ultitools.aop;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.PluginManager;
 
 /**
@@ -147,18 +159,36 @@ class ExceptionHandlerRethrowTest {
     }
 
     /**
-     * {@link PluginManager#wireAop(SimpleContainer)} is package-private in a different package by
-     * deliberate design (see {@code AopActivationTest}'s identical helper, which this mirrors
-     * rather than duplicates logic for) - reflection reaches the exact production wiring code
-     * instead of a stand-in that would pass regardless of whether {@code wireAop} itself is broken.
+     * {@link PluginManager#wireAop(SimpleContainer, DataScope)} is package-private in a different
+     * package by deliberate design (see {@code AopActivationTest}'s identical helper, which this
+     * mirrors rather than duplicates logic for) - reflection reaches the exact production wiring
+     * code instead of a stand-in that would pass regardless of whether {@code wireAop} itself is
+     * broken. {@code UltiTools.getInstance().getDataStore()} is stubbed to a {@link JsonStore} for
+     * the duration of the call: this file is about {@code @ExceptionCatch}'s custom-handler
+     * rethrow semantics, not the {@code @Transactional} JDBC path 02-01 added.
      */
     private static void invokeWireAop(SimpleContainer context) {
-        try {
-            Method wireAop = PluginManager.class.getDeclaredMethod("wireAop", SimpleContainer.class);
+        try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            DataStore jsonStore = new JsonStore("build/test-exception-rethrow-json");
+            when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
+            ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+            Method wireAop = PluginManager.class.getDeclaredMethod("wireAop", SimpleContainer.class, DataScope.class);
             wireAop.setAccessible(true);
-            wireAop.invoke(null, context);
+            wireAop.invoke(null, context, newDataScope());
         } catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to invoke PluginManager.wireAop via reflection", e);
+        }
+    }
+
+    private static DataScope newDataScope() {
+        try {
+            Constructor<DataScope> ctor = DataScope.class.getDeclaredConstructor(String.class, File.class, Set.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance("exception-handler-rethrow-test", new File("."), Collections.emptySet());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to construct DataScope via reflection", e);
         }
     }
 

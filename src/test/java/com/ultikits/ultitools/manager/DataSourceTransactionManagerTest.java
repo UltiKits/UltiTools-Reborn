@@ -7,6 +7,8 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.sql.DataSource;
 
@@ -547,6 +549,100 @@ class DataSourceTransactionManagerTest {
 
             // 主线程的事务应该仍然活动
             assertThat(transactionManager.hasActiveTransaction()).isTrue();
+        }
+    }
+
+    /**
+     * FOUND-04: contextHolder is an instance field, not static, so two
+     * {@code DataSourceTransactionManager} instances - each bound to a different
+     * {@link DataSource} - never observe each other's {@link Connection} or transaction state.
+     * These tests fail against the pre-fix {@code static} field: with a static contextHolder,
+     * manager A and manager B would share the same ThreadLocal slot, so B's {@code begin()}
+     * would silently overwrite A's context on the same thread (Test 1), and on two threads the
+     * two managers would still resolve to independent ThreadLocal entries only by accident of
+     * per-thread storage - Test 1 is the one that actually distinguishes "static" from
+     * "instance", because same-thread reuse of one static field is exactly where the two
+     * shapes diverge.
+     */
+    @Nested
+    @DisplayName("跨 DataSource 隔离测试（FOUND-04）")
+    class CrossDataSourceIsolationTests {
+
+        @Test
+        @DisplayName("同一线程上，两个 manager 各自持有独立的连接，互不可见")
+        void shouldIsolateConnectionsAcrossManagersOnSameThread() throws Exception {
+            DataSource dataSourceA = mock(DataSource.class);
+            DataSource dataSourceB = mock(DataSource.class);
+            Connection connectionA = mock(Connection.class);
+            Connection connectionB = mock(Connection.class);
+            when(dataSourceA.getConnection()).thenReturn(connectionA);
+            when(dataSourceB.getConnection()).thenReturn(connectionB);
+
+            DataSourceTransactionManager managerA = new DataSourceTransactionManager(dataSourceA);
+            DataSourceTransactionManager managerB = new DataSourceTransactionManager(dataSourceB);
+
+            managerA.begin();
+            managerB.begin();
+
+            assertThat(managerA.getConnection()).isSameAs(connectionA);
+            assertThat(managerB.getConnection()).isSameAs(connectionB);
+            assertThat(managerA.getConnection()).isNotSameAs(managerB.getConnection());
+
+            // Rolling back manager A must never touch manager B's connection or transaction state.
+            managerA.rollback();
+
+            assertThat(managerA.hasActiveTransaction()).isFalse();
+            assertThat(managerB.hasActiveTransaction()).isTrue();
+            verify(connectionB, never()).rollback();
+            verify(connectionB, never()).close();
+        }
+
+        @Test
+        @DisplayName("两个线程上，两个 manager 的事务同时打开时互不可见")
+        void shouldIsolateConnectionsAcrossManagersOnDifferentThreads() throws Exception {
+            DataSource dataSourceA = mock(DataSource.class);
+            DataSource dataSourceB = mock(DataSource.class);
+            Connection connectionA = mock(Connection.class);
+            Connection connectionB = mock(Connection.class);
+            when(dataSourceA.getConnection()).thenReturn(connectionA);
+            when(dataSourceB.getConnection()).thenReturn(connectionB);
+
+            DataSourceTransactionManager managerA = new DataSourceTransactionManager(dataSourceA);
+            DataSourceTransactionManager managerB = new DataSourceTransactionManager(dataSourceB);
+
+            CountDownLatch bothBegun = new CountDownLatch(2);
+            CountDownLatch releaseThreadA = new CountDownLatch(1);
+            AtomicReference<Connection> seenByThreadA = new AtomicReference<>();
+            AtomicReference<Connection> seenByThreadB = new AtomicReference<>();
+
+            Thread threadA = new Thread(() -> {
+                managerA.begin();
+                bothBegun.countDown();
+                try {
+                    // Hold A's transaction open until B has begun too, so both are active
+                    // simultaneously before either reads its connection back.
+                    releaseThreadA.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                seenByThreadA.set(managerA.getConnection());
+            });
+            Thread threadB = new Thread(() -> {
+                managerB.begin();
+                bothBegun.countDown();
+                seenByThreadB.set(managerB.getConnection());
+                releaseThreadA.countDown();
+            });
+
+            threadA.start();
+            threadB.start();
+            threadA.join();
+            threadB.join();
+
+            assertThat(bothBegun.getCount()).isZero();
+            assertThat(seenByThreadA.get()).isSameAs(connectionA);
+            assertThat(seenByThreadB.get()).isSameAs(connectionB);
+            assertThat(seenByThreadA.get()).isNotSameAs(seenByThreadB.get());
         }
     }
 }

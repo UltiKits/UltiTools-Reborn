@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
@@ -62,6 +63,11 @@ public class ExternalPluginIntegrationTest {
         when(mockUltiTools.getListenerManager()).thenReturn(listenerManager);
         when(mockUltiTools.getEventBus()).thenReturn(eventBus);
         when(mockUltiTools.getPluginManager()).thenReturn(new PluginManager());
+        // wireAop (02-01) resolves a DataSource through UltiTools.getInstance().getDataStore() for
+        // the @Transactional advisor. CALLS_REAL_METHODS lets the interface's own default
+        // getDataSource(DataScope) run and throw UnsupportedOperationException - wireAop's existing
+        // graceful "declare unavailable" fallback - instead of a bare mock's null surfacing as an NPE.
+        when(mockUltiTools.getDataStore()).thenReturn(mock(DataStore.class, CALLS_REAL_METHODS));
 
         setStaticField(UltiTools.class, "ultiTools", mockUltiTools);
     }
