@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
@@ -22,6 +23,7 @@ import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 
@@ -231,18 +233,22 @@ class DataSourceTransactionManagerTest {
         }
 
         @Test
-        @DisplayName("嵌套事务 rollback 应该完全回滚")
-        void shouldFullyRollbackNestedTransactions() throws Exception {
+        @DisplayName("嵌套事务 rollback 只标记 rollback-only 并递减深度，不立即清除（D-08，修正自「完全回滚」旧断言）")
+        void nestedRollbackShouldMarkRollbackOnlyInsteadOfTearingDownImmediately() throws Exception {
+            // D-08 corrects this test's pre-6.3.0 assumption: rollback() used to call cleanup(ctx)
+            // "regardless of depth" (the exact HEAD comment this fix removes), silently discarding
+            // whatever the outer scope(s) still expected to do. A rollback() at depth > 1 now only
+            // marks the context rollback-only and decrements depth -- see RollbackOnlyMarkerTests
+            // below for the full depth-2 RED/GREEN pair and the outer commit()'s throw.
             transactionManager.begin();
             transactionManager.begin();
             transactionManager.begin();
 
-            // 回滚应该完全清除，不管嵌套深度
             transactionManager.rollback();
 
-            verify(mockConnection).rollback();
-            assertThat(transactionManager.hasActiveTransaction()).isFalse();
-            assertThat(transactionManager.getTransactionDepth()).isZero();
+            verify(mockConnection, never()).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
         }
 
         @Test
@@ -528,6 +534,7 @@ class DataSourceTransactionManagerTest {
             assertThat(ctx.depth).isZero();
             assertThat(ctx.originalIsolation).isEqualTo(-1);
             assertThat(ctx.originalAutoCommit).isTrue();
+            assertThat(ctx.rollbackOnly).isFalse();
         }
     }
 
@@ -747,6 +754,79 @@ class DataSourceTransactionManagerTest {
         void concreteManagerIsAssignableToBothInterfaces() {
             assertThat(transactionManager).isInstanceOf(TransactionManager.class);
             assertThat(transactionManager).isInstanceOf(JdbcTransactionManager.class);
+        }
+    }
+
+    /**
+     * D-08: an inner {@code rollback()} at depth &gt; 1 marks the transaction rollback-only and
+     * decrements depth instead of tearing the whole {@link DataSourceTransactionManager.TransactionContext}
+     * down. The outer {@code commit()} then performs the real rollback, cleans up, and throws
+     * {@link UnexpectedRollbackException} instead of silently returning after a WARNING log line -
+     * observed HEAD behaviour before this fix (pinned by
+     * {@code shouldFullyRollbackNestedTransactions} above, now rewritten to match the corrected
+     * semantics).
+     */
+    @Nested
+    @DisplayName("回滚只读标记 — 外层 commit() 不再静默丢弃工作（D-08）")
+    class RollbackOnlyMarkerTests {
+
+        @Test
+        @DisplayName("深度 2：内层 rollback() 打标记；外层 commit() 执行真正回滚并抛出 UnexpectedRollbackException")
+        void innerRollbackThenOuterCommitThrowsUnexpectedRollback() throws Exception {
+            transactionManager.begin(); // depth 1
+            transactionManager.begin(); // depth 2
+
+            transactionManager.rollback(); // inner rollback at depth 2 -- must only mark, not tear down
+
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+            verify(mockConnection, never()).rollback();
+            verify(mockConnection, never()).close();
+
+            assertThatThrownBy(() -> transactionManager.commit())
+                .isInstanceOf(UnexpectedRollbackException.class)
+                .hasMessageContaining("nested")
+                .satisfies(e -> assertThat(((UnexpectedRollbackException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.TRANSACTION_ROLLBACK_ONLY));
+
+            // Outer commit must have performed the real rollback and cleaned up -- no leaked context.
+            verify(mockConnection).rollback();
+            verify(mockConnection, never()).commit();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("深度 2：内层 commit() 再外层 commit() 正常提交，不抛出任何异常（对照组）")
+        void innerCommitThenOuterCommitCommitsNormally() throws Exception {
+            transactionManager.begin();
+            transactionManager.begin();
+
+            transactionManager.commit(); // inner commit, depth 2 -> 1
+
+            assertThatCode(() -> transactionManager.commit()).doesNotThrowAnyException();
+
+            verify(mockConnection).commit();
+            verify(mockConnection, never()).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("深度 1 的 rollback() 行为不变：真正回滚并清理")
+        void depthOneRollbackUnchanged() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.rollback();
+
+            verify(mockConnection).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+            assertThat(transactionManager.getTransactionDepth()).isZero();
+        }
+
+        @Test
+        @DisplayName("没有活动事务时 commit()/rollback() 仍然只记 WARNING 并正常返回")
+        void noActiveTransactionStillReturnsQuietly() {
+            assertThatCode(() -> transactionManager.commit()).doesNotThrowAnyException();
+            assertThatCode(() -> transactionManager.rollback()).doesNotThrowAnyException();
         }
     }
 }

@@ -33,6 +33,7 @@ public enum ErrorCode {
     TRANSACTION_FAILED(3006, "Transaction failed"),
     DATA_ENTITY_INVALID(3007, "Data entity invalid"),
     DATA_OPERATION_FAILED(3008, "Data operation failed"),
+    TRANSACTION_ROLLBACK_ONLY(3009, "Transaction was marked rollback-only by a nested scope"),
 
     // ===== Command Errors (4000-4999) =====
     COMMAND_ERROR(4000, "Command error"),
