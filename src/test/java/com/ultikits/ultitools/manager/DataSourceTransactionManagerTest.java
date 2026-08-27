@@ -22,6 +22,8 @@ import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
+import com.ultikits.ultitools.interfaces.TransactionManager;
 
 /**
  * DataSourceTransactionManager 测试类
@@ -643,6 +645,108 @@ class DataSourceTransactionManagerTest {
             assertThat(seenByThreadA.get()).isSameAs(connectionA);
             assertThat(seenByThreadB.get()).isSameAs(connectionB);
             assertThat(seenByThreadA.get()).isNotSameAs(seenByThreadB.get());
+        }
+    }
+
+    /**
+     * D-04: {@code TransactionManager} is split additively. A backend that only needs the
+     * lifecycle half (begin/commit/rollback/hasActiveTransaction/setTimeout/getTransactionDepth)
+     * implements {@link TransactionManager} directly and is never forced to answer the three
+     * JDBC-only members - those now live only on {@link JdbcTransactionManager}, with a
+     * {@code default} fallback on the base interface that refuses rather than lies.
+     */
+    @Nested
+    @DisplayName("TransactionManager / JdbcTransactionManager split（D-04）")
+    class JdbcSplitTests {
+
+        /**
+         * Test-only backend supplying only the six lifecycle methods - deliberately does not
+         * implement {@link JdbcTransactionManager}, and does not override any of the three
+         * JDBC-only default methods either.
+         */
+        private final class LifecycleOnlyTransactionManager implements TransactionManager {
+            private boolean active;
+            private int depth;
+
+            @Override
+            public void begin() {
+                active = true;
+                depth++;
+            }
+
+            @Override
+            public void commit() {
+                depth = Math.max(0, depth - 1);
+                active = depth > 0;
+            }
+
+            @Override
+            public void rollback() {
+                depth = 0;
+                active = false;
+            }
+
+            @Override
+            public boolean hasActiveTransaction() {
+                return active;
+            }
+
+            @Override
+            public void setTimeout(int seconds) {
+                // no-op: not exercised by this test
+            }
+
+            @Override
+            public int getTransactionDepth() {
+                return depth;
+            }
+        }
+
+        @Test
+        @DisplayName("A lifecycle-only TransactionManager implementation compiles and instantiates")
+        void lifecycleOnlyImplementationCompilesAndInstantiates() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThat(manager).isNotNull();
+            manager.begin();
+            assertThat(manager.hasActiveTransaction()).isTrue();
+        }
+
+        @Test
+        @DisplayName("getConnection() on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void getConnectionThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(manager::getConnection)
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("setIsolationLevel(int) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void setIsolationLevelThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(() -> manager.setIsolationLevel(Connection.TRANSACTION_SERIALIZABLE))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("setReadOnly(boolean) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void setReadOnlyThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(() -> manager.setReadOnly(true))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("DataSourceTransactionManager is assignable to both TransactionManager and JdbcTransactionManager")
+        void concreteManagerIsAssignableToBothInterfaces() {
+            assertThat(transactionManager).isInstanceOf(TransactionManager.class);
+            assertThat(transactionManager).isInstanceOf(JdbcTransactionManager.class);
         }
     }
 }
