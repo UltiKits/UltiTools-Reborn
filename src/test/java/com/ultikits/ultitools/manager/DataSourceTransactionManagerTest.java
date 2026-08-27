@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Deque;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -827,6 +828,106 @@ class DataSourceTransactionManagerTest {
         void noActiveTransactionStillReturnsQuietly() {
             assertThatCode(() -> transactionManager.commit()).doesNotThrowAnyException();
             assertThatCode(() -> transactionManager.rollback()).doesNotThrowAnyException();
+        }
+    }
+
+    /**
+     * D-09: {@code suspend()}/{@code resume(Object)} are the mechanism {@code REQUIRES_NEW} and
+     * {@code NOT_SUPPORTED} need in 02-06 - detach the current context from this thread, let an
+     * independent transaction run in its place, then restore the original at its original depth
+     * with its original {@link Connection}.
+     */
+    @Nested
+    @DisplayName("suspend()/resume() — REQUIRES_NEW/NOT_SUPPORTED 所需的挂起机制（D-09）")
+    class SuspendResumeTests {
+
+        @Test
+        @DisplayName("没有活动事务时 suspend() 返回 null，不抛出异常")
+        void suspendWithNothingActiveReturnsNull() {
+            Object suspended = transactionManager.suspend();
+
+            assertThat(suspended).isNull();
+        }
+
+        @Test
+        @DisplayName("resume(null) 是空操作，不会抛出异常，也不会遗留状态")
+        void resumeWithNullIsNoOp() {
+            assertThatCode(() -> transactionManager.resume(null)).doesNotThrowAnyException();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() 摘除当前上下文，之后 hasActiveTransaction() 为 false")
+        void suspendDetachesCurrentContext() {
+            transactionManager.begin();
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+
+            Object suspended = transactionManager.suspend();
+
+            assertThat(suspended).isNotNull();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() -> begin() -> commit() -> resume(saved)：原事务在原深度、原 Connection 上恢复")
+        void suspendThenResumeRestoresOriginalContextAtOriginalDepthAndConnection() throws Exception {
+            Connection outerConnection = mock(Connection.class);
+            Connection innerConnection = mock(Connection.class);
+            when(mockDataSource.getConnection()).thenReturn(outerConnection, innerConnection);
+
+            transactionManager.begin(); // outer, depth 1, outerConnection
+            transactionManager.begin(); // outer, depth 2 (still nested on the same context)
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+
+            Object suspended = transactionManager.suspend();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+
+            transactionManager.begin(); // inner, independent, depth 1, innerConnection
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+            assertThat(transactionManager.getConnection()).isSameAs(innerConnection);
+            transactionManager.commit(); // inner finishes and cleans up completely
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+            assertThat(transactionManager.getConnection()).isSameAs(outerConnection);
+        }
+
+        @Test
+        @DisplayName("getTransactionDepth() 只报告当前上下文的深度，不会跨挂起栈求和")
+        void depthReportsCurrentContextOnlyNotSummedAcrossStack() {
+            transactionManager.begin(); // depth 1
+            transactionManager.begin(); // depth 2
+            Object suspended = transactionManager.suspend();
+
+            transactionManager.begin(); // new, independent, depth 1
+
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+
+            transactionManager.commit();
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("挂起后正常 resume：挂起栈的 ThreadLocal 不遗留悬空帧（T-02-DOS-5）")
+        void suspendedStackLeavesNoDanglingFrameAfterResume() throws Exception {
+            transactionManager.begin();
+            Object suspended = transactionManager.suspend();
+            transactionManager.resume(suspended);
+
+            assertThat(suspendedStackValue()).isNull();
+        }
+
+        private Deque<?> suspendedStackValue() throws Exception {
+            Field field = DataSourceTransactionManager.class.getDeclaredField("suspendedStack");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            ThreadLocal<Deque<?>> threadLocal = (ThreadLocal<Deque<?>>) field.get(transactionManager);
+            return threadLocal.get();
         }
     }
 }
