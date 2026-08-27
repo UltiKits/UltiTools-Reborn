@@ -284,25 +284,31 @@ class JsonStoreTest {
         @Test
         @DisplayName("Multiple plugins using same JsonStore")
         void testMultiplePlugins() {
+            // Pins SILENT-04's fix: dataOperatorMap is keyed by (plugin identity, entity class), not
+            // by entity class alone, so two plugins requesting the same @Table entity get two
+            // distinct operators writing to two distinct directories and cannot read each other's
+            // rows through them.
             UltiToolsPlugin plugin1 = mock(UltiToolsPlugin.class);
             when(plugin1.getPluginName()).thenReturn("Plugin1");
-            
+
             UltiToolsPlugin plugin2 = mock(UltiToolsPlugin.class);
             when(plugin2.getPluginName()).thenReturn("Plugin2");
-            
+
             DataOperator<AnnotatedTestData> op1 = store.getOperator(plugin1, AnnotatedTestData.class);
             DataOperator<AnnotatedTestData> op2 = store.getOperator(plugin2, AnnotatedTestData.class);
-            
-            // Note: Same entity class but different plugins - they share the same operator
-            // This is because dataOperatorMap is keyed by Class, not by plugin+class
-            // Insert data through one operator
+
+            assertThat(op1).isNotSameAs(op2);
+
+            // Insert data through plugin1's operator
             AnnotatedTestData data1 = new AnnotatedTestData();
             data1.setId("plugin1-data");
             data1.setName("from plugin 1");
             op1.insert(data1);
-            
-            // Should be visible through the same operator (since they share)
+
+            // Visible through plugin1's own operator...
             assertThat(op1.getById("plugin1-data")).isNotNull();
+            // ...but NOT through plugin2's operator - they are isolated, not shared.
+            assertThat(op2.getById("plugin1-data")).isNull();
         }
     }
 

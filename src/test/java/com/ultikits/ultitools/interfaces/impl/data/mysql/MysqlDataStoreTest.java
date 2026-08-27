@@ -6,13 +6,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
-import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -113,28 +112,19 @@ class MysqlDataStoreTest {
         when(mockConfig.getInt("mysql.prepStmtCacheSqlLimit")).thenReturn(2048);
     }
 
-    /**
-     * 清理 MysqlDataStore 中的静态缓存
-     */
-    private void clearStaticCache() {
-        try {
-            Field field = MysqlDataStore.class.getDeclaredField("dataOperatorMap");
-            field.setAccessible(true);
-            Map<?, ?> map = (Map<?, ?>) field.get(null);
-            map.clear();
-        } catch (Exception e) {
-            // 忽略反射异常
-        }
-    }
-
     @BeforeEach
     void setUp() {
-        clearStaticCache();
+        // dataOperatorMap is instance-scoped since Task 3 (SILENT-04) - each test constructs its own
+        // fresh MysqlDataStore(), so there is no shared static cache left to clear here anymore.
         ultiToolsStaticMock = mockStatic(UltiTools.class);
         ultiToolsStaticMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         lenient().when(mockUltiTools.getConfig()).thenReturn(mockConfig);
         lenient().when(mockUltiTools.getLogger()).thenReturn(mockLogger);
         lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        // Used only by tests that call getOperator(); lenient() so tests that don't need it
+        // (constructor/getStoreType/getDataSource/destroyAllOperators tests) aren't flagged for an
+        // unused stub under Mockito's strict-stubs default.
+        lenient().when(mockPlugin.getPluginName()).thenReturn("test-plugin");
     }
 
     @AfterEach
@@ -142,7 +132,6 @@ class MysqlDataStoreTest {
         if (ultiToolsStaticMock != null) {
             ultiToolsStaticMock.close();
         }
-        clearStaticCache();
     }
 
     @Nested
@@ -329,6 +318,34 @@ class MysqlDataStoreTest {
         }
 
         @Test
+        @DisplayName("两个插件请求同一实体类应该得到互不相同的 operator (SILENT-04)")
+        void shouldCreateDifferentOperatorsForDifferentPluginsSameEntity() {
+            // Arrange - pins T-02-EOP-1's mitigation: the operator cache key now includes the
+            // requesting plugin's identity, not only the entity class, so two plugins asking for
+            // the same @Table entity no longer share one MysqlDataOperator (and, through it, one
+            // another's rows).
+            setupMysqlConfig();
+            UltiToolsPlugin otherPlugin = mock(UltiToolsPlugin.class);
+            when(otherPlugin.getPluginName()).thenReturn("other-plugin");
+
+            try (MockedConstruction<HikariDataSource> hikariMock =
+                    mockConstruction(HikariDataSource.class);
+                 MockedConstruction<MysqlDataOperator> operatorMock =
+                    mockConstruction(MysqlDataOperator.class)) {
+
+                MysqlDataStore store = new MysqlDataStore();
+
+                // Act
+                DataOperator<TestDataEntity> operatorForFirstPlugin = store.getOperator(mockPlugin, TestDataEntity.class);
+                DataOperator<TestDataEntity> operatorForOtherPlugin = store.getOperator(otherPlugin, TestDataEntity.class);
+
+                // Assert
+                assertThat(operatorForFirstPlugin).isNotSameAs(operatorForOtherPlugin);
+                assertThat(operatorMock.constructed()).hasSize(2);
+            }
+        }
+
+        @Test
         @DisplayName("应该正确传递 DataSource 给 MysqlDataOperator")
         void shouldPassDataSourceToMysqlDataOperator() {
             // Arrange
@@ -375,6 +392,31 @@ class MysqlDataStoreTest {
 
                 // Assert
                 verify(mockDataSource).close();
+            }
+        }
+
+        @Test
+        @DisplayName("应该清空 operator 缓存")
+        void shouldClearOperatorCache() {
+            // Arrange
+            setupMysqlConfig();
+
+            try (MockedConstruction<HikariDataSource> hikariMock =
+                    mockConstruction(HikariDataSource.class);
+                 MockedConstruction<MysqlDataOperator> operatorMock =
+                    mockConstruction(MysqlDataOperator.class)) {
+
+                MysqlDataStore store = new MysqlDataStore();
+                DataOperator<TestDataEntity> before = store.getOperator(mockPlugin, TestDataEntity.class);
+
+                // Act
+                store.destroyAllOperators();
+                DataOperator<TestDataEntity> after = store.getOperator(mockPlugin, TestDataEntity.class);
+
+                // Assert - a fresh operator is built, proving the cache was actually emptied rather
+                // than merely surviving destroyAllOperators() untouched.
+                assertThat(after).isNotSameAs(before);
+                assertThat(operatorMock.constructed()).hasSize(2);
             }
         }
 
@@ -477,20 +519,23 @@ class MysqlDataStoreTest {
     }
 
     @Nested
-    @DisplayName("静态缓存测试")
+    @DisplayName("实例级缓存测试 (SILENT-04 修复后)")
     class StaticCacheTests {
 
         @Test
-        @DisplayName("不同 MysqlDataStore 实例应该共享 operator 缓存")
-        void differentStoreInstancesShouldShareOperatorCache() {
-            // Arrange
+        @DisplayName("不同 MysqlDataStore 实例不应该共享 operator 缓存")
+        void differentStoreInstancesShouldNotShareOperatorCache() {
+            // Arrange - dataOperatorMap 从 Task 3 (SILENT-04) 起是实例字段，不再是 static，
+            // 所以两个独立的 store 实例各自持有自己的缓存。生产环境中 DataStoreManager 只会注册
+            // 一个 MysqlDataStore 实例，所以这个场景不会在真实运行时出现，但它记录了这个
+            // 有意为之的行为变化。
             setupMysqlConfig();
 
-            try (MockedConstruction<HikariDataSource> hikariMock = 
+            try (MockedConstruction<HikariDataSource> hikariMock =
                     mockConstruction(HikariDataSource.class);
-                 MockedConstruction<MysqlDataOperator> operatorMock = 
+                 MockedConstruction<MysqlDataOperator> operatorMock =
                     mockConstruction(MysqlDataOperator.class)) {
-                
+
                 MysqlDataStore store1 = new MysqlDataStore();
                 MysqlDataStore store2 = new MysqlDataStore();
 
@@ -498,10 +543,10 @@ class MysqlDataStoreTest {
                 DataOperator<TestDataEntity> operator1 = store1.getOperator(mockPlugin, TestDataEntity.class);
                 DataOperator<TestDataEntity> operator2 = store2.getOperator(mockPlugin, TestDataEntity.class);
 
-                // Assert - 由于静态缓存，两个 store 应该返回同一个 operator
-                assertThat(operator1).isSameAs(operator2);
-                // 只创建了一个 MysqlDataOperator
-                assertThat(operatorMock.constructed()).hasSize(1);
+                // Assert - each store instance has its own operator cache
+                assertThat(operator1).isNotSameAs(operator2);
+                // Two independent stores -> two MysqlDataOperator instances
+                assertThat(operatorMock.constructed()).hasSize(2);
             }
         }
     }

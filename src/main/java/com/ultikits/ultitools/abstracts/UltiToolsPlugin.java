@@ -25,6 +25,8 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.Configurable;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
@@ -81,9 +83,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     protected UltiToolsPlugin() {
         YamlConfiguration pluginConfig = loadPluginConfiguration();
-        
+
+        if (!pluginConfig.contains("name")) {
+            // D-16: a module with no `name:` key used to silently become "unknown" and share
+            // sqliteDB/unknown.db with every other name-less module (measured on-disk: 10 tables
+            // from 8 modules, one of them - world_settings - holding the same logical rows as a
+            // properly-named module's own .db file). Fail fast at load instead, naming the JAR, so
+            // the operator sees this at startup rather than discovering it as missing data later.
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Module JAR '" + resolveJarFileNameForError() + "' has no 'name:' key in its "
+                            + "plugin.yml. Refusing to load rather than silently sharing "
+                            + "sqliteDB/unknown.db with other unnamed modules - add a 'name:' key.");
+        }
+
         version = pluginConfig.getString("version", "unknown");
-        pluginName = pluginConfig.getString("name", "unknown");
+        pluginName = pluginConfig.getString("name");
         authors = pluginConfig.getStringList("authors");
         loadAfter = pluginConfig.getStringList("loadAfter");
         minUltiToolsVersion = pluginConfig.getInt("api-version", 0);
@@ -308,6 +322,30 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         } catch (java.net.URISyntaxException e) {
             throw new IOException("Invalid URL format", e);
         }
+    }
+
+    /**
+     * Best-effort resolution of this module's own JAR file name, for the {@code name:}-missing
+     * refusal message only. Never throws -- falls back to the class name if the code source is
+     * unavailable (e.g. when running from unpacked classes in a test).
+     * <p>
+     * 尽力解析本模块自身的 JAR 文件名，仅用于 {@code name:} 缺失时的拒绝加载信息。永不抛出异常——
+     * 当代码源不可用时（例如测试中从未打包的 class 运行）回退为类名。
+     *
+     * @return the JAR file name, or this class's name if it cannot be determined
+     */
+    private String resolveJarFileNameForError() {
+        try {
+            CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
+            if (src != null && src.getLocation() != null) {
+                String path = src.getLocation().getPath();
+                int slash = path.lastIndexOf('/');
+                return slash >= 0 ? path.substring(slash + 1) : path;
+            }
+        } catch (Exception ignored) {
+            // Best effort only - fall through to the class-name fallback below.
+        }
+        return this.getClass().getName();
     }
 
     protected final String getConfigFolder() {
