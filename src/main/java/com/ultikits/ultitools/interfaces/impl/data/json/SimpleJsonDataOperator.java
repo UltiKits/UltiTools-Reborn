@@ -35,6 +35,7 @@ import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
 import com.ultikits.ultitools.utils.JsonPathUtil;
@@ -65,6 +66,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      */
     private final Map<String, String> columnToFieldName;
 
+    /**
+     * The per-plugin {@link JsonTransactionManager} governing this operator, or {@code null} if
+     * this operator was never bound to one (e.g. constructed directly, as every pre-existing
+     * caller of the two-arg constructor still does -- see {@link #transaction(Callable)}, which
+     * is a separate, independent snapshot mechanism this field does not affect).
+     * <p>
+     * Set via {@link #bindTransactionManager(JsonTransactionManager)} by {@code JsonStore} (same
+     * package) right after this operator is constructed or retrieved from its cache (02-05, D-03).
+     * {@code volatile} because a write can happen on a different Bukkit worker thread than the one
+     * that bound the manager.
+     */
+    private volatile JsonTransactionManager transactionManager;
+
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
         this.type = type;
@@ -81,6 +95,70 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 }
             });
         }
+    }
+
+    /**
+     * Binds the {@link JsonTransactionManager} this operator participates in (02-05, D-03).
+     * <p>
+     * Package-private: called only by {@code JsonStore}, right after it constructs or retrieves
+     * this operator from its cache, with the manager it resolves for the same identity. Not part
+     * of this class's public API.
+     *
+     * @param transactionManager the manager governing the plugin (or external caller) this
+     *                           operator belongs to
+     */
+    void bindTransactionManager(JsonTransactionManager transactionManager) {
+        this.transactionManager = transactionManager;
+    }
+
+    /**
+     * Called as the first statement of every cache-mutating method ({@link #insert}, {@link #del},
+     * {@link #delById}, the two {@code update} overloads). A no-op unless a {@link
+     * #bindTransactionManager bound} {@link JsonTransactionManager} has an active transaction on
+     * this thread and has not already captured this operator this transaction (D-03: lazy
+     * snapshot on first touch, so an operator never written to during the transaction is neither
+     * snapshotted nor restored).
+     * <p>
+     * The actual deep-copy capture ({@link #snapshotCache()}) and restore ({@link
+     * #restoreCache(Map)}) stay entirely inside this class; {@link JsonTransactionManager} only
+     * ever holds the {@code Supplier}/{@code Consumer} lambdas below, never this operator's cache
+     * directly.
+     */
+    private void beforeMutate() {
+        JsonTransactionManager manager = this.transactionManager;
+        if (manager != null) {
+            manager.captureIfAbsent(this, this::snapshotCache, snapshot -> restoreCache(uncheckedCast(snapshot)));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<Object, T> uncheckedCast(Object snapshot) {
+        return (Map<Object, T>) snapshot;
+    }
+
+    /**
+     * Deep-copies this operator's current cache: serialize/deserialize to break references, since
+     * {@code update(T)} mutates cached entities in-place via {@link
+     * BeanCopyUtil#copyProperties}. Package-private hook shared by {@link #transaction(Callable)}
+     * (the pre-existing per-operator mechanism, unchanged) and {@link #beforeMutate()} (the new
+     * per-plugin {@link JsonTransactionManager} hook, 02-05) -- one copy of the deep-copy logic,
+     * two callers.
+     */
+    synchronized Map<Object, T> snapshotCache() {
+        Map<Object, T> snapshot = new HashMap<>();
+        for (Map.Entry<Object, T> entry : cache.entrySet()) {
+            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
+        }
+        return snapshot;
+    }
+
+    /**
+     * Restores this operator's cache from a snapshot previously captured by {@link
+     * #snapshotCache()}.
+     */
+    synchronized void restoreCache(Map<Object, T> snapshot) {
+        cache.clear();
+        cache.putAll(snapshot);
     }
 
     /**
@@ -234,6 +312,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void insert(T obj) {
+        beforeMutate();
         // 关系型后端在 id 为空时自动补一个 UUID（AbstractRelationalDataOperator.insert），
         // 所以模块从来不自己设 id —— 全部 Modules 加起来的 setId 调用是 0 次。
         // JSON 侧过去不补，null 直接进 ConcurrentHashMap 当 key，于是同一份模块代码
@@ -247,6 +326,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
+        beforeMutate();
         // 这里刻意不照搬 getAll 对空条件的处理：在查询侧「空条件 = 不过滤 = 返回全量」是合理的，
         // 搬到删除侧就成了「删光全表」。空条件目前会在下面取 getValue() 时抛 NPE，难看但失败方向安全。
         Collection<Map.Entry<Object, T>> results = new ArrayList<>();
@@ -284,11 +364,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void delById(Object id) {
+        beforeMutate();
         cache.remove(id);
     }
 
     @Override
     public synchronized void update(String column, Object value, Object id) {
+        beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             throw new RuntimeException("Query value is not serializable");
         }
@@ -303,6 +385,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void update(T obj) {
+        beforeMutate();
         Object id = obj.getId();
         T old = cache.get(id);
         if (old == null) {
@@ -358,16 +441,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
         // Deep copy: serialize/deserialize to break references
         // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
-        Map<Object, T> snapshot = new HashMap<>();
-        for (Map.Entry<Object, T> entry : cache.entrySet()) {
-            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
-        }
+        Map<Object, T> snapshot = snapshotCache();
         try {
             return action.call();
         } catch (Exception e) {
             // Rollback: restore cache from deep copy
-            cache.clear();
-            cache.putAll(snapshot);
+            restoreCache(snapshot);
             throw e;
         }
     }

@@ -1,11 +1,13 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 @DisplayName("JSON Data Operator - Transaction & Batch Tests")
 class JsonTransactionTest {
@@ -424,6 +428,133 @@ class JsonTransactionTest {
 
             // Only "stable" should remain
             assertThat(operator.getById("stable")).isNotNull();
+        }
+    }
+
+    // ===== Per-Plugin Transaction Scope (JsonTransactionManager, D-03) =====
+
+    @Nested
+    @DisplayName("JsonTransactionManager - Per-Plugin Rollback Scope")
+    class PerPluginTransactionScopeTests {
+
+        private SimpleJsonDataOperator<TestData> operatorA;
+        private SimpleJsonDataOperator<TestData> operatorB;
+        private JsonTransactionManager manager;
+
+        @BeforeEach
+        void setUpTwoOperators() throws Exception {
+            File dirA = Files.createDirectory(tempDir.resolve("operator-a")).toFile();
+            File dirB = Files.createDirectory(tempDir.resolve("operator-b")).toFile();
+            operatorA = new SimpleJsonDataOperator<>(dirA.getAbsolutePath(), TestData.class);
+            operatorB = new SimpleJsonDataOperator<>(dirB.getAbsolutePath(), TestData.class);
+            manager = new JsonTransactionManager("per-plugin-scope-test");
+            operatorA.bindTransactionManager(manager);
+            operatorB.bindTransactionManager(manager);
+        }
+
+        @Test
+        @DisplayName("Rollback restores every operator of the plugin touched during the transaction")
+        void rollbackRestoresBothTouchedOperators() {
+            operatorA.insert(new TestData("pre-a", "PreA", 1));
+            operatorB.insert(new TestData("pre-b", "PreB", 2));
+
+            manager.begin();
+            operatorA.insert(new TestData("new-a", "NewA", 10));
+            operatorB.insert(new TestData("new-b", "NewB", 20));
+            manager.rollback();
+
+            assertThat(operatorA.getAll()).hasSize(1);
+            assertThat(operatorA.getById("pre-a")).isNotNull();
+            assertThat(operatorA.getById("new-a")).isNull();
+
+            assertThat(operatorB.getAll()).hasSize(1);
+            assertThat(operatorB.getById("pre-b")).isNotNull();
+            assertThat(operatorB.getById("new-b")).isNull();
+        }
+
+        @Test
+        @DisplayName("An operator never written to during the transaction is not snapshotted -- "
+                + "a concurrent external write to it survives rollback")
+        void untouchedOperatorNotSnapshotted() throws Exception {
+            operatorA.insert(new TestData("pre-a", "PreA", 1));
+
+            manager.begin();
+            operatorA.insert(new TestData("new-a", "NewA", 10));
+
+            // A write to operatorB from a different thread never observes this thread's active
+            // transaction context (JsonTransactionManager's context is ThreadLocal, matching
+            // DataSourceTransactionManager's design), so it is never captured -- exactly the
+            // "operator never touched" case, made observable via a genuinely concurrent write.
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                executor.submit(() -> operatorB.insert(new TestData("external", "External", 99))).get();
+            } finally {
+                executor.shutdown();
+            }
+
+            manager.rollback();
+
+            // operatorA was touched on this thread -- restored to its pre-transaction state.
+            assertThat(operatorA.getById("new-a")).isNull();
+            assertThat(operatorA.getById("pre-a")).isNotNull();
+
+            // operatorB was never touched inside the transaction -- the concurrent external write
+            // survives the rollback untouched.
+            assertThat(operatorB.getById("external")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("commit() discards captured snapshots")
+        void commitDiscardsSnapshots() {
+            manager.begin();
+            operatorA.insert(new TestData("a", "A", 1));
+            manager.commit();
+
+            assertThat(operatorA.getById("a")).isNotNull();
+            assertThat(manager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("rollback() with no active transaction logs a warning and returns")
+        void rollbackWithNoActiveTransactionIsANoOp() {
+            assertThatCode(() -> manager.rollback()).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("Depth 2: inner rollback() then outer commit() throws UnexpectedRollbackException "
+                + "and restores every captured snapshot")
+        void nestedRollbackThenOuterCommitThrows() {
+            operatorA.insert(new TestData("pre-a", "PreA", 1));
+
+            manager.begin(); // depth 1
+            manager.begin(); // depth 2
+            operatorA.insert(new TestData("new-a", "NewA", 10));
+            manager.rollback(); // marks rollback-only, depth -> 1
+
+            assertThat(manager.hasActiveTransaction()).isTrue();
+            assertThat(manager.getTransactionDepth()).isEqualTo(1);
+
+            assertThatThrownBy(manager::commit).isInstanceOf(UnexpectedRollbackException.class);
+
+            assertThat(operatorA.getById("new-a")).isNull();
+            assertThat(operatorA.getById("pre-a")).isNotNull();
+            assertThat(manager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("setTimeout gives an explicit answer, not a silent no-op")
+        void setTimeoutIsNotASilentNoOp() {
+            assertThatThrownBy(() -> manager.setTimeout(30))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        @DisplayName("JsonTransactionManager implements TransactionManager only -- "
+                + "the JDBC-only methods are refused, not silently no-op")
+        void doesNotImplementJdbcMethods() {
+            assertThatThrownBy(manager::getConnection).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> manager.setIsolationLevel(1)).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> manager.setReadOnly(true)).isInstanceOf(UnsupportedOperationException.class);
         }
     }
 }

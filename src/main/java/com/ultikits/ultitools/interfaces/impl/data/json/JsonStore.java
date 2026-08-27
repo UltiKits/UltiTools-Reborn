@@ -16,7 +16,9 @@ import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.DataStoreManager;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
@@ -47,6 +49,14 @@ public class JsonStore implements DataStore {
     private static volatile boolean schedulerInitialized = false;
 
     private final String storeLocation;
+
+    /**
+     * Per-identity {@link JsonTransactionManager}, one per requesting identity -- the same
+     * identity {@link #dataOperatorMap} already keys by -- shared by every {@link
+     * SimpleJsonDataOperator} this store hands out for that identity (02-05, D-03). Not static,
+     * same reasoning as {@link #dataOperatorMap}.
+     */
+    private final Map<String, JsonTransactionManager> transactionManagers = new ConcurrentHashMap<>();
 
     /**
      * Initialize the flush scheduler. Called lazily when first JsonStore is created.
@@ -117,11 +127,14 @@ public class JsonStore implements DataStore {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
-        String location = storeLocation + File.separator + plugin.getPluginName() + File.separator
+        String identity = plugin.getPluginName();
+        String location = storeLocation + File.separator + identity + File.separator
                 + ReflectionUtil.getAnnotation(dataEntity, Table.class).value();
-        Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(plugin.getPluginName(), dataEntity),
+        Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
                 key -> new SimpleJsonDataOperator<>(location, dataEntity));
-        return (DataOperator<T>) cached;
+        SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
+        operator.bindTransactionManager(transactionManagerFor(identity));
+        return operator;
     }
 
     @Override
@@ -135,10 +148,61 @@ public class JsonStore implements DataStore {
                 + ReflectionUtil.getAnnotation(dataEntity, Table.class).value();
         Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
                 key -> new SimpleJsonDataOperator<>(location, dataEntity));
-        return (DataOperator<T>) cached;
+        SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
+        operator.bindTransactionManager(transactionManagerFor(identity));
+        return operator;
+    }
+
+    /**
+     * Resolves (creating on first use) the {@link JsonTransactionManager} for {@code scope},
+     * giving the JSON backend a real {@link com.ultikits.ultitools.interfaces.TransactionManager}
+     * so {@code @Transactional} is no longer refused on {@code datasource.type: json} (02-05,
+     * D-03). Called by {@code PluginManager.wireAop}'s JSON branch, a different package -- public
+     * for that reason, even though it is not part of the officially-extensible {@link DataStore}
+     * contract; the actual snapshot mechanics it drives stay package-private on {@link
+     * SimpleJsonDataOperator}, reached only from inside this class.
+     * <p>
+     * Shares one instance with every {@link SimpleJsonDataOperator} {@link #getOperator} hands
+     * out for the same identity, so a single {@code @Transactional} method's writes across
+     * several of that plugin's entities are governed by the same transaction.
+     *
+     * @param scope the identity token minted for the caller <br> 为调用方铸造的身份令牌
+     * @return this store's manager for that caller's identity <br> 该调用方身份对应的管理器
+     */
+    public JsonTransactionManager transactionManagerFor(DataScope scope) {
+        return transactionManagerFor(identityOf(scope));
+    }
+
+    private JsonTransactionManager transactionManagerFor(String identity) {
+        return transactionManagers.computeIfAbsent(identity, JsonTransactionManager::new);
+    }
+
+    /**
+     * Derives the same identity {@link #getOperator(UltiToolsPlugin, Class)} and {@link
+     * #getOperator(File, Class)} each already resolve for {@link OperatorKey}, from a {@link
+     * DataScope} instead of a raw plugin or {@link File}.
+     * <p>
+     * {@link DataScope} carries both a plugin name and a data folder but no explicit
+     * internal-vs-external discriminator, so this disambiguates the same way {@link
+     * DataScope#forPlugin} itself is built: an internal scope's data folder is always the core
+     * UltiTools plugin's own folder (shared by every internal plugin), which no external plugin's
+     * own folder can equal. When it matches, the plugin-path identity ({@link
+     * DataScope#getPluginName()}) is used; otherwise the external-path identity ({@link
+     * #canonicalPath}) is used.
+     */
+    private static String identityOf(DataScope scope) {
+        File coreDataFolder = UltiTools.getInstance() == null ? null : UltiTools.getInstance().getDataFolder();
+        if (coreDataFolder != null
+                && Objects.equals(canonicalPath(scope.getDataFolder()), canonicalPath(coreDataFolder))) {
+            return scope.getPluginName();
+        }
+        return canonicalPath(scope.getDataFolder());
     }
 
     private static String canonicalPath(File dataFolder) {
+        if (dataFolder == null) {
+            return null;
+        }
         try {
             return dataFolder.getCanonicalPath();
         } catch (IOException e) {
