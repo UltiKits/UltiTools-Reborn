@@ -80,10 +80,17 @@ public class TransactionInterceptor implements MethodInterceptor {
                 }
                 return invocation.proceed();
 
-            case REQUIRES_NEW:
-                // Always create a new transaction
-                // Note: In a full implementation, we would suspend the existing transaction
-                return executeInNewTransaction(invocation, tx);
+            case REQUIRES_NEW: {
+                // D-09: always suspend whatever is active (a no-op returning null if nothing is),
+                // begin a genuinely new and independent transaction, and resume the suspended
+                // frame in a finally so a failure on the inner path cannot strand it.
+                Object suspended = transactionManager.suspend();
+                try {
+                    return executeInNewTransaction(invocation, tx);
+                } finally {
+                    transactionManager.resume(suspended);
+                }
+            }
 
             case SUPPORTS:
                 // Execute with or without transaction
@@ -97,23 +104,22 @@ public class TransactionInterceptor implements MethodInterceptor {
                 }
                 return invocation.proceed();
 
-            case NOT_SUPPORTED:
-                // Execute without transaction (in a full impl, would suspend existing)
-                return invocation.proceed();
+            case NOT_SUPPORTED: {
+                // D-09: same suspend/resume shape as REQUIRES_NEW, minus the inner begin() - the
+                // body runs with no active transaction at all.
+                Object suspended = transactionManager.suspend();
+                try {
+                    return invocation.proceed();
+                } finally {
+                    transactionManager.resume(suspended);
+                }
+            }
 
             case NEVER:
                 if (existingTx) {
                     throw new IllegalStateException(
                             "Existing transaction found for NEVER propagation on method: " +
                                     invocation.getMethod().getName());
-                }
-                return invocation.proceed();
-
-            case NESTED:
-                // For NESTED, we would create a savepoint in a full implementation
-                // For now, treat it like REQUIRED
-                if (!existingTx) {
-                    return executeInNewTransaction(invocation, tx);
                 }
                 return invocation.proceed();
 

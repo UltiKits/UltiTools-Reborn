@@ -43,8 +43,15 @@ import java.lang.annotation.Target;
  *
  * <p><b>Important:</b>
  * <ul>
- *   <li>Self-invocation (calling a @Transactional method from within the same class) bypasses the proxy</li>
- *   <li>Only public methods can be transactional</li>
+ *   <li>Self-invocation (calling a {@code @Transactional} method on {@code this} from within the
+ *       same class) <b>is</b> intercepted: the framework's generated proxy is a subclass of the
+ *       bean itself, not a delegate wrapping a separate target, so a call to
+ *       {@code this.method()} dispatches virtually onto the proxy's override. Re-verified against
+ *       three pre-existing {@code shouldInterceptSelfInvocation} test classes (2026-08-27)</li>
+ *   <li>Private, static, and final methods cannot be transactional - each is dispatched in a way
+ *       that bypasses the proxy (respectively: {@code invokespecial}, {@code invokestatic}, and
+ *       no override is possible); a package-private method is also ineligible when it is declared
+ *       in a different package than the bean class</li>
  *   <li>The class must not be final (subclass proxy limitation)</li>
  * </ul>
  *
