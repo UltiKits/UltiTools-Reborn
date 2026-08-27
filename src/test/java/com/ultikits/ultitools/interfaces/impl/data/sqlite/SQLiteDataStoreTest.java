@@ -97,16 +97,8 @@ class SQLiteDataStoreTest {
         ultiToolsStaticMock = mockStatic(UltiTools.class);
         ultiToolsStaticMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         when(mockUltiTools.getDataFolder()).thenReturn(tempDir);
-        
-        // 清空静态缓存
-        try {
-            Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-            field.setAccessible(true); // NOPMD
-            @SuppressWarnings("unchecked")
-            Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-            map.clear();
-        } catch (Exception ignored) {
-        }
+        // dataOperatorMap is instance-scoped since Task 2 (SILENT-03) - each test constructs its own
+        // fresh SQLiteDataStore(), so there is no shared static cache left to clear here anymore.
     }
 
     @AfterEach
@@ -134,26 +126,23 @@ class SQLiteDataStoreTest {
         @Test
         @DisplayName("应该成功获取带 @Table 注解的实体的 DataOperator")
         void shouldGetOperatorForAnnotatedEntity() {
-            // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            // Arrange - dataOperatorMap is instance-scoped and keyed by a private composite type
+            // since Task 2 (SILENT-03), so this drives the real getOperator() path with
+            // HikariConfig/HikariDataSource/SQLiteDataOperator construction mocked out (the SQLite
+            // JDBC driver is not on the test classpath - see PoolStateTests for why).
+            when(mockPlugin.getPluginName()).thenReturn("annotated-entity-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator);
-                
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator = store.getOperator(mockPlugin, TestDataEntity.class);
 
                 // Assert
                 assertThat(operator).isNotNull();
-                assertThat(operator).isSameAs(h2Operator);
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
+                assertThat(mockedOperator.constructed()).hasSize(1);
+                assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
             }
         }
 
@@ -173,25 +162,19 @@ class SQLiteDataStoreTest {
         @DisplayName("应该返回缓存的 DataOperator 实例")
         void shouldReturnCachedOperator() {
             // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            when(mockPlugin.getPluginName()).thenReturn("cached-operator-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator);
 
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator1 = store.getOperator(mockPlugin, TestDataEntity.class);
                 DataOperator<TestDataEntity> operator2 = store.getOperator(mockPlugin, TestDataEntity.class);
 
                 // Assert
                 assertThat(operator1).isSameAs(operator2);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+                assertThat(mockedOperator.constructed()).hasSize(1);
             }
         }
 
@@ -199,27 +182,21 @@ class SQLiteDataStoreTest {
         @DisplayName("应该为不同的实体类返回不同的 DataOperator")
         void shouldReturnDifferentOperatorsForDifferentEntities() {
             // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            when(mockPlugin.getPluginName()).thenReturn("different-entities-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator1 = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                SQLiteDataOperator<AnotherDataEntity> h2Operator2 = new SQLiteDataOperator<>(h2DataSource, AnotherDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator1);
-                map.put(AnotherDataEntity.class, h2Operator2);
 
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator1 = store.getOperator(mockPlugin, TestDataEntity.class);
                 DataOperator<AnotherDataEntity> operator2 = store.getOperator(mockPlugin, AnotherDataEntity.class);
 
                 // Assert
                 assertThat(operator1).isNotSameAs(operator2);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+                assertThat(mockedOperator.constructed()).hasSize(2);
+                // Both entity classes are backed by the same .db file (same plugin) -> one pool.
+                assertThat(mockedDataSource.constructed()).hasSize(1);
             }
         }
     }
@@ -301,6 +278,59 @@ class SQLiteDataStoreTest {
                 }
                 poolMap.remove("fileA");
                 poolMap.remove("fileB");
+            }
+        }
+
+        /**
+         * Same defect as {@link #shouldShareOnePoolAcrossEntitiesInSameFile()}, but through a real,
+         * live pool instead of a construction count -- pre-seeds a real H2-backed pool at the exact
+         * canonical path {@code getOperator} will resolve to for this plugin, so {@code poolFor}'s
+         * {@code computeIfAbsent} finds it already cached and never attempts a real
+         * {@code jdbc:sqlite:} connection. This lets {@link SQLiteDataOperator} run its real {@code
+         * CREATE TABLE} against the pool, and lets {@link PoolStateAssertions#assertTotalConnections}
+         * assert against genuine {@link com.zaxxer.hikari.HikariPoolMXBean} state, per this plan's
+         * acceptance criteria.
+         */
+        @Test
+        @DisplayName("同一 .db 文件的多个实体类应该共享同一个连接池的真实连接")
+        void shouldReportRealPoolConnectionsSharedAcrossEntities() throws Exception {
+            when(mockPlugin.getPluginName()).thenReturn("real-pool-plugin");
+            File dataFolder = new File(tempDir, "sqliteDB");
+            dataFolder.mkdirs();
+            String dbPath = new File(dataFolder, "real-pool-plugin.db").getCanonicalPath();
+
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:realpooltest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            config.setMinimumIdle(0);
+            config.setMaximumPoolSize(10);
+            HikariDataSource realPool = new HikariDataSource(config);
+
+            SQLiteDataStore store = new SQLiteDataStore();
+            Field poolMapField = SQLiteDataStore.class.getDeclaredField("dataSourceMap");
+            poolMapField.setAccessible(true); // NOPMD
+            @SuppressWarnings("unchecked")
+            Map<String, DataSource> poolMap = (Map<String, DataSource>) poolMapField.get(store);
+            poolMap.put(dbPath, realPool);
+
+            try {
+                // Each getOperator() call runs a CREATE TABLE that borrows a connection from the pool
+                // and returns it; sequential (non-concurrent) borrow/return cycles against the same
+                // pool settle on one physical connection, so this observes real
+                // HikariPoolMXBean.getTotalConnections() state - not a construction count and not the
+                // absence of a thrown exception.
+                DataOperator<TestDataEntity> op1 = store.getOperator(mockPlugin, TestDataEntity.class);
+                DataOperator<AnotherDataEntity> op2 = store.getOperator(mockPlugin, AnotherDataEntity.class);
+                DataOperator<ThirdDataEntity> op3 = store.getOperator(mockPlugin, ThirdDataEntity.class);
+
+                assertThat(op1).isNotNull();
+                assertThat(op2).isNotNull();
+                assertThat(op3).isNotNull();
+                assertThat(poolMap).hasSize(1);
+                PoolStateAssertions.assertTotalConnections(realPool, 1);
+            } finally {
+                poolMap.remove(dbPath);
+                realPool.close();
             }
         }
     }
