@@ -160,16 +160,11 @@ class PluginManagerClassScanningTest {
     @Test
     @DisplayName("@UltiToolsModule#additionalEntities 声明的实体并入插件的 scope")
     void additionalEntitiesAttributeShouldBeAddedToPluginScope() throws Exception {
-        // Objenesis bypasses every UltiToolsPlugin constructor (all of which do real plugin.yml/
-        // language/config I/O against UltiTools.getInstance()) so this test exercises only what
-        // scanPluginEntities actually reads: plugin.getClass() -- for the CodeSource-based jar
-        // resolution and the @UltiToolsModule annotation lookup. Mockito's mock() cannot stand in
-        // here: getClass() is final on Object, so a mock's generated subclass never carries the
-        // literal ModuleWithAdditionalEntities class -- and @UltiToolsModule is not @Inherited.
-        ModuleWithAdditionalEntities plugin =
-                new org.objenesis.ObjenesisStd().newInstance(ModuleWithAdditionalEntities.class);
-
-        Set<Class<?>> scanned = invokeScanPluginEntities(plugin);
+        // scanPluginEntities takes the plugin's Class, not an instance -- everything it reads (the
+        // jar's own CodeSource and the class-level @UltiToolsModule annotation) is a class-level
+        // fact, so no UltiToolsPlugin construction (real plugin.yml/language/config I/O) is needed
+        // here at all.
+        Set<Class<?>> scanned = invokeScanPluginEntities(ModuleWithAdditionalEntities.class);
 
         assertThat(scanned).contains(UnrelatedEntity.class);
     }
@@ -177,9 +172,7 @@ class PluginManagerClassScanningTest {
     @Test
     @DisplayName("没有声明任何实体的插件得到空集合而非 null，owns() 不抛异常")
     void pluginWithNoEntitiesGetsEmptySetNotNull() throws Exception {
-        ConcretePlugin plugin = new org.objenesis.ObjenesisStd().newInstance(ConcretePlugin.class);
-
-        Set<Class<?>> scanned = invokeScanPluginEntities(plugin);
+        Set<Class<?>> scanned = invokeScanPluginEntities(ConcretePlugin.class);
 
         assertThat(scanned).isNotNull().isEmpty();
         DataScope scope = DataScope.forExternal("no-entities-plugin", tempDir, scanned);
@@ -206,10 +199,10 @@ class PluginManagerClassScanningTest {
     }
 
     @SuppressWarnings("unchecked")
-    private Set<Class<?>> invokeScanPluginEntities(UltiToolsPlugin plugin) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("scanPluginEntities", UltiToolsPlugin.class);
+    private Set<Class<?>> invokeScanPluginEntities(Class<? extends UltiToolsPlugin> pluginClass) throws Exception {
+        Method method = PluginManager.class.getDeclaredMethod("scanPluginEntities", Class.class);
         method.setAccessible(true);
-        return (Set<Class<?>>) method.invoke(pluginManager, plugin);
+        return (Set<Class<?>>) method.invoke(pluginManager, pluginClass);
     }
 
     @SuppressWarnings("unchecked")

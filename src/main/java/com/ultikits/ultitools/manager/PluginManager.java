@@ -10,7 +10,9 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -71,6 +73,21 @@ public class PluginManager {
     private TaskManager taskManager;
     @Getter
     private PlayerCacheManager playerCacheManager;
+
+    /**
+     * Entity class -&gt; owning plugin name, populated every time a {@link DataScope} is minted
+     * (both internal modules and external plugins). Lets a refusal built by {@link
+     * DataScope#refusalFor(Class)} say "belongs to module X" instead of only "not registered to
+     * you" -- D-15 requires the two to be distinguishable. First registration wins; a genuine
+     * collision has never been observed across this project's 21 {@code @Table} classes / 17
+     * repositories (02-CONTEXT.md), so this is a defensive tie-break, not a load-bearing one.
+     * <p>
+     * 实体类 -&gt; 拥有它的插件名，每次铸造 {@link DataScope} 时都会填充（内部模块和外部插件均
+     * 会）。使得 {@link DataScope#refusalFor(Class)} 构造的拒绝信息能说「属于模块 X」而不只是
+     * 「未向你注册」——D-15 要求二者可区分。先注册者优先；本项目 21 个 {@code @Table} 类 /
+     * 17 个仓库中从未观测到真实冲突（见 02-CONTEXT.md），所以这只是防御性的兜底，不是关键路径。
+     */
+    private final Map<Class<?>, String> entityOwnership = new ConcurrentHashMap<>();
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -219,7 +236,9 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
-            wireAop(pluginContext, DataScope.forPlugin(plugin, scanPluginEntities(plugin)));
+            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
+            registerEntityOwnership(scope);
+            wireAop(pluginContext, scope);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
@@ -528,17 +547,22 @@ public class PluginManager {
      * {@code @Table} 类，加上模块通过 {@code @UltiToolsModule#additionalEntities()} 声明的、
      * 合法存放在别处的实体。永不抛出异常——jar 无法解析时（例如直接构造、没有真实 jar 的测试
      * 实例），实体集合仅由其声明的 {@code additionalEntities()} 构成，默认为空。
+     * <p>
+     * Takes the plugin's class rather than an instance -- everything this reads (the JAR's own
+     * {@code CodeSource} and the class-level {@code @UltiToolsModule} annotation) is a class-level
+     * fact, and {@code initializePlugin} already has {@code pluginClass} in hand before the
+     * instance exists.
      *
-     * @param plugin the plugin whose scope is being minted <br> 正在铸造 scope 的插件
+     * @param pluginClass the plugin whose scope is being minted <br> 正在铸造 scope 的插件
      * @return the entity set for that plugin's scope <br> 该插件 scope 的实体集合
      */
-    private Set<Class<?>> scanPluginEntities(UltiToolsPlugin plugin) {
+    private Set<Class<?>> scanPluginEntities(Class<? extends UltiToolsPlugin> pluginClass) {
         Set<Class<?>> entities = new HashSet<>();
-        File jarFile = resolveOwnJarFile(plugin.getClass());
+        File jarFile = resolveOwnJarFile(pluginClass);
         if (jarFile != null) {
             entities.addAll(scanEntitiesInJar(jarFile));
         }
-        UltiToolsModule module = plugin.getClass().getAnnotation(UltiToolsModule.class);
+        UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
         if (module != null) {
             Collections.addAll(entities, module.additionalEntities());
         }
@@ -570,7 +594,38 @@ public class PluginManager {
         }
         return entities;
     }
-    
+
+    /**
+     * Records {@code scope}'s owned entities in {@link #entityOwnership}, so a later ownership
+     * refusal (D-15) can name the actual owning module instead of only saying "not registered to
+     * you". Called every time a {@link DataScope} is minted, for both internal modules and
+     * external plugins.
+     * <p>
+     * 把 {@code scope} 拥有的实体记录进 {@link #entityOwnership}，使后续的所有权拒绝（D-15）
+     * 能够点名真正的拥有者模块，而不只是说「未向你注册」。每次铸造 {@link DataScope} 时都会
+     * 调用，内部模块和外部插件均适用。
+     *
+     * @param scope the scope just minted <br> 刚铸造的 scope
+     */
+    private void registerEntityOwnership(DataScope scope) {
+        for (Class<?> entity : scope.getOwnedEntities()) {
+            entityOwnership.putIfAbsent(entity, scope.getPluginName());
+        }
+    }
+
+    /**
+     * Looks up which loaded plugin owns {@code entityClass}, per {@link #entityOwnership}.
+     * <p>
+     * 按 {@link #entityOwnership} 查找哪个已加载插件拥有 {@code entityClass}。
+     *
+     * @param entityClass the entity class to look up <br> 待查找的实体类
+     * @return the owning plugin's name, or {@code null} if no loaded scope owns it <br>
+     *         拥有者插件的名称；若没有任何已加载 scope 拥有该实体则为 {@code null}
+     */
+    public String findOwningPlugin(Class<?> entityClass) {
+        return entityOwnership.get(entityClass);
+    }
+
     /**
      * Validate jar file security.
      * <br>
@@ -1063,7 +1118,9 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
-            wireAop(pluginContext, DataScope.forPlugin(plugin, scanPluginEntities(plugin)));
+            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
+            registerEntityOwnership(scope);
+            wireAop(pluginContext, scope);
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -1274,6 +1331,7 @@ public class PluginManager {
         // 3. Refresh container to instantiate beans
         DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
                 scanExternalEntities(adapter, additionalEntities));
+        registerEntityOwnership(scope);
         wireAop(context, scope);
         context.refresh();
         adapter.setContext(context);

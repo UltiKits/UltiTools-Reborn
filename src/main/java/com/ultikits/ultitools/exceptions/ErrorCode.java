@@ -34,6 +34,7 @@ public enum ErrorCode {
     DATA_ENTITY_INVALID(3007, "Data entity invalid"),
     DATA_OPERATION_FAILED(3008, "Data operation failed"),
     TRANSACTION_ROLLBACK_ONLY(3009, "Transaction was marked rollback-only by a nested scope"),
+    ENTITY_NOT_OWNED(3010, "Entity is not owned by the requesting plugin"),
 
     // ===== Command Errors (4000-4999) =====
     COMMAND_ERROR(4000, "Command error"),

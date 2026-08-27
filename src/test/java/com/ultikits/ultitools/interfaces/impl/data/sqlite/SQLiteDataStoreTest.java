@@ -352,4 +352,59 @@ class SQLiteDataStoreTest {
             assertThat(storeType).isEqualTo("sqlite");
         }
     }
+
+    /**
+     * getOperator(DataScope, Class) 所有权测试（D-14/D-17）。{@code SQLiteDataStore} 没有覆写
+     * 这个新方法（不在本计划的 files_modified 范围内），所以这里验证的是它从 {@code DataStore}
+     * 接口继承来的 default 方法本身在真实存储实现上依然生效——不是只在 stub 上生效。
+     * <p>
+     * {@link com.ultikits.ultitools.manager.DataScope#forExternal} 对 {@code manager} 包之外
+     * 是包私有的（D-17 的不可伪造凭证设计），因此这里通过反射构造 scope，与
+     * {@code PluginManagerClassScanningTest} 里访问私有方法的既有做法一致。
+     */
+    @Nested
+    @DisplayName("getOperator(DataScope, Class) 所有权测试 (D-14, 继承自 DataStore 的 default 方法)")
+    class GetOperatorDataScopeTests {
+
+        private com.ultikits.ultitools.manager.DataScope buildScope(
+                String pluginName, java.util.Set<Class<?>> ownedEntities
+        ) throws ReflectiveOperationException {
+            Class<?> dataScopeClass = com.ultikits.ultitools.manager.DataScope.class;
+            java.lang.reflect.Method factory = dataScopeClass.getDeclaredMethod(
+                    "forExternal", String.class, File.class, java.util.Set.class);
+            factory.setAccessible(true);
+            return (com.ultikits.ultitools.manager.DataScope) factory.invoke(null, pluginName, tempDir, ownedEntities);
+        }
+
+        @Test
+        @DisplayName("继承的 default 方法应该拒绝未拥有的实体")
+        void shouldRefuseUnownedEntity() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scope =
+                    buildScope("Requester", java.util.Collections.emptySet());
+
+            assertThatThrownBy(() -> store.getOperator(scope, TestDataEntity.class))
+                    .isInstanceOf(com.ultikits.ultitools.exceptions.DataAccessException.class)
+                    .extracting(e -> ((com.ultikits.ultitools.exceptions.DataAccessException) e).getErrorCode())
+                    .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+        }
+
+        @Test
+        @DisplayName("继承的 default 方法应该为拥有的实体返回一个真实可用的操作器")
+        void shouldReturnWorkingOperatorForOwnedEntity() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scope =
+                    buildScope("Owner", java.util.Collections.singleton(TestDataEntity.class));
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                DataOperator<TestDataEntity> operator = store.getOperator(scope, TestDataEntity.class);
+
+                assertThat(operator).isNotNull();
+                assertThat(mockedOperator.constructed()).hasSize(1);
+                assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
+            }
+        }
+    }
 }

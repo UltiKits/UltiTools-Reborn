@@ -822,4 +822,117 @@ class DataStoreManagerTest {
             assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
         }
     }
+
+    /**
+     * getOperator(DataScope, Class) 所有权校验测试（D-14/D-15/D-17）。
+     * <p>
+     * Task 2's own acceptance criteria: a stub {@link DataStore} that does NOT override
+     * {@code getOperator(DataScope, Class)} still refuses an unowned entity -- proving the
+     * {@code default} body on the interface is what enforces, not any one store's own code.
+     */
+    @Nested
+    @DisplayName("getOperator(DataScope, Class) 所有权校验测试 (D-14/D-15/D-17)")
+    class GetOperatorDataScopeTests {
+
+        @com.ultikits.ultitools.annotations.Table("owned_entity_secret_table")
+        class OwnedEntity extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String> {
+            @com.ultikits.ultitools.annotations.Column("secret_column_name")
+            private String secretColumnName;
+        }
+
+        class UnownedEntity extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String> {
+        }
+
+        private DataScope scopeFor(String pluginName, java.util.Set<Class<?>> owned) {
+            return DataScope.forExternal(pluginName, new File(System.getProperty("java.io.tmpdir"),
+                    "ultitools-test-scope-" + pluginName), owned);
+        }
+
+        @Test
+        @DisplayName("stub DataStore 未覆写该方法时，默认实现仍应拒绝未拥有的实体")
+        void defaultBodyOnAStubStoreShouldRefuseUnownedEntity() {
+            DataStore stubStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            when(stubStore.getStoreType()).thenReturn("stub-store");
+            DataScope scope = scopeFor("Requester", java.util.Collections.emptySet());
+
+            com.ultikits.ultitools.exceptions.DataAccessException thrown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> stubStore.getOperator(scope, OwnedEntity.class));
+
+            assertThat(thrown.getErrorCode())
+                    .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+            assertThat(thrown.getMessage())
+                    .contains(OwnedEntity.class.getName())
+                    .contains("Requester");
+        }
+
+        @Test
+        @DisplayName("拥有的实体应该返回一个可用的操作器（走 default 方法委托给 File 重载）")
+        void ownedEntityShouldReturnAWorkingOperator() {
+            @SuppressWarnings("unchecked")
+            com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> fakeOperator =
+                    mock(com.ultikits.ultitools.interfaces.DataOperator.class);
+            DataStore stubStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            when(stubStore.getStoreType()).thenReturn("stub-store");
+            // doReturn().when(), not when().thenReturn(): the File-overload's real default body
+            // throws unconditionally, and with CALLS_REAL_METHODS as the mock's default answer,
+            // when(stubStore.getOperator(...)) would evaluate that real (throwing) call as part of
+            // recording the stub. doReturn() never invokes the real method to determine this.
+            org.mockito.Mockito.doReturn(fakeOperator).when(stubStore)
+                    .getOperator(org.mockito.ArgumentMatchers.any(File.class), eq(OwnedEntity.class));
+            DataScope scope = scopeFor("Owner", java.util.Collections.singleton(OwnedEntity.class));
+
+            com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> result =
+                    stubStore.getOperator(scope, OwnedEntity.class);
+
+            assertThat(result).isSameAs(fakeOperator);
+        }
+
+        @Test
+        @DisplayName("已知归属方与未知归属方的拒绝信息必须是两种不同的、可区分的字符串")
+        void refusalMessageShouldDistinguishKnownOwnerFromUnknown() {
+            PluginManager pluginManager = mock(PluginManager.class);
+            when(pluginManager.findOwningPlugin(OwnedEntity.class)).thenReturn("OwnerModule");
+            when(pluginManager.findOwningPlugin(UnownedEntity.class)).thenReturn(null);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
+
+            DataScope requester = scopeFor("Requester", java.util.Collections.emptySet());
+
+            com.ultikits.ultitools.exceptions.DataAccessException known =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> { throw requester.refusalFor(OwnedEntity.class); });
+            com.ultikits.ultitools.exceptions.DataAccessException unknown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> { throw requester.refusalFor(UnownedEntity.class); });
+
+            assertThat(known.getMessage()).contains("OwnerModule");
+            assertThat(unknown.getMessage()).doesNotContain("OwnerModule");
+            assertThat(known.getMessage()).isNotEqualTo(unknown.getMessage());
+        }
+
+        @Test
+        @DisplayName("拒绝信息不得包含表名、列名或文件路径")
+        void refusalMessageShouldNotDiscloseSchemaOrPaths() {
+            PluginManager pluginManager = mock(PluginManager.class);
+            when(pluginManager.findOwningPlugin(OwnedEntity.class)).thenReturn("OwnerModule");
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
+
+            DataScope requester = scopeFor("Requester", java.util.Collections.emptySet());
+
+            com.ultikits.ultitools.exceptions.DataAccessException thrown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> { throw requester.refusalFor(OwnedEntity.class); });
+
+            assertThat(thrown.getMessage())
+                    .doesNotContain("owned_entity_secret_table")
+                    .doesNotContain("secret_column_name")
+                    .doesNotContain(System.getProperty("java.io.tmpdir"));
+        }
+    }
 }
