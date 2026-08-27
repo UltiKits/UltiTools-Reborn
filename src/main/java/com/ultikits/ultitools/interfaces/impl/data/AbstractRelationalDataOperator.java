@@ -97,7 +97,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         // transaction, getConnection() returns the transaction's connection instead
         // of a fresh auto-commit one.
         this.dataSource = new TransactionAwareDataSource(dataSource, () -> this.transactionManager);
-        this.queryRunner = new QueryRunner(this.dataSource);
+        // D-10: TimeoutAwareQueryRunner reads the active transaction's remaining-time budget
+        // fresh on every statement via currentTimeoutDeadlineNanos() -- this operator outlives
+        // any single transaction, and transactionManager itself can be swapped out.
+        this.queryRunner = new TimeoutAwareQueryRunner(this.dataSource, this::currentTimeoutDeadlineNanos);
         Table tableAnnotation = ReflectionUtil.getAnnotation(type, Table.class);
         if (tableAnnotation == null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
@@ -151,6 +154,37 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     public void setTransactionManager(TransactionManager transactionManager) {
         this.transactionManager = transactionManager;
+    }
+
+    /**
+     * Supplies {@link #queryRunner}'s per-statement query timeout deadline (D-10): the active
+     * transaction's remaining-time budget, or {@code null} when none is configured (no active
+     * transaction, or {@code @Transactional(timeout=0)}, the default). Also used directly by
+     * {@link #applyStatementTimeout} for the two {@code PreparedStatement} call sites that
+     * bypass {@link #queryRunner} entirely. A method reference rather than a field capture, so
+     * every call reads {@link #transactionManager}'s *current* value -- this operator outlives
+     * any single transaction, and {@link #setTransactionManager} can swap the manager out.
+     */
+    private Long currentTimeoutDeadlineNanos() {
+        return transactionManager != null ? transactionManager.getTimeoutDeadlineNanos() : null;
+    }
+
+    /**
+     * Applies the same per-statement query timeout {@link #queryRunner} (a {@link
+     * TimeoutAwareQueryRunner}) would, to a {@link PreparedStatement} built directly against
+     * {@link #dataSource} -- the two call sites in {@link #insertAll} and {@link #updateAll}
+     * that bypass {@code QueryRunner} entirely. A timeout wired only into {@link #queryRunner}'s
+     * path would leave these two batch operations silently ignoring
+     * {@code @Transactional(timeout=)}, exactly the gap 02-RESEARCH.md warns about.
+     *
+     * @param statement the statement to apply the timeout to, already prepared
+     * @throws SQLException if the driver rejects the timeout value
+     */
+    private void applyStatementTimeout(PreparedStatement statement) throws SQLException {
+        Long deadlineNanos = currentTimeoutDeadlineNanos();
+        if (deadlineNanos != null) {
+            statement.setQueryTimeout(TimeoutAwareQueryRunner.remainingSecondsFloored(deadlineNanos));
+        }
     }
 
     /**
@@ -656,6 +690,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                // D-10: this statement bypasses queryRunner entirely, so it needs the same
+                // per-statement timeout applied explicitly -- see applyStatementTimeout's javadoc.
+                applyStatementTimeout(pstmt);
                 for (T entity : entities) {
                     int idx = 1;
                     for (ColumnMapping col : columns) {
@@ -700,6 +737,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
                 try (Connection conn = dataSource.getConnection();
                      PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                    // D-10: this statement bypasses queryRunner entirely -- same reasoning as
+                    // insertAll's identical call above.
+                    applyStatementTimeout(pstmt);
                     for (T entity : entities) {
                         // Fires once per entity, in list order, before this entity's fields are
                         // read below -- this loop builds its own statement rather than

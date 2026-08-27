@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
@@ -209,13 +210,45 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * D-10: records a deadline on the active {@link TransactionContext} rather than a wall-clock
+     * bound on the transaction as a whole -- {@link #getTimeoutDeadlineNanos()} exposes it so
+     * each statement issued afterward can be given the time <em>remaining</em>, not a fresh full
+     * allowance. {@code seconds <= 0} is inert (no deadline recorded), matching
+     * {@code @Transactional(timeout=0)}'s default -- {@code TransactionInterceptor} itself never
+     * calls this method for a non-positive value in the first place, so this is a second,
+     * defensive guard for any other caller. Called with no active transaction, this logs a
+     * warning and records nothing, the same shape {@link #commit()}/{@link #rollback()} already
+     * use for that case.
+     */
     @Override
     public void setTimeout(int seconds) {
-        // JDBC doesn't directly support transaction timeout
-        // This could be implemented using a scheduled task to cancel the connection
-        if (seconds > 0) {
-            LOGGER.fine("Transaction timeout set to " + seconds + " seconds (note: not enforced by JDBC)");
+        TransactionContext ctx = contextHolder.get();
+        if (ctx == null || !ctx.active) {
+            LOGGER.warning("setTimeout called but no active transaction");
+            return;
         }
+        if (seconds > 0) {
+            ctx.timeoutDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+            LOGGER.fine("Transaction timeout set to " + seconds + " seconds");
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Reads {@link TransactionContext#timeoutDeadlineNanos} off the active context -- {@code
+     * null} when no transaction is active, or when {@link #setTimeout(int)} was never called (or
+     * called only with a non-positive value) for it. {@link #suspend()}/{@link #resume(Object)}
+     * detach and restore the whole {@link TransactionContext} object, so a suspended-then-resumed
+     * transaction's deadline travels with it automatically -- no separate handling needed here.
+     */
+    @Override
+    public Long getTimeoutDeadlineNanos() {
+        TransactionContext ctx = contextHolder.get();
+        return ctx != null && ctx.active ? ctx.timeoutDeadlineNanos : null;
     }
 
     @Override
@@ -335,5 +368,13 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
          * happened.
          */
         boolean rollbackOnly;
+
+        /**
+         * D-10: set by {@link #setTimeout(int)} to the {@link System#nanoTime()} value at which
+         * this transaction's query-timeout budget expires. {@code null} means no timeout is
+         * configured -- {@link #getTimeoutDeadlineNanos()} reports that as-is, never coercing it
+         * to a sentinel like {@code 0} or {@code -1}.
+         */
+        Long timeoutDeadlineNanos;
     }
 }

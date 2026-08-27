@@ -89,11 +89,16 @@ public class TimeoutAwareQueryRunner extends QueryRunner {
      * {@link #MIN_QUERY_TIMEOUT_SECONDS} so an exhausted or already-passed deadline still
      * produces a real, enforced limit rather than {@code 0} ("no limit") or a negative value
      * (which the JDBC driver rejects).
+     * <p>
+     * Package-visible (not {@code private}) so {@link AbstractRelationalDataOperator}'s two
+     * direct {@code PreparedStatement} call sites -- {@code insertAll}/{@code updateAll}, which
+     * bypass {@code QueryRunner} entirely -- apply the identical floor this class does, rather
+     * than a second, potentially-diverging copy of the same arithmetic.
      *
      * @param deadlineNanos the deadline, as a {@link System#nanoTime()} value
      * @return the query timeout to apply, in seconds, always {@code >= MIN_QUERY_TIMEOUT_SECONDS}
      */
-    private static int remainingSecondsFloored(long deadlineNanos) {
+    static int remainingSecondsFloored(long deadlineNanos) {
         long remainingNanos = deadlineNanos - System.nanoTime();
         long remainingSeconds = TimeUnit.NANOSECONDS.toSeconds(remainingNanos);
         return (int) Math.max(MIN_QUERY_TIMEOUT_SECONDS, Math.min(Integer.MAX_VALUE, remainingSeconds));

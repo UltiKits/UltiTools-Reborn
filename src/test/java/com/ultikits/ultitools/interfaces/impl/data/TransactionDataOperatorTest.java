@@ -457,13 +457,19 @@ class TransactionDataOperatorTest {
          * package. Proves the wiring end-to-end: {@link DataSourceTransactionManager#setTimeout}
          * -&gt; {@link DataSourceTransactionManager#getTimeoutDeadlineNanos()} -&gt; {@link
          * TimeoutAwareQueryRunner}'s deadline supplier -&gt; the actual prepared statement.
+         * <p>
+         * Deliberately parameterized ({@code WHERE id = ?}), even though no row need match:
+         * {@code QueryRunner.query(sql, handler)}'s zero-params overload takes a {@code
+         * conn.createStatement()} path that never reaches {@code prepareStatement(Connection,
+         * String)} at all -- the exact method {@link TimeoutAwareQueryRunner} overrides. Only the
+         * parameterized overload routes through a real {@code PreparedStatement}.
          */
         private int capturedQueryTimeout() throws Exception {
             java.util.concurrent.atomic.AtomicReference<Integer> timeout = new java.util.concurrent.atomic.AtomicReference<>();
-            operator.queryRunner.query("SELECT * FROM tx_test", rs -> {
+            operator.queryRunner.query("SELECT * FROM tx_test WHERE id = ?", rs -> {
                 timeout.set(rs.getStatement().getQueryTimeout());
                 return null;
-            });
+            }, "nonexistent-id");
             return timeout.get();
         }
 
