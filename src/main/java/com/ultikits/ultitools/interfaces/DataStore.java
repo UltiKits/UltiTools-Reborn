@@ -29,17 +29,18 @@ public interface DataStore {
      * @param <T>        Must inherit {@link BaseDataEntity}
      * @return Data operation entity <br> 数据操作实体
      * @deprecated Carries no ownership check of its own (D-14/D-18) -- a {@code DataStore}
-     *             implementation that overrides this method directly, rather than reaching an
-     *             operator through {@link #getOperator(DataScope, Class)}, does not get the
-     *             refusal. Framework-internal callers ({@code UltiToolsPlugin.getDataOperator})
-     *             already check ownership themselves before calling this. Use {@link
-     *             #getOperator(DataScope, Class)}.
+     *             implementation that overrides this method directly must call {@link
+     *             #checkOwnership(UltiToolsPlugin, Class)} as its own first statement to get the
+     *             refusal; the three backends shipped by this framework all do (02-12). Framework-
+     *             internal callers ({@code UltiToolsPlugin.getDataOperator}) already check
+     *             ownership themselves before calling this. Use {@link #getOperator(DataScope,
+     *             Class)}.
      *             <p>
      *             自身不带所有权校验（D-14/D-18）——直接覆写这个方法的 {@code DataStore}
-     *             实现，而不是通过 {@link #getOperator(DataScope, Class)} 获取操作器，
-     *             不会得到拒绝校验。框架内部调用方（{@code UltiToolsPlugin.getDataOperator}）
-     *             在调用它之前已经自行做过所有权校验。请改用
-     *             {@link #getOperator(DataScope, Class)}。
+     *             实现必须自己把 {@link #checkOwnership(UltiToolsPlugin, Class)} 作为方法体的
+     *             第一条语句调用，才能得到拒绝校验；本框架自带的三个后端都是如此（02-12）。
+     *             框架内部调用方（{@code UltiToolsPlugin.getDataOperator}）在调用它之前已经
+     *             自行做过所有权校验。请改用 {@link #getOperator(DataScope, Class)}。
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
@@ -65,44 +66,132 @@ public interface DataStore {
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataFolder} matches
      *         no registered scope, or matches one that does not own {@code dataEntity}
      * @since 6.2.2
-     * @deprecated Only enforces D-18's ownership check in its own {@code default} body -- a
-     *             {@code DataStore} implementation that overrides this method directly, rather
-     *             than reaching an operator through {@link #getOperator(DataScope, Class)}, does
-     *             not get the refusal. Framework-internal callers
+     * @deprecated Enforces D-18's ownership check via {@link #checkOwnership(java.io.File, Class)}
+     *             as its own first statement -- a {@code DataStore} implementation that overrides
+     *             this method directly must call the same helper to get the refusal; the three
+     *             backends shipped by this framework all do (02-12). Framework-internal callers
      *             ({@code UltiToolsAPI.getDataOperator}) already check ownership themselves before
      *             calling this. Use {@link #getOperator(DataScope, Class)}.
      *             <p>
-     *             只在自己的 {@code default} 方法体内强制执行 D-18 的所有权校验——直接覆写这个
-     *             方法的 {@code DataStore} 实现，而不是通过 {@link #getOperator(DataScope, Class)}
-     *             获取操作器，不会得到拒绝校验。框架内部调用方
+     *             通过在方法体第一条语句调用 {@link #checkOwnership(java.io.File, Class)} 强制执行
+     *             D-18 的所有权校验——直接覆写这个方法的 {@code DataStore} 实现必须调用同一个
+     *             辅助方法才能得到拒绝校验；本框架自带的三个后端都是如此（02-12）。框架内部调用方
      *             （{@code UltiToolsAPI.getDataOperator}）在调用它之前已经自行做过所有权校验。
      *             请改用 {@link #getOperator(DataScope, Class)}。
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     default <T extends BaseDataEntity<String>> DataOperator<T> getOperator(java.io.File dataFolder, Class<T> dataEntity) {
+        checkOwnership(dataFolder, dataEntity);
+        throw new UnsupportedOperationException("This DataStore does not support external plugin data storage");
+    }
+
+    /**
+     * Shared ownership check for the {@link #getOperator(java.io.File, Class)} legacy overload
+     * (D-14/D-18/02-12). Called both by this interface's own {@code default} body above and, as
+     * the first statement (before any path resolution, cache lookup, or connection-pool creation),
+     * by the {@code getOperator(File, Class)} override of every backend this framework ships --
+     * so a refused call has not created a pool, a file, or a cache entry as a side effect. The
+     * reverse lookup only ever registers EXTERNAL scopes (D-18) -- every internal plugin shares
+     * the framework's own data folder ({@code DataScope.forPlugin}), so that one folder can never
+     * be attributed to a single owner by folder alone. The framework's own core data folder is
+     * exempt from the reverse-lookup refusal for exactly that reason (same disambiguation
+     * {@code JsonStore.identityOf(DataScope)} already uses, 02-05) -- it is also what lets {@link
+     * #getOperator(DataScope, Class)}'s delegation reach an INTERNAL scope's own {@code
+     * getOperator(File, Class)} without being refused a second time.
+     * <p>
+     * {@link #getOperator(java.io.File, Class)} 旧重载的共享所有权校验（D-14/D-18/02-12）。既被
+     * 本接口上面的 {@code default} 方法体调用，也被本框架自带的每一个后端在其
+     * {@code getOperator(File, Class)} 覆写方法体的第一条语句（先于任何路径解析、缓存查找或连接池
+     * 创建）调用——因此被拒绝的调用不会产生连接池、文件或缓存条目这类副作用。反向查找只会登记
+     * EXTERNAL scope（D-18）——每个内部插件共享的都是框架自己的数据文件夹（{@code
+     * DataScope.forPlugin}），单靠文件夹本身永远无法把它归属到某一个所有者。框架自己的核心数据
+     * 文件夹正因如此被排除在反向查找拒绝之外（与 {@code JsonStore.identityOf(DataScope)}
+     * 已经使用的判别方式相同，02-05）——这也是 {@link #getOperator(DataScope, Class)} 的委托能够
+     * 到达 INTERNAL scope 自己的 {@code getOperator(File, Class)} 而不被二次拒绝的原因。
+     *
+     * @param dataFolder the external plugin's data folder <br> 外部插件的数据文件夹
+     * @param dataEntity data entity class <br> 数据实体类
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataFolder} matches
+     *         no registered scope, or matches one that does not own {@code dataEntity} <br>
+     *         如果 {@code dataFolder} 匹配不到任何已注册 scope，或匹配到的 scope 并不拥有
+     *         {@code dataEntity}
+     * @since 6.3.0
+     */
+    default void checkOwnership(java.io.File dataFolder, Class<?> dataEntity) {
         com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
-        // The reverse lookup only ever registers EXTERNAL scopes (D-18) -- every internal plugin
-        // shares the framework's own data folder (DataScope.forPlugin), so that one folder can
-        // never be attributed to a single owner by folder alone. Skip the check for exactly that
-        // sentinel folder rather than let it always refuse a folder no external scope could ever
-        // register (same disambiguation JsonStore.identityOf(DataScope) already uses, 02-05).
         boolean isFrameworkCoreFolder = ultiTools != null && ultiTools.getDataFolder() != null
                 && ultiTools.getDataFolder().equals(dataFolder);
-        if (!isFrameworkCoreFolder) {
-            DataScope scope = ultiTools != null && ultiTools.getPluginManager() != null
-                    ? ultiTools.getPluginManager().findScopeForDataFolder(dataFolder)
-                    : null;
-            if (scope == null) {
-                throw new com.ultikits.ultitools.exceptions.DataAccessException(
-                        com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED,
-                        "Data folder is not a registered external plugin -- call UltiToolsAPI.connect(...) "
-                                + "before requesting a data operator.");
-            }
-            if (!scope.owns(dataEntity)) {
-                throw scope.refusalFor(dataEntity);
-            }
+        if (isFrameworkCoreFolder) {
+            return;
         }
-        throw new UnsupportedOperationException("This DataStore does not support external plugin data storage");
+        DataScope scope = ultiTools != null && ultiTools.getPluginManager() != null
+                ? ultiTools.getPluginManager().findScopeForDataFolder(dataFolder)
+                : null;
+        if (scope == null) {
+            throw new com.ultikits.ultitools.exceptions.DataAccessException(
+                    com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED,
+                    "Data folder is not a registered external plugin -- call UltiToolsAPI.connect(...) "
+                            + "before requesting a data operator.");
+        }
+        if (!scope.owns(dataEntity)) {
+            throw scope.refusalFor(dataEntity);
+        }
+    }
+
+    /**
+     * Shared ownership check for the {@link #getOperator(UltiToolsPlugin, Class)} legacy overload
+     * (D-14/D-18/02-12), the counterpart to {@link #checkOwnership(java.io.File, Class)} above for
+     * the overload that already carries a {@link UltiToolsPlugin} identity directly rather than a
+     * {@link java.io.File} to reverse-resolve. Called by every backend this framework ships as the
+     * first statement of their own {@code getOperator(UltiToolsPlugin, Class)} override, before
+     * any path resolution, cache lookup, or connection-pool creation.
+     * <p>
+     * {@code UltiToolsPlugin} exposes no accessor for the {@link DataScope} {@code PluginManager}
+     * mints for it -- only {@link UltiToolsPlugin#setDataScope}, the injection point, is public --
+     * so this cannot call {@code plugin}'s own {@code DataScope#owns(Class)} directly. It instead
+     * consults the same {@code PluginManager#findOwningPlugin(Class)} registry {@link
+     * DataScope#refusalFor(Class)} itself already treats as authoritative for message-building:
+     * every scope's owned-entity set is recorded there at minting time (D-19), first-registration-
+     * wins on a collision. This project's measured, zero-collision entity population across 21
+     * {@code @Table} classes / 17 repositories (02-CONTEXT.md) means "the registry's recorded
+     * owner equals the requester's own name" and "the requester's own scope owns the entity" agree
+     * in every case this codebase has ever produced; a genuine collision would need {@link
+     * UltiToolsPlugin} to expose its own {@link DataScope} to close fully, which is out of this
+     * change's scope (02-12-PLAN.md's file boundary excludes {@code UltiToolsPlugin.java}).
+     * <p>
+     * {@code UltiToolsPlugin} 没有暴露 {@code PluginManager} 为它铸造的 {@link DataScope} 的
+     * 访问器——只有注入点 {@link UltiToolsPlugin#setDataScope} 是 public 的——所以这里无法直接
+     * 调用 {@code plugin} 自己的 {@code DataScope#owns(Class)}。转而查询与 {@link
+     * DataScope#refusalFor(Class)} 自身构造拒绝信息时依赖的同一个
+     * {@code PluginManager#findOwningPlugin(Class)} 登记表：每个 scope 拥有的实体集合都会在
+     * 铸造时（D-19）记录进这张表，发生冲突时先注册者优先。本项目实测到的、跨 21 个 {@code @Table}
+     * 类 / 17 个仓库的零冲突实体分布（见 02-CONTEXT.md）意味着「登记表记录的归属方与请求方自己的
+     * 名字一致」和「请求方自己的 scope 拥有该实体」在本代码库迄今产生的每一种情况下都是等价的；
+     * 真正发生冲突时需要 {@code UltiToolsPlugin} 自己暴露 {@link DataScope} 才能彻底解决，这超出了
+     * 本次改动的范围（02-12-PLAN.md 的文件边界不包含 {@code UltiToolsPlugin.java}）。
+     *
+     * @param plugin     the requesting plugin <br> 请求方插件
+     * @param dataEntity data entity class <br> 数据实体类
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code plugin} does not own
+     *         {@code dataEntity} per the registry above <br> 如果按上述登记表 {@code plugin}
+     *         并不拥有 {@code dataEntity}
+     * @since 6.3.0
+     */
+    default void checkOwnership(UltiToolsPlugin plugin, Class<?> dataEntity) {
+        com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
+        String owner = ultiTools != null && ultiTools.getPluginManager() != null
+                ? ultiTools.getPluginManager().findOwningPlugin(dataEntity)
+                : null;
+        String requester = plugin.getPluginName();
+        if (!java.util.Objects.equals(requester, owner)) {
+            String message = owner != null
+                    ? "Entity " + dataEntity.getName() + " belongs to module '" + owner + "', not '"
+                            + requester + "' -- use " + owner + "'s exposed service or the EventBus instead."
+                    : "Entity " + dataEntity.getName() + " is not registered to '" + requester
+                            + "' -- use the owning module's exposed service or the EventBus instead.";
+            throw new com.ultikits.ultitools.exceptions.DataAccessException(
+                    com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED, message);
+        }
     }
 
     /**
