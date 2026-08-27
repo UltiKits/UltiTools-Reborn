@@ -44,6 +44,7 @@ import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
@@ -748,9 +749,13 @@ public class PluginManager {
 
         // One DataSourceTransactionManager per plugin container (D-01/D-02, FOUND-04): built here,
         // from this plugin's own DataSource, so two plugin containers can never share transaction
-        // state. Registered into the container so DataOperator/service beans that need to join the
-        // active transaction (e.g. via setTransactionManager) can resolve it by type.
-        TransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        // state. Typed as JdbcTransactionManager here (02-04, D-04) even though the interceptor's
+        // own constructor still takes the base TransactionManager type - the local's type is what
+        // documents that this advisor is bound to a JDBC-backed manager, not a future JSON one.
+        // Registered into the container under the base TransactionManager type so DataOperator/
+        // service beans that need to join the active transaction (e.g. via setTransactionManager)
+        // can resolve it regardless of backend.
+        JdbcTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
         context.registerType(TransactionManager.class, transactionManager);
 
         TransactionInterceptor transactionInterceptor = new TransactionInterceptor(transactionManager);

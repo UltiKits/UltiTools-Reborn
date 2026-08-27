@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
@@ -127,6 +128,39 @@ class PluginManagerAopWiringTest {
         String message = rootMessage(thrown);
         assertTrue(message.contains("Transactional"), message);
         assertTrue(message.contains("datasource.type"), message);
+    }
+
+    @Test
+    @DisplayName("Should declare @Transactional unavailable for any DataStore whose getDataSource(DataScope) "
+            + "throws UnsupportedOperationException, naming the configured backend (D-01, decoupled from JsonStore)")
+    void shouldRejectTransactionalBeanForAnyUnsupportedDataSource() {
+        // This is deliberately independent of JsonStore (see shouldRejectTransactionalBean above,
+        // which exercises the same fallback branch indirectly through JSON's real behavior at
+        // HEAD). 02-05 replaces JsonStore.getDataSource(DataScope) with a real snapshot-based
+        // implementation, at which point shouldRejectTransactionalBean's JSON-backed assertion
+        // stops applying -- this test pins the fallback branch itself, against a store built to
+        // throw regardless of what any concrete backend does, so it survives that change (02-04
+        // Task 3 action item: "so 02-05 has a test to flip rather than a behaviour to discover").
+        DataStore unsupportedStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
+        when(unsupportedStore.getStoreType()).thenReturn("mystery-backend");
+        DataScope unsupportedScope = DataScope.forExternal("shouldRejectTransactionalBeanForAnyUnsupportedDataSource",
+                new File("build/test-wireaop-unsupported"), Collections.emptySet());
+
+        // Reuse the class-level static mock (setUpDataStore() already opened one for UltiTools on
+        // this thread) rather than opening a second one -- Mockito forbids two concurrent static
+        // mocks for the same class on the same thread.
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        when(mockUltiTools.getDataStore()).thenReturn(unsupportedStore);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+        SimpleContainer context = new SimpleContainer();
+        PluginManager.wireAop(context, unsupportedScope);
+        context.registerBean(Transactionally.class);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
+        String message = rootMessage(thrown);
+        assertTrue(message.contains("Transactional"), message);
+        assertTrue(message.contains("mystery-backend"), message);
     }
 
     @Test
