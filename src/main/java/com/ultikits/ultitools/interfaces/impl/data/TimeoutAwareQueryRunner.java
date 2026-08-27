@@ -76,9 +76,12 @@ public class TimeoutAwareQueryRunner extends QueryRunner {
 
     @Override
     protected PreparedStatement prepareStatement(Connection conn, String sql) throws SQLException {
-        // RED stub (02-09 Task 1): does not yet apply setQueryTimeout -- see
-        // TimeoutAwareQueryRunnerTest for the failing assertions this leaves red.
-        return super.prepareStatement(conn, sql);
+        PreparedStatement statement = super.prepareStatement(conn, sql);
+        Long deadlineNanos = deadlineSupplier.get();
+        if (deadlineNanos != null) {
+            statement.setQueryTimeout(remainingSecondsFloored(deadlineNanos));
+        }
+        return statement;
     }
 
     /**

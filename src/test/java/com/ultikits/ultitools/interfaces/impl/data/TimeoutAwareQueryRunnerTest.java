@@ -8,13 +8,11 @@ import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import javax.sql.DataSource;
-
 import org.apache.commons.dbutils.handlers.MapListHandler;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,36 +28,47 @@ import com.zaxxer.hikari.HikariDataSource;
  * Every deadline case is driven by a fixed-nanosecond {@link java.util.function.Supplier}, not a
  * sleep -- a test that sleeps to cross a second boundary is a flaky test (Wave 0 gap 3,
  * 02-VALIDATION.md).
+ * <p>
+ * Each test gets its own dedicated, uniquely-named in-memory database rather than sharing one
+ * across the class. This is not just isolation hygiene: H2 stores a JDBC {@code Statement}'s
+ * {@code queryTimeout} as session (connection) state, confirmed empirically against
+ * {@code h2-2.2.224.jar} -- once ANY statement on a connection calls
+ * {@code setQueryTimeout(N)}, every later statement on that same connection (even a brand-new
+ * {@code PreparedStatement} that never had it called) reports {@code N}, and H2's own
+ * {@code SET QUERY_TIMEOUT 0} command does not reset that client-side JDBC state. A shared
+ * connection pool would make {@link #noDeadlineLeavesDriverDefault()} pass or fail depending on
+ * test execution order and which pooled physical connection HikariCP happened to hand out.
  */
 @DisplayName("TimeoutAwareQueryRunner")
 class TimeoutAwareQueryRunnerTest {
 
-    private static HikariDataSource dataSource;
+    private static final AtomicInteger DB_COUNTER = new AtomicInteger();
 
-    @BeforeAll
-    static void initDataSource() {
+    private HikariDataSource dataSource;
+
+    @BeforeEach
+    void setUp() throws Exception {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:h2:mem:timeoutawareqrtest;DB_CLOSE_DELAY=-1;MODE=MySQL");
+        // A fresh, uniquely-named in-memory database per test -- see the class javadoc for why
+        // this must not be shared.
+        config.setJdbcUrl("jdbc:h2:mem:timeoutawareqrtest" + DB_COUNTER.incrementAndGet()
+                + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
         config.setUsername("sa");
         // Deliberately no setPassword(): the in-memory DB is created password-less on first
         // connection; an empty-string password reads as a hardcoded credential to static
         // analysis. There is no credential here.
         dataSource = new HikariDataSource(config);
-    }
 
-    @AfterAll
-    static void closeDataSource() {
-        dataSource.close();
-    }
-
-    @BeforeEach
-    void setUp() throws Exception {
         try (Connection conn = dataSource.getConnection();
                 Statement st = conn.createStatement()) {
-            st.execute("DROP TABLE IF EXISTS timeout_probe");
             st.execute("CREATE TABLE timeout_probe (id INT PRIMARY KEY, name VARCHAR(50))");
             st.execute("INSERT INTO timeout_probe (id, name) VALUES (1, 'alpha')");
         }
+    }
+
+    @AfterEach
+    void tearDown() {
+        dataSource.close();
     }
 
     /**
@@ -107,10 +116,8 @@ class TimeoutAwareQueryRunnerTest {
 
         int timeout = capturedQueryTimeout(runner);
 
-        // H2's own driver default is 0 ("no limit") -- asserting the exact driver default would
-        // couple this test to H2; the behavior actually under test is "unchanged from what a
-        // plain QueryRunner would have produced", which the driver default satisfies here since
-        // a plain QueryRunner never calls setQueryTimeout either.
+        // A fresh H2 connection's own default is 0 ("no limit"), confirmed empirically -- see the
+        // class javadoc for why this database is not shared with any test that sets a timeout.
         assertThat(timeout).isZero();
     }
 
@@ -130,14 +137,13 @@ class TimeoutAwareQueryRunnerTest {
     @DisplayName("a second statement later in the same transaction gets a strictly smaller budget")
     void secondStatementGetsSmallerBudgetWhenClockAdvances() throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        AtomicReference<Long> clock = new AtomicReference<>(System.nanoTime());
         TimeoutAwareQueryRunner runner = new TimeoutAwareQueryRunner(dataSource, () -> deadline);
 
         int first = capturedQueryTimeout(runner);
-        // Simulate the clock having advanced by re-deriving the deadline relative to an earlier
-        // "now" than the second call will use -- built via a second runner sharing the same fixed
-        // deadline but whose remaining budget is computed against a later instant, exactly what
-        // System.nanoTime() advancing between two real statements would produce.
+        // Simulate the clock having advanced between two statements of the same transaction by
+        // computing the second statement's remaining budget against the same fixed deadline but
+        // an effectively later "now" -- exactly what System.nanoTime() advancing between two real
+        // statements would produce, without sleeping to cross a second boundary.
         long laterDeadline = deadline - TimeUnit.SECONDS.toNanos(3);
         TimeoutAwareQueryRunner laterRunner = new TimeoutAwareQueryRunner(dataSource, () -> laterDeadline);
         int second = capturedQueryTimeout(laterRunner);
