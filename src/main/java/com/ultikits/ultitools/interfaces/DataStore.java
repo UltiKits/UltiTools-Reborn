@@ -28,21 +28,80 @@ public interface DataStore {
      * @param dataEntity Data entity class <br> 数据实体类
      * @param <T>        Must inherit {@link BaseDataEntity}
      * @return Data operation entity <br> 数据操作实体
+     * @deprecated Carries no ownership check of its own (D-14/D-18) -- a {@code DataStore}
+     *             implementation that overrides this method directly, rather than reaching an
+     *             operator through {@link #getOperator(DataScope, Class)}, does not get the
+     *             refusal. Framework-internal callers ({@code UltiToolsPlugin.getDataOperator})
+     *             already check ownership themselves before calling this. Use {@link
+     *             #getOperator(DataScope, Class)}.
+     *             <p>
+     *             自身不带所有权校验（D-14/D-18）——直接覆写这个方法的 {@code DataStore}
+     *             实现，而不是通过 {@link #getOperator(DataScope, Class)} 获取操作器，
+     *             不会得到拒绝校验。框架内部调用方（{@code UltiToolsPlugin.getDataOperator}）
+     *             在调用它之前已经自行做过所有权校验。请改用
+     *             {@link #getOperator(DataScope, Class)}。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
 
     /**
-     * Get data operator for an external plugin, scoped to the plugin's own data folder.
+     * Get data operator for an external plugin, scoped to the plugin's own data folder. Refuses
+     * outright (D-18) when {@code dataFolder} resolves to a registered external plugin's scope
+     * that does not own {@code dataEntity}, or when {@code dataFolder} matches no registered
+     * scope at all -- an unresolvable folder fails closed rather than proceeding unchecked (D-15).
+     * A {@code DataStore} that overrides this method directly (as every backend shipped by this
+     * framework does) does not inherit this check; see the {@code @deprecated} note.
      * <p>
-     * 获取外部插件的数据操作器，数据范围限定在插件自己的数据文件夹中。
+     * 获取外部插件的数据操作器，数据范围限定在插件自己的数据文件夹中。当 {@code dataFolder}
+     * 解析到的已注册外部插件 scope 并不拥有 {@code dataEntity} 时，或 {@code dataFolder}
+     * 完全不匹配任何已注册 scope 时，直接拒绝（D-18）——无法解析的文件夹按 fail-closed 处理，
+     * 而不是不加校验地放行（D-15）。直接覆写这个方法的 {@code DataStore}（本框架自带的每个
+     * 后端都是如此）不会继承这项校验；见 {@code @deprecated} 说明。
      *
      * @param dataFolder the external plugin's data folder (e.g., plugins/MyPlugin/)
      * @param dataEntity data entity class
      * @param <T> entity type
      * @return data operator
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataFolder} matches
+     *         no registered scope, or matches one that does not own {@code dataEntity}
      * @since 6.2.2
+     * @deprecated Only enforces D-18's ownership check in its own {@code default} body -- a
+     *             {@code DataStore} implementation that overrides this method directly, rather
+     *             than reaching an operator through {@link #getOperator(DataScope, Class)}, does
+     *             not get the refusal. Framework-internal callers
+     *             ({@code UltiToolsAPI.getDataOperator}) already check ownership themselves before
+     *             calling this. Use {@link #getOperator(DataScope, Class)}.
+     *             <p>
+     *             只在自己的 {@code default} 方法体内强制执行 D-18 的所有权校验——直接覆写这个
+     *             方法的 {@code DataStore} 实现，而不是通过 {@link #getOperator(DataScope, Class)}
+     *             获取操作器，不会得到拒绝校验。框架内部调用方
+     *             （{@code UltiToolsAPI.getDataOperator}）在调用它之前已经自行做过所有权校验。
+     *             请改用 {@link #getOperator(DataScope, Class)}。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     default <T extends BaseDataEntity<String>> DataOperator<T> getOperator(java.io.File dataFolder, Class<T> dataEntity) {
+        com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
+        // The reverse lookup only ever registers EXTERNAL scopes (D-18) -- every internal plugin
+        // shares the framework's own data folder (DataScope.forPlugin), so that one folder can
+        // never be attributed to a single owner by folder alone. Skip the check for exactly that
+        // sentinel folder rather than let it always refuse a folder no external scope could ever
+        // register (same disambiguation JsonStore.identityOf(DataScope) already uses, 02-05).
+        boolean isFrameworkCoreFolder = ultiTools != null && ultiTools.getDataFolder() != null
+                && ultiTools.getDataFolder().equals(dataFolder);
+        if (!isFrameworkCoreFolder) {
+            DataScope scope = ultiTools != null && ultiTools.getPluginManager() != null
+                    ? ultiTools.getPluginManager().findScopeForDataFolder(dataFolder)
+                    : null;
+            if (scope == null) {
+                throw new com.ultikits.ultitools.exceptions.DataAccessException(
+                        com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED,
+                        "Data folder is not a registered external plugin -- call UltiToolsAPI.connect(...) "
+                                + "before requesting a data operator.");
+            }
+            if (!scope.owns(dataEntity)) {
+                throw scope.refusalFor(dataEntity);
+            }
+        }
         throw new UnsupportedOperationException("This DataStore does not support external plugin data storage");
     }
 

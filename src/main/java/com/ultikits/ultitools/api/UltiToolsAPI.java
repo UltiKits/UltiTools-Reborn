@@ -122,19 +122,34 @@ public final class UltiToolsAPI {
 
     /**
      * Get a DataOperator for an external plugin's data entity.
-     * Data is stored in the plugin's own data folder.
+     * Data is stored in the plugin's own data folder. Refuses outright if {@code dataEntity} is
+     * not registered to {@code plugin} (D-14) -- checked against the same {@link
+     * com.ultikits.ultitools.manager.DataScope} minted for this plugin at {@code connect(...)}
+     * time, via the same refusal {@code DataStore.getOperator(DataScope, Class)} builds, so the
+     * exception type, error code, and message shape are identical regardless of which entry point
+     * a caller reaches.
      * <p>
-     * 获取外部插件的数据操作器。数据存储在插件自己的数据文件夹中。
+     * 获取外部插件的数据操作器。数据存储在插件自己的数据文件夹中。若 {@code dataEntity} 未向
+     * {@code plugin} 注册则直接拒绝（D-14）——校验依据是该插件 {@code connect(...)} 时铸造的同一个
+     * {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式与
+     * {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个入口，
+     * 异常类型、错误码和消息形态都一致。
      *
      * @param plugin the external JavaPlugin
      * @param dataEntity the data entity class (must have @Table annotation)
      * @param <T> entity type
      * @return data operator
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataEntity} is not
+     *         registered to {@code plugin}
      */
     public static <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(JavaPlugin plugin, Class<T> dataEntity) {
         ExternalPluginAdapter adapter = adapters.get(plugin);
         if (adapter == null) {
             throw new IllegalStateException("Plugin " + plugin.getName() + " is not connected to UltiTools");
+        }
+        com.ultikits.ultitools.manager.DataScope scope = adapter.getDataScope();
+        if (scope != null && !scope.owns(dataEntity)) {
+            throw scope.refusalFor(dataEntity);
         }
         return UltiTools.getInstance().getDataStore().getOperator(adapter.getDataFolder(), dataEntity);
     }

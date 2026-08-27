@@ -74,6 +74,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private String resourceFolderPath;
     @Getter
     private SimpleContainer context;
+    private com.ultikits.ultitools.manager.DataScope dataScope;
 
 
     /**
@@ -251,6 +252,33 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @ApiStatus.Internal
     public void setContext(SimpleContainer context) {
         this.context = context;
+    }
+
+    /**
+     * Injects the {@link com.ultikits.ultitools.manager.DataScope} credential {@code
+     * PluginManager} minted for this module (D-17). Called by {@code PluginManager} right after
+     * minting, before {@code wireAop} runs -- the same lifecycle point {@link #setContext}
+     * documents.
+     * <p>
+     * Deliberately still public, for the same reason {@link #setContext} is: {@code
+     * PluginManager} lives in another package and cannot be narrowed to package-private, and the
+     * compatibility policy forbids removing a public method in a PATCH release. The annotation is
+     * a signal to humans and IDEs; it enforces nothing at runtime.
+     * <p>
+     * 注入 {@code PluginManager} 为本模块铸造的 {@link com.ultikits.ultitools.manager.DataScope}
+     * 凭证（D-17）。由 {@code PluginManager} 在铸造后、{@code wireAop} 运行前调用——与
+     * {@link #setContext} 记录的是同一个生命周期节点。
+     * <p>
+     * 刻意保持 public，原因与 {@link #setContext} 相同：{@code PluginManager} 不在同一个包，
+     * 降不成 package-private；兼容性策略也不允许 PATCH 版本移除一个 public 方法。注解只是给人
+     * 和 IDE 看的信号，运行期不做任何强制。
+     *
+     * @param scope the scope minted for this plugin <br> 为本插件铸造的 scope
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void setDataScope(com.ultikits.ultitools.manager.DataScope scope) {
+        this.dataScope = scope;
     }
 
     /**
@@ -434,15 +462,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Gets data operator.
+     * Gets data operator. Refuses outright if {@code dataClazz} is not registered to this module
+     * (D-14) -- checked against the same {@link com.ultikits.ultitools.manager.DataScope} minted
+     * for this module at load, via the same refusal {@code DataStore.getOperator(DataScope,
+     * Class)} builds, so the exception type, error code, and message shape are identical
+     * regardless of which entry point a caller reaches.
      * <p>
-     * 获取数据操作器。
+     * 获取数据操作器。若 {@code dataClazz} 未向本模块注册则直接拒绝（D-14）——校验依据是本模块
+     * 加载时铸造的同一个 {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式
+     * 与 {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个
+     * 入口，异常类型、错误码和消息形态都一致。
      *
      * @param dataClazz the class of the data entity <br> 数据实体的类
      * @param <T>       the type of the data entity <br> 数据实体的类型
      * @return the data operator <br> 数据操作器
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataClazz} is not
+     *         registered to this module <br> 如果 {@code dataClazz} 未向本模块注册
      */
     public final <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(Class<T> dataClazz) {
+        if (dataScope != null && !dataScope.owns(dataClazz)) {
+            throw dataScope.refusalFor(dataClazz);
+        }
         return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
     }
 

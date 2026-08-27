@@ -90,6 +90,19 @@ public class PluginManager {
     private final Map<Class<?>, String> entityOwnership = new ConcurrentHashMap<>();
 
     /**
+     * External plugin data folder (canonical path) -&gt; the {@link DataScope} minted for it,
+     * populated by {@link #registerExternal(ExternalPluginAdapter, Class[])}. Lets {@code
+     * DataStore.getOperator(File, Class)} resolve its caller back to a scope (D-18), for the
+     * default body a third-party {@code DataStore} that does not override that method inherits.
+     * <p>
+     * 外部插件数据文件夹（规范路径）-&gt; 为其铸造的 {@link DataScope}，由
+     * {@link #registerExternal(ExternalPluginAdapter, Class[])} 填充。使
+     * {@code DataStore.getOperator(File, Class)} 能把调用方解析回一个 scope（D-18）——针对未覆写
+     * 该方法的第三方 {@code DataStore} 所继承的默认实现。
+     */
+    private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
+
+    /**
      * Initialize plugin manager. Please do not call this method manually.
      * <br>
      * 初始化插件管理器。请不要手动调用此方法。
@@ -238,6 +251,7 @@ public class PluginManager {
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
             DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
             registerEntityOwnership(scope);
+            plugin.setDataScope(scope);
             wireAop(pluginContext, scope);
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
@@ -624,6 +638,45 @@ public class PluginManager {
      */
     public String findOwningPlugin(Class<?> entityClass) {
         return entityOwnership.get(entityClass);
+    }
+
+    /**
+     * Records an external plugin's {@link DataScope} under its data folder's canonical path, so
+     * {@link #findScopeForDataFolder} can resolve the caller of {@code DataStore.getOperator(File,
+     * Class)} back to a scope (D-18) -- the same canonical-path keying 02-02's Task 2 used for the
+     * SQLite pool map, so two spellings of the same folder resolve to one entry.
+     * <p>
+     * 把外部插件的 {@link DataScope} 按其数据文件夹的规范路径记录下来，使
+     * {@link #findScopeForDataFolder} 能把 {@code DataStore.getOperator(File, Class)} 的调用方
+     * 解析回一个 scope（D-18）——沿用 02-02 Task 2 为 SQLite 连接池 Map 采用的规范路径键法，
+     * 让同一个文件夹的两种写法解析到同一条记录。
+     *
+     * @param dataFolder the external plugin's own data folder <br> 外部插件自己的数据文件夹
+     * @param scope      the scope just minted for it <br> 刚为它铸造的 scope
+     */
+    private void registerExternalScope(File dataFolder, DataScope scope) {
+        externalScopesByFolder.put(canonicalPath(dataFolder), scope);
+    }
+
+    /**
+     * Resolves a data folder back to the registered external plugin scope that owns it (D-18).
+     * <p>
+     * 把数据文件夹解析回拥有它的、已注册的外部插件 scope（D-18）。
+     *
+     * @param dataFolder the folder to resolve <br> 待解析的文件夹
+     * @return the registered scope, or {@code null} if the folder matches no registered adapter
+     *         <br> 已注册的 scope；若该文件夹不匹配任何已注册的适配器则为 {@code null}
+     */
+    public DataScope findScopeForDataFolder(File dataFolder) {
+        return externalScopesByFolder.get(canonicalPath(dataFolder));
+    }
+
+    private static String canonicalPath(File folder) {
+        try {
+            return folder.getCanonicalPath();
+        } catch (IOException e) {
+            return folder.getAbsolutePath();
+        }
     }
 
     /**
@@ -1120,6 +1173,7 @@ public class PluginManager {
 
             DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
             registerEntityOwnership(scope);
+            plugin.setDataScope(scope);
             wireAop(pluginContext, scope);
             pluginContext.refresh();
             plugin.setContext(pluginContext);
@@ -1332,6 +1386,8 @@ public class PluginManager {
         DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
                 scanExternalEntities(adapter, additionalEntities));
         registerEntityOwnership(scope);
+        adapter.setDataScope(scope);
+        registerExternalScope(adapter.getDataFolder(), scope);
         wireAop(context, scope);
         context.refresh();
         adapter.setContext(context);

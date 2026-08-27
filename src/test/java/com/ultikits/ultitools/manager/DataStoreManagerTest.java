@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -933,6 +934,224 @@ class DataStoreManagerTest {
                     .doesNotContain("owned_entity_secret_table")
                     .doesNotContain("secret_column_name")
                     .doesNotContain(System.getProperty("java.io.tmpdir"));
+        }
+    }
+
+    /**
+     * D-18: 两个旧入口（{@code getOperator(UltiToolsPlugin, Class)}、
+     * {@code getOperator(File, Class)}）现在都标记 {@code @Deprecated(forRemoval = true)}，且
+     * {@code UltiToolsPlugin.getDataOperator}/{@code UltiToolsAPI.getDataOperator} 这两个
+     * 框架自身的入口在调用它们之前，会先用与 {@code getOperator(DataScope, Class)} 完全相同的
+     * {@link DataScope#refusalFor} 做一次所有权校验。
+     */
+    @Nested
+    @DisplayName("旧入口路由到统一校验测试 (D-18)")
+    class LegacyOverloadRoutingTests {
+
+        @com.ultikits.ultitools.annotations.Table("legacy_routing_owned_entity")
+        class OwnedEntity extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String> {
+        }
+
+        private DataScope scopeFor(String pluginName, java.util.Set<Class<?>> owned, File folder) {
+            return DataScope.forExternal(pluginName, folder, owned);
+        }
+
+        @Test
+        @DisplayName("两个旧重载都应携带 forRemoval = true 的 @Deprecated")
+        void bothLegacyOverloadsShouldBeDeprecatedForRemoval() throws NoSuchMethodException {
+            Method pluginOverload = DataStore.class.getMethod("getOperator",
+                    com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, Class.class);
+            Method fileOverload = DataStore.class.getMethod("getOperator", File.class, Class.class);
+
+            assertThat(pluginOverload.getAnnotation(Deprecated.class)).isNotNull();
+            assertThat(pluginOverload.getAnnotation(Deprecated.class).forRemoval()).isTrue();
+            assertThat(fileOverload.getAnnotation(Deprecated.class)).isNotNull();
+            assertThat(fileOverload.getAnnotation(Deprecated.class).forRemoval()).isTrue();
+        }
+
+        @Test
+        @DisplayName("UltiToolsPlugin.getDataOperator 拒绝未拥有的实体，消息与 DataScope 重载完全一致")
+        void ultiToolsPluginGetDataOperatorShouldRefuseUnownedEntityIdentically() {
+            DataScope scope = scopeFor("PluginX", java.util.Collections.emptySet(),
+                    new File(System.getProperty("java.io.tmpdir"), "ultitools-test-legacy-plugin"));
+            com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin =
+                    mock(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            plugin.setDataScope(scope);
+
+            com.ultikits.ultitools.exceptions.DataAccessException viaWrapper =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> plugin.getDataOperator(OwnedEntity.class));
+            com.ultikits.ultitools.exceptions.DataAccessException viaDataScope =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> { throw scope.refusalFor(OwnedEntity.class); });
+
+            assertThat(viaWrapper.getErrorCode()).isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+            assertThat(viaWrapper.getMessage()).isEqualTo(viaDataScope.getMessage());
+        }
+
+        @Test
+        @DisplayName("拥有的实体不受影响 -- UltiToolsPlugin.getDataOperator 仍然委托给原来的 plugin 重载")
+        void ultiToolsPluginGetDataOperatorShouldStillDelegateForOwnedEntity() {
+            DataScope scope = scopeFor("PluginOwns", java.util.Collections.singleton(OwnedEntity.class),
+                    new File(System.getProperty("java.io.tmpdir"), "ultitools-test-legacy-plugin-owns"));
+            com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin =
+                    mock(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            plugin.setDataScope(scope);
+
+            @SuppressWarnings("unchecked")
+            com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> fakeOperator =
+                    mock(com.ultikits.ultitools.interfaces.DataOperator.class);
+            DataStore dataStore = mock(DataStore.class);
+            when(dataStore.getOperator(plugin, OwnedEntity.class)).thenReturn(fakeOperator);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getDataStore()).thenReturn(dataStore));
+
+            com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> result =
+                    plugin.getDataOperator(OwnedEntity.class);
+
+            assertThat(result).isSameAs(fakeOperator);
+            // Still the original, path-correct plugin overload -- no relocation.
+            verify(dataStore).getOperator(plugin, OwnedEntity.class);
+        }
+
+        @Test
+        @DisplayName("UltiToolsAPI.getDataOperator 拒绝未拥有的实体，消息与 DataScope 重载完全一致")
+        void ultiToolsApiGetDataOperatorShouldRefuseUnownedEntityIdentically() throws Exception {
+            org.bukkit.plugin.java.JavaPlugin externalPlugin =
+                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("UltiToolsApiLegacyRoutingFixture");
+            com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
+            DataScope scope = scopeFor(adapter.getPluginName(), java.util.Collections.emptySet(),
+                    adapter.getDataFolder());
+            adapter.setDataScope(scope);
+            putAdapter(externalPlugin, adapter);
+
+            try {
+                com.ultikits.ultitools.exceptions.DataAccessException viaWrapper =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                com.ultikits.ultitools.exceptions.DataAccessException.class,
+                                () -> com.ultikits.ultitools.api.UltiToolsAPI.getDataOperator(
+                                        externalPlugin, OwnedEntity.class));
+                com.ultikits.ultitools.exceptions.DataAccessException viaDataScope =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                com.ultikits.ultitools.exceptions.DataAccessException.class,
+                                () -> { throw scope.refusalFor(OwnedEntity.class); });
+
+                assertThat(viaWrapper.getErrorCode())
+                        .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+                assertThat(viaWrapper.getMessage()).isEqualTo(viaDataScope.getMessage());
+            } finally {
+                removeAdapter(externalPlugin);
+            }
+        }
+
+        @Test
+        @DisplayName("外部插件经 UltiToolsAPI.getDataOperator 解析到的存储位置，路由前后完全一致（SQLite）")
+        void externalPluginStorageLocationShouldBeUnchangedBySqliteRouting() throws Exception {
+            // Proves the D-18 routing change moves no data: SQLiteDataStore.getOperator(File,
+            // Class) itself is byte-for-byte untouched by this plan (git diff confirms zero
+            // changes to SQLiteDataStore.java), and UltiToolsAPI.getDataOperator's final
+            // delegating line is the same call it always was -- the new ownership check only runs
+            // BEFORE it. Both the pre-Task-3 call shape (direct File overload) and the
+            // post-Task-3 shape (through UltiToolsAPI) must resolve to the exact same pool.
+            org.bukkit.plugin.java.JavaPlugin externalPlugin =
+                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("SqlitePathPreservationFixture");
+            com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
+            DataScope scope = scopeFor(adapter.getPluginName(),
+                    java.util.Collections.singleton(OwnedEntity.class), adapter.getDataFolder());
+            adapter.setDataScope(scope);
+            putAdapter(externalPlugin, adapter);
+
+            try {
+                SQLiteDataStore sqliteStore = new SQLiteDataStore();
+                try (org.mockito.MockedConstruction<HikariConfig> mockedConfig =
+                             org.mockito.Mockito.mockConstruction(HikariConfig.class);
+                     org.mockito.MockedConstruction<HikariDataSource> mockedDataSource =
+                             org.mockito.Mockito.mockConstruction(HikariDataSource.class);
+                     org.mockito.MockedConstruction<com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator<OwnedEntity>>
+                             mockedOperator = org.mockito.Mockito.mockConstruction(
+                                     (Class<com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator<OwnedEntity>>)
+                                             (Class<?>) com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataOperator.class)) {
+                    // Pre-Task-3 shape: the raw, unchecked File overload.
+                    Object beforeOperator = sqliteStore.getOperator(adapter.getDataFolder(), OwnedEntity.class);
+
+                    com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                            ultiTools -> when(ultiTools.getDataStore()).thenReturn(sqliteStore));
+
+                    // Post-Task-3 shape: through UltiToolsAPI's now ownership-checked wrapper.
+                    Object afterOperator = com.ultikits.ultitools.api.UltiToolsAPI.getDataOperator(
+                            externalPlugin, OwnedEntity.class);
+
+                    // One pool, shared by both call shapes -- the routing change moved nothing.
+                    assertThat(mockedDataSource.constructed()).hasSize(1);
+                    assertThat(afterOperator).isSameAs(beforeOperator);
+                }
+            } finally {
+                removeAdapter(externalPlugin);
+            }
+        }
+
+        @Test
+        @DisplayName("getOperator(File, Class) 默认实现：未注册的数据文件夹应该被拒绝，而不是不加校验地放行")
+        void unregisteredDataFolderShouldBeRefusedNotServed() {
+            PluginManager pluginManager = mock(PluginManager.class);
+            when(pluginManager.findScopeForDataFolder(org.mockito.ArgumentMatchers.any(File.class)))
+                    .thenReturn(null);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
+
+            DataStore stubStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            when(stubStore.getStoreType()).thenReturn("stub-store");
+            File unregisteredFolder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-unregistered");
+
+            com.ultikits.ultitools.exceptions.DataAccessException thrown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> stubStore.getOperator(unregisteredFolder, OwnedEntity.class));
+
+            assertThat(thrown.getErrorCode()).isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+        }
+
+        @Test
+        @DisplayName("getOperator(File, Class) 默认实现：注册过的文件夹里未拥有的实体也应该被拒绝")
+        void registeredFolderWithUnownedEntityShouldBeRefused() {
+            File folder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-registered-unowned");
+            DataScope scope = scopeFor("RegisteredPlugin", java.util.Collections.emptySet(), folder);
+            PluginManager pluginManager = mock(PluginManager.class);
+            when(pluginManager.findScopeForDataFolder(folder)).thenReturn(scope);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
+
+            DataStore stubStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            when(stubStore.getStoreType()).thenReturn("stub-store");
+
+            com.ultikits.ultitools.exceptions.DataAccessException thrown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.DataAccessException.class,
+                            () -> stubStore.getOperator(folder, OwnedEntity.class));
+
+            assertThat(thrown.getErrorCode()).isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+        }
+
+        private void putAdapter(org.bukkit.plugin.java.JavaPlugin plugin,
+                com.ultikits.ultitools.api.ExternalPluginAdapter adapter) throws Exception {
+            adaptersField().put(plugin, adapter);
+        }
+
+        private void removeAdapter(org.bukkit.plugin.java.JavaPlugin plugin) throws Exception {
+            adaptersField().remove(plugin);
+        }
+
+        @SuppressWarnings("unchecked")
+        private java.util.Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>
+                adaptersField() throws Exception {
+            Field field = com.ultikits.ultitools.api.UltiToolsAPI.class.getDeclaredField("adapters");
+            field.setAccessible(true);
+            return (java.util.Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>)
+                    field.get(null);
         }
     }
 }
