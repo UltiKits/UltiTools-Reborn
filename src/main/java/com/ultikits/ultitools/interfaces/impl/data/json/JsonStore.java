@@ -124,6 +124,7 @@ public class JsonStore implements DataStore {
     @Override
     @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
+        checkOwnership(plugin, dataEntity);
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
@@ -140,6 +141,7 @@ public class JsonStore implements DataStore {
     @Override
     @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        checkOwnership(dataFolder, dataEntity);
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
