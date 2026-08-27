@@ -210,6 +210,129 @@ class TransactionInterceptorTest {
         }
     }
 
+    /**
+     * Marker exception standing in for {@code Transactional.java}'s own
+     * {@code rollbackFor = {BusinessException.class}} javadoc example (D-06).
+     */
+    public static class BusinessException extends Exception {
+        public BusinessException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Fixture for {@link RollbackRuleCombinationTests} (D-06/D-07): additive {@code rollbackFor}
+     * plus the shallowest-inheritance-depth tiebreak against {@code noRollbackFor}, each case
+     * proven through both an external call and a self-invocation call (WIRE-13). Declared at the
+     * top level for the same Java 8 / JUnit 5 {@code @Nested} reason documented on
+     * {@link SelfInvocationBean}.
+     */
+    public static class RollbackRuleBean {
+        private final TransactionManager txManager;
+
+        public RollbackRuleBean(TransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        // --- D-06: an unmatched rollbackFor no longer commits; it falls through to the default. ---
+
+        @Transactional(rollbackFor = BusinessException.class)
+        public void unmatchedRollbackForExternal() {
+            write(101);
+            throw new NullPointerException("boom - unmatched rollbackFor, external");
+        }
+
+        public void outerCallsUnmatchedRollbackFor() {
+            unmatchedRollbackForSelf();
+        }
+
+        @Transactional(rollbackFor = BusinessException.class)
+        public void unmatchedRollbackForSelf() {
+            write(102);
+            throw new NullPointerException("boom - unmatched rollbackFor, self-invocation");
+        }
+
+        // --- D-07: a narrower rollbackFor rule wins over a broader noRollbackFor rule. ---
+
+        @Transactional(noRollbackFor = Exception.class, rollbackFor = IllegalStateException.class)
+        public void narrowerRollbackForWinsExternal() {
+            write(103);
+            throw new IllegalStateException("boom - narrower rollbackFor wins, external");
+        }
+
+        public void outerCallsNarrowerRollbackForWins() {
+            narrowerRollbackForWinsSelf();
+        }
+
+        @Transactional(noRollbackFor = Exception.class, rollbackFor = IllegalStateException.class)
+        public void narrowerRollbackForWinsSelf() {
+            write(104);
+            throw new IllegalStateException("boom - narrower rollbackFor wins, self-invocation");
+        }
+
+        // --- D-07 mirror: a narrower noRollbackFor rule wins over a broader rollbackFor rule. ---
+
+        @Transactional(rollbackFor = Exception.class, noRollbackFor = IllegalStateException.class)
+        public void narrowerNoRollbackForWinsExternal() {
+            write(109);
+            throw new IllegalStateException("boom - narrower noRollbackFor wins, external");
+        }
+
+        public void outerCallsNarrowerNoRollbackForWins() {
+            narrowerNoRollbackForWinsSelf();
+        }
+
+        @Transactional(rollbackFor = Exception.class, noRollbackFor = IllegalStateException.class)
+        public void narrowerNoRollbackForWinsSelf() {
+            write(110);
+            throw new IllegalStateException("boom - narrower noRollbackFor wins, self-invocation");
+        }
+
+        // --- Sole noRollbackFor rule (no rollbackFor configured) still commits, unaffected. ---
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void soleNoRollbackForCommitsExternal() {
+            write(105);
+            throw new IllegalStateException("boom - sole noRollbackFor commits, external");
+        }
+
+        public void outerCallsSoleNoRollbackForCommits() {
+            soleNoRollbackForCommitsSelf();
+        }
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void soleNoRollbackForCommitsSelf() {
+            write(106);
+            throw new IllegalStateException("boom - sole noRollbackFor commits, self-invocation");
+        }
+
+        // --- D-07: an exact-depth tie (same class in both arrays) favors rollback. ---
+
+        @Transactional(rollbackFor = IllegalStateException.class, noRollbackFor = IllegalStateException.class)
+        public void exactTieRollsBackExternal() {
+            write(107);
+            throw new IllegalStateException("boom - exact-depth tie rolls back, external");
+        }
+
+        public void outerCallsExactTieRollsBack() {
+            exactTieRollsBackSelf();
+        }
+
+        @Transactional(rollbackFor = IllegalStateException.class, noRollbackFor = IllegalStateException.class)
+        public void exactTieRollsBackSelf() {
+            write(108);
+            throw new IllegalStateException("boom - exact-depth tie rolls back, self-invocation");
+        }
+
+        private void write(int id) {
+            try (Statement st = txManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
     @BeforeEach
     void setUp() {
         interceptor = new TransactionInterceptor(transactionManager);
@@ -637,8 +760,9 @@ class TransactionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Should commit for non-matching rollbackFor exception")
-        void shouldCommitForNonMatchingRollbackForException() throws Throwable {
+        @DisplayName("D-06: an unmatched rollbackFor now falls through to the RuntimeException/Error "
+                + "default and rolls back, instead of committing")
+        void shouldRollbackForNonMatchingRollbackForExceptionViaDefaultFallthrough() throws Throwable {
             Method method = RollbackService.class.getMethod("rollbackFor");
             Object target = new RollbackService();
 
@@ -648,7 +772,8 @@ class TransactionInterceptorTest {
 
             assertThrows(NullPointerException.class, () -> interceptor.invoke(mockInvocation));
 
-            verify(transactionManager).commit();
+            verify(transactionManager).rollback();
+            verify(transactionManager, never()).commit();
         }
 
         @Test
@@ -873,6 +998,166 @@ class TransactionInterceptorTest {
             assertThrows(RuntimeException.class, bean::plainWriteThenThrow);
 
             assertThat(countRows()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * D-06/D-07: additive {@code rollbackFor} plus the shallowest-inheritance-depth tiebreak
+     * against {@code noRollbackFor}, each case proven through both an external call and a
+     * self-invocation call (WIRE-13). Same real-proxy-plus-real-JDBC rationale as
+     * {@link SelfInvocationAndExternalCallTests} - a mocked {@link TransactionManager} cannot
+     * distinguish self-invocation from an external call.
+     */
+    @Nested
+    @DisplayName("D-06/D-07: additive rollbackFor with shallowest-depth tiebreak（WIRE-13）")
+    class RollbackRuleCombinationTests {
+
+        private DataSource h2DataSource;
+        private DataSourceTransactionManager realManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:txinterceptorrollbackrule" + System.nanoTime()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            // Deliberately no setPassword(): see TransactionalRollbackEndToEndTest's identical
+            // comment - the in-memory DB has no credential to hardcode.
+            h2DataSource = new HikariDataSource(config);
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE tx_test (id INT PRIMARY KEY)");
+            }
+
+            realManager = new DataSourceTransactionManager(h2DataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, realInterceptor, 100));
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (h2DataSource instanceof HikariDataSource) {
+                ((HikariDataSource) h2DataSource).close();
+            }
+        }
+
+        private int countRows() throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+
+        private RollbackRuleBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(RollbackRuleBean.class);
+            return (RollbackRuleBean) proxyClass
+                    .getDeclaredConstructor(TransactionManager.class)
+                    .newInstance(realManager);
+        }
+
+        @Test
+        @DisplayName("D-06: unmatched rollbackFor rolls back on the RuntimeException default (external)")
+        void unmatchedRollbackForRollsBackExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(NullPointerException.class, bean::unmatchedRollbackForExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-06: unmatched rollbackFor rolls back on the RuntimeException default (self-invocation)")
+        void unmatchedRollbackForRollsBackSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(NullPointerException.class, bean::outerCallsUnmatchedRollbackFor);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: a narrower rollbackFor wins over a broader noRollbackFor (external)")
+        void narrowerRollbackForWinsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::narrowerRollbackForWinsExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: a narrower rollbackFor wins over a broader noRollbackFor (self-invocation)")
+        void narrowerRollbackForWinsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsNarrowerRollbackForWins);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07 mirror: a narrower noRollbackFor wins over a broader rollbackFor (external)")
+        void narrowerNoRollbackForWinsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::narrowerNoRollbackForWinsExternal);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("D-07 mirror: a narrower noRollbackFor wins over a broader rollbackFor (self-invocation)")
+        void narrowerNoRollbackForWinsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsNarrowerNoRollbackForWins);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("A sole noRollbackFor rule still commits, unaffected by D-06 (external)")
+        void soleNoRollbackForStillCommitsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::soleNoRollbackForCommitsExternal);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("A sole noRollbackFor rule still commits, unaffected by D-06 (self-invocation)")
+        void soleNoRollbackForStillCommitsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsSoleNoRollbackForCommits);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("D-07: an exact-depth tie between rollbackFor and noRollbackFor favors rollback (external)")
+        void exactDepthTieFavorsRollbackExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::exactTieRollsBackExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: an exact-depth tie between rollbackFor and noRollbackFor favors rollback "
+                + "(self-invocation)")
+        void exactDepthTieFavorsRollbackSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsExactTieRollsBack);
+
+            assertThat(countRows()).isZero();
         }
     }
 }
