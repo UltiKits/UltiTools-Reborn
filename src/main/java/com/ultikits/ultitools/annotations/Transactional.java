@@ -88,7 +88,26 @@ public @interface Transactional {
     /**
      * The transaction timeout in seconds.
      * <p>
-     * Defaults to -1 (no timeout / use database default).
+     * Defaults to -1 (no timeout / use database default). Only a value greater than 0 is ever
+     * acted on at all -- the interceptor skips calling {@code TransactionManager.setTimeout(int)}
+     * entirely for -1 or 0, so both mean exactly "no timeout requested."
+     * <p>
+     * <b>Not currently enforced as a bound on the method body, and not currently enforced at
+     * all on two of the three backends.</b> This attribute is <em>not</em>, and will never be,
+     * a wall-clock limit on how long the annotated method may run -- that would require
+     * cancelling or interrupting work already in flight, which plain JDBC does not support
+     * (see {@code REQUIREMENTS.md}'s "out of scope" section). Per backend, today:
+     * <ul>
+     *   <li>SQLite, MySQL (JDBC-backed): a positive value is accepted but currently has no
+     *       effect. {@code DataSourceTransactionManager.setTimeout(int)} only logs it; no
+     *       statement issued inside the transaction carries any query timeout as a result.</li>
+     *   <li>JSON-backed: a positive value makes the transaction fail outright.
+     *       {@code JsonTransactionManager.setTimeout(int)} throws
+     *       {@link UnsupportedOperationException} unconditionally, since a snapshot-based
+     *       rollback has no query or connection to bound.</li>
+     * </ul>
+     * A method that leaves this attribute at its default is unaffected on every backend, since
+     * the interceptor never calls {@code setTimeout} for it.
      *
      * @return the timeout in seconds
      */
