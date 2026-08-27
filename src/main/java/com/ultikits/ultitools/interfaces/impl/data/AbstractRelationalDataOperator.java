@@ -164,6 +164,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * bypass {@link #queryRunner} entirely. A method reference rather than a field capture, so
      * every call reads {@link #transactionManager}'s *current* value -- this operator outlives
      * any single transaction, and {@link #setTransactionManager} can swap the manager out.
+     *
+     * @return the active transaction's timeout deadline, or {@code null} if none is configured
      */
     private Long currentTimeoutDeadlineNanos() {
         return transactionManager != null ? transactionManager.getTimeoutDeadlineNanos() : null;
