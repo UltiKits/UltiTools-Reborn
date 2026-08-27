@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 
 import javax.sql.DataSource;
@@ -12,7 +13,8 @@ import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * DataSource-based implementation of {@link TransactionManager}.
+ * DataSource-based implementation of {@link TransactionManager}, and its JDBC-specific
+ * sub-interface {@link JdbcTransactionManager}.
  * <p>
  * Uses ThreadLocal to associate transactions with threads, ensuring thread safety.
  * Each thread can have at most one active transaction at a time.
@@ -21,7 +23,7 @@ import org.jetbrains.annotations.ApiStatus;
  * @since 6.2.0
  */
 @ApiStatus.Internal
-public class DataSourceTransactionManager implements TransactionManager {
+public class DataSourceTransactionManager implements JdbcTransactionManager {
 
     private static final Logger LOGGER = Logger.getLogger(DataSourceTransactionManager.class.getName());
 

@@ -20,8 +20,20 @@ public interface TransactionManager {
      * Otherwise, returns a new connection from the data source.
      *
      * @return the current connection
+     * @deprecated JDBC-specific; not every {@code TransactionManager} backs a
+     *             {@link javax.sql.DataSource}. Program against
+     *             {@link JdbcTransactionManager#getConnection()} instead. This default throws
+     *             {@link UnsupportedOperationException} for any backend that only implements the
+     *             base interface.
+     * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
+     *        removal.
      */
-    Connection getConnection();
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    default Connection getConnection() {
+        throw new UnsupportedOperationException(
+                "getConnection() is JDBC-specific and not supported by this TransactionManager. "
+                        + "Implement " + JdbcTransactionManager.class.getName() + " to provide it.");
+    }
 
     /**
      * Begins a new transaction.
@@ -62,15 +74,39 @@ public interface TransactionManager {
      * Must be called after begin() and before any statements are executed.
      *
      * @param level the JDBC isolation level constant
+     * @deprecated JDBC-specific; program against
+     *             {@link JdbcTransactionManager#setIsolationLevel(int)} instead. This default
+     *             throws {@link UnsupportedOperationException} for any backend that only
+     *             implements the base interface.
+     * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
+     *        removal.
      */
-    void setIsolationLevel(int level);
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    default void setIsolationLevel(int level) {
+        throw new UnsupportedOperationException(
+                "setIsolationLevel(int) is JDBC-specific and not supported by this "
+                        + "TransactionManager. Implement " + JdbcTransactionManager.class.getName()
+                        + " to provide it.");
+    }
 
     /**
      * Sets read-only mode for the current transaction.
      *
      * @param readOnly true for read-only mode
+     * @deprecated JDBC-specific; program against
+     *             {@link JdbcTransactionManager#setReadOnly(boolean)} instead. This default
+     *             throws {@link UnsupportedOperationException} for any backend that only
+     *             implements the base interface.
+     * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
+     *        removal.
      */
-    void setReadOnly(boolean readOnly);
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    default void setReadOnly(boolean readOnly) {
+        throw new UnsupportedOperationException(
+                "setReadOnly(boolean) is JDBC-specific and not supported by this "
+                        + "TransactionManager. Implement " + JdbcTransactionManager.class.getName()
+                        + " to provide it.");
+    }
 
     /**
      * Sets the timeout for the current transaction.
