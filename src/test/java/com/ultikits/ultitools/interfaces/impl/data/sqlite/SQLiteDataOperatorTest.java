@@ -3,23 +3,34 @@ package com.ultikits.ultitools.interfaces.impl.data.sqlite;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
+import org.apache.commons.dbutils.QueryRunner;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
+import com.ultikits.ultitools.interfaces.impl.data.AbstractRelationalDataOperator;
+import com.ultikits.ultitools.interfaces.impl.data.json.SimpleJsonDataOperator;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -289,6 +300,211 @@ class SQLiteDataOperatorTest {
             operator.delById("del-2");
 
             assertThat(operator.exist(entity)).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("Comparison 语义测试（GREATER 等运算符跨后端一致，WIRE-04）")
+    class ComparisonSemanticsTests {
+
+        @BeforeEach
+        void insertNumericRows() {
+            insertNumeric("cmp-1", 1);
+            insertNumeric("cmp-5", 5);
+            insertNumeric("cmp-9", 9);
+        }
+
+        private void insertNumeric(String id, int age) {
+            TestEntity entity = new TestEntity();
+            entity.setId(id);
+            entity.setName("Entity" + age);
+            entity.setAge(age);
+            operator.insert(entity);
+        }
+
+        @Test
+        @DisplayName("Test A: getAll(GREATER) 只返回大于阈值的行，而不是等于阈值")
+        void getAllGreaterShouldReturnOnlyRowsAboveThreshold() {
+            List<TestEntity> result = operator.getAll(
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build());
+
+            assertThat(result).extracting(TestEntity::getAge).containsExactly(9);
+        }
+
+        @Test
+        @DisplayName("Test B: SQLite 与 SimpleJsonDataOperator 在同一个 GREATER 条件下返回同一行集")
+        void greaterShouldAgreeAcrossSqliteAndJson(@TempDir Path jsonDir) {
+            SimpleJsonDataOperator<TestEntity> json =
+                    new SimpleJsonDataOperator<>(jsonDir.toFile().getAbsolutePath(), TestEntity.class);
+            insertNumericInto(json, "json-cmp-1", 1);
+            insertNumericInto(json, "json-cmp-5", 5);
+            insertNumericInto(json, "json-cmp-9", 9);
+
+            WhereCondition condition =
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build();
+
+            List<Integer> sqliteAges = operator.getAll(condition).stream()
+                    .map(TestEntity::getAge).collect(Collectors.toList());
+            List<Integer> jsonAges = json.getAll(condition).stream()
+                    .map(TestEntity::getAge).collect(Collectors.toList());
+
+            assertThat(sqliteAges)
+                    .as("同一个 GREATER 条件，SQLite 与 JSON 后端必须返回同一批年龄值")
+                    .containsExactlyInAnyOrderElementsOf(jsonAges)
+                    .containsExactly(9);
+        }
+
+        private void insertNumericInto(SimpleJsonDataOperator<TestEntity> json, String id, int age) {
+            TestEntity entity = new TestEntity();
+            entity.setId(id);
+            entity.setName("Entity" + age);
+            entity.setAge(age);
+            json.insert(entity);
+        }
+
+        @Test
+        @DisplayName("Test C: exist(GREATER) 与 getAll 的 GREATER 语义一致")
+        void existGreaterShouldMatchGetAllSemantics() {
+            assertThat(operator.exist(
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build()))
+                    .as("存在一行 age=9 > 5")
+                    .isTrue();
+
+            assertThat(operator.exist(
+                    WhereCondition.builder().column("age").value(9).comparison(Comparison.GREATER).build()))
+                    .as("没有任何行 age > 9")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Test C: page(GREATER) 与 getAll 的 GREATER 语义一致")
+        void pageGreaterShouldMatchGetAllSemantics() {
+            List<TestEntity> result = operator.page(1, 10,
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build());
+
+            assertThat(result).extracting(TestEntity::getAge).containsExactly(9);
+        }
+    }
+
+    @Nested
+    @DisplayName("LIKE 语义测试（INCLUDE/STARTSWITH/ENDSWITH 与 JSON 后端一致，WIRE-04）")
+    class LikeComparisonTests {
+
+        @BeforeEach
+        void insertNameRows() {
+            insertNamed("like-cmp-1", "TestEntity");
+            insertNamed("like-cmp-2", "AnotherTest");
+        }
+
+        private void insertNamed(String id, String name) {
+            TestEntity entity = new TestEntity();
+            entity.setId(id);
+            entity.setName(name);
+            operator.insert(entity);
+        }
+
+        @Test
+        @DisplayName("Test D: INCLUDE 匹配子串出现在任意位置")
+        void includeShouldMatchSubstringAnywhere() {
+            List<TestEntity> result = operator.getAll(
+                    WhereCondition.builder().column("name").value("Test").comparison(Comparison.INCLUDE).build());
+
+            assertThat(result).extracting(TestEntity::getName)
+                    .containsExactlyInAnyOrder("TestEntity", "AnotherTest");
+        }
+
+        @Test
+        @DisplayName("Test D: STARTSWITH 只匹配以该值开头的行")
+        void startswithShouldMatchPrefixOnly() {
+            List<TestEntity> result = operator.getAll(WhereCondition.builder().column("name").value("Test")
+                    .comparison(Comparison.STARTSWITH).build());
+
+            assertThat(result).extracting(TestEntity::getName).containsExactly("TestEntity");
+        }
+
+        @Test
+        @DisplayName("Test D: ENDSWITH 只匹配以该值结尾的行")
+        void endswithShouldMatchSuffixOnly() {
+            List<TestEntity> result = operator.getAll(
+                    WhereCondition.builder().column("name").value("Test").comparison(Comparison.ENDSWITH).build());
+
+            assertThat(result).extracting(TestEntity::getName).containsExactly("AnotherTest");
+        }
+    }
+
+    @Nested
+    @DisplayName("del() 零条件防护测试（SILENT-01）")
+    class DeleteGuardTests {
+
+        @BeforeEach
+        void insertThreeRows() {
+            for (int i = 1; i <= 3; i++) {
+                TestEntity entity = new TestEntity();
+                entity.setId("guard-" + i);
+                entity.setName("Guard" + i);
+                entity.setAge(i);
+                operator.insert(entity);
+            }
+        }
+
+        private long countRows() throws Exception {
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM test_entity")) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+
+        @Test
+        @DisplayName("Test E: del() 零条件（varargs 空数组）抛出 DataAccessException，行数不变")
+        void delWithNoConditionsShouldThrowAndLeaveRowsUnchanged() throws Exception {
+            assertThat(countRows()).isEqualTo(3);
+
+            assertThatThrownBy(operator::del).isInstanceOf(DataAccessException.class);
+
+            assertThat(countRows())
+                    .as("表未被清空——修复前这里会变成 0")
+                    .isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("Test E: del((WhereCondition[]) null) 与零长度数组行为一致")
+        void delWithNullConditionsShouldThrowAndLeaveRowsUnchanged() throws Exception {
+            assertThatThrownBy(() -> operator.del((WhereCondition[]) null))
+                    .isInstanceOf(DataAccessException.class);
+
+            assertThat(countRows()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("Test F: 连续两次调用 del() 零条件均抛出，行数不变（守卫不是一次性 latch）")
+        void delWithNoConditionsShouldThrowTwiceInARowAndStayIdempotent() throws Exception {
+            assertThatThrownBy(operator::del).isInstanceOf(DataAccessException.class);
+            assertThatThrownBy(operator::del).isInstanceOf(DataAccessException.class);
+
+            assertThat(countRows()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("Test G: 守卫在触及 QueryRunner 之前就已生效——update 从未被调用")
+        void delWithNoConditionsShouldNeverReachQueryRunner() throws Exception {
+            QueryRunner spyRunner = Mockito.spy(new QueryRunner(dataSource));
+            Field field = AbstractRelationalDataOperator.class.getDeclaredField("queryRunner");
+            field.setAccessible(true);
+            field.set(operator, spyRunner);
+
+            assertThatThrownBy(operator::del).isInstanceOf(DataAccessException.class);
+
+            Mockito.verifyNoInteractions(spyRunner);
+        }
+
+        @Test
+        @DisplayName("Test H（正对照）: del(单条件) 仍然只删除匹配的行")
+        void delWithOneConditionShouldStillDeleteOnlyMatchingRow() throws Exception {
+            operator.del(WhereCondition.builder().column("name").value("Guard1").build());
+
+            assertThat(countRows()).isEqualTo(2);
         }
     }
 
