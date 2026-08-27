@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 
@@ -104,6 +105,23 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
             return;
         }
 
+        // D-08: an inner rollback() at a depth this commit() has now unwound to may have marked
+        // the context rollback-only instead of tearing it down. At depth 1 that marker must be
+        // honoured with a real rollback, not silently overridden by a commit the caller never
+        // asked to happen after all. cleanup(ctx) runs before the throw so a caller catching this
+        // exception never observes a still-live context (T-02-TAM-2).
+        if (ctx.rollbackOnly) {
+            try {
+                ctx.connection.rollback();
+                LOGGER.fine("Transaction rolled back (was marked rollback-only by a nested scope)");
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "Failed to rollback rollback-only transaction", e);
+            } finally {
+                cleanup(ctx);
+            }
+            throw UnexpectedRollbackException.markedBy("a nested transaction scope");
+        }
+
         try {
             ctx.connection.commit();
             LOGGER.fine("Transaction committed");
@@ -122,13 +140,24 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
             return;
         }
 
+        // D-08: an inner rollback() must not tear down the whole context -- that would silently
+        // discard whatever the outer scope(s) still have to do, and the outer commit() would then
+        // proceed as if nothing had gone wrong. Mark rollback-only and decrement instead; only the
+        // depth-1 rollback below performs a real connection.rollback() and cleanup, exactly as at
+        // HEAD.
+        if (ctx.depth > 1) {
+            ctx.rollbackOnly = true;
+            ctx.depth--;
+            LOGGER.fine("Nested transaction marked rollback-only, depth: " + ctx.depth);
+            return;
+        }
+
         try {
             ctx.connection.rollback();
             LOGGER.fine("Transaction rolled back");
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "Failed to rollback transaction", e);
         } finally {
-            // Always cleanup on rollback, regardless of depth
             cleanup(ctx);
         }
     }
@@ -220,5 +249,14 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         int depth;
         int originalIsolation = -1;
         boolean originalAutoCommit = true;
+
+        /**
+         * D-08: set by an inner {@code rollback()} at depth &gt; 1 instead of tearing the context
+         * down. The outer {@code commit()} at depth 1 checks this before committing - if set, it
+         * performs a real rollback, cleans up, and throws {@link UnexpectedRollbackException}
+         * rather than silently committing (or silently returning) as if the inner rollback never
+         * happened.
+         */
+        boolean rollbackOnly;
     }
 }
