@@ -8,12 +8,17 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
 import org.apache.commons.dbutils.QueryRunner;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,7 +27,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
+import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.abstracts.data.DataEntityTest;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
@@ -609,6 +616,221 @@ class SQLiteDataOperatorTest {
             
             assertThatThrownBy(() -> operator.insert(entity2))
                 .isInstanceOf(RuntimeException.class);
+        }
+    }
+
+    /**
+     * SILENT-02 (02-08): {@code onCreate}/{@code onUpdate}/{@code onDelete}/{@code onLoad} were
+     * declared on {@code BaseDataEntity} but nothing in this class ever called them, and
+     * {@code AuditableDataEntity#setCurrentUser} had zero call sites -- so {@code created_at}/
+     * {@code created_by}/{@code updated_at}/{@code updated_by} were always {@code NULL} on every
+     * persisted row. Both halves are pinned here against the relational backend; the identical
+     * set is pinned against {@code SimpleJsonDataOperatorTest} so the two backends cannot diverge.
+     */
+    @Nested
+    @DisplayName("生命周期钩子测试（SILENT-02）")
+    class LifecycleHookTests {
+
+        private AbstractRelationalDataOperator<DataEntityTest.CountingAuditableEntity> hookOperator;
+
+        @BeforeEach
+        void setUpHookOperator() {
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("DROP TABLE IF EXISTS counting_auditable_entity");
+            } catch (Exception ignored) {
+            }
+            hookOperator = new SQLiteDataOperator<>(dataSource, DataEntityTest.CountingAuditableEntity.class);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        @AfterEach
+        void tearDownHookOperator() {
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        private DataEntityTest.CountingAuditableEntity newEntity(String label) {
+            DataEntityTest.CountingAuditableEntity entity = new DataEntityTest.CountingAuditableEntity();
+            entity.setLabel(label);
+            return entity;
+        }
+
+        private long countRows() throws Exception {
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM counting_auditable_entity")) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+
+        @Test
+        @DisplayName("insert 应填充 created_at 与 created_by（此前一直是 NULL）")
+        void insertShouldPopulateCreatedAtAndCreatedBy() {
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            DataEntityTest.CountingAuditableEntity entity = newEntity("insert-1");
+
+            hookOperator.insert(entity);
+
+            assertThat(entity.getCreatedAt()).isNotNull();
+            assertThat(entity.getCreatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("update 应填充 updated_at 与 updated_by（此前一直是 NULL）")
+        void updateShouldPopulateUpdatedAtAndUpdatedBy() throws Exception {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("update-1");
+            hookOperator.insert(entity);
+
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            entity.setLabel("update-1-changed");
+            hookOperator.update(entity);
+
+            assertThat(entity.getUpdatedAt()).isNotNull();
+            assertThat(entity.getUpdatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("insert/update/getById/delById 各自恰好触发一次对应钩子")
+        void hooksFireExactlyOnceEachForSingleEntityOperations() throws Exception {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("count-1");
+
+            hookOperator.insert(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(1);
+
+            entity.setLabel("count-1-updated");
+            hookOperator.update(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(1);
+
+            DataEntityTest.CountingAuditableEntity loaded = hookOperator.getById(entity.getId());
+            assertThat(loaded).isNotNull();
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(1);
+
+            hookOperator.delById(entity.getId());
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("getAll/page 对返回的每个实体恰好触发一次 onLoad")
+        void getAllAndPageFireOnLoadOncePerReturnedEntity() {
+            hookOperator.insert(newEntity("load-1"));
+            hookOperator.insert(newEntity("load-2"));
+            hookOperator.insert(newEntity("load-3"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            List<DataEntityTest.CountingAuditableEntity> all = hookOperator.getAll();
+            assertThat(all).hasSize(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(3);
+
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            List<DataEntityTest.CountingAuditableEntity> page = hookOperator.page(1, 2);
+            assertThat(page).hasSize(2);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
+                    .as("onLoad must fire only for the entities actually returned by the page, not every matched row")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("插入后立即更新：created_at 保持插入时的值，updated_at 非空")
+        void adjacentInsertThenUpdatePreservesCreatedAt() throws Exception {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("adjacency-1");
+            hookOperator.insert(entity);
+            LocalDateTime createdAt = entity.getCreatedAt();
+            assertThat(createdAt).isNotNull();
+
+            entity.setLabel("adjacency-1-updated");
+            hookOperator.update(entity);
+
+            assertThat(entity.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(entity.getUpdatedAt()).isNotNull();
+
+            DataEntityTest.CountingAuditableEntity reloaded = hookOperator.getById(entity.getId());
+            assertThat(reloaded.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(reloaded.getUpdatedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("insertAll(空列表) 不触发任何钩子，也不写入任何行")
+        void insertAllEmptyFiresNoHooksAndWritesNoRows() throws Exception {
+            hookOperator.insertAll(Collections.emptyList());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(0);
+            assertThat(countRows()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("未设置当前用户时，created_by/updated_by 写入 SQL NULL 而非占位字符串")
+        void nullActorWritesSqlNullNotPlaceholderString() throws Exception {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("null-actor-1");
+            hookOperator.insert(entity);
+
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(
+                         "SELECT created_by, updated_by FROM counting_auditable_entity WHERE id = '"
+                                 + entity.getId() + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getObject("created_by")).isNull();
+                assertThat(rs.getObject("updated_by")).isNull();
+                // Java's null-to-string coercion for a missing reference would render as the
+                // 4-character literal "null" -- assert the column holds no such string either.
+                assertThat(rs.getString("created_by")).isNotEqualTo("null");
+                assertThat(rs.getString("updated_by")).isNotEqualTo("null");
+            }
+        }
+
+        @Test
+        @DisplayName("insertAll(3 个实体) 按列表顺序恰好触发 3 次 onCreate")
+        void insertAllFiresOnCreateThreeTimesInOrder() {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-1");
+            e1.setId("batch-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-2");
+            e2.setId("batch-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-3");
+            e3.setId("batch-id-3");
+
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateOrder())
+                    .containsExactly("batch-id-1", "batch-id-2", "batch-id-3");
+        }
+
+        @Test
+        @DisplayName("updateAll(3 个实体) 按列表顺序恰好触发 3 次 onUpdate")
+        void updateAllFiresOnUpdateThreeTimesInOrder() throws Exception {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-u-1");
+            e1.setId("batch-u-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-u-2");
+            e2.setId("batch-u-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-u-3");
+            e3.setId("batch-u-id-3");
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.updateAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateOrder())
+                    .containsExactly("batch-u-id-1", "batch-u-id-2", "batch-u-id-3");
+        }
+
+        @Test
+        @DisplayName("del(WhereCondition...) 按条件删除，但不会触发 onDelete（未实体化被删行）")
+        void delByConditionDoesNotFireOnDelete() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("del-condition-1");
+            hookOperator.insert(entity);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.del(WhereCondition.builder().column("label").value("del-condition-1").build());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount())
+                    .as("del(WhereCondition...) deletes by predicate without materialising rows -- it must not fire onDelete")
+                    .isEqualTo(0);
         }
     }
 }

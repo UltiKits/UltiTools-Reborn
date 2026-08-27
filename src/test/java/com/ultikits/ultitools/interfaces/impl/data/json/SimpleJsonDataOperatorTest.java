@@ -8,11 +8,16 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.FileWriter;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,7 +25,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.abstracts.data.DataEntityTest;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -710,6 +717,232 @@ class SimpleJsonDataOperatorTest {
 
         public void setValue(int value) {
             this.value = value;
+        }
+    }
+
+    /**
+     * SILENT-02 (02-08): the same set of assertions as
+     * {@code SQLiteDataOperatorTest$LifecycleHookTests}, run against the JSON backend, so the
+     * two backends cannot diverge on when the entity lifecycle hooks fire.
+     */
+    @Nested
+    @DisplayName("Lifecycle Hook Tests (SILENT-02)")
+    class LifecycleHookTests {
+
+        private SimpleJsonDataOperator<DataEntityTest.CountingAuditableEntity> hookOperator;
+
+        @BeforeEach
+        void setUpHookOperator() {
+            File hookDir = new File(storeDir, "counting-auditable");
+            hookDir.mkdirs();
+            hookOperator = new SimpleJsonDataOperator<>(hookDir.getAbsolutePath(),
+                    DataEntityTest.CountingAuditableEntity.class);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        @AfterEach
+        void tearDownHookOperator() {
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            AuditableDataEntity.clearCurrentUser();
+        }
+
+        private DataEntityTest.CountingAuditableEntity newEntity(String label) {
+            DataEntityTest.CountingAuditableEntity entity = new DataEntityTest.CountingAuditableEntity();
+            entity.setLabel(label);
+            return entity;
+        }
+
+        @Test
+        @DisplayName("insert should populate created_at and created_by (previously always NULL)")
+        void insertShouldPopulateCreatedAtAndCreatedBy() {
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            DataEntityTest.CountingAuditableEntity entity = newEntity("insert-1");
+
+            hookOperator.insert(entity);
+
+            assertThat(entity.getCreatedAt()).isNotNull();
+            assertThat(entity.getCreatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("update should populate updated_at and updated_by (previously always NULL)")
+        void updateShouldPopulateUpdatedAtAndUpdatedBy() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("update-1");
+            hookOperator.insert(entity);
+
+            UUID user = UUID.randomUUID();
+            AuditableDataEntity.setCurrentUser(user);
+            entity.setLabel("update-1-changed");
+            hookOperator.update(entity);
+
+            assertThat(entity.getUpdatedAt()).isNotNull();
+            assertThat(entity.getUpdatedBy()).isEqualTo(user);
+        }
+
+        @Test
+        @DisplayName("insert/update/getById/delById each fire their matching hook exactly once")
+        void hooksFireExactlyOnceEachForSingleEntityOperations() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("count-1");
+
+            hookOperator.insert(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(1);
+
+            entity.setLabel("count-1-updated");
+            hookOperator.update(entity);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(1);
+
+            DataEntityTest.CountingAuditableEntity loaded = hookOperator.getById(entity.getId());
+            assertThat(loaded).isNotNull();
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(1);
+
+            hookOperator.delById(entity.getId());
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("getAll/page fire onLoad exactly once per returned entity")
+        void getAllAndPageFireOnLoadOncePerReturnedEntity() {
+            hookOperator.insert(newEntity("load-1"));
+            hookOperator.insert(newEntity("load-2"));
+            hookOperator.insert(newEntity("load-3"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            List<DataEntityTest.CountingAuditableEntity> all = hookOperator.getAll();
+            assertThat(all).hasSize(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(3);
+
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+            List<DataEntityTest.CountingAuditableEntity> page = hookOperator.page(1, 2, WhereCondition.empty());
+            assertThat(page).hasSize(2);
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
+                    .as("onLoad must fire only for the entities actually returned by the page, not every matched row")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("exist(WhereCondition...) does not fire onLoad -- it is a boolean check, not a read")
+        void existDoesNotFireOnLoad() {
+            hookOperator.insert(newEntity("exist-1"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            boolean found = hookOperator.exist(
+                    WhereCondition.builder().column("label").value("exist-1").build());
+
+            assertThat(found).isTrue();
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("insert then immediate update: created_at keeps the insert value, updated_at is non-null")
+        void adjacentInsertThenUpdatePreservesCreatedAt() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("adjacency-1");
+            hookOperator.insert(entity);
+            LocalDateTime createdAt = entity.getCreatedAt();
+            assertThat(createdAt).isNotNull();
+
+            entity.setLabel("adjacency-1-updated");
+            hookOperator.update(entity);
+
+            assertThat(entity.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(entity.getUpdatedAt()).isNotNull();
+
+            DataEntityTest.CountingAuditableEntity reloaded = hookOperator.getById(entity.getId());
+            assertThat(reloaded.getCreatedAt()).isEqualTo(createdAt);
+            assertThat(reloaded.getUpdatedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("insertAll(empty list) fires no hooks and stores no entries")
+        void insertAllEmptyFiresNoHooksAndWritesNoRows() {
+            hookOperator.insertAll(Collections.emptyList());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(0);
+            assertThat(hookOperator.getAll()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("with no current user set, created_by/updated_by stay null (not a placeholder string)")
+        void nullActorLeavesCreatedByNull() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("null-actor-1");
+
+            hookOperator.insert(entity);
+
+            assertThat(entity.getCreatedBy()).isNull();
+            assertThat(entity.getUpdatedBy()).isNull();
+            DataEntityTest.CountingAuditableEntity reloaded = hookOperator.getById(entity.getId());
+            assertThat(reloaded.getCreatedBy()).isNull();
+            assertThat(reloaded.getUpdatedBy()).isNull();
+        }
+
+        @Test
+        @DisplayName("insertAll(3 entities) fires onCreate exactly 3 times, in list order")
+        void insertAllFiresOnCreateThreeTimesInOrder() {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-1");
+            e1.setId("batch-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-2");
+            e2.setId("batch-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-3");
+            e3.setId("batch-id-3");
+
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateOrder())
+                    .containsExactly("batch-id-1", "batch-id-2", "batch-id-3");
+        }
+
+        @Test
+        @DisplayName("updateAll(3 entities) fires onUpdate exactly 3 times, in list order")
+        void updateAllFiresOnUpdateThreeTimesInOrder() throws Exception {
+            DataEntityTest.CountingAuditableEntity e1 = newEntity("batch-u-1");
+            e1.setId("batch-u-id-1");
+            DataEntityTest.CountingAuditableEntity e2 = newEntity("batch-u-2");
+            e2.setId("batch-u-id-2");
+            DataEntityTest.CountingAuditableEntity e3 = newEntity("batch-u-3");
+            e3.setId("batch-u-id-3");
+            hookOperator.insertAll(Arrays.asList(e1, e2, e3));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.updateAll(Arrays.asList(e1, e2, e3));
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).isEqualTo(3);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateOrder())
+                    .containsExactly("batch-u-id-1", "batch-u-id-2", "batch-u-id-3");
+        }
+
+        @Test
+        @DisplayName("del(WhereCondition...) deletes by predicate but does not fire onDelete (rows never materialised)")
+        void delByConditionDoesNotFireOnDelete() {
+            DataEntityTest.CountingAuditableEntity entity = newEntity("del-condition-1");
+            hookOperator.insert(entity);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            hookOperator.del(WhereCondition.builder().column("label").value("del-condition-1").build());
+
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount())
+                    .as("del(WhereCondition...) deletes by predicate without materialising entries -- it must not fire onDelete")
+                    .isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("a snapshot restore (rolled-back transaction) does not re-fire onLoad for restored entries")
+        void snapshotRestoreDoesNotRefireOnLoad() {
+            hookOperator.insert(newEntity("txn-1"));
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            assertThatThrownBy(() -> hookOperator.transaction(() -> {
+                hookOperator.insert(newEntity("txn-2"));
+                throw new RuntimeException("force rollback");
+            })).isInstanceOf(RuntimeException.class);
+
+            // The snapshot restore itself (not the getAll() check below, which fires its own
+            // onLoad on the surviving entity) must not count as a load.
+            assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
+                    .as("restoreCache() repopulates the cache from a snapshot; that is not a load")
+                    .isEqualTo(0);
+            assertThat(hookOperator.getAll()).hasSize(1);
         }
     }
 }

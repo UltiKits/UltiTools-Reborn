@@ -10,24 +10,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.annotations.Column;
+import com.ultikits.ultitools.annotations.Table;
+
 /**
  * Unit tests for BaseDataEntity and AuditableDataEntity.
  */
 @DisplayName("Data Entity Tests")
-class DataEntityTest {
+public class DataEntityTest {
 
     @AfterEach
     void tearDown() {
         // Always clear current user after each test
         AuditableDataEntity.clearCurrentUser();
+        CountingAuditableEntity.resetCounters();
     }
 
     @Nested
@@ -382,7 +388,7 @@ class DataEntityTest {
             UUID testUserId = UUID.randomUUID();
             AuditableDataEntity.setCurrentUser(testUserId);
             AuditableDataEntity.clearCurrentUser();
-            
+
             TestAuditableEntity entity = new TestAuditableEntity();
             assertNull(entity.getCurrentUserForTest());
         }
@@ -501,6 +507,117 @@ class DataEntityTest {
         @Override
         protected Object clone() throws CloneNotSupportedException {
             throw new CloneNotSupportedException("Cloning not supported");
+        }
+    }
+
+    /**
+     * Counting fixture shared by {@code SQLiteDataOperatorTest} and
+     * {@code SimpleJsonDataOperatorTest} (02-08 Task 1) so both backends assert the same
+     * hook-firing counts and order against the same entity shape.
+     * <p>
+     * Counters and order lists are {@code static} rather than per-instance: the relational
+     * backend deserializes every returned row into a brand-new instance via Gson
+     * ({@code AbstractRelationalDataOperator#getListHandler()}), which never runs a
+     * constructor parameter through the object -- only its no-arg constructor and field
+     * initializers -- so a shared list reference handed in via a constructor would be null on
+     * every entity Gson produces. Static state is safe here because this project's Surefire
+     * configuration has no {@code <parallel>} element (sequential test-class execution is the
+     * default), and every consuming test calls {@link #resetCounters()} in its own
+     * {@code @BeforeEach}/{@code @AfterEach}.
+     */
+    @Table("counting_auditable_entity")
+    public static class CountingAuditableEntity extends AuditableDataEntity<String> {
+
+        @Column(value = "label", type = "VARCHAR(255)")
+        private String label;
+
+        private static final AtomicInteger ON_CREATE_COUNT = new AtomicInteger();
+        private static final AtomicInteger ON_UPDATE_COUNT = new AtomicInteger();
+        private static final AtomicInteger ON_DELETE_COUNT = new AtomicInteger();
+        private static final AtomicInteger ON_LOAD_COUNT = new AtomicInteger();
+
+        private static final List<String> ON_CREATE_ORDER = Collections.synchronizedList(new ArrayList<>());
+        private static final List<String> ON_UPDATE_ORDER = Collections.synchronizedList(new ArrayList<>());
+        private static final List<String> ON_DELETE_ORDER = Collections.synchronizedList(new ArrayList<>());
+        private static final List<String> ON_LOAD_ORDER = Collections.synchronizedList(new ArrayList<>());
+
+        public String getLabel() {
+            return label;
+        }
+
+        public void setLabel(String label) {
+            this.label = label;
+        }
+
+        public static void resetCounters() {
+            ON_CREATE_COUNT.set(0);
+            ON_UPDATE_COUNT.set(0);
+            ON_DELETE_COUNT.set(0);
+            ON_LOAD_COUNT.set(0);
+            ON_CREATE_ORDER.clear();
+            ON_UPDATE_ORDER.clear();
+            ON_DELETE_ORDER.clear();
+            ON_LOAD_ORDER.clear();
+        }
+
+        public static int onCreateCount() {
+            return ON_CREATE_COUNT.get();
+        }
+
+        public static int onUpdateCount() {
+            return ON_UPDATE_COUNT.get();
+        }
+
+        public static int onDeleteCount() {
+            return ON_DELETE_COUNT.get();
+        }
+
+        public static int onLoadCount() {
+            return ON_LOAD_COUNT.get();
+        }
+
+        public static List<String> onCreateOrder() {
+            return new ArrayList<>(ON_CREATE_ORDER);
+        }
+
+        public static List<String> onUpdateOrder() {
+            return new ArrayList<>(ON_UPDATE_ORDER);
+        }
+
+        public static List<String> onDeleteOrder() {
+            return new ArrayList<>(ON_DELETE_ORDER);
+        }
+
+        public static List<String> onLoadOrder() {
+            return new ArrayList<>(ON_LOAD_ORDER);
+        }
+
+        @Override
+        public void onCreate() {
+            super.onCreate();
+            ON_CREATE_COUNT.incrementAndGet();
+            ON_CREATE_ORDER.add(getId());
+        }
+
+        @Override
+        public void onUpdate() {
+            super.onUpdate();
+            ON_UPDATE_COUNT.incrementAndGet();
+            ON_UPDATE_ORDER.add(getId());
+        }
+
+        @Override
+        public void onDelete() {
+            super.onDelete();
+            ON_DELETE_COUNT.incrementAndGet();
+            ON_DELETE_ORDER.add(getId());
+        }
+
+        @Override
+        public void onLoad() {
+            super.onLoad();
+            ON_LOAD_COUNT.incrementAndGet();
+            ON_LOAD_ORDER.add(getId());
         }
     }
 }
