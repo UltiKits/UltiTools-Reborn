@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,7 +41,11 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
+import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
+import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 
 @DisplayName("PluginManager AOP wiring")
 class PluginManagerAopWiringTest {
@@ -262,6 +268,70 @@ class PluginManagerAopWiringTest {
         String message = rootMessage(thrown);
         assertTrue(message.contains("Transactional"), message);
         assertTrue(message.contains("mystery-backend"), message);
+    }
+
+    // ===== Single-instance TransactionManager property (02-09, T-02-TAM-11) =====
+
+    /**
+     * {@code SQLiteDataStore}/{@code MysqlDataStore} are concrete classes -- {@code
+     * mock(...)} bypasses their real constructors entirely (no pool, no connection, no
+     * {@code org.sqlite.JDBC}/live MySQL needed), while still satisfying {@code PluginManager}'s
+     * {@code instanceof SQLiteDataStore}/{@code instanceof MysqlDataStore} checks, which a
+     * hand-written {@code DataStore} stand-in (as most of this file's tests use) could not: those
+     * checks are on the concrete class, not the interface.
+     */
+    @Test
+    @DisplayName("Should bind the @Transactional advisor to the SAME JdbcTransactionManager "
+            + "SQLiteDataStore wires onto the operators it hands out, not an independent second "
+            + "instance (T-02-TAM-11)")
+    void shouldBindTransactionalAdvisorToSqliteStoreSharedManager() {
+        SQLiteDataStore sqliteStore = mock(SQLiteDataStore.class);
+        DataSource fakeDataSource = mock(DataSource.class);
+        JdbcTransactionManager sharedManager = mock(JdbcTransactionManager.class);
+        DataScope sqliteScope = DataScope.forExternal("shouldBindTransactionalAdvisorToSqliteStoreSharedManager",
+                new File("build/test-wireaop-sqlite"), Collections.emptySet());
+        when(sqliteStore.getStoreType()).thenReturn("sqlite");
+        when(sqliteStore.getDataSource(sqliteScope)).thenReturn(fakeDataSource);
+        when(sqliteStore.transactionManagerFor(sqliteScope)).thenReturn(sharedManager);
+
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        when(mockUltiTools.getDataStore()).thenReturn(sqliteStore);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+        SimpleContainer context = new SimpleContainer();
+        PluginManager.wireAop(context, sqliteScope);
+        context.refresh();
+
+        assertSame(sharedManager, context.getBean(TransactionManager.class),
+                "wireAop must bind the interceptor to the exact manager SQLiteDataStore itself "
+                        + "resolves for this scope, not a second, independently-constructed one");
+    }
+
+    @Test
+    @DisplayName("Should bind the @Transactional advisor to the SAME JdbcTransactionManager "
+            + "MysqlDataStore wires onto the operators it hands out, not an independent second "
+            + "instance (T-02-TAM-11)")
+    void shouldBindTransactionalAdvisorToMysqlStoreSharedManager() {
+        MysqlDataStore mysqlStore = mock(MysqlDataStore.class);
+        DataSource fakeDataSource = mock(DataSource.class);
+        JdbcTransactionManager sharedManager = mock(JdbcTransactionManager.class);
+        DataScope mysqlScope = DataScope.forExternal("shouldBindTransactionalAdvisorToMysqlStoreSharedManager",
+                new File("build/test-wireaop-mysql"), Collections.emptySet());
+        when(mysqlStore.getStoreType()).thenReturn("mysql");
+        when(mysqlStore.getDataSource(mysqlScope)).thenReturn(fakeDataSource);
+        when(mysqlStore.transactionManagerFor(mysqlScope)).thenReturn(sharedManager);
+
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        when(mockUltiTools.getDataStore()).thenReturn(mysqlStore);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+        SimpleContainer context = new SimpleContainer();
+        PluginManager.wireAop(context, mysqlScope);
+        context.refresh();
+
+        assertSame(sharedManager, context.getBean(TransactionManager.class),
+                "wireAop must bind the interceptor to the exact manager MysqlDataStore itself "
+                        + "resolves for this scope, not a second, independently-constructed one");
     }
 
     @Test

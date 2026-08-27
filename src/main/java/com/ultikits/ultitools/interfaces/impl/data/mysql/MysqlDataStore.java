@@ -6,7 +6,9 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.manager.DataScope;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.Getter;
@@ -49,6 +51,21 @@ public class MysqlDataStore implements DataStore {
     @Getter
     private HikariDataSource dataSource;
 
+    /**
+     * {@link JdbcTransactionManager} cache, keyed by requesting identity -- one manager per
+     * plugin container even though every plugin shares the one global {@link #dataSource} (D-02):
+     * {@code contextHolder} is a per-instance {@code ThreadLocal} (FOUND-04), so two plugins each
+     * doing a {@code @Transactional} write on MySQL must never cross transaction state, exactly
+     * as {@code PluginManager.wireTransactional}'s own javadoc already documents for the JDBC
+     * path. Not static -- same reload-safety reasoning as {@link #dataOperatorMap}.
+     * <p>
+     * The single seam through which both {@link #transactionManagerFor(DataScope)} (called by
+     * {@code PluginManager.wireTransactional} for the AOP interceptor) and {@link #getOperator}
+     * (below) resolve a manager for the same identity -- {@code computeIfAbsent} guarantees the
+     * second caller gets back the exact instance the first one built (T-02-TAM-11).
+     */
+    private final Map<String, JdbcTransactionManager> transactionManagerMap = new ConcurrentHashMap<>();
+
     public MysqlDataStore() {
         MysqlConfig mysqlConfig = new MysqlConfig(UltiTools.getInstance().getConfig());
 
@@ -83,8 +100,13 @@ public class MysqlDataStore implements DataStore {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(plugin.getPluginName(), dataEntity),
-                key -> new MysqlDataOperator<>(dataSource, dataEntity));
+        String identity = plugin.getPluginName();
+        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
+                key -> {
+                    MysqlDataOperator<T> operator = new MysqlDataOperator<>(dataSource, dataEntity);
+                    operator.setTransactionManager(transactionManagerForIdentity(identity));
+                    return operator;
+                });
     }
 
     @Override
@@ -94,13 +116,44 @@ public class MysqlDataStore implements DataStore {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(canonicalPath(dataFolder), dataEntity),
-                key -> new MysqlDataOperator<>(dataSource, dataEntity));
+        String identity = canonicalPath(dataFolder);
+        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
+                key -> {
+                    MysqlDataOperator<T> operator = new MysqlDataOperator<>(dataSource, dataEntity);
+                    operator.setTransactionManager(transactionManagerForIdentity(identity));
+                    return operator;
+                });
     }
 
     @Override
     public javax.sql.DataSource getDataSource(DataScope scope) {
         return dataSource;
+    }
+
+    /**
+     * Resolves the same per-plugin-container {@link JdbcTransactionManager} instance {@link
+     * #getOperator} wires onto the operators it hands out for {@code scope}'s own identity -- the
+     * seam {@code PluginManager.wireTransactional} calls to bind the AOP {@code @Transactional}
+     * interceptor to it, so a module's data operators and its {@code @Transactional} beans share
+     * one transaction, not two (T-02-TAM-11), despite every plugin sharing the one global {@link
+     * #dataSource}.
+     *
+     * @param scope the identity token to resolve the manager for <br> 待解析管理器的身份令牌
+     * @return the shared manager for that scope's identity <br> 该 scope 身份共享的管理器
+     */
+    public JdbcTransactionManager transactionManagerFor(DataScope scope) {
+        UltiTools ultiTools = UltiTools.getInstance();
+        boolean internal = ultiTools != null && ultiTools.getDataFolder() != null
+                && ultiTools.getDataFolder().equals(scope.getDataFolder());
+        String identity = internal ? scope.getPluginName() : canonicalPath(scope.getDataFolder());
+        return transactionManagerForIdentity(identity);
+    }
+
+    /**
+     * Returns the manager for {@code identity}, building it on first touch.
+     */
+    private JdbcTransactionManager transactionManagerForIdentity(String identity) {
+        return transactionManagerMap.computeIfAbsent(identity, key -> new DataSourceTransactionManager(dataSource));
     }
 
     private static String canonicalPath(File dataFolder) {
@@ -115,6 +168,7 @@ public class MysqlDataStore implements DataStore {
     public void destroyAllOperators() {
         dataSource.close();
         dataOperatorMap.clear();
+        transactionManagerMap.clear();
     }
 
     /**

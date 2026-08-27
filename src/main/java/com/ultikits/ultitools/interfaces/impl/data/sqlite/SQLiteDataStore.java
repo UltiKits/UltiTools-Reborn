@@ -16,7 +16,9 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.manager.DataScope;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -58,6 +60,23 @@ public class SQLiteDataStore implements DataStore {
      */
     private final Map<String, HikariDataSource> dataSourceMap = new ConcurrentHashMap<>();
 
+    /**
+     * {@link JdbcTransactionManager} cache, keyed identically to {@link #dataSourceMap} -- the
+     * backing .db file's canonical path (D-02: one JDBC {@link DataSource} per file already means
+     * one manager per file is "one per plugin container", since each plugin has its own file).
+     * Not static -- same reload-safety reasoning as the other two maps.
+     * <p>
+     * This is the single seam through which BOTH {@link #transactionManagerFor(DataScope)}
+     * (called by {@code PluginManager.wireTransactional} for the AOP interceptor) and {@link
+     * #getOperator} (below, for the operators this store hands module authors) resolve a manager
+     * for the same file -- {@code computeIfAbsent} guarantees the second caller to touch a given
+     * key gets back the exact instance the first one built, never a second, independent one
+     * (T-02-TAM-11: two managers over one file would give a {@code @Transactional} method calling
+     * {@code insertAll} two independent transactions, which is worse than no transaction at all
+     * because it looks correct).
+     */
+    private final Map<String, JdbcTransactionManager> transactionManagerMap = new ConcurrentHashMap<>();
+
     @Override
     public String getStoreType() {
         return "sqlite";
@@ -70,11 +89,13 @@ public class SQLiteDataStore implements DataStore {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        File dataFolder = new File(UltiTools.getInstance().getDataFolder(), "sqliteDB");
-        ensureExists(dataFolder);
-        String dbPath = canonicalPath(new File(dataFolder, plugin.getPluginName() + ".db"));
+        String dbPath = dbPathForPlugin(plugin.getPluginName());
         return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(dbPath, dataEntity),
-                key -> new SQLiteDataOperator<>(poolFor(dbPath), dataEntity));
+                key -> {
+                    SQLiteDataOperator<T> operator = new SQLiteDataOperator<>(poolFor(dbPath), dataEntity);
+                    operator.setTransactionManager(transactionManagerForPath(dbPath));
+                    return operator;
+                });
     }
 
     @Override
@@ -84,18 +105,75 @@ public class SQLiteDataStore implements DataStore {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        ensureExists(dataFolder);
-        String dbPath = canonicalPath(new File(dataFolder, "data.db"));
+        String dbPath = dbPathForFolder(dataFolder);
         return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(dbPath, dataEntity),
-                key -> new SQLiteDataOperator<>(poolFor(dbPath), dataEntity));
+                key -> {
+                    SQLiteDataOperator<T> operator = new SQLiteDataOperator<>(poolFor(dbPath), dataEntity);
+                    operator.setTransactionManager(transactionManagerForPath(dbPath));
+                    return operator;
+                });
     }
 
     @Override
     public DataSource getDataSource(DataScope scope) {
-        File dataFolder = new File(scope.getDataFolder(), "sqliteDB");
+        return poolFor(dbPathFor(scope));
+    }
+
+    /**
+     * Resolves the same per-plugin-container {@link JdbcTransactionManager} instance {@link
+     * #getOperator} wires onto the operators it hands out for {@code scope}'s own database file
+     * -- the seam {@code PluginManager.wireTransactional} calls to bind the AOP {@code
+     * @Transactional} interceptor to it, so a module's data operators and its {@code
+     * @Transactional} beans share one transaction, not two (T-02-TAM-11).
+     *
+     * @param scope the identity token to resolve the manager for <br> 待解析管理器的身份令牌
+     * @return the shared manager for that scope's database file <br> 该 scope 数据库文件共享的管理器
+     */
+    public JdbcTransactionManager transactionManagerFor(DataScope scope) {
+        return transactionManagerForPath(dbPathFor(scope));
+    }
+
+    /**
+     * Returns the manager for {@code dbPath}, building it on first touch -- the same {@code
+     * computeIfAbsent} single-construction guarantee {@link #poolFor(String)} already gives the
+     * connection pool for that file.
+     */
+    private JdbcTransactionManager transactionManagerForPath(String dbPath) {
+        return transactionManagerMap.computeIfAbsent(dbPath, path -> new DataSourceTransactionManager(poolFor(path)));
+    }
+
+    /**
+     * Resolves {@code scope}'s backing .db file path, matching whichever legacy {@code
+     * getOperator} overload the same scope would actually route through: the internal ({@code
+     * dbPathForPlugin}) shape when {@code scope} is an internal plugin's own scope (its {@code
+     * dataFolder} is exactly the core framework's own data folder, {@code DataScope.forPlugin}'s
+     * construction -- the same disambiguation {@code JsonStore.identityOf(DataScope)} uses, 02-05),
+     * the external ({@code dbPathForFolder}) shape otherwise.
+     */
+    private static String dbPathFor(DataScope scope) {
+        UltiTools ultiTools = UltiTools.getInstance();
+        boolean internal = ultiTools != null && ultiTools.getDataFolder() != null
+                && ultiTools.getDataFolder().equals(scope.getDataFolder());
+        return internal ? dbPathForPlugin(scope.getPluginName()) : dbPathForFolder(scope.getDataFolder());
+    }
+
+    /**
+     * The internal-plugin .db path shape: {@code <core data folder>/sqliteDB/<plugin name>.db}.
+     * Shared by {@link #getOperator(UltiToolsPlugin, Class)} and {@link #dbPathFor(DataScope)}.
+     */
+    private static String dbPathForPlugin(String pluginName) {
+        File dataFolder = new File(UltiTools.getInstance().getDataFolder(), "sqliteDB");
         ensureExists(dataFolder);
-        String dbPath = canonicalPath(new File(dataFolder, scope.getPluginName() + ".db"));
-        return poolFor(dbPath);
+        return canonicalPath(new File(dataFolder, pluginName + ".db"));
+    }
+
+    /**
+     * The external-plugin .db path shape: {@code <plugin's own data folder>/data.db}. Shared by
+     * {@link #getOperator(File, Class)} and {@link #dbPathFor(DataScope)}.
+     */
+    private static String dbPathForFolder(File dataFolder) {
+        ensureExists(dataFolder);
+        return canonicalPath(new File(dataFolder, "data.db"));
     }
 
     /**
@@ -152,6 +230,7 @@ public class SQLiteDataStore implements DataStore {
         }
         dataSourceMap.clear();
         dataOperatorMap.clear();
+        transactionManagerMap.clear();
     }
 
     /**
