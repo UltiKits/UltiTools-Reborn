@@ -56,8 +56,9 @@ class DataSourceTransactionManagerTest {
         try {
             Field contextHolderField = DataSourceTransactionManager.class.getDeclaredField("contextHolder");
             contextHolderField.setAccessible(true);
+            // Instance field now (FOUND-04) -- read off transactionManager, not off the class (null).
             @SuppressWarnings("unchecked")
-            ThreadLocal<?> contextHolder = (ThreadLocal<?>) contextHolderField.get(null);
+            ThreadLocal<?> contextHolder = (ThreadLocal<?>) contextHolderField.get(transactionManager);
             contextHolder.remove();
         } catch (Exception ignored) {
         }
@@ -489,8 +490,8 @@ class DataSourceTransactionManagerTest {
         @Test
         @DisplayName("没有事务时应该返回 null")
         void shouldReturnNullWhenNoTransaction() {
-            DataSourceTransactionManager.TransactionContext ctx = 
-                DataSourceTransactionManager.getCurrentContext();
+            DataSourceTransactionManager.TransactionContext ctx =
+                transactionManager.getCurrentContext();
             assertThat(ctx).isNull();
         }
 
@@ -498,10 +499,10 @@ class DataSourceTransactionManagerTest {
         @DisplayName("有事务时应该返回上下文")
         void shouldReturnContextWhenTransactionActive() {
             transactionManager.begin();
-            
-            DataSourceTransactionManager.TransactionContext ctx = 
-                DataSourceTransactionManager.getCurrentContext();
-            
+
+            DataSourceTransactionManager.TransactionContext ctx =
+                transactionManager.getCurrentContext();
+
             assertThat(ctx).isNotNull();
             assertThat(ctx.active).isTrue();
             assertThat(ctx.depth).isEqualTo(1);

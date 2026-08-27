@@ -15,6 +15,8 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 
+import javax.sql.DataSource;
+
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -35,11 +37,14 @@ import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ExceptionInterceptor;
+import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.AnnotationUtils;
@@ -212,7 +217,7 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
-            wireAop(pluginContext);
+            wireAop(pluginContext, DataScope.forPlugin(plugin));
             pluginContext.refresh();
             if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
                 ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
@@ -596,11 +601,14 @@ public class PluginManager {
      * Must be called before {@link SimpleContainer#refresh()}: the resolver participates in bean
      * instantiation, so beans created earlier are never proxied.
      * <p>
-     * Only {@code @ExceptionCatch} is wired in this release. {@code @Transactional} is declared
-     * unavailable rather than silently inert: the framework has no reachable
-     * {@code TransactionManager} today, because {@code DataStore} does not expose its
-     * {@code DataSource} and the default SQLite backend opens one connection pool per entity class
-     * against a per-plugin {@code .db} file. Tracked in issues #195 and #196.
+     * {@code @ExceptionCatch} and {@code @Transactional} are both wired in this release, for the
+     * JDBC backends (SQLite, MySQL). {@code DataStore} now exposes the plugin's {@code DataSource}
+     * via {@code getDataSource(DataScope)}, keyed by database file rather than by entity class,
+     * and this method builds one {@code TransactionManager} per plugin container from it and
+     * registers a {@code TransactionInterceptor} advisor for that manager. Issues #195 and #196
+     * are both addressed for the JDBC backends. The JSON backend does not implement
+     * {@code getDataSource(DataScope)} yet, so {@code @Transactional} stays declared unavailable
+     * there until a snapshot-based transaction manager lands.
      * <p>
      * <b>Scope limit 1 — {@code registerSingleton} bypasses this entirely.</b> Only beans the
      * container constructs itself (through {@code registerBean} or component scanning) are ever
@@ -642,8 +650,12 @@ public class PluginManager {
      * {@code @ExceptionCatch} silently does nothing there and {@code @Transactional} is not
      * even refused. Unchanged from 6.2.x, and not fixed here.
      * <p>
-     * 本版本只接线 @ExceptionCatch。@Transactional 声明为不可用而非静默失效，
-     * 因为框架当前没有可达的 TransactionManager。见 issue #195 / #196。
+     * 本版本同时接线 @ExceptionCatch 与 @Transactional（面向 SQLite、MySQL 两个 JDBC 后端）。
+     * DataStore 现在通过 getDataSource(DataScope) 暴露插件的 DataSource——按数据库文件而非
+     * 实体类分池，本方法据此为每个插件容器构建一个 TransactionManager，并为其注册
+     * TransactionInterceptor 通知器。issue #195、#196 在 JDBC 后端上均已解决。JSON 后端尚未
+     * 实现 getDataSource(DataScope)，因此 @Transactional 在该后端仍声明为不可用，直到基于
+     * 快照的事务管理器落地。
      * <p>
      * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
      * {@code @ContextEntry} bean（反射手工构造）、config 实体、{@code @Configuration} 类
@@ -670,8 +682,12 @@ public class PluginManager {
      * {@code @Transactional} 连拒绝都不会触发。与 6.2.x 行为相同，本批未修复。
      *
      * @param context the plugin container, before refresh
+     * @param scope   the identity token minted for the caller, used to resolve that plugin's
+     *                {@code DataSource} for the {@code @Transactional} advisor <br>
+     *                为调用方铸造的身份令牌，用于解析该插件的 {@code DataSource}，供
+     *                {@code @Transactional} 通知器使用
      */
-    static void wireAop(SimpleContainer context) {
+    static void wireAop(SimpleContainer context, DataScope scope) {
         AopProxyResolver resolver = new AopProxyResolver();
 
         // One AnnotationLookupCache instance per annotation type, shared between the advisor and
@@ -690,17 +706,60 @@ public class PluginManager {
         resolver.addAdvisor(AopAdvisor.forAnnotation(
                 ExceptionCatch.class, exceptionInterceptor, 200, exceptionCatchCache));
 
-        resolver.addUnavailableAnnotation(Transactional.class,
-                "@Transactional needs a TransactionManager bound to a DataSource. The framework "
-                        + "cannot provide one yet: DataStore does not expose its DataSource, and "
-                        + "the default SQLite backend opens one connection pool per entity class, "
-                        + "so a single .db file would have several unrelated transaction managers. "
-                        + "Tracked in issues #195 and #196. Until then use "
-                        + "DataOperator.transaction(Callable) explicitly.");
+        wireTransactional(context, scope, resolver);
 
         resolver.validateAnnotationCoverage();
 
         context.setAopProxyResolver(resolver);
+    }
+
+    /**
+     * Builds and registers the {@code @Transactional} advisor for one plugin container, or
+     * declares the annotation unavailable if the configured backend cannot supply a
+     * {@code DataSource} yet (the JSON backend, until 02-05's snapshot-based manager lands).
+     * <p>
+     * 为一个插件容器构建并注册 {@code @Transactional} 通知器；若配置的后端还不能提供
+     * {@code DataSource}（JSON 后端，直到 02-05 的快照式管理器落地为止），则将该注解声明为
+     * 不可用。
+     *
+     * @param context  the plugin container, before refresh <br> 插件容器，尚未 refresh
+     * @param scope    the identity token used to resolve the plugin's {@code DataSource}
+     *                 <br> 用于解析插件 {@code DataSource} 的身份令牌
+     * @param resolver the resolver {@code wireAop} is assembling <br> {@code wireAop} 正在组装的解析器
+     */
+    private static void wireTransactional(SimpleContainer context, DataScope scope, AopProxyResolver resolver) {
+        DataStore dataStore = UltiTools.getInstance().getDataStore();
+        DataSource dataSource;
+        try {
+            dataSource = dataStore.getDataSource(scope);
+        } catch (UnsupportedOperationException e) {
+            resolver.addUnavailableAnnotation(Transactional.class,
+                    "@Transactional needs a TransactionManager bound to a DataSource. The "
+                            + "configured datasource.type (" + dataStore.getStoreType() + ") does "
+                            + "not expose one yet. Until then use "
+                            + "DataOperator.transaction(Callable) explicitly.");
+            return;
+        }
+
+        // Same reasoning as the shared exceptionCatchCache above (D-38): one AnnotationLookupCache
+        // instance per plugin container, constructor-injected into the interceptor, never static.
+        AnnotationLookupCache<Transactional> transactionalCache =
+                new AnnotationLookupCache<>(Transactional.class);
+
+        // One DataSourceTransactionManager per plugin container (D-01/D-02, FOUND-04): built here,
+        // from this plugin's own DataSource, so two plugin containers can never share transaction
+        // state. Registered into the container so DataOperator/service beans that need to join the
+        // active transaction (e.g. via setTransactionManager) can resolve it by type.
+        TransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        context.registerType(TransactionManager.class, transactionManager);
+
+        TransactionInterceptor transactionInterceptor = new TransactionInterceptor(transactionManager);
+        // Order 100: below ExceptionCatch's 200 (lower value = higher priority, applied outermost),
+        // matching the documented interceptor order Transaction -> Exception -> target, and the
+        // "Transaction advisors typically use order 100" convention AopAdvisor#getOrder already
+        // documents.
+        resolver.addAdvisor(AopAdvisor.forAnnotation(
+                Transactional.class, transactionInterceptor, 100, transactionalCache));
     }
 
     /**
@@ -784,7 +843,7 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
-            wireAop(pluginContext);
+            wireAop(pluginContext, DataScope.forPlugin(plugin));
             pluginContext.refresh();
             plugin.setContext(pluginContext);
             return plugin;
@@ -976,7 +1035,8 @@ public class PluginManager {
         }
 
         // 3. Refresh container to instantiate beans
-        wireAop(context);
+        wireAop(context, DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
+                Collections.emptySet()));
         context.refresh();
         adapter.setContext(context);
 

@@ -29,8 +29,15 @@ public class DataSourceTransactionManager implements TransactionManager {
 
     /**
      * ThreadLocal holding the current transaction context for each thread.
+     * <p>
+     * Instance-scoped on purpose (FOUND-04) - one {@code DataSourceTransactionManager} per plugin
+     * container, built once in {@code PluginManager.wireAop}. A {@code static} field here would
+     * let two plugin containers' transactions cross: manager A's {@code rollback()} would be able
+     * to reach a {@link TransactionContext} manager B set up for a completely different
+     * {@link DataSource}, on the same thread. Still a {@code ThreadLocal} - the fix is "no longer
+     * static", not "no longer ThreadLocal".
      */
-    private static final ThreadLocal<TransactionContext> contextHolder = new ThreadLocal<>();
+    private final ThreadLocal<TransactionContext> contextHolder = new ThreadLocal<>();
 
     /**
      * Creates a new DataSourceTransactionManager.
@@ -194,8 +201,11 @@ public class DataSourceTransactionManager implements TransactionManager {
 
     /**
      * Gets the current transaction context (for testing).
+     * <p>
+     * Instance method, not static, per the same FOUND-04 fix as {@link #contextHolder} itself:
+     * two {@code DataSourceTransactionManager} instances now have independent state.
      */
-    static TransactionContext getCurrentContext() {
+    TransactionContext getCurrentContext() {
         return contextHolder.get();
     }
 

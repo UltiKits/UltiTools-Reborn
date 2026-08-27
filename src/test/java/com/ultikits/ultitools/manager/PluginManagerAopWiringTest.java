@@ -6,16 +6,23 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
+import java.io.File;
 import java.lang.annotation.Annotation;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.aop.AopAdvisor;
@@ -24,9 +31,36 @@ import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 
 @DisplayName("PluginManager AOP wiring")
 class PluginManagerAopWiringTest {
+
+    // wireAop now resolves a DataSource through UltiTools.getInstance().getDataStore() (D-01).
+    // Every test in this file exercises @ExceptionCatch wiring or annotation-coverage plumbing,
+    // not @Transactional's JDBC path, so the JSON store's UnsupportedOperationException branch
+    // (declare-unavailable, matching pre-6.3.0 behavior) is the right stand-in here.
+    private MockedStatic<UltiTools> ultiToolsMock;
+    private DataScope scope;
+
+    @BeforeEach
+    void setUpDataStore() {
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        DataStore jsonStore = new JsonStore("build/test-wireaop-json");
+        when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
+        ultiToolsMock = mockStatic(UltiTools.class);
+        ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+        scope = DataScope.forExternal("PluginManagerAopWiringTest", new File("build/test-wireaop-json"),
+                Collections.emptySet());
+    }
+
+    @AfterEach
+    void tearDownDataStore() {
+        if (ultiToolsMock != null) {
+            ultiToolsMock.close();
+        }
+    }
 
     public static class Guarded {
         @ExceptionCatch(silent = true)
@@ -46,7 +80,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("Should register exactly one advisor, for @ExceptionCatch")
     void shouldRegisterExceptionCatchAdvisorOnly() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
 
         AopProxyResolver resolver = context.getAopProxyResolver();
         assertNotNull(resolver, "wireAop must attach a resolver");
@@ -61,7 +95,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("Should proxy a bean using @ExceptionCatch")
     void shouldProxyExceptionCatchBean() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
         context.registerBean(Guarded.class);
         context.refresh();
 
@@ -74,7 +108,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("Should swallow the exception through the wired @ExceptionCatch interceptor")
     void shouldSwallowThroughWiredInterceptor() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
         context.registerBean(Guarded.class);
         context.refresh();
 
@@ -83,23 +117,23 @@ class PluginManagerAopWiringTest {
     }
 
     @Test
-    @DisplayName("Should reject a bean using @Transactional with a message naming #195/#196")
+    @DisplayName("Should reject a bean using @Transactional when the backend has no DataSource yet (JSON)")
     void shouldRejectTransactionalBean() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
         context.registerBean(Transactionally.class);
 
         RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
         String message = rootMessage(thrown);
         assertTrue(message.contains("Transactional"), message);
-        assertTrue(message.contains("#195"), message);
+        assertTrue(message.contains("datasource.type"), message);
     }
 
     @Test
     @DisplayName("Should leave plain beans unproxied")
     void shouldLeavePlainBeansAlone() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
         context.registerBean(Plain.class);
         context.refresh();
 
@@ -110,7 +144,7 @@ class PluginManagerAopWiringTest {
     @DisplayName("Should produce a resolver that passes annotation coverage validation")
     void shouldPassAnnotationCoverageValidation() {
         SimpleContainer context = new SimpleContainer();
-        PluginManager.wireAop(context);
+        PluginManager.wireAop(context, scope);
 
         assertDoesNotThrow(() -> context.getAopProxyResolver().validateAnnotationCoverage());
     }
@@ -132,7 +166,7 @@ class PluginManagerAopWiringTest {
             SimpleContainer context = new SimpleContainer();
 
             ContainerException thrown =
-                    assertThrows(ContainerException.class, () -> PluginManager.wireAop(context));
+                    assertThrows(ContainerException.class, () -> PluginManager.wireAop(context, scope));
             assertTrue(thrown.getMessage().contains("Deprecated"), thrown.getMessage());
         }
     }

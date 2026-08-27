@@ -12,11 +12,17 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.manager.DataScope;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
 public class SQLiteDataStore implements DataStore {
     private static final Map<Class<?>, DataOperator<?>> dataOperatorMap = new ConcurrentHashMap<>();
+    // Keyed by resolved .db file path, not by entity class -- independent of dataOperatorMap above.
+    // A JDBC connection pool needs only a file path, not @Table metadata. SILENT-03's re-key of
+    // dataOperatorMap itself is a later plan's work; this map exists solely to serve
+    // getDataSource(DataScope) before any entity operator has ever been requested.
+    private static final Map<String, DataSource> dataSourceMap = new ConcurrentHashMap<>();
 
     @Override
     public String getStoreType() {
@@ -64,6 +70,26 @@ public class SQLiteDataStore implements DataStore {
             dataOperatorMap.put(dataEntity, tSQLiteDataOperator);
         }
         return tSQLiteDataOperator;
+    }
+
+    @Override
+    public DataSource getDataSource(DataScope scope) {
+        File dataFolder = new File(scope.getDataFolder(), "sqliteDB");
+        if (!dataFolder.exists()) {
+            dataFolder.mkdirs();
+        }
+        String dbPath = dataFolder.getAbsolutePath() + "/" + scope.getPluginName() + ".db";
+        DataSource cached = dataSourceMap.get(dbPath);
+        if (cached != null) {
+            return cached;
+        }
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:sqlite://" + dbPath);
+        config.setDriverClassName("org.sqlite.JDBC");
+        config.setMaximumPoolSize(10);
+        DataSource dataSource = new HikariDataSource(config);
+        dataSourceMap.put(dbPath, dataSource);
+        return dataSource;
     }
 
     @Override
