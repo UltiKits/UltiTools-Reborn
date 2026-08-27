@@ -47,8 +47,23 @@ public abstract class AuditableDataEntity<ID extends java.io.Serializable> exten
      * Sets the current user for audit tracking.
      * Call this before performing data operations.
      * <p>
+     * {@code BaseCommandExecutor} (Phase 5's file; the current-user wrapper was added there in
+     * 02-08) calls this once, inside the runnable that actually invokes a command's matched
+     * method, when the resolved sender is a {@code Player} -- so a command handler's data
+     * operations record that player's UUID in {@code createdBy}/{@code updatedBy}. Nothing else
+     * in the framework calls this: a module performing data operations from outside a command
+     * handler (a scheduled task, a listener, an external plugin via the External Plugin API) is
+     * responsible for setting the context itself, or its writes record {@code null} actors.
+     * <p>
      * 设置用于审计跟踪的当前用户。
      * 在执行数据操作之前调用此方法。
+     * <p>
+     * {@code BaseCommandExecutor}（Phase 5 的文件；当前用户包装器由 02-08 加入）在实际调用
+     * 命令匹配方法的那个 runnable 内部调用一次本方法——仅当解析出的发送者是 {@code Player}
+     * 时才会调用，因此命令处理器中的数据操作会把该玩家的 UUID 记入
+     * {@code createdBy}/{@code updatedBy}。框架中没有其他地方会调用它：模块如果在命令处理器
+     * 之外执行数据操作（定时任务、监听器、通过 External Plugin API 接入的外部插件），
+     * 需要自行设置该上下文，否则写入的审计字段记录的行为者会是 {@code null}。
      *
      * @param userId the current user's UUID
      */
@@ -60,8 +75,21 @@ public abstract class AuditableDataEntity<ID extends java.io.Serializable> exten
      * Clears the current user context.
      * Call this after completing data operations.
      * <p>
+     * {@code BaseCommandExecutor} calls this in a {@code finally} around the same invocation it
+     * wraps with {@link #setCurrentUser(UUID)}, so it runs whether the handler returns normally
+     * or throws. It calls this method -- not {@code setCurrentUser(null)} -- specifically because
+     * this removes the {@link ThreadLocal} entry entirely rather than leaving a {@code null}
+     * mapping behind, which matters on a pooled Bukkit worker thread that gets reused for a later,
+     * unrelated command.
+     * <p>
      * 清除当前用户上下文。
      * 在完成数据操作后调用此方法。
+     * <p>
+     * {@code BaseCommandExecutor} 在包裹同一次调用的 {@code finally} 块中调用本方法（与
+     * {@link #setCurrentUser(UUID)} 成对），因此无论处理器正常返回还是抛出异常都会执行。
+     * 它调用的是本方法而不是 {@code setCurrentUser(null)}，原因是本方法会把
+     * {@link ThreadLocal} 条目彻底移除，而不是留下一个值为 {@code null} 的映射——这对
+     * 之后被复用来处理另一条无关命令的 Bukkit 工作线程池线程很重要。
      */
     public static void clearCurrentUser() {
         CURRENT_USER.remove();
