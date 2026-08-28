@@ -1,22 +1,34 @@
 package com.ultikits.ultitools.context;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.PostConstruct;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopProxyResolver;
+import com.ultikits.ultitools.aop.ExceptionInterceptor;
+import com.ultikits.ultitools.aop.ProxyFactory;
+import com.ultikits.ultitools.exceptions.ContainerException;
 
 /**
- * Pins D-14 (full assembly, unconditional on {@code refresh()} state) for
- * {@link SimpleContainer#registerSingleton}.
+ * Pins D-14 (full assembly, unconditional on {@code refresh()} state) and D-15 (refusal of an
+ * AOP-annotated pre-constructed instance) for {@link SimpleContainer#registerSingleton}.
  * <p>
  * Before this plan, {@code registerSingleton} was a two-line method: {@code addSingleton} plus a
  * type-mapping write. No autowiring, no {@code @PostConstruct}, no {@code BeanPostProcessor}
- * chain. Every assembly case below is run <b>both</b> before and after {@code refresh()}, because
+ * chain -- and no refusal for an object whose class carries an AOP annotation it could never
+ * honour. Every assembly case below is run <b>both</b> before and after {@code refresh()}, because
  * "the outcome does not depend on refresh state" is the substance of D-14 and a single-state test
  * cannot show it -- a post-refresh-only case would also pass under a narrower window-guard fix
  * that D-14 explicitly rejects as insufficient (it would have left the config entities, the
@@ -213,6 +225,133 @@ class RegisterSingletonAssemblyTest {
 
             assertSame(plain, container.getBean("plain"));
             assertEquals("unchanged", plain.value);
+        }
+    }
+
+    // ===== Task 2: AOP refusal on a pre-constructed instance (D-15) =====
+
+    static class MethodLevelExceptionCatchBean {
+        @ExceptionCatch
+        void guarded() {
+        }
+    }
+
+    static class MethodLevelTransactionalBean {
+        @Transactional
+        void guarded() {
+        }
+    }
+
+    @Transactional
+    static class ClassLevelTransactionalBean {
+        void work() {
+        }
+    }
+
+    @ExceptionCatch
+    static class ClassLevelExceptionCatchBean {
+        void work() {
+        }
+    }
+
+    static class NoAopAnnotationBean {
+        void work() {
+        }
+    }
+
+    @Nested
+    @DisplayName("refuses an instance whose class carries an AOP annotation it can never honour")
+    class AopRefusal {
+
+        @Test
+        @DisplayName("method-level @ExceptionCatch is refused, naming the class and the method")
+        void methodLevelExceptionCatchRefused() {
+            SimpleContainer container = new SimpleContainer();
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.registerSingleton("guarded", new MethodLevelExceptionCatchBean()));
+
+            assertTrue(thrown.getMessage().contains(MethodLevelExceptionCatchBean.class.getName()),
+                    thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("guarded"), thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("method-level @Transactional is refused too")
+        void methodLevelTransactionalRefused() {
+            SimpleContainer container = new SimpleContainer();
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.registerSingleton("guarded", new MethodLevelTransactionalBean()));
+
+            assertTrue(thrown.getMessage().contains(MethodLevelTransactionalBean.class.getName()),
+                    thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("class-level @Transactional is refused -- not just method-level")
+        void classLevelTransactionalRefused() {
+            SimpleContainer container = new SimpleContainer();
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.registerSingleton("classLevel", new ClassLevelTransactionalBean()));
+
+            assertTrue(thrown.getMessage().contains(ClassLevelTransactionalBean.class.getName()),
+                    thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("class-level @ExceptionCatch is refused too")
+        void classLevelExceptionCatchRefused() {
+            SimpleContainer container = new SimpleContainer();
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.registerSingleton("classLevel", new ClassLevelExceptionCatchBean()));
+
+            assertTrue(thrown.getMessage().contains(ClassLevelExceptionCatchBean.class.getName()),
+                    thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("an instance with no AOP annotation is never refused")
+        void noAnnotationNotRefused() {
+            SimpleContainer container = new SimpleContainer();
+
+            assertDoesNotThrow(() -> container.registerSingleton("plain", new NoAopAnnotationBean()));
+        }
+
+        @Test
+        @DisplayName("a generated proxy is not refused, even though its class carries the copied annotation")
+        void generatedProxyNotRefused() {
+            SimpleContainer aopContainer = new SimpleContainer();
+            AopProxyResolver resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(ExceptionCatch.class, new ExceptionInterceptor(), 200));
+            aopContainer.setAopProxyResolver(resolver);
+            aopContainer.registerBean(MethodLevelExceptionCatchBean.class);
+            aopContainer.refresh();
+
+            MethodLevelExceptionCatchBean proxied = aopContainer.getBean(MethodLevelExceptionCatchBean.class);
+            assertTrue(ProxyFactory.isProxyClass(proxied.getClass()),
+                    "guard: this case must actually exercise a real generated proxy, or refusing "
+                            + "it (or not) proves nothing");
+
+            SimpleContainer target = new SimpleContainer();
+            assertDoesNotThrow(() -> target.registerSingleton("proxied", proxied),
+                    "a generated proxy already honours its own AOP annotations and must not be refused");
+        }
+    }
+
+    @Nested
+    @DisplayName("the framework's own bootstrap registrations must still succeed")
+    class BootstrapCompatibility {
+
+        @Test
+        @DisplayName("a plain object with neither @Autowired, @PostConstruct, nor an AOP annotation still loads")
+        void plainBootstrapObjectStillLoads() {
+            SimpleContainer container = new SimpleContainer();
+
+            assertDoesNotThrow(() -> container.registerSingleton("bootstrap", new NoAopAnnotationBean()));
+            assertNotNull(container.getBean("bootstrap"));
         }
     }
 }
