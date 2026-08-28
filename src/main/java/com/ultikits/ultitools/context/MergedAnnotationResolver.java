@@ -113,8 +113,96 @@ public final class MergedAnnotationResolver {
      * @param annotationType the annotation type to validate <br> 要校验的注解类型
      */
     public static void validateAliases(Class<? extends Annotation> annotationType) {
-        // Filled in by this plan's Task 2 -- structural @AliasFor validation needs
-        // ContainerException.malformedAliasFor, added in that same commit.
+        if (annotationType == null) {
+            return;
+        }
+        Map<String, AliasDeclaration> withinSelfDeclarations = new LinkedHashMap<>();
+        for (Method method : annotationType.getDeclaredMethods()) {
+            AliasFor aliasFor = method.getAnnotation(AliasFor.class);
+            if (aliasFor == null) {
+                continue;
+            }
+            Class<? extends Annotation> targetType =
+                    aliasFor.annotation() == Annotation.class ? annotationType : aliasFor.annotation();
+            String targetAttribute = resolveAttributeName(aliasFor, method);
+            boolean withinSelf = targetType.equals(annotationType);
+
+            // Requirement 1: annotation() must reference a type that is meta-present on the
+            // declaring annotation (a within-self alias trivially satisfies this).
+            if (!withinSelf && !isMetaPresent(annotationType, targetType)) {
+                throw ContainerException.malformedAliasFor(annotationType, method.getName(),
+                        "target annotation " + targetType.getName() + " is not meta-present on "
+                                + annotationType.getName());
+            }
+
+            // Requirement 2: the target attribute must actually exist on the target annotation.
+            Method targetMethod = findAttributeMethod(targetType, targetAttribute);
+            if (targetMethod == null) {
+                throw ContainerException.malformedAliasFor(annotationType, method.getName(),
+                        "target attribute '" + targetAttribute + "' does not exist on "
+                                + targetType.getName());
+            }
+
+            // Requirement 3: aliased attributes must share the same return type.
+            if (!targetMethod.getReturnType().equals(method.getReturnType())) {
+                throw ContainerException.malformedAliasFor(annotationType, method.getName(),
+                        "return type " + method.getReturnType().getName() + " does not match "
+                                + "aliased attribute '" + targetAttribute + "' return type "
+                                + targetMethod.getReturnType().getName());
+            }
+
+            if (withinSelf) {
+                withinSelfDeclarations.put(method.getName(), new AliasDeclaration(method.getName(), targetAttribute));
+            }
+        }
+
+        // Requirement 4: a within-annotation mutual alias must be reciprocal -- both attributes
+        // must declare @AliasFor pointing at each other.
+        for (AliasDeclaration declaration : withinSelfDeclarations.values()) {
+            AliasDeclaration reciprocal = withinSelfDeclarations.get(declaration.targetAttribute);
+            if (reciprocal == null || !declaration.attributeName.equals(reciprocal.targetAttribute)) {
+                throw ContainerException.malformedAliasFor(annotationType, declaration.attributeName,
+                        "mutual alias with '" + declaration.targetAttribute + "' is not reciprocal -- "
+                                + "both attributes must declare @AliasFor at each other");
+            }
+        }
+    }
+
+    /** One attribute's declared {@code @AliasFor} target, for reciprocity checking. */
+    private static final class AliasDeclaration {
+        private final String attributeName;
+        private final String targetAttribute;
+
+        private AliasDeclaration(String attributeName, String targetAttribute) {
+            this.attributeName = attributeName;
+            this.targetAttribute = targetAttribute;
+        }
+    }
+
+    /**
+     * Whether {@code target} is present, directly or transitively, on {@code declaring}'s own
+     * meta-annotation graph -- Spring's "meta-present" requirement for an explicit
+     * {@code @AliasFor(annotation = ...)}. Cycle-guarded the same way {@link #search} is.
+     */
+    private static boolean isMetaPresent(Class<? extends Annotation> declaring, Class<? extends Annotation> target) {
+        return isMetaPresent(declaring, target, new HashSet<>());
+    }
+
+    private static boolean isMetaPresent(Class<? extends Annotation> current, Class<? extends Annotation> target,
+            Set<Class<? extends Annotation>> visited) {
+        for (Annotation meta : current.getAnnotations()) {
+            Class<? extends Annotation> metaType = meta.annotationType();
+            if (isJavaLangAnnotation(metaType)) {
+                continue;
+            }
+            if (metaType.equals(target)) {
+                return true;
+            }
+            if (visited.add(metaType) && isMetaPresent(metaType, target, visited)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static <A extends Annotation> A findOnClassHierarchy(Class<?> clazz, Class<A> annotationType,
@@ -183,11 +271,20 @@ public final class MergedAnnotationResolver {
         Map<String, Object> overrides = new LinkedHashMap<>();
         for (Map.Entry<String, List<Candidate>> entry : candidatesByAttribute.entrySet()) {
             List<Candidate> candidates = entry.getValue();
-            // Conflicting-candidate detection (a within-annotation mutual alias whose two sides
-            // disagree) is added by this plan's Task 2, alongside the ContainerException factory
-            // it throws through. Last-candidate-wins here is only ever exercised by a single
-            // candidate in this plan's own fixtures.
-            overrides.put(entry.getKey(), candidates.get(candidates.size() - 1).value);
+            Object agreedValue = candidates.get(0).value;
+            for (Candidate candidate : candidates) {
+                if (!Objects.deepEquals(candidate.value, agreedValue)) {
+                    String sourceAttributes = candidates.stream()
+                            .map(c -> c.sourceMethodName)
+                            .distinct()
+                            .reduce((a, b) -> a + "', '" + b)
+                            .orElse("");
+                    throw ContainerException.malformedAliasFor(annotationType, entry.getKey(),
+                            "conflicting @AliasFor values for target attribute '" + entry.getKey()
+                                    + "' from '" + sourceAttributes + "' on a single concrete instance");
+                }
+            }
+            overrides.put(entry.getKey(), agreedValue);
         }
         return createProxy(typed, annotationType, overrides);
     }
@@ -199,10 +296,19 @@ public final class MergedAnnotationResolver {
      * {@code Annotation.class} default meaning "within this same annotation") and the method's
      * value on {@code dInstance} differs from that method's own declared default, it is a
      * candidate override for the aliased attribute name on {@code target}.
+     * <p>
+     * When {@code dInstance} IS an instance of {@code target} itself, any attribute that
+     * participates in a within-annotation mutual alias also contributes its OWN declared value
+     * as a second candidate for its own attribute name -- otherwise a conflicting pair
+     * ({@code foo=x} aliased to {@code bar}, {@code bar=y} aliased to {@code foo}) would only
+     * ever compare "the other side's value" against itself, and the conflict between {@code x}
+     * and {@code y} would never surface as more than one candidate for the same attribute.
      */
     private static <A extends Annotation> void collectOverrideCandidates(Annotation dInstance, Class<A> target,
             Map<String, List<Candidate>> out) {
         Class<? extends Annotation> dType = dInstance.annotationType();
+        Set<String> withinSelfParticipants = new HashSet<>();
+
         for (Method method : dType.getDeclaredMethods()) {
             AliasFor aliasFor = method.getAnnotation(AliasFor.class);
             if (aliasFor == null) {
@@ -215,6 +321,18 @@ public final class MergedAnnotationResolver {
             }
             String targetAttribute = resolveAttributeName(aliasFor, method);
             addCandidateIfNonDefault(out, targetAttribute, method, dInstance, dType);
+            if (dType.equals(target)) {
+                withinSelfParticipants.add(targetAttribute);
+                withinSelfParticipants.add(method.getName());
+            }
+        }
+
+        if (dType.equals(target) && !withinSelfParticipants.isEmpty()) {
+            for (Method method : dType.getDeclaredMethods()) {
+                if (withinSelfParticipants.contains(method.getName())) {
+                    addCandidateIfNonDefault(out, method.getName(), method, dInstance, dType);
+                }
+            }
         }
     }
 

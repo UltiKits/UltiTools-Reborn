@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.exceptions;
 
+import java.lang.annotation.Annotation;
+
 /**
  * Exception thrown when IoC container operations fail.
  * <p>
@@ -106,5 +108,22 @@ public class ContainerException extends UltiToolsException {
     public static ContainerException duplicateBean(String beanName, Class<?> beanType) {
         return new ContainerException(ErrorCode.DUPLICATE_BEAN,
                 "Duplicate bean definition: " + beanName + " of type " + beanType.getName());
+    }
+
+    /**
+     * Creates an exception for a malformed {@code @AliasFor} declaration -- one that fails one
+     * of Spring's documented Implementation Requirements for an explicit meta-annotation alias
+     * (D-02). The message always names both the declaring annotation and the offending
+     * attribute, so the module author can act on it without cross-referencing anything else.
+     *
+     * @param declaringAnnotation the annotation type that declares the malformed {@code @AliasFor}
+     * @param attribute           the offending attribute's name
+     * @param reason              a specific reason clause describing which requirement failed
+     * @return a new ContainerException
+     */
+    public static ContainerException malformedAliasFor(Class<? extends Annotation> declaringAnnotation,
+            String attribute, String reason) {
+        return new ContainerException(ErrorCode.MALFORMED_ANNOTATION_ALIAS,
+                "Malformed @AliasFor on " + declaringAnnotation.getName() + "#" + attribute + "(): " + reason);
     }
 }
