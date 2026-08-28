@@ -256,29 +256,39 @@ class RegisterSingletonAssemblyTest {
     static class MethodLevelExceptionCatchBean {
         @ExceptionCatch
         void guarded() {
+            // Intentionally empty: this fixture only proves AOP eligibility/refusal wiring
+            // (D-15) -- the method body itself is never exercised.
         }
     }
 
     static class MethodLevelTransactionalBean {
         @Transactional
         void guarded() {
+            // Intentionally empty: this fixture only proves AOP eligibility/refusal wiring
+            // (D-15) -- the method body itself is never exercised.
         }
     }
 
     @Transactional
     static class ClassLevelTransactionalBean {
         void work() {
+            // Intentionally empty: this fixture only proves AOP eligibility/refusal wiring
+            // (D-15) -- the method body itself is never exercised.
         }
     }
 
     @ExceptionCatch
     static class ClassLevelExceptionCatchBean {
         void work() {
+            // Intentionally empty: this fixture only proves AOP eligibility/refusal wiring
+            // (D-15) -- the method body itself is never exercised.
         }
     }
 
     static class NoAopAnnotationBean {
         void work() {
+            // Intentionally empty: this fixture only proves AOP eligibility/refusal wiring
+            // (D-15) -- the method body itself is never exercised.
         }
     }
 
