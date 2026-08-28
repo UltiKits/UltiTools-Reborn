@@ -1,0 +1,44 @@
+name: Phase Closeout
+
+on:
+  pull_request_target:
+    types: [ closed ]
+    branches: [ "alpha", "main" ]
+
+# Feature pull requests here target `alpha`, not the default branch `main`. GitHub only acts on
+# closing keywords for pull requests merged into the *default* branch, so `Closes #123` in a pull
+# request body has never closed anything in this repository - those issues were closed by hand,
+# and a phase that forgot to do it left its entire issue set open behind a stale board.
+#
+# This job performs that closure: it reads the declaration out of the pull request body and closes
+# each issue with a comment pointing back at the pull request.
+#
+# Why `pull_request_target` and not `pull_request`: on a pull request from a fork, `pull_request`
+# hands the job a read-only GITHUB_TOKEN, which cannot close anything. The standard hazard of
+# `pull_request_target` is running the head branch's code with a privileged token. That does not
+# apply here - the checkout below takes the *base* branch (actions/checkout's default under this
+# event), never `github.event.pull_request.head.sha`, so the script executed is the one already
+# reviewed and merged into `alpha`. Do not add a `ref:` that points at the head.
+
+permissions:
+  issues: write
+
+jobs:
+  close-declared-issues:
+    name: Close issues declared in the PR body
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Close declared issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 .github/scripts/close_declared_issues.py

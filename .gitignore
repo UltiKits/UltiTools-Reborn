@@ -152,3 +152,6 @@ data.json
 # GSD planning artifacts (local-only, never published)
 .planning/
 .gsd/
+
+# Python bytecode from .github/scripts/
+__pycache__/
