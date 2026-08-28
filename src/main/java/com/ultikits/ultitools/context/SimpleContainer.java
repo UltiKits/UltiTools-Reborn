@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1269,24 +1270,49 @@ public class SimpleContainer {
 
     /**
      * Process configuration class.
+     * <p>
+     * Reads {@code @ComponentScan} through {@link MergedAnnotationResolver#find} rather than a
+     * bare {@code configClass.getAnnotation(ComponentScan.class)} -- a class meta-annotated with
+     * {@code @UltiToolsModule} carries its {@code scanBasePackages()}/{@code
+     * scanBasePackageClasses()} values onto the merged {@code @ComponentScan} view via their
+     * {@code @AliasFor} declarations (D-01), which a bare lookup would miss entirely. The result
+     * is additive across {@code value()}, {@code basePackages()} and the packages named by
+     * {@code basePackageClasses()} -- in that declaration order, with duplicates collapsed to
+     * their first occurrence (GEN-06) -- not a first-match choice among them.
      * <br>
      * 处理配置类。
+     * <p>
+     * 通过 {@link MergedAnnotationResolver#find} 而非裸的
+     * {@code configClass.getAnnotation(ComponentScan.class)} 读取 {@code @ComponentScan}——一个
+     * 元注解了 {@code @UltiToolsModule} 的类，会通过其 {@code @AliasFor} 声明把
+     * {@code scanBasePackages()}/{@code scanBasePackageClasses()} 的值带入合并后的
+     * {@code @ComponentScan} 视图（D-01），裸查找会完全错过这一点。结果是在 {@code value()}、
+     * {@code basePackages()} 以及 {@code basePackageClasses()} 指名的包之间做累加——按此声明顺序，
+     * 重复项折叠为首次出现（GEN-06）——而不是在它们之间做首个匹配的选择。
      *
      * @param configClass configuration class <br> 配置类
      */
     public void processConfigurationClass(Class<?> configClass) {
-        ComponentScanner scanner = new ComponentScanner(this);
-        if (configClass.isAnnotationPresent(ComponentScan.class)) {
-            ComponentScan componentScan = configClass.getAnnotation(ComponentScan.class);
-            String[] basePackages = componentScan.value();
-            if (basePackages.length == 0) {
-                basePackages = componentScan.basePackages();
-            }
-            if (basePackages.length == 0) {
-                // Default to the package of the configuration class
-                basePackages = new String[]{configClass.getPackage().getName()};
-            }
-            scanner.scanPackages(basePackages);
+        ComponentScan merged = MergedAnnotationResolver.find(configClass, ComponentScan.class);
+        if (merged == null) {
+            return;
         }
+        LinkedHashSet<String> basePackages = new LinkedHashSet<>();
+        basePackages.addAll(Arrays.asList(merged.value()));
+        basePackages.addAll(Arrays.asList(merged.basePackages()));
+        for (Class<?> markerClass : merged.basePackageClasses()) {
+            // Class.getPackage() is null for an array type/primitive/void -- skip rather than
+            // fold a null entry into the scan set (T-03-31).
+            Package markerPackage = markerClass.getPackage();
+            if (markerPackage != null) {
+                basePackages.add(markerPackage.getName());
+            }
+        }
+        if (basePackages.isEmpty()) {
+            // Default to the package of the configuration class, exactly as before.
+            basePackages.add(configClass.getPackage().getName());
+        }
+        ComponentScanner scanner = new ComponentScanner(this);
+        scanner.scanPackages(basePackages.toArray(new String[0]));
     }
 }

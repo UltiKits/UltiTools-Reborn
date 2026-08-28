@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1655,16 +1656,37 @@ public class PluginManager {
      * @return scan packages <br> 扫描包
      */
     private String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
-        UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
-        if (module != null && module.scanBasePackages().length > 0) {
-            return module.scanBasePackages();
+        // Read through the merged resolver, not a bare pluginClass.getAnnotation(...) --
+        // @UltiToolsModule is meta-annotated @ComponentScan, and its scanBasePackages()/
+        // scanBasePackageClasses() attributes both declare @AliasFor onto ComponentScan's
+        // basePackages()/basePackageClasses(), so the merged instance already carries the
+        // module-level values (D-01). Measured: this replaces the old direct
+        // module.scanBasePackages() read entirely -- the merged resolution already covers it,
+        // so keeping a second hand-read alongside it would just be the per-site special-casing
+        // D-01 rejected, reintroduced one attribute later.
+        ComponentScan merged = MergedAnnotationResolver.find(pluginClass, ComponentScan.class);
+        // Additive, not first-match: every source that declares a non-empty value contributes
+        // packages, in declaration order, with duplicates collapsed to their first occurrence
+        // (GEN-06). The old first-match-wins shape silently dropped every source after the
+        // first non-empty one.
+        LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
+        if (merged != null) {
+            Collections.addAll(scanPackages, merged.value());
+            Collections.addAll(scanPackages, merged.basePackages());
+            for (Class<?> markerClass : merged.basePackageClasses()) {
+                // Class.getPackage() is null for an array type/primitive/void -- skip rather
+                // than fold a null entry into the scan set (T-03-31).
+                Package markerPackage = markerClass.getPackage();
+                if (markerPackage != null) {
+                    scanPackages.add(markerPackage.getName());
+                }
+            }
         }
-        ComponentScan componentScan = pluginClass.getAnnotation(ComponentScan.class);
-        if (componentScan != null) {
-            if (componentScan.value().length > 0) return componentScan.value();
-            if (componentScan.basePackages().length > 0) return componentScan.basePackages();
+        if (scanPackages.isEmpty()) {
+            // Default to the package of the plugin class itself, exactly as before.
+            scanPackages.add(pluginClass.getPackage().getName());
         }
-        return new String[]{pluginClass.getPackage().getName()};
+        return scanPackages.toArray(new String[0]);
     }
 
     /**
