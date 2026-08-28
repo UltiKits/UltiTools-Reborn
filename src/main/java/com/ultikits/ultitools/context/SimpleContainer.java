@@ -46,6 +46,13 @@ public class SimpleContainer {
     private final Map<String, Supplier<Object>> suppliers = new ConcurrentHashMap<>();
     private final Map<Class<?>, Object> typeMappings = new ConcurrentHashMap<>();
     private final Map<Class<?>, Supplier<Object>> typeSuppliers = new ConcurrentHashMap<>();
+    // By-type assignability resolution cache. Populated only by getBean(Class)'s ambiguity
+    // adjudication (D-11/D-12) -- distinct from typeMappings, which holds author-declared
+    // bindings (registerType/registerTypeSupplier/registerSingleton's own concrete-class
+    // binding). Kept separate so a newly registered implementation can invalidate this cache
+    // without dropping an explicit binding. Instance-scoped, not static: a static Class-keyed
+    // map would pin module classes and block plugin ClassLoader unload (Phase 1 D-35/D-38).
+    private final Map<Class<?>, Object> resolvedTypeCache = new ConcurrentHashMap<>();
     private final Map<String, BeanScope> beanScopes = new ConcurrentHashMap<>();
     private final Map<String, Class<?>> beanTypes = new ConcurrentHashMap<>();
     private final List<BeanPostProcessor> beanPostProcessors = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -303,30 +310,47 @@ public class SimpleContainer {
             return (T) bean;
         }
 
-        // Check bean definitions by assignability (interface/superclass → impl resolution)
-        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
-            if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
-                bean = getBean(entry.getKey());
-                if (bean != null) {
-                    typeMappings.put(type, bean);
-                    return (T) bean;
-                }
+        // A prior assignability adjudication for this exact type, if one has already happened
+        // and no registration has invalidated it since (D-12).
+        bean = resolvedTypeCache.get(type);
+        if (bean != null) {
+            return (T) bean;
+        }
+
+        // Collect every assignable candidate in this container and order by @Service(priority)
+        // descending, reusing getOrderedBeansOfType -- which had zero production callers before
+        // this change (D-11) -- instead of writing a third ordering implementation. It already
+        // dedups a definition-backed singleton that has already been instantiated, and it reads
+        // priority off each candidate's actual resolved instance class, so a proxied bean's
+        // priority is read correctly: ProxyFactory copies the target's annotations onto the
+        // generated subclass, and getServicePriority relies on that.
+        List<T> candidates = getOrderedBeansOfType(type);
+
+        if (candidates.isEmpty()) {
+            // Total miss in this container -- only now is the parent consulted, so a child that
+            // has any candidates (even an ambiguous pair that goes on to throw) never falls
+            // through to a parent's unrelated bean (D-13).
+            if (parent != null) {
+                return parent.getBean(type);
+            }
+            return null;
+        }
+
+        if (candidates.size() > 1) {
+            // Only the top two matter: a tie further down the list, among beans that already
+            // lose to the top candidate, is not ambiguous.
+            T first = candidates.get(0);
+            T second = candidates.get(1);
+            if (getServicePriority(first.getClass()) == getServicePriority(second.getClass())) {
+                throw ContainerException.ambiguousBeanType(type, first.getClass(), second.getClass());
             }
         }
 
-        // Fallback: check all singletons by assignability (interface/superclass resolution)
-        for (Object singleton : singletonObjects.values()) {
-            if (type.isInstance(singleton)) {
-                typeMappings.put(type, singleton); // cache for next lookup
-                return (T) singleton;
-            }
-        }
-
-        if (parent != null) {
-            return parent.getBean(type);
-        }
-
-        return null;
+        // Adjudicate before caching: this is reached only once exactly one winner is
+        // determined -- either there was a single candidate, or priority broke the tie (D-12).
+        bean = candidates.get(0);
+        resolvedTypeCache.put(type, bean);
+        return (T) bean;
     }
 
     /**

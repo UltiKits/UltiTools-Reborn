@@ -150,4 +150,27 @@ public class ContainerException extends UltiToolsException {
                         + "object was created by the container rather than with 'new'. "
                         + "Use @Autowired(required = false) if the dependency really is optional.");
     }
+
+    /**
+     * Creates an exception for an ambiguous by-type bean resolution (D-11/D-12).
+     * <p>
+     * Two or more candidates assignable to the requested type share the highest
+     * {@code @Service(priority)} value, so {@code getBean(Class)} cannot determine which one
+     * the caller intended. Before this check existed, the ambiguity was resolved silently by
+     * whichever candidate the internal map iteration reached first, and that arbitrary choice
+     * was then cached permanently. The message names both tied candidate classes and the
+     * requested type, and points at {@code @Service(priority = ...)} as the remedy.
+     *
+     * @param requestedType the type that was requested via getBean(Class)
+     * @param first         the first tied candidate's class
+     * @param second        the second tied candidate's class
+     * @return a new ContainerException
+     */
+    public static ContainerException ambiguousBeanType(Class<?> requestedType, Class<?> first, Class<?> second) {
+        return new ContainerException(ErrorCode.AMBIGUOUS_BEAN_TYPE,
+                "Ambiguous bean resolution for type " + requestedType.getName() + ": both "
+                        + first.getName() + " and " + second.getName()
+                        + " are assignable candidates with equal @Service(priority). "
+                        + "Disambiguate with a higher @Service(priority = ...) on the intended bean.");
+    }
 }

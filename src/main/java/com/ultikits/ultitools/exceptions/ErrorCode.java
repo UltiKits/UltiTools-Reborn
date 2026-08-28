@@ -23,6 +23,7 @@ public enum ErrorCode {
     DEPENDENCY_INJECTION_FAILED(2003, "Dependency injection failed"),
     DUPLICATE_BEAN(2004, "Duplicate bean definition"),
     MALFORMED_ANNOTATION_ALIAS(2005, "Malformed @AliasFor declaration"),
+    AMBIGUOUS_BEAN_TYPE(2006, "Ambiguous bean type resolution"),
 
     // ===== Data Access Errors (3000-3999) =====
     DATA_ACCESS_ERROR(3000, "Data access error"),
