@@ -20,6 +20,8 @@ import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
@@ -682,6 +684,18 @@ public class SimpleContainer {
 
             LOGGER.fine("Successfully created bean: " + name);
             return bean;
+        } catch (ContainerException e) {
+            // A ContainerException raised deeper in bean creation (e.g. an unresolvable
+            // @Autowired(required = true) dependency, or a constructor-injection failure) is
+            // already a deliberate, correctly-typed refusal -- rethrow it unchanged instead of
+            // letting the catch-all below downgrade it to an anonymous RuntimeException. Mirrors
+            // ComponentScanner.scanPackage's own catch (ContainerException e) { throw e; }
+            // rethrow for the same reason: a refusal that is swallowed or re-typed upstream is
+            // indistinguishable from the silent no-op it replaces (D-08, D-09).
+            singletonFactories.remove(name);
+            earlySingletonObjects.remove(name);
+            LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
+            throw e;
         } catch (Exception e) {
             // Clean up caches on failure
             singletonFactories.remove(name);
@@ -712,14 +726,16 @@ public class SimpleContainer {
             }
         }
         if (bestConstructor == null) {
-            throw new RuntimeException("No constructor found for: " + beanClass.getName());
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "No constructor found for: " + beanClass.getName());
         }
         Class<?>[] paramTypes = bestConstructor.getParameterTypes();
         Object[] args = new Object[paramTypes.length];
         for (int i = 0; i < paramTypes.length; i++) {
             args[i] = getBean(paramTypes[i]);
             if (args[i] == null) {
-                throw new RuntimeException("Cannot resolve constructor parameter " + paramTypes[i].getName() +
+                throw new ContainerException(ErrorCode.DEPENDENCY_INJECTION_FAILED,
+                        "Cannot resolve constructor parameter " + paramTypes[i].getName() +
                     " for bean: " + beanClass.getName());
             }
         }
@@ -727,7 +743,8 @@ public class SimpleContainer {
         try {
             return bestConstructor.newInstance(args);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to instantiate via constructor injection: " + beanClass.getName(), e);
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "Failed to instantiate via constructor injection: " + beanClass.getName(), e);
         }
     }
 
