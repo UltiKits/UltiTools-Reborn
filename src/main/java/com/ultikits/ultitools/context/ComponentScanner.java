@@ -9,6 +9,8 @@ import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -31,6 +33,8 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class ComponentScanner {
+    private static final Logger LOGGER = Logger.getLogger(ComponentScanner.class.getName());
+
     private final SimpleContainer container;
 
     public ComponentScanner(SimpleContainer container) {
@@ -84,8 +88,11 @@ public class ComponentScanner {
             // happened. See issue #190.
             throw e;
         } catch (Exception e) {
-            // Log warning and continue
-            System.err.println("Failed to scan package: " + basePackage + ", " + e.getMessage());
+            // Skip-and-continue: the scan moves on to the next package, so this is an
+            // expected-shape event (a missing/unreadable package), not a registration
+            // failure - logged at WARNING and never forwarded to the UltiPanel dashboard
+            // (D-24).
+            LOGGER.log(Level.WARNING, "Failed to scan package: " + basePackage, e);
         }
     }
 
@@ -118,7 +125,8 @@ public class ComponentScanner {
                 }
             }
         } catch (IOException e) {
-            System.err.println("Failed to scan JAR for package: " + basePackage + ", " + e.getMessage());
+            // Skip-and-continue: the scan moves on to the next package (D-24).
+            LOGGER.log(Level.WARNING, "Failed to scan JAR for package: " + basePackage, e);
         }
     }
 
@@ -287,8 +295,10 @@ public class ComponentScanner {
                 List<String> violations = CmdTargetComposition.check(clazz);
                 if (!violations.isEmpty()) {
                     for (String violation : violations) {
-                        System.err.println("Refused to register command class due to ambiguous "
-                                + "@CmdTarget composition: " + violation);
+                        // A refusal is a registration failure (SEVERE), even though there is no
+                        // exception object to attach - the class was refused, not merely skipped.
+                        LOGGER.log(Level.SEVERE, "Refused to register command class due to "
+                                + "ambiguous @CmdTarget composition: " + violation);
                     }
                     return;
                 }
@@ -297,7 +307,8 @@ public class ComponentScanner {
             BeanDefinition definition = new BeanDefinition(clazz, beanName);
             container.registerBeanDefinition(beanName, definition);
         } catch (Exception e) {
-            System.err.println("Failed to register component: " + clazz.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to register component: " + clazz.getName(), e);
         }
     }
 
@@ -319,7 +330,8 @@ public class ComponentScanner {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Failed to register configuration: " + clazz.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to register configuration: " + clazz.getName(), e);
         }
     }
 
@@ -335,7 +347,8 @@ public class ComponentScanner {
             String beanName = method.getName();
             container.registerSingleton(beanName, bean);
         } catch (Exception e) {
-            System.err.println("Failed to process bean method: " + method.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to process bean method: " + method.getName(), e);
         }
     }
 
