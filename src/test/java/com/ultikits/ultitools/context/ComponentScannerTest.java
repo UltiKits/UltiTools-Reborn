@@ -6,7 +6,9 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
@@ -14,9 +16,20 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.net.URL;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.spy;
 
 /**
  * Unit tests for ComponentScanner class.
@@ -187,4 +200,216 @@ class ComponentScannerTest {
             return 42;
         }
     }
+
+    private static String decapitalize(String simpleName) {
+        return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
+    }
+
+    // ===== Task 1 (03-07, D-24): leveled scan diagnostics =====
+
+    /**
+     * {@code @Configuration} whose constructor throws -- exercises
+     * {@code ComponentScanner.registerConfiguration}'s catch-all.
+     */
+    @Configuration
+    public static class ThrowingConfigConstructorFixture {
+        public ThrowingConfigConstructorFixture() {
+            throw new IllegalStateException("boom-config-constructor");
+        }
+    }
+
+    /**
+     * {@code @Configuration} whose {@code @Bean} method throws -- exercises
+     * {@code ComponentScanner.processBeanMethod}'s catch-all.
+     */
+    @Configuration
+    public static class ThrowingBeanMethodFixture {
+        @Bean
+        public String explodingBean() {
+            throw new IllegalStateException("boom-bean-method");
+        }
+    }
+
+    /**
+     * Paired with {@link RegistrationSurvivorComponentFixture}: used with a spied
+     * {@link SimpleContainer} that throws only for this fixture's bean name, exercising
+     * {@code ComponentScanner.registerComponent}'s catch-all while proving the sibling class in
+     * the same package still registers.
+     */
+    @Component
+    public static class ThrowingRegistrationComponentFixture {
+    }
+
+    @Component
+    public static class RegistrationSurvivorComponentFixture {
+    }
+
+    @Nested
+    @DisplayName("Task 1 (03-07): leveled scan diagnostics, throwable-carrying (D-24)")
+    class LogDiagnostics {
+
+        private final List<LogRecord> captured = new ArrayList<>();
+        private Logger scannerLogger;
+        private Handler captureHandler;
+
+        @BeforeEach
+        void captureLogs() {
+            captured.clear();
+            scannerLogger = Logger.getLogger(ComponentScanner.class.getName());
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            scannerLogger.addHandler(captureHandler);
+        }
+
+        @AfterEach
+        void releaseLogs() {
+            scannerLogger.removeHandler(captureHandler);
+        }
+
+        private List<LogRecord> withLevel(Level level) {
+            List<LogRecord> result = new ArrayList<>();
+            for (LogRecord record : captured) {
+                if (level.equals(record.getLevel())) {
+                    result.add(record);
+                }
+            }
+            return result;
+        }
+
+        @Test
+        @DisplayName("A @Configuration class whose constructor throws logs SEVERE with the throwable attached, naming the class")
+        void configurationConstructorFailureLogsSevereWithThrowable() {
+            SimpleContainer freshContainer = new SimpleContainer();
+            ComponentScanner freshScanner = new ComponentScanner(freshContainer);
+
+            assertDoesNotThrow(() -> freshScanner.scanPackage("com.ultikits.ultitools.context"));
+
+            List<LogRecord> severe = withLevel(Level.SEVERE);
+            boolean found = severe.stream().anyMatch(r ->
+                    r.getMessage() != null
+                            && r.getMessage().contains(ThrowingConfigConstructorFixture.class.getName())
+                            && r.getThrown() != null);
+            assertTrue(found, "expected a SEVERE record naming the throwing configuration class "
+                    + "with its throwable attached");
+            assertTrue(withLevel(Level.WARNING).stream().noneMatch(r ->
+                            r.getMessage() != null
+                                    && r.getMessage().contains(ThrowingConfigConstructorFixture.class.getName())),
+                    "a registration failure must never also be logged at WARNING");
+        }
+
+        @Test
+        @DisplayName("A @Bean method whose invocation throws logs SEVERE with the throwable attached and the method name in the message")
+        void beanMethodFailureLogsSevereWithThrowableAndMethodName() {
+            SimpleContainer freshContainer = new SimpleContainer();
+            ComponentScanner freshScanner = new ComponentScanner(freshContainer);
+
+            assertDoesNotThrow(() -> freshScanner.scanPackage("com.ultikits.ultitools.context"));
+
+            List<LogRecord> severe = withLevel(Level.SEVERE);
+            boolean found = severe.stream().anyMatch(r ->
+                    r.getMessage() != null && r.getMessage().contains("explodingBean") && r.getThrown() != null);
+            assertTrue(found, "expected a SEVERE record naming the exploding @Bean method with its "
+                    + "throwable attached");
+        }
+
+        @Test
+        @DisplayName("A component whose registration throws logs SEVERE with the throwable attached; the sibling class in the same package still registers")
+        void componentRegistrationFailureLogsSevereAndSiblingStillRegisters() {
+            SimpleContainer spyContainer = spy(new SimpleContainer());
+            RuntimeException boom = new RuntimeException("boom-component");
+            String throwingBeanName = decapitalize(ThrowingRegistrationComponentFixture.class.getSimpleName());
+            String survivorBeanName = decapitalize(RegistrationSurvivorComponentFixture.class.getSimpleName());
+            doThrow(boom).when(spyContainer).registerBeanDefinition(eq(throwingBeanName), any());
+            ComponentScanner throwingScanner = new ComponentScanner(spyContainer);
+
+            assertDoesNotThrow(() -> throwingScanner.scanPackage("com.ultikits.ultitools.context"));
+
+            assertFalse(Arrays.asList(spyContainer.getBeanDefinitionNames()).contains(throwingBeanName),
+                    "the throwing component must not end up registered");
+            assertTrue(spyContainer.containsBean(survivorBeanName),
+                    "a sibling class in the same package must still register after the throwing "
+                            + "class is skipped");
+
+            List<LogRecord> severe = withLevel(Level.SEVERE);
+            boolean found = severe.stream().anyMatch(r ->
+                    r.getMessage() != null
+                            && r.getMessage().contains(ThrowingRegistrationComponentFixture.class.getName())
+                            && boom.equals(r.getThrown()));
+            assertTrue(found, "expected a SEVERE record naming the class with the original "
+                    + "throwable instance attached");
+        }
+
+        @Test
+        @DisplayName("A package that cannot be resolved logs WARNING with the throwable attached, never SEVERE")
+        void unresolvablePackageLogsWarningNotSevere() {
+            SimpleContainer freshContainer = new SimpleContainer();
+            String breakingPath = "com/ultikits/testfixtures/scanpackageboom";
+            ClassLoader throwingLoader = new ClassLoader(getClass().getClassLoader()) {
+                @Override
+                public URL getResource(String name) {
+                    if (breakingPath.equals(name)) {
+                        throw new IllegalStateException("simulated package resolution failure");
+                    }
+                    return super.getResource(name);
+                }
+            };
+            freshContainer.setClassLoader(throwingLoader);
+            ComponentScanner freshScanner = new ComponentScanner(freshContainer);
+
+            assertDoesNotThrow(() -> freshScanner.scanPackage("com.ultikits.testfixtures.scanpackageboom"));
+
+            List<LogRecord> warnings = withLevel(Level.WARNING);
+            assertTrue(warnings.stream().anyMatch(r ->
+                            r.getMessage() != null
+                                    && r.getMessage().contains("com.ultikits.testfixtures.scanpackageboom")
+                                    && r.getThrown() != null),
+                    "expected a WARNING naming the package with the throwable attached");
+            assertTrue(withLevel(Level.SEVERE).isEmpty(),
+                    "a package-resolution skip must never be logged at SEVERE");
+        }
+
+        @Test
+        @DisplayName("An unreadable JAR logs WARNING with the throwable attached, never SEVERE")
+        void unreadableJarLogsWarningNotSevere() throws Exception {
+            SimpleContainer freshContainer = new SimpleContainer();
+            String breakingPath = "com/ultikits/testfixtures/scanjarboom";
+            URL badJarUrl = new URL("jar:file:/nonexistent/does-not-exist-" + System.nanoTime() + ".jar!/");
+            ClassLoader jarLoader = new ClassLoader(getClass().getClassLoader()) {
+                @Override
+                public URL getResource(String name) {
+                    if (breakingPath.equals(name)) {
+                        return badJarUrl;
+                    }
+                    return super.getResource(name);
+                }
+            };
+            freshContainer.setClassLoader(jarLoader);
+            ComponentScanner freshScanner = new ComponentScanner(freshContainer);
+
+            assertDoesNotThrow(() -> freshScanner.scanPackage("com.ultikits.testfixtures.scanjarboom"));
+
+            List<LogRecord> warnings = withLevel(Level.WARNING);
+            assertTrue(warnings.stream().anyMatch(r ->
+                            r.getMessage() != null
+                                    && r.getMessage().contains("com.ultikits.testfixtures.scanjarboom")
+                                    && r.getThrown() != null),
+                    "expected a WARNING naming the package with the throwable attached");
+            assertTrue(withLevel(Level.SEVERE).isEmpty(), "a JAR-resolution skip must never be logged at SEVERE");
+        }
+    }
+
 }
