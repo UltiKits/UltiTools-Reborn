@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.JarURLConnection;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
@@ -356,6 +357,13 @@ public class ComponentScanner {
                     processBeanMethod(configInstance, method);
                 }
             }
+        } catch (ContainerException e) {
+            // A malformed @Bean name/value declaration (D-02/D-06) or a hard failure inside
+            // registerSingleton (an unresolvable required @Autowired dependency, D-08, or an AOP
+            // annotation registerSingleton can never honour, D-15) must abort the module's scan
+            // like every other ContainerException (D-25) -- not be caught here and demoted to an
+            // ordinary logged-and-skipped registration failure.
+            throw e;
         } catch (Exception e) {
             // A registration failure, not a skip - reported to the panel (D-24).
             LOGGER.log(Level.SEVERE, "Failed to register configuration: " + clazz.getName(), e);
@@ -364,19 +372,114 @@ public class ComponentScanner {
 
     /**
      * Process @Bean method.
+     * <p>
+     * The bean name is derived from {@code @Bean}'s {@code name()}/{@code value()} (D-06) via
+     * {@link #resolveBeanNames(Method)}, falling back to the method's own name exactly as before
+     * this attribute took effect. The <b>first</b> resolved name is registered through
+     * {@link SimpleContainer#registerSingleton(String, Object)}, which fully assembles the
+     * instance (D-14); any remaining names are bound as aliases to that <em>same, already
+     * assembled</em> reference via the package-visible
+     * {@link SimpleContainer#addSingleton(String, Object)} -- deliberately not a second
+     * {@code registerSingleton} call per name, which after D-14 would re-run autowiring and
+     * {@code @PostConstruct} once per alias on what should be one bean.
      * <br>
      * 处理@Bean方法。
+     * <p>
+     * Bean 名称通过 {@link #resolveBeanNames(Method)} 从 {@code @Bean} 的 {@code name()}/
+     * {@code value()} 派生（D-06），缺省时回退到方法自身的名称，与该属性生效前的行为一致。解析出的
+     * <b>第一个</b>名称通过 {@link SimpleContainer#registerSingleton(String, Object)} 注册，
+     * 该方法会完整装配实例（D-14）；其余名称则通过包内可见的
+     * {@link SimpleContainer#addSingleton(String, Object)} 绑定到<em>同一个已装配完成</em>的引用
+     * 上——刻意不对每个名称都调用一次 {@code registerSingleton}，因为在 D-14 之后那样做会让一个
+     * Bean 的自动装配与 {@code @PostConstruct} 按别名数量重复执行。
      */
     private void processBeanMethod(Object configInstance, Method method) {
         try {
             method.setAccessible(true);
             Object bean = method.invoke(configInstance);
-            String beanName = method.getName();
-            container.registerSingleton(beanName, bean);
+            String[] beanNames = resolveBeanNames(method);
+            String primaryName = beanNames[0];
+            container.registerSingleton(primaryName, bean);
+            if (beanNames.length > 1) {
+                Object assembled = container.getBean(primaryName);
+                for (int i = 1; i < beanNames.length; i++) {
+                    container.addSingleton(beanNames[i], assembled);
+                }
+            }
+        } catch (ContainerException e) {
+            // A malformed @Bean name/value declaration (D-02/D-06) or a hard failure inside
+            // registerSingleton (D-08/D-15) must abort the module's scan, not be demoted to an
+            // ordinary registration failure (D-25).
+            throw e;
         } catch (Exception e) {
             // A registration failure, not a skip - reported to the panel (D-24).
             LOGGER.log(Level.SEVERE, "Failed to process bean method: " + method.getName(), e);
         }
+    }
+
+    /**
+     * Resolve the effective bean-name array for a {@code @Bean} method (D-06): {@code name()} if
+     * non-empty, else {@code value()} if non-empty, else the method's own name as a
+     * single-element array. {@code name()} and {@code value()} are mutual aliases -- declaring
+     * both with different content is a malformed declaration and hard-fails naming the method
+     * and both declared values, reusing the same {@link ContainerException#malformedAliasFor}
+     * factory (and therefore the same message shape) plan 03-01 built for malformed
+     * {@code @AliasFor} declarations, even though {@code @Bean} itself deliberately does not
+     * declare a real {@code @AliasFor} between its two attributes (see this method's own class's
+     * scope boundary). Declaring both with identical content is legal. Every resolved element
+     * must be non-blank -- a blank or whitespace-only element is also a malformed declaration,
+     * because a name that cannot name anything is not a usable third state between "declared" and
+     * "absent" (D-02). No element is normalized: two names differing only by Unicode
+     * normalization form are two distinct declared names, decided purely by
+     * {@code String.equals}.
+     * <br>
+     * 为一个 {@code @Bean} 方法解析有效的 Bean 名称数组（D-06）：{@code name()} 非空则使用它，
+     * 否则 {@code value()} 非空则使用它，否则回退到方法自身的名称作为单元素数组。{@code name()}
+     * 与 {@code value()} 互为别名——两者都非空且内容不同即为畸形声明，会导致加载失败，错误信息
+     * 同时指出该方法与两个已声明的值，复用了 03-01 为畸形 {@code @AliasFor}
+     * 声明构建的同一个 {@link ContainerException#malformedAliasFor} 工厂（因此消息形态一致），
+     * 尽管 {@code @Bean} 自身刻意不在两个属性之间声明真正的 {@code @AliasFor}
+     * （见本方法所在类的 scope boundary）。两者内容相同则合法。解析出的每个元素都必须非空白——
+     * 空白或仅由空白字符组成的元素同样是畸形声明，因为一个无法命名任何东西的名称，不是"已声明"
+     * 与"缺省"之间可用的第三种状态（D-02）。不对任何元素做归一化：两个仅在 Unicode
+     * 规范化形式上不同的名称，是两个不同的已声明名称，纯粹由 {@code String.equals} 决定。
+     *
+     * @param method the {@code @Bean}-annotated factory method <br> 携带 {@code @Bean} 的工厂方法
+     * @return the resolved name array; index 0 is the registered bean name, the rest are aliases
+     *         <br> 解析出的名称数组；索引 0 是注册的 Bean 名称，其余是别名
+     */
+    private String[] resolveBeanNames(Method method) {
+        Bean beanAnnotation = method.getAnnotation(Bean.class);
+        String[] name = beanAnnotation.name();
+        String[] value = beanAnnotation.value();
+
+        if (name.length > 0 && value.length > 0 && !Arrays.equals(name, value)) {
+            throw ContainerException.malformedAliasFor(Bean.class, "name",
+                    "@Bean method '" + method.getName() + "' declares both name=" + Arrays.toString(name)
+                            + " and value=" + Arrays.toString(value) + " with different content -- "
+                            + "name() and value() are mutual aliases and must agree, or only one "
+                            + "should be declared");
+        }
+
+        String[] resolved;
+        if (name.length > 0) {
+            resolved = name;
+        } else if (value.length > 0) {
+            resolved = value;
+        } else {
+            resolved = new String[]{method.getName()};
+        }
+
+        for (int i = 0; i < resolved.length; i++) {
+            String candidate = resolved[i];
+            if (candidate == null || candidate.trim().isEmpty()) {
+                throw ContainerException.malformedAliasFor(Bean.class, "name",
+                        "@Bean method '" + method.getName() + "' declares a blank or whitespace-only "
+                                + "name element at index " + i + " of " + Arrays.toString(resolved));
+            }
+        }
+
+        return resolved;
     }
 
     /**
