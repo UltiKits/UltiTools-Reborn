@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.context;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Static holder for accessing the current IoC container context.
  * <p>
@@ -12,6 +14,7 @@ package com.ultikits.ultitools.context;
  * @author wisdomme
  * @since 6.2.0
  */
+@ApiStatus.Internal
 public class ContextHolder {
 
     private static volatile SimpleContainer context;

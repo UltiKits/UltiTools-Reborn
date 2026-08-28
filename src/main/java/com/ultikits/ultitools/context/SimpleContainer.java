@@ -28,11 +28,14 @@ import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
  * <br>
  * 简单的依赖注入容器，用于替换Spring ApplicationContext。
  */
+@ApiStatus.Internal
 public class SimpleContainer {
     private static final Logger LOGGER = Logger.getLogger(SimpleContainer.class.getName());
     
