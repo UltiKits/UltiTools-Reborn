@@ -7,6 +7,12 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -220,6 +226,111 @@ class ConditionalOnConfigTest {
         void nullFolderRegisters() throws Exception {
             when(mockPlugin.getResourceFolderPath()).thenReturn(null);
             assertTrue(invokesShouldRegister(ConditionalServiceA.class));
+        }
+    }
+
+    // === D-20: fail-open branches stay fail-open but stop being silent ===
+
+    /**
+     * Both fail-open branches of the shared evaluator (D-20) must keep returning {@code true}
+     * <b>and</b> announce themselves with a {@code Level.WARNING} record naming the evaluated
+     * class. Captured on the evaluator's own logger by name (rather than
+     * {@code ConditionalRegistrationEvaluator.class.getName()}) so this test class compiles
+     * before that extracted type exists -- it is the RED half of Task 1's TDD cycle.
+     * <br>
+     * 共享判定器（D-20）的两条"无法判定 -> 默认放行"分支必须继续返回 {@code true}，并且不再沉默：
+     * 各自发出一条命名了被判定类的 {@code Level.WARNING} 记录。这里按名字（而不是
+     * {@code ConditionalRegistrationEvaluator.class.getName()}）获取 logger，以便本测试类在
+     * 该抽取出的类型存在之前也能编译通过——这是 Task 1 TDD 循环的 RED 一半。
+     */
+    @Nested
+    @DisplayName("Fail-open branches announce themselves (D-20)")
+    class FailOpenWarnings {
+
+        private static final String EVALUATOR_LOGGER_NAME =
+                "com.ultikits.ultitools.context.ConditionalRegistrationEvaluator";
+
+        private final List<LogRecord> captured = new ArrayList<>();
+        private Logger evaluatorLogger;
+        private Handler captureHandler;
+
+        @BeforeEach
+        void captureLogs() {
+            captured.clear();
+            evaluatorLogger = Logger.getLogger(EVALUATOR_LOGGER_NAME);
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+            evaluatorLogger.addHandler(captureHandler);
+        }
+
+        @AfterEach
+        void releaseLogs() {
+            evaluatorLogger.removeHandler(captureHandler);
+        }
+
+        private List<LogRecord> warnings() {
+            List<LogRecord> result = new ArrayList<>();
+            for (LogRecord record : captured) {
+                if (Level.WARNING.equals(record.getLevel())) {
+                    result.add(record);
+                }
+            }
+            return result;
+        }
+
+        @Test
+        @DisplayName("Unresolvable plugin from container still registers, and warns naming the class")
+        void unresolvablePluginWarnsAndRegisters() throws Exception {
+            SimpleContainer throwingContainer = mock(SimpleContainer.class);
+            when(throwingContainer.getBean(UltiToolsPlugin.class))
+                    .thenThrow(new IllegalStateException("simulated container failure"));
+
+            boolean result = invokesShouldRegisterAgainst(ConditionalServiceA.class, throwingContainer);
+
+            assertTrue(result, "an unresolvable plugin must still fail open (register by default)");
+            List<LogRecord> warnings = warnings();
+            assertTrue(warnings.size() >= 1,
+                    "expected a WARNING when no plugin could be resolved from the container");
+            assertTrue(warnings.stream().anyMatch(r ->
+                            r.getMessage().contains(ConditionalServiceA.class.getName())),
+                    "expected the warning to name the evaluated class");
+        }
+
+        @Test
+        @DisplayName("Null resourceFolderPath still registers, and warns naming the class")
+        void nullResourceFolderWarnsAndRegisters() throws Exception {
+            when(mockPlugin.getResourceFolderPath()).thenReturn(null);
+
+            boolean result = invokesShouldRegister(ConditionalServiceA.class);
+
+            assertTrue(result, "a null resource folder path must still fail open (register by default)");
+            List<LogRecord> warnings = warnings();
+            assertTrue(warnings.size() >= 1,
+                    "expected a WARNING when the plugin's resource folder path is null");
+            assertTrue(warnings.stream().anyMatch(r ->
+                            r.getMessage().contains(ConditionalServiceA.class.getName())),
+                    "expected the warning to name the evaluated class");
+        }
+
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        private boolean invokesShouldRegisterAgainst(Class<?> clazz, SimpleContainer testContainer) throws Exception {
+            ComponentScanner scanner = new ComponentScanner(testContainer);
+            java.lang.reflect.Method shouldRegister =
+                    ComponentScanner.class.getDeclaredMethod("shouldRegister", Class.class);
+            shouldRegister.setAccessible(true);
+            return (boolean) shouldRegister.invoke(scanner, clazz);
         }
     }
 }
