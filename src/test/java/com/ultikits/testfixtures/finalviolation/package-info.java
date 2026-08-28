@@ -3,9 +3,14 @@
  * ({@link com.ultikits.ultitools.annotations.Final}): extending a sealed class or overriding a
  * sealed method. See the subpackages for the actual fixture classes:
  * {@link com.ultikits.testfixtures.finalviolation.validator} for
- * {@code FinalContractValidatorTest}'s unit-test fixtures, and
+ * {@code FinalContractValidatorTest}'s unit-test fixtures (including its interface-shaped
+ * fixtures),
  * {@link com.ultikits.testfixtures.finalviolation.scanner} for
- * {@code ComponentScannerFinalContractTest}'s integration-test fixture.
+ * {@code ComponentScannerFinalContractTest}'s integration-test fixture, and
+ * {@link com.ultikits.testfixtures.finalviolation.chain} for
+ * {@code FinalContractValidatorTest}'s cross-package transitive-override fixtures, which need
+ * their own two real packages ({@code chain.p1}, {@code chain.p2}) rather than living directly
+ * here.
  * <p>
  * This package family exists <b>outside</b> {@code com.ultikits.ultitools} on purpose. Component
  * scanning ({@code com.ultikits.ultitools.context.ComponentScanner}) walks whatever package it is
