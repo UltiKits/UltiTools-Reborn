@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 
+import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
@@ -1236,6 +1237,130 @@ class DataStoreManagerTest {
             field.setAccessible(true);
             return (java.util.Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>)
                     field.get(null);
+        }
+    }
+
+    /**
+     * 02-14 Task 2: an external scope registration cannot displace an existing one.
+     * <p>
+     * {@code registerExternalScope} previously used a plain {@code .put()} -- so wrapping another,
+     * already-registered plugin's data folder (all public calls -- {@code new
+     * ExternalPluginAdapter(Bukkit.getPluginManager().getPlugin("Victim"))}) and calling the public
+     * {@code registerExternal} would silently displace the victim's legitimate scope, poisoning the
+     * D-18 reverse lookup {@code DataStore.getOperator(File, Class)}'s default body depends on.
+     * These tests go through the real, un-mocked {@code PluginManager} end-to-end (not a stub),
+     * because the guard lives inside {@code registerExternal}'s own call to the private
+     * {@code registerExternalScope} -- there is no other way to exercise it.
+     */
+    @Nested
+    @DisplayName("registerExternalScope 不可被覆盖测试 (D-18, 02-14 Task 2)")
+    class RegisterExternalScopeTests {
+
+        private PluginManager pluginManager;
+
+        @BeforeEach
+        void setUpPluginManager() {
+            DependenceManagers dependenceManagers = mock(DependenceManagers.class);
+            SimpleContainer parentContext = new SimpleContainer();
+            parentContext.refresh();
+            when(dependenceManagers.getContext()).thenReturn(parentContext);
+
+            pluginManager = new PluginManager();
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getDependenceManagers()).thenReturn(dependenceManagers);
+                when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+                when(ultiTools.getCommandManager()).thenReturn(new CommandManager());
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                // wireAop (02-01) resolves a DataSource through getDataStore() for the
+                // @Transactional advisor -- CALLS_REAL_METHODS lets the interface's own default
+                // getDataSource(DataScope) run and throw UnsupportedOperationException (wireAop's
+                // existing graceful "declare unavailable" fallback) instead of a bare mock's null
+                // surfacing as an NPE.
+                when(ultiTools.getDataStore()).thenReturn(mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS));
+            });
+        }
+
+        private org.bukkit.plugin.java.JavaPlugin mockExternal(String name, File dataFolder) {
+            org.bukkit.plugin.java.JavaPlugin plugin = mock(org.bukkit.plugin.java.JavaPlugin.class);
+            org.bukkit.plugin.PluginDescriptionFile desc = mock(org.bukkit.plugin.PluginDescriptionFile.class);
+            when(plugin.getName()).thenReturn(name);
+            when(plugin.getDescription()).thenReturn(desc);
+            when(desc.getVersion()).thenReturn("1.0.0");
+            when(desc.getAuthors()).thenReturn(java.util.Collections.emptyList());
+            // Top-level main class name (no dot) -> ExternalPluginAdapter.getScanPackage() is
+            // empty, so registerExternal skips component scanning entirely.
+            when(desc.getMain()).thenReturn(name + "Main");
+            when(plugin.getDataFolder()).thenReturn(dataFolder);
+            when(plugin.getLogger()).thenReturn(Logger.getLogger(name));
+            return plugin;
+        }
+
+        @Test
+        @DisplayName("第二个插件为已注册的数据文件夹注册 scope 时应被拒绝，原 scope 保持不变")
+        void secondRegistrationForSameFolderByDifferentPluginShouldBeRefused() {
+            File sharedFolder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-shared-folder-02-14");
+            org.bukkit.plugin.java.JavaPlugin victim = mockExternal("Victim", sharedFolder);
+            org.bukkit.plugin.java.JavaPlugin attacker = mockExternal("Attacker", sharedFolder);
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter victimAdapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(victim);
+            pluginManager.registerExternal(victimAdapter);
+            DataScope originalScope = pluginManager.findScopeForDataFolder(sharedFolder);
+            assertThat(originalScope).isNotNull();
+            assertThat(originalScope.getPluginName()).isEqualTo("Victim");
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter attackerAdapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(attacker);
+
+            com.ultikits.ultitools.exceptions.PluginModuleException thrown =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.ultikits.ultitools.exceptions.PluginModuleException.class,
+                            () -> pluginManager.registerExternal(attackerAdapter));
+            assertThat(thrown.getMessage()).contains("Victim").contains("Attacker");
+
+            // The original scope must still be exactly what findScopeForDataFolder returns -- not
+            // displaced, and not even replaced by an equal-looking new instance.
+            assertThat(pluginManager.findScopeForDataFolder(sharedFolder)).isSameAs(originalScope);
+        }
+
+        @Test
+        @DisplayName("同一个插件重复注册同一个数据文件夹是幂等的，不应被拒绝")
+        void reRegistrationBySamePluginShouldBeIdempotent() {
+            File folder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-idempotent-folder-02-14");
+            org.bukkit.plugin.java.JavaPlugin plugin = mockExternal("SamePlugin", folder);
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter firstAdapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(plugin);
+            pluginManager.registerExternal(firstAdapter);
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter secondAdapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(plugin);
+            assertDoesNotThrow(() -> pluginManager.registerExternal(secondAdapter));
+            assertThat(pluginManager.findScopeForDataFolder(folder).getPluginName()).isEqualTo("SamePlugin");
+        }
+
+        @Test
+        @DisplayName("unregisterExternal 之后重新 registerExternal 同一文件夹应该成功（不会被永久锁死）")
+        void unregisterThenReRegisterForSameFolderShouldSucceed() {
+            File folder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-reconnect-folder-02-14");
+            org.bukkit.plugin.java.JavaPlugin plugin = mockExternal("ReconnectPlugin", folder);
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(plugin);
+            pluginManager.registerExternal(adapter);
+            assertThat(pluginManager.findScopeForDataFolder(folder)).isNotNull();
+
+            pluginManager.unregisterExternal(adapter);
+            // The previous behavior (the plan's "second finding"): unregisterExternal never
+            // cleared externalScopesByFolder, so this stayed non-null indefinitely after
+            // disconnect, and a fresh registerExternal for the same folder would have been wrongly
+            // refused as "already registered" by the very guard this Task adds.
+            assertThat(pluginManager.findScopeForDataFolder(folder)).isNull();
+
+            com.ultikits.ultitools.api.ExternalPluginAdapter freshAdapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(plugin);
+            assertDoesNotThrow(() -> pluginManager.registerExternal(freshAdapter));
+            assertThat(pluginManager.findScopeForDataFolder(folder)).isNotNull();
         }
     }
 }
