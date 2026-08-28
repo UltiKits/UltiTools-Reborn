@@ -45,6 +45,8 @@ import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
@@ -251,7 +253,7 @@ public class PluginManager {
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
-            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
+            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
             registerEntityOwnership(scope);
             plugin.setDataScope(scope);
             wireAop(pluginContext, scope);
@@ -568,11 +570,20 @@ public class PluginManager {
      * {@code CodeSource} and the class-level {@code @UltiToolsModule} annotation) is a class-level
      * fact, and {@code initializePlugin} already has {@code pluginClass} in hand before the
      * instance exists.
+     * <p>
+     * Every class named in {@code additionalEntities()} is validated (02-14) before being folded
+     * in -- see the private provenance-check method below this one. A plugin can declare an entity
+     * that legitimately lives outside its own JAR (D-19's purpose), but not one that structurally
+     * belongs to a different, already-known module.
      *
+     * @param pluginName  the plugin's own name, for the refusal message and the ownership-conflict
+     *                     check <br> 插件自身名称，用于拒绝信息和所有权冲突检查
      * @param pluginClass the plugin whose scope is being minted <br> 正在铸造 scope 的插件
      * @return the entity set for that plugin's scope <br> 该插件 scope 的实体集合
+     * @throws PluginModuleException fail-closed, when {@code additionalEntities()} names an entity
+     *                                that does not live on this plugin's own classpath (02-14)
      */
-    private Set<Class<?>> scanPluginEntities(Class<? extends UltiToolsPlugin> pluginClass) {
+    private Set<Class<?>> scanPluginEntities(String pluginName, Class<? extends UltiToolsPlugin> pluginClass) {
         Set<Class<?>> entities = new HashSet<>();
         File jarFile = resolveOwnJarFile(pluginClass);
         if (jarFile != null) {
@@ -580,7 +591,10 @@ public class PluginManager {
         }
         UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
         if (module != null) {
-            Collections.addAll(entities, module.additionalEntities());
+            for (Class<?> entity : module.additionalEntities()) {
+                validateAdditionalEntity(pluginName, pluginClass, jarFile, entity);
+                entities.add(entity);
+            }
         }
         return entities;
     }
@@ -593,22 +607,196 @@ public class PluginManager {
      * 为外部插件的 {@link DataScope} 构建实体集合（D-19）：扫描插件自身 jar 得到的每一个
      * {@code @Table} 类，加上通过 {@code UltiToolsAPI.connect(plugin, additionalEntities)} 声明的
      * 实体。
+     * <p>
+     * Every class named in {@code additionalEntities} is validated (02-14) before being folded in
+     * -- see the private provenance-check method below {@code scanPluginEntities}. This is the
+     * public, reachable side of D-19: {@code UltiToolsAPI.connect(plugin, additionalEntities...)}
+     * lands here with zero prior trust established, so the validation matters most on this path.
      *
      * @param adapter            the external plugin adapter <br> 外部插件适配器
      * @param additionalEntities entity classes declared via {@code connect(...)} <br> 通过
      *                           {@code connect(...)} 声明的实体类
      * @return the entity set for that external plugin's scope <br> 该外部插件 scope 的实体集合
+     * @throws PluginModuleException fail-closed, when {@code additionalEntities} names an entity
+     *                                that does not live on this plugin's own classpath (02-14)
      */
     private Set<Class<?>> scanExternalEntities(ExternalPluginAdapter adapter, Class<?>[] additionalEntities) {
         Set<Class<?>> entities = new HashSet<>();
-        File jarFile = resolveOwnJarFile(adapter.getJavaPlugin().getClass());
+        Class<?> declaringClass = adapter.getJavaPlugin().getClass();
+        File jarFile = resolveOwnJarFile(declaringClass);
         if (jarFile != null) {
             entities.addAll(scanEntitiesInJar(jarFile));
         }
         if (additionalEntities != null) {
-            Collections.addAll(entities, additionalEntities);
+            for (Class<?> entity : additionalEntities) {
+                validateAdditionalEntity(adapter.getPluginName(), declaringClass, jarFile, entity);
+                entities.add(entity);
+            }
         }
         return entities;
+    }
+
+    /**
+     * Validates that {@code entityClass}, declared via {@code additionalEntities} (D-19) by
+     * {@code declaringPluginName}, does not structurally belong to a DIFFERENT, already-known
+     * plugin before it is folded into that plugin's {@link DataScope} (02-14 finding: this
+     * attribute previously accepted any {@code Class<?>} the caller named, with zero validation --
+     * letting any plugin claim ownership of any other module's real {@code @Table} entity through
+     * the public {@code UltiToolsAPI.connect(plugin, additionalEntities...)} surface, or the
+     * internal {@code @UltiToolsModule#additionalEntities()} equivalent).
+     * <p>
+     * The discriminator is "does this class belong to a DIFFERENT plugin", not "is this class
+     * mine" -- deliberately, since D-19 exists precisely so a module can declare an entity that
+     * lives outside its own JAR:
+     * <ul>
+     *   <li>{@code entityClass} living in the SAME physical jar as {@code declaringOwnJarFile} (a
+     *       shared library shaded into the declaring plugin's own artifact, or a harmless
+     *       redundant re-declaration of an entity the automatic scan already found) -- legitimate,
+     *       accept.</li>
+     *   <li>{@code entityClass} already recorded in {@link #entityOwnership} under a DIFFERENT
+     *       plugin name -- refuse, naming the confirmed owner (matches
+     *       {@code DataScope.refusalFor}'s message shape).</li>
+     *   <li>{@code entityClass}'s own jar is itself the own jar of a DIFFERENT, already-discovered
+     *       {@link UltiToolsPlugin} module ({@link #pluginClassList}, populated by {@code init()}'s
+     *       upfront jar scan BEFORE any individual plugin registers) or of a currently-loaded
+     *       Bukkit plugin ({@code Bukkit.getPluginManager().getPlugins()}, populated by Bukkit's
+     *       own plugin loading, independent of whether that plugin has called
+     *       {@code UltiToolsAPI.connect(...)} yet) -- structurally confirmed as belonging to a
+     *       different plugin, refuse. This is what closes the first-registration-wins window
+     *       {@link #entityOwnership}'s {@code putIfAbsent} semantics alone cannot: it does not
+     *       depend on which plugin happened to register first, only on which jar actually defines
+     *       the class.</li>
+     *   <li>Anything else -- {@code entityClass} lives outside the declarer's own jar but is not
+     *       structurally tied to any other known plugin, and no registry conflict exists -- a
+     *       genuine shared-library / multi-module common artifact, D-19's stated purpose. Accept.</li>
+     * </ul>
+     * Deliberately does not compare classloaders: every internal {@link UltiToolsPlugin} module is
+     * loaded through ONE shared {@code URLClassLoader} covering the whole {@code plugins/} folder
+     * (see {@code init(ClassLoader)}), so two different internal modules' classes always report
+     * the same classloader -- using that as a signal would make this check a no-op for the
+     * internal path, silently failing to close the exact vulnerability it exists to close. Jar
+     * identity (via {@code java.security.CodeSource}) remains meaningful even when many jars share
+     * one classloader, which is why it is the signal used here instead.
+     * <p>
+     * A residual gap, disclosed rather than silently accepted: an attacker who can obtain a
+     * byte-identical copy of another plugin's entity class (e.g. by depending on its published jar
+     * at build time) and shade that copy into their own jar would pass this check -- from the
+     * JVM's perspective it genuinely is a different, attacker-owned {@code Class} object,
+     * structurally indistinguishable from a legitimate shared-library entity. This method
+     * validates class PROVENANCE (which jar/module actually defined this exact class), not table
+     * name collision; a plugin that simply writes its own class with a matching {@code @Table}
+     * name never reaches this method at all (no {@code additionalEntities} declaration involved),
+     * and is a pre-existing, out-of-scope risk inherent to a single shared MySQL DataSource across
+     * all plugins -- not the vulnerability 02-SECURITY.md described or this plan closes.
+     *
+     * @param declaringPluginName the plugin declaring {@code entityClass} <br> 声明
+     *                             {@code entityClass} 的插件
+     * @param declaringClass      the declaring plugin's own main/adapter class, used to look it up
+     *                             in {@link #pluginClassList} and excluded from the
+     *                             "belongs to another known plugin" check <br> 声明方插件自身的主类
+     *                             /适配器类，用于在 {@link #pluginClassList} 中查找自身并将其排除在
+     *                             「属于另一个已知插件」检查之外
+     * @param declaringOwnJarFile the declaring plugin's own resolved jar, or {@code null} when
+     *                             unresolvable (e.g. a directly-constructed test instance) <br>
+     *                             声明方插件自身解析出的 jar；无法解析时（例如直接构造、无真实
+     *                             jar 的测试实例）为 {@code null}
+     * @param entityClass          the entity class named in {@code additionalEntities} <br>
+     *                             {@code additionalEntities} 中声明的实体类
+     * @throws PluginModuleException fail-closed (D-15), naming the declarer, the entity, and the
+     *                                actual owner where one is known
+     */
+    private void validateAdditionalEntity(String declaringPluginName, Class<?> declaringClass,
+            File declaringOwnJarFile, Class<?> entityClass) {
+        File entityJarFile = resolveOwnJarFile(entityClass);
+
+        if (entityJarFile != null && declaringOwnJarFile != null
+                && canonicalPath(entityJarFile).equals(canonicalPath(declaringOwnJarFile))) {
+            return; // same physical jar as the declarer's own artifact -- legitimate (D-19)
+        }
+
+        String owner = findOwningPlugin(entityClass);
+        if (owner != null && !owner.equals(declaringPluginName)) {
+            throw new PluginModuleException(ErrorCode.ENTITY_NOT_OWNED,
+                    additionalEntityRefusalMessage(declaringPluginName, entityClass, owner));
+        }
+
+        if (entityJarFile != null && belongsToAnotherKnownPlugin(entityJarFile, declaringClass)) {
+            throw new PluginModuleException(ErrorCode.ENTITY_NOT_OWNED,
+                    additionalEntityRefusalMessage(declaringPluginName, entityClass, null));
+        }
+    }
+
+    /**
+     * Whether {@code entityJarFile} is itself the own jar of some plugin OTHER than
+     * {@code declaringClass} -- checked against every internal module {@code init()} has already
+     * discovered ({@link #pluginClassList}, regardless of load order) and every Bukkit plugin
+     * currently loaded ({@code Bukkit.getPluginManager().getPlugins()}, regardless of whether it
+     * has called {@code UltiToolsAPI.connect(...)} yet). See the caller directly above this method
+     * for the full reasoning.
+     * <p>
+     * {@code entityJarFile} 是否正是除 {@code declaringClass} 之外某个插件自身的 jar——依次比对
+     * {@code init()} 已经发现的每一个内部模块（{@link #pluginClassList}，与加载顺序无关）和每一个
+     * 当前已加载的 Bukkit 插件（{@code Bukkit.getPluginManager().getPlugins()}，无论其是否已调用
+     * {@code UltiToolsAPI.connect(...)}）。完整推理见上一个方法（本方法唯一的调用方）。
+     *
+     * @param entityJarFile  the entity's resolved own jar, never null <br> 实体自身解析出的 jar，
+     *                       不会为 null
+     * @param declaringClass the declaring plugin's own class, excluded from the comparison <br>
+     *                       声明方插件自身的类，比对时会被排除
+     * @return true if a different, already-known plugin's own jar matches <br>
+     *         若匹配到另一个已知插件自身的 jar 则为 true
+     */
+    private boolean belongsToAnotherKnownPlugin(File entityJarFile, Class<?> declaringClass) {
+        String entityPath = canonicalPath(entityJarFile);
+        for (Class<? extends UltiToolsPlugin> known : pluginClassList) {
+            if (known == declaringClass) {
+                continue;
+            }
+            File knownJar = resolveOwnJarFile(known);
+            if (knownJar != null && entityPath.equals(canonicalPath(knownJar))) {
+                return true;
+            }
+        }
+        for (org.bukkit.plugin.Plugin loaded : Bukkit.getPluginManager().getPlugins()) {
+            if (loaded.getClass() == declaringClass) {
+                continue;
+            }
+            File loadedJar = resolveOwnJarFile(loaded.getClass());
+            if (loadedJar != null && entityPath.equals(canonicalPath(loadedJar))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Builds the refusal message for an {@code additionalEntities} declaration that does not live
+     * on the declarer's own classpath -- the same "confirmed owner" vs. "no confirmed owner"
+     * distinction {@code DataScope.refusalFor(Class)} makes (D-15), applied at declaration time
+     * instead of data-access time.
+     * <p>
+     * 为不在声明方自身 classpath 上的 {@code additionalEntities} 声明构建拒绝信息——与
+     * {@code DataScope.refusalFor(Class)}（D-15）相同的「已确认归属方」与「归属方未知」区分，
+     * 只是发生在声明时而非数据访问时。
+     *
+     * @param declaringPluginName the plugin whose declaration is refused <br> 被拒绝声明的插件
+     * @param entityClass          the entity class that was declared <br> 被声明的实体类
+     * @param owner                the confirmed owning plugin's name, or {@code null} when none is
+     *                             known <br> 已确认的拥有者插件名；未知时为 {@code null}
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String additionalEntityRefusalMessage(String declaringPluginName, Class<?> entityClass,
+            String owner) {
+        if (owner != null) {
+            return "Plugin '" + declaringPluginName + "' declared additionalEntities entity "
+                    + entityClass.getName() + ", which is confirmed to belong to module '" + owner
+                    + "' -- refusing (the entity does not live on '" + declaringPluginName
+                    + "'s own classpath; use " + owner + "'s exposed service or the EventBus instead).";
+        }
+        return "Plugin '" + declaringPluginName + "' declared additionalEntities entity "
+                + entityClass.getName() + ", which is confirmed to belong to a different, "
+                + "already-known plugin -- refusing (the entity does not live on '" + declaringPluginName
+                + "'s own classpath).";
     }
 
     /**
@@ -652,12 +840,45 @@ public class PluginManager {
      * {@link #findScopeForDataFolder} 能把 {@code DataStore.getOperator(File, Class)} 的调用方
      * 解析回一个 scope（D-18）——沿用 02-02 Task 2 为 SQLite 连接池 Map 采用的规范路径键法，
      * 让同一个文件夹的两种写法解析到同一条记录。
+     * <p>
+     * Refuses (02-14 Task 2) rather than silently replacing when the canonical path already maps
+     * to a DIFFERENT plugin's scope -- {@code externalScopesByFolder} used a plain {@code .put()}
+     * before this, so wrapping another plugin (all public calls -- {@code new
+     * ExternalPluginAdapter(Bukkit.getPluginManager().getPlugin("Victim"))}) and calling the
+     * public {@code registerExternal} would displace the victim's legitimate scope here, poisoning
+     * the D-18 reverse lookup {@code checkOwnership(File, Class)} depends on. Re-registration by
+     * the SAME plugin (matched by name) is idempotent, not refused -- a plugin reconnecting after
+     * {@link #unregisterExternal(ExternalPluginAdapter)} must not be permanently locked out.
+     * <p>
+     * 当规范路径已经映射到另一个不同插件的 scope 时拒绝（02-14 Task 2），而不是静默替换——此前
+     * {@code externalScopesByFolder} 用的是普通 {@code .put()}，于是包装另一个插件（全部为公开
+     * 调用——{@code new ExternalPluginAdapter(Bukkit.getPluginManager().getPlugin("Victim"))}）
+     * 并调用公开的 {@code registerExternal}，就能在这里覆盖受害插件的合法 scope，污染
+     * {@code checkOwnership(File, Class)} 依赖的 D-18 反向查找。同一个插件（按名称匹配）重复
+     * 注册是幂等的、不会被拒绝——插件在 {@link #unregisterExternal(ExternalPluginAdapter)} 后
+     * 重连不应被永久锁死。
      *
      * @param dataFolder the external plugin's own data folder <br> 外部插件自己的数据文件夹
      * @param scope      the scope just minted for it <br> 刚为它铸造的 scope
+     * @throws PluginModuleException fail-closed, when {@code dataFolder} already maps to a
+     *                                DIFFERENT plugin's registered scope (02-14)
      */
     private void registerExternalScope(File dataFolder, DataScope scope) {
-        externalScopesByFolder.put(canonicalPath(dataFolder), scope);
+        String path = canonicalPath(dataFolder);
+        // putIfAbsent, not get()-then-put(): atomic check-and-insert, so two concurrent
+        // registrations for the same folder can't both observe "nothing registered yet" and both
+        // proceed to write -- the same race a plain get()/put() pair would leave open.
+        DataScope existing = externalScopesByFolder.putIfAbsent(path, scope);
+        if (existing != null && !existing.getPluginName().equals(scope.getPluginName())) {
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Refusing to register external plugin '" + scope.getPluginName() + "' for data folder '"
+                            + path + "': already registered to '" + existing.getPluginName() + "' -- an "
+                            + "external scope registration cannot displace an existing one.");
+        }
+        // existing == null: this call's putIfAbsent just inserted scope, nothing left to do.
+        // existing != null && same plugin name: idempotent re-registration -- the map keeps the
+        // ALREADY-registered scope (putIfAbsent never overwrites on a hit); same plugin, so this
+        // is a no-op rather than an attack.
     }
 
     /**
@@ -671,6 +892,22 @@ public class PluginManager {
      */
     public DataScope findScopeForDataFolder(File dataFolder) {
         return externalScopesByFolder.get(canonicalPath(dataFolder));
+    }
+
+    /**
+     * Removes a data folder's registered external plugin scope (02-14 Task 2), so a subsequent
+     * {@link #registerExternal(ExternalPluginAdapter, Class[])} for the same folder -- a legitimate
+     * reconnect -- is not refused by {@link #registerExternalScope}'s displacement guard as if it
+     * were a different plugin still holding the folder.
+     * <p>
+     * 移除某个数据文件夹已注册的外部插件 scope（02-14 Task 2），使随后针对同一文件夹的
+     * {@link #registerExternal(ExternalPluginAdapter, Class[])}（合法的重新连接）不会被
+     * {@link #registerExternalScope} 的覆盖防护误判成「该文件夹仍被另一个插件占用」而拒绝。
+     *
+     * @param dataFolder the folder whose registration should be cleared <br> 待清除注册的文件夹
+     */
+    private void unregisterExternalScope(File dataFolder) {
+        externalScopesByFolder.remove(canonicalPath(dataFolder));
     }
 
     private static String canonicalPath(File folder) {
@@ -1226,7 +1463,7 @@ public class PluginManager {
             // can call Xxx.getInstance().getDataOperator() etc.
             setPluginStaticInstance(pluginClass, plugin);
 
-            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getClass()));
+            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
             registerEntityOwnership(scope);
             plugin.setDataScope(scope);
             wireAop(pluginContext, scope);
@@ -1440,9 +1677,12 @@ public class PluginManager {
         // 3. Refresh container to instantiate beans
         DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
                 scanExternalEntities(adapter, additionalEntities));
+        // registerExternalScope runs FIRST (02-14 Task 2): if it refuses (another plugin already
+        // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
+        // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
+        registerExternalScope(adapter.getDataFolder(), scope);
         registerEntityOwnership(scope);
         adapter.setDataScope(scope);
-        registerExternalScope(adapter.getDataFolder(), scope);
         wireAop(context, scope);
         context.refresh();
         adapter.setContext(context);
@@ -1519,6 +1759,14 @@ public class PluginManager {
             adapter.getContext().close();
             adapter.setContext(null);
         }
+
+        // Clear the folder->scope registration (02-14 Task 2) so a fresh registerExternal(...) for
+        // the same folder -- a legitimate reconnect -- is not refused by registerExternalScope's
+        // displacement guard as if the folder were still held by a different plugin. This was
+        // previously left behind entirely (a second, disclosed finding beyond the displacement
+        // guard itself): unregisterExternal never removed the entry, so findScopeForDataFolder
+        // kept resolving a disconnected plugin's stale scope indefinitely.
+        unregisterExternalScope(adapter.getDataFolder());
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin unregistered: " + pluginName);

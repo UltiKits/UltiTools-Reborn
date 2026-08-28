@@ -58,15 +58,36 @@ public final class UltiToolsAPI {
      * not a replacement for it. The single-argument {@link #connect(JavaPlugin)} overload is
      * unchanged and delegates here with an empty array.
      * <p>
+     * <b>{@code additionalEntities} is validated, not trusted (02-14).</b> Each class must live on
+     * {@code plugin}'s own classpath -- either its own JAR, or a jar/module not already known to
+     * belong to a different, currently-loaded plugin. A class that structurally belongs to a
+     * DIFFERENT plugin (its own JAR, or one already recorded as owned by another plugin) is
+     * refused with an {@link IllegalStateException} wrapping a
+     * {@code com.ultikits.ultitools.exceptions.PluginModuleException}, and no partial registration
+     * is left behind -- {@code additionalEntities} cannot be used to obtain a working
+     * {@link DataOperator} for another plugin's entity, only to declare entities this plugin
+     * genuinely owns but does not package.
+     * <p>
      * 将外部 Bukkit 插件连接到 UltiTools 框架，并声明合法存放在插件自身 JAR 之外的实体类
      * （D-19）——共享库 JAR，或多模块构建的公共产物。插件自身 JAR 中的 {@code @Table} 类始终会
      * 被自动扫描；{@code additionalEntities} 是对该扫描结果的补充，而非替代。单参数的
      * {@link #connect(JavaPlugin)} 重载保持不变，以空数组委托到本方法。
+     * <p>
+     * <b>{@code additionalEntities} 会被校验，而非被信任（02-14）。</b>其中每一个类都必须存放在
+     * {@code plugin} 自身的 classpath 上——要么是它自己的 JAR，要么是一个尚未被记录为归属于
+     * 另一个当前已加载插件的 jar/模块。若某个类在结构上被确认属于另一个不同的插件（它自身的
+     * JAR，或已记录归属于另一个插件），则会被拒绝，抛出包裹了
+     * {@code com.ultikits.ultitools.exceptions.PluginModuleException} 的
+     * {@link IllegalStateException}，且不会留下任何部分注册的状态——{@code additionalEntities}
+     * 无法被用来获得另一个插件实体的可用 {@link DataOperator}，只能用来声明本插件确实拥有、
+     * 但未打包在自身 JAR 中的实体。
      *
      * @param plugin            the external JavaPlugin to connect <br> 待连接的外部 JavaPlugin
      * @param additionalEntities entity classes owned by this plugin that live outside its own JAR
      *                            <br> 该插件拥有、但存放在自身 JAR 之外的实体类
-     * @throws IllegalStateException if UltiTools is not loaded
+     * @throws IllegalStateException if UltiTools is not loaded, or if an entity in
+     *                                {@code additionalEntities} does not live on {@code plugin}'s
+     *                                own classpath (02-14)
      * @since 6.3.0
      */
     public static void connect(JavaPlugin plugin, Class<?>... additionalEntities) {
