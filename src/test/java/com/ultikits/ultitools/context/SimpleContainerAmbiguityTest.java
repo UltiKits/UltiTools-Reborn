@@ -127,6 +127,19 @@ class SimpleContainerAmbiguityTest {
         }
     }
 
+    /**
+     * CR-01 fixture: an ordinary, Spring-idiomatic naming choice (a lower-priority implementer
+     * explicitly named after the interface's own decapitalized default) that must NOT bypass
+     * priority adjudication -- unlike {@link MarkerImpl}, which is a genuine self-match.
+     */
+    @Service(value = "greeter", priority = 0)
+    static class NameCollidesWithInterfaceDefaultGreeter implements Greeter {
+        @Override
+        public String greet() {
+            return "name-collision-low";
+        }
+    }
+
     @Service(priority = 0)
     static class LateEqualPriorityGreeter implements Greeter {
         @Override
@@ -291,6 +304,33 @@ class SimpleContainerAmbiguityTest {
             MarkerImpl bean = container.getBean(MarkerImpl.class);
 
             assertEquals("marker", bean.id());
+        }
+
+        @Test
+        @DisplayName("CR-01: an unrelated bean explicitly named after the interface's own "
+                + "decapitalized default must not bypass priority adjudication")
+        void explicitNameCollidingWithInterfaceDefaultNameDoesNotBypassPriority() {
+            // getBeanName(Greeter.class) synthesizes "greeter" (Greeter has no @Component/
+            // @Service of its own). NameCollidesWithInterfaceDefaultGreeter is registered under
+            // that exact name via an explicit, ordinary @Service(value = "greeter") -- a
+            // completely idiomatic naming choice a module author could make with no idea it
+            // shares the requested interface's synthesized default. Before the CR-01 fix,
+            // getBean(Greeter.class)'s by-name shortcut (SimpleContainer.java:393-399) matched
+            // this name and returned it unconditionally, never reaching the priority/ambiguity
+            // adjudication a few lines below -- even though a strictly higher-priority
+            // implementer is also registered.
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(NameCollidesWithInterfaceDefaultGreeter.class);
+            container.registerBean(HighPriorityGreeter.class);
+            container.refresh();
+
+            Greeter bean = container.getBean(Greeter.class);
+
+            assertEquals("high", bean.greet(),
+                    "the higher-priority candidate (@Service(priority = 10)) must win even though "
+                            + "a lower-priority bean happens to be registered under the interface's "
+                            + "own decapitalized default name (\"greeter\") -- an accidental name "
+                            + "collision must not silently outrank @Service(priority = ...)");
         }
     }
 
