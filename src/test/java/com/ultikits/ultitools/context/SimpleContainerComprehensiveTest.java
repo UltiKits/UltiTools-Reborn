@@ -789,6 +789,9 @@ class SimpleContainerComprehensiveTest {
     }
 
     public static class UnresolvableConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container's
+        // constructor-injection resolver down the "dependency type cannot be resolved" branch.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
         public UnresolvableConstructorBean(UnresolvableConstructorDependency dependency) {
             // Never reached: the dependency cannot be resolved.
         }
@@ -799,6 +802,9 @@ class SimpleContainerComprehensiveTest {
     }
 
     public static class ThrowingConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container
+        // through constructor injection before the constructor body deliberately fails.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
         public ThrowingConstructorBean(SimpleConstructorDependency dependency) {
             throw new IllegalStateException("constructor body deliberately fails");
         }
