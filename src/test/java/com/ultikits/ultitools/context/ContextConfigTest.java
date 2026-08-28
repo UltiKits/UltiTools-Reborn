@@ -1,8 +1,10 @@
 package com.ultikits.ultitools.context;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Constructor;
@@ -30,25 +32,13 @@ class ContextConfigTest {
     }
 
     @Test
-    @DisplayName("Should be annotated with @ComponentScan")
-    void testComponentScanAnnotation() {
-        // Then
-        assertTrue(ContextConfig.class.isAnnotationPresent(ComponentScan.class),
-                "ContextConfig should be annotated with @ComponentScan");
-    }
-
-    @Test
-    @DisplayName("Should scan com.ultikits.ultitools package")
-    void testComponentScanPackage() {
-        // Given
-        ComponentScan componentScan = ContextConfig.class.getAnnotation(ComponentScan.class);
-
-        // Then
-        assertNotNull(componentScan);
-        String[] basePackages = componentScan.value();
-        assertNotNull(basePackages);
-        assertEquals(1, basePackages.length);
-        assertEquals("com.ultikits.ultitools", basePackages[0]);
+    @DisplayName("Should no longer be annotated with @ComponentScan")
+    void testComponentScanAnnotationAbsent() {
+        // @ComponentScan("com.ultikits.ultitools") was removed in 6.3.0 (D-23): nothing in
+        // src/main ever invoked SimpleContainer#processConfigurationClass against it, so the
+        // declaration was a scan nobody performed. See ContextConfig's own javadoc.
+        assertFalse(ContextConfig.class.isAnnotationPresent(ComponentScan.class),
+                "ContextConfig should no longer be annotated with @ComponentScan");
     }
 
     @Test
@@ -133,26 +123,19 @@ class ContextConfigTest {
     }
 
     @Test
-    @DisplayName("ComponentScan annotation should have correct attributes")
-    void testComponentScanAttributes() {
+    @DisplayName("getAnnotation(ComponentScan.class) should return null now that the declaration "
+            + "is gone")
+    void testComponentScanAnnotationInstanceIsNull() {
         // Given
         ComponentScan componentScan = ContextConfig.class.getAnnotation(ComponentScan.class);
 
         // Then
-        assertNotNull(componentScan);
-        
-        // Check value attribute
-        String[] value = componentScan.value();
-        assertEquals(1, value.length);
-        assertEquals("com.ultikits.ultitools", value[0]);
-        
-        // Check basePackages attribute (should be empty as value is used)
-        String[] basePackages = componentScan.basePackages();
-        assertEquals(0, basePackages.length);
+        assertNull(componentScan,
+                "ContextConfig no longer carries @ComponentScan, so its instance must be null");
     }
 
     @Test
-    @DisplayName("Should be a simple marker configuration class")
+    @DisplayName("Should be a simple marker configuration class with no scan declaration")
     void testIsMarkerClass() {
         // Given - filter out synthetic members
         boolean hasConfigAnnotation = ContextConfig.class.isAnnotationPresent(Configuration.class);
@@ -164,7 +147,8 @@ class ContextConfigTest {
 
         // Then
         assertTrue(hasConfigAnnotation);
-        assertTrue(hasComponentScanAnnotation);
+        assertFalse(hasComponentScanAnnotation,
+                "ContextConfig should no longer be annotated with @ComponentScan (D-23)");
         assertTrue(hasNoMethods);
         assertTrue(hasNoFields);
     }
