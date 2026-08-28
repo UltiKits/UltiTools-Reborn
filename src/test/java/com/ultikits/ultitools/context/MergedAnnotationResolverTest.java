@@ -2,8 +2,10 @@ package com.ultikits.ultitools.context;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.annotation.ElementType;
@@ -18,6 +20,7 @@ import com.ultikits.ultitools.annotations.AliasFor;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.I18n;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.utils.AnnotationUtils;
 
 /**
@@ -165,5 +168,143 @@ class MergedAnnotationResolverTest {
 
         assertNotNull(merged);
         assertTrue("shorthand-value".equals(merged.value()));
+    }
+
+    // ===== Task 2: malformed @AliasFor declarations (D-02) =====
+
+    // Shape 1: annotation() references a type that is NOT meta-present on the declaring
+    // annotation.
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface UnrelatedTarget {
+        String value() default "";
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface NotMetaPresentAlias {
+        @AliasFor(annotation = UnrelatedTarget.class, attribute = "value")
+        String foo() default "";
+    }
+
+    @Test
+    @DisplayName("Malformed: annotation() targets a type that is not meta-present on the declaring annotation")
+    void shouldRejectAliasForWhoseTargetIsNotMetaPresent() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> MergedAnnotationResolver.validateAliases(NotMetaPresentAlias.class));
+
+        assertTrue(thrown.getMessage().contains(NotMetaPresentAlias.class.getName()), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
+    }
+
+    // Shape 2: attribute() names an attribute that does not exist on the target annotation.
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface SimpleTarget {
+        String value() default "";
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @SimpleTarget
+    @interface MissingAttributeAlias {
+        @AliasFor(annotation = SimpleTarget.class, attribute = "doesNotExist")
+        String foo() default "";
+    }
+
+    @Test
+    @DisplayName("Malformed: attribute() names an attribute that does not exist on the target annotation")
+    void shouldRejectAliasForWhoseAttributeDoesNotExist() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> MergedAnnotationResolver.validateAliases(MissingAttributeAlias.class));
+
+        assertTrue(thrown.getMessage().contains(MissingAttributeAlias.class.getName()), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
+    }
+
+    // Shape 3: the aliasing attribute and the target attribute have different return types.
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface TypedTarget {
+        String value() default "";
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @TypedTarget
+    @interface MismatchedTypeAlias {
+        @AliasFor(annotation = TypedTarget.class, attribute = "value")
+        boolean foo() default false;
+    }
+
+    @Test
+    @DisplayName("Malformed: aliased attributes do not share the same return type")
+    void shouldRejectAliasForWithMismatchedReturnType() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> MergedAnnotationResolver.validateAliases(MismatchedTypeAlias.class));
+
+        assertTrue(thrown.getMessage().contains(MismatchedTypeAlias.class.getName()), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
+    }
+
+    // Shape 4: a within-annotation mutual alias where only one side declares @AliasFor back at
+    // the other -- not reciprocal.
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface NonReciprocalMutualAlias {
+        @AliasFor("bar")
+        String foo() default "";
+
+        String bar() default "";
+    }
+
+    @Test
+    @DisplayName("Malformed: a within-annotation mutual alias is not reciprocal")
+    void shouldRejectNonReciprocalMutualAlias() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> MergedAnnotationResolver.validateAliases(NonReciprocalMutualAlias.class));
+
+        assertTrue(thrown.getMessage().contains(NonReciprocalMutualAlias.class.getName()), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
+    }
+
+    // ===== Task 2: within-annotation mutual alias, well-formed and conflicting instances =====
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @interface MutualAlias {
+        @AliasFor("bar")
+        String foo() default "";
+
+        @AliasFor("foo")
+        String bar() default "";
+    }
+
+    @MutualAlias(foo = "x")
+    static class WellFormedMutualAliasFixture {
+    }
+
+    @MutualAlias(foo = "x", bar = "y")
+    static class ConflictingMutualAliasFixture {
+    }
+
+    @Test
+    @DisplayName("Control: a well-formed mutual alias declaration passes structural validation")
+    void validateAliasesAcceptsWellFormedMutualAlias() {
+        assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(MutualAlias.class));
+    }
+
+    @Test
+    @DisplayName("Well-formed mutual alias with only one side set: the set side wins for both, no exception")
+    void wellFormedMutualAliasWithOneSideSetResolvesWithoutConflict() {
+        MutualAlias merged = MergedAnnotationResolver.find(WellFormedMutualAliasFixture.class, MutualAlias.class);
+
+        assertNotNull(merged);
+        assertEquals("x", merged.foo());
+        assertEquals("x", merged.bar());
+    }
+
+    @Test
+    @DisplayName("Mutual alias with different non-default values on the same concrete instance -> ContainerException naming both attributes")
+    void conflictingMutualAliasValuesAreRejectedAtResolution() {
+        ContainerException thrown = assertThrows(ContainerException.class,
+                () -> MergedAnnotationResolver.find(ConflictingMutualAliasFixture.class, MutualAlias.class));
+
+        assertTrue(thrown.getMessage().contains(MutualAlias.class.getName()), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("foo"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("bar"), thrown.getMessage());
     }
 }
