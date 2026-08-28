@@ -449,7 +449,6 @@ class RegisterSingletonAssemblyTest {
         void firstRegisteredObjectThrowsWhenFieldIsRequired() {
             SimpleContainer container = new SimpleContainer();
             MutualARequired a = new MutualARequired();
-            MutualBRequired b = new MutualBRequired();
 
             assertThrows(ContainerException.class,
                     () -> container.registerSingleton("mutualARequired", a),
