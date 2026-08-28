@@ -46,6 +46,7 @@ import com.ultikits.ultitools.api.UltiToolsAPI;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -56,7 +57,6 @@ import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
-import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
@@ -1566,7 +1566,7 @@ public class PluginManager {
      * @param flag   True if register in default package  <br> 如果在默认包中注册则为true
      */
     private void registerBukkit(UltiToolsPlugin plugin, boolean flag) {
-        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(plugin.getClass(), EnableAutoRegister.class);
+        EnableAutoRegister annotation = MergedAnnotationResolver.find(plugin.getClass(), EnableAutoRegister.class);
         if (annotation == null) {
             return;
         }
