@@ -38,6 +38,8 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
@@ -391,12 +393,30 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      * a hook. {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()}
      * on it (02-08-PLAN.md's delete-hook-path split, mirrored from
      * {@code AbstractRelationalDataOperator}).
+     * <p>
+     * A {@code null} or zero-length {@code whereConditions} is refused with a {@link
+     * DataAccessException}, matching {@code AbstractRelationalDataOperator.del()}'s guard and the
+     * contract {@link com.ultikits.ultitools.interfaces.DataOperator#del}'s interface javadoc
+     * promises (CR-02, 02-13). The refusal runs before {@link #beforeMutate()}, so a refused call
+     * does not capture a transaction snapshot as a side effect.
      */
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
+        // Deliberately does NOT mirror getAll's empty-condition handling: on the query side,
+        // "empty conditions = no filter = return everything" is a reasonable convention; carried
+        // over to the delete side it becomes "delete the entire table", which is precisely the
+        // silent-full-wipe defect class this milestone exists to remove -- refuse both shapes
+        // before beforeMutate() runs (a zero-length array previously made the loop body below
+        // never run, so the call returned normally having deleted nothing; a null array threw a
+        // raw NullPointerException from the enhanced-for loop, not the DataAccessException the
+        // interface promises).
+        if (whereConditions == null || whereConditions.length == 0) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to delete every entry of JSON store '" + type.getSimpleName() + "' with no "
+                            + "WhereCondition. Pass an explicit condition, or use a dedicated full-table "
+                            + "operation if one genuinely exists.");
+        }
         beforeMutate();
-        // 这里刻意不照搬 getAll 对空条件的处理：在查询侧「空条件 = 不过滤 = 返回全量」是合理的，
-        // 搬到删除侧就成了「删光全表」。空条件目前会在下面取 getValue() 时抛 NPE，难看但失败方向安全。
         Collection<Map.Entry<Object, T>> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
