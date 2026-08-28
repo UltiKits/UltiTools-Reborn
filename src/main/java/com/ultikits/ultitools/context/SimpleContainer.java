@@ -160,6 +160,10 @@ public class SimpleContainer {
     public void registerSingleton(String name, Object instance) {
         addSingleton(name, instance);
         typeMappings.put(instance.getClass(), instance);
+        // A newly registered singleton may be a new candidate for some already-resolved
+        // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
+        // instead of returning a stale cached resolution (D-12).
+        invalidateResolvedTypeCache();
     }
 
     /**
@@ -619,6 +623,24 @@ public class SimpleContainer {
     public void registerBeanDefinition(String name, BeanDefinition definition) {
         beanDefinitions.put(name, definition);
         beanTypes.put(name, definition.getBeanClass());
+        // A newly registered bean definition may be a new candidate for some already-resolved
+        // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
+        // instead of returning a stale cached resolution (D-12).
+        invalidateResolvedTypeCache();
+    }
+
+    /**
+     * Invalidates the by-type assignability resolution cache ({@link #resolvedTypeCache}).
+     * <p>
+     * Called whenever a new bean definition or singleton is registered, so a subsequently
+     * registered implementation of an already-resolved type participates in the next
+     * adjudication instead of being masked by a resolution cached before it existed (D-12).
+     * Never touches {@link #typeMappings} -- that map holds author-declared bindings
+     * ({@code registerType}/{@code registerTypeSupplier}/{@code registerSingleton}'s own
+     * concrete-class binding), which must survive registration of unrelated beans.
+     */
+    private void invalidateResolvedTypeCache() {
+        resolvedTypeCache.clear();
     }
 
     /**
