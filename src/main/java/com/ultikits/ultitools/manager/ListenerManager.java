@@ -4,6 +4,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
+import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
@@ -72,6 +73,9 @@ public class ListenerManager {
                 Objects.requireNonNull(plugin.getClass().getClassLoader())
         );
         for (Class<?> clazz : classes) {
+            if (!ConditionalRegistrationEvaluator.shouldRegister(clazz, plugin.getContext())) {
+                continue;
+            }
             try {
                 Listener listener = (Listener) clazz.getDeclaredConstructor().newInstance();
                 plugin.getContext().getAutowireCapableBeanFactory().autowireBean(listener);

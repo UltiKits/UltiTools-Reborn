@@ -15,7 +15,6 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Component;
-import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
@@ -23,7 +22,6 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -184,41 +182,21 @@ public class ComponentScanner {
 
     /**
      * Check if a class should be registered based on @ConditionalOnConfig.
+     * <p>
+     * Delegates to {@link ConditionalRegistrationEvaluator}, the single shared implementation
+     * of this decision (D-17) -- also consulted by {@code ListenerManager}'s package-scan
+     * overload, so the annotation is honoured identically on both reflection paths.
      * <br>
      * 根据 @ConditionalOnConfig 检查类是否应被注册。
+     * <p>
+     * 委托给 {@link ConditionalRegistrationEvaluator}——该判定逻辑唯一的共享实现（D-17），
+     * 同时也被 {@code ListenerManager} 的包扫描重载调用，从而使该注解在两条反射路径上表现一致。
      *
      * @param clazz the class to check
      * @return true if the class should be registered
      */
     private boolean shouldRegister(Class<?> clazz) {
-        ConditionalOnConfig condition = clazz.getAnnotation(ConditionalOnConfig.class);
-        if (condition == null) {
-            return true;
-        }
-
-        // Retrieve the plugin from the container
-        UltiToolsPlugin plugin = null;
-        try {
-            plugin = container.getBean(UltiToolsPlugin.class);
-        } catch (Exception e) {
-            // No plugin in container — skip conditional (register by default)
-            return true;
-        }
-
-        if (plugin == null || plugin.getResourceFolderPath() == null) {
-            return true;
-        }
-
-        // Load the referenced config file from the plugin's config folder
-        File configFile = new File(plugin.getResourceFolderPath(), condition.value());
-        if (!configFile.exists()) {
-            // Config file doesn't exist yet — feature disabled
-            return condition.negate();
-        }
-
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(configFile);
-        boolean value = yaml.getBoolean(condition.path(), false);
-        return condition.negate() ? !value : value;
+        return ConditionalRegistrationEvaluator.shouldRegister(clazz, container);
     }
 
     /**
