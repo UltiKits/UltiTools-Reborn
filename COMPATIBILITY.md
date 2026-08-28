@@ -681,16 +681,197 @@ a fresh, correctly-scoped `.db` file — it does not automatically recover the o
 rows. Inspect `sqliteDB/unknown.db` yourself before upgrading if you are unsure whether any of your
 modules were affected.
 
-**Newly deprecated, not yet removal-eligible.** Two more `@Deprecated(since = "6.3.0", forRemoval =
-true)` additions land in this release but do not appear in the "Removal list for 6.3.0" table above
+### Recorded instance: an unresolvable required `@Autowired` dependency now fails module load (SILENT-05, 6.3.0)
+
+Before 6.3.0, `SimpleContainer.autowireBean` and the constructor-injection path logged a `WARNING`
+and injected `null` for an unresolvable `@Autowired(required = true)` field or constructor
+parameter, instead of the failure the `required = true` default promises. 6.3.0 throws
+`ContainerException`, naming the declaring class, the field (or constructor parameter position),
+and the unresolvable dependency type, and the module fails to load rather than continuing with a
+silently-null collaborator. `required = false` is unaffected — the field or parameter is still
+left `null` with no warning.
+
+This falls under "moving from silent degradation to failure," which normally needs a migration
+period — but that period has already run. Issue #182's one-shot `WARNING` on this exact path
+shipped in `v6.2.5`, giving downstream module authors one full release of notice before 6.3.0
+turns it into a load-time failure. That warning is the precondition D-08 relied on to treat 6.3.0
+as the "N+1" step rather than starting the two-step process over.
+
+Constructor injection carries the identical fix: an unresolvable required constructor dependency
+now throws `ContainerException` rather than a bare `RuntimeException`.
+
+### Recorded instance: same-type resolution now adjudicates by `@Service(priority)` and refuses an exact tie (SILENT-06, 6.3.0)
+
+Before 6.3.0, `SimpleContainer.getBean(Class)` resolving a type with more than one matching
+candidate returned whichever the internal map iteration reached first — an unspecified,
+implementation-dependent choice that this repository's own `@Service` javadoc did not document,
+even though it shipped a `priority` attribute. 6.3.0 makes `priority` load-bearing: candidates are
+ranked by `@Service(priority)`, **higher value wins** — the framework's own direction, chosen
+because it is what this codebase's javadoc already promised in 6.2.5, and deliberately not
+Spring's `@Priority`, where a lower value wins. An exact tie between the top two candidates
+(including the common case of both left at the default priority `0`) now throws
+`ContainerException` at the first `getBean(Class)` call that hits the ambiguity, naming both
+candidate classes and pointing at `@Service(priority = ...)` as the remedy.
+
+**Scope.** Candidates are collected from the resolving container only; the parent container is
+consulted solely on a total miss (no candidate found locally). A module that overrides a
+framework-provided default service by registering its own implementation in its own child
+container is unaffected by this change — the override is never compared against the framework's
+default, because the two never sit in the same candidate pool.
+
+This is "moving from silent degradation to failure": before 6.3.0, two same-priority
+implementations resolved silently to an unspecified one and that choice was cached for the
+container's lifetime; after 6.3.0, the same module fails to load until it disambiguates with
+`priority`.
+
+### Recorded instance: `registerSingleton` now fully assembles its argument and can refuse an AOP-annotated instance (SILENT-09, SILENT-10, 6.3.0)
+
+Before 6.3.0, `SimpleContainer.registerSingleton` stored whatever object it was given as-is: no
+`@Autowired` injection, no `@PostConstruct` invocation, and no `BeanPostProcessor` chain ran
+against it. 6.3.0 widens its contract from "register" to "register and fully assemble" — every
+object passed to `registerSingleton` now goes through the same
+`postProcessBeforeInitialization → autowireBean → @PostConstruct → postProcessAfterInitialization`
+sequence a container-constructed bean does. This reaches config entities, `@ContextEntry` beans,
+`@Configuration` instances, and `@Bean` products registered via this path, none of which were
+previously assembled.
+
+As part of the same widening, `registerSingleton` now **refuses** an instance whose class carries
+`@Transactional` or `@ExceptionCatch` at method or class level — `ContainerException`,
+`ErrorCode.UNPROXYABLE_SINGLETON` (2007) — because an object registered this way was never routed
+through AOP proxy generation and the annotation would otherwise silently do nothing. An
+already-generated proxy instance is exempt.
+
+Measured in-house impact: **0** occurrences of `@Transactional`/`@ExceptionCatch` on any object
+registered via `registerSingleton` across `Modules/`, `Plugins/`, and the framework's own
+`src/main` (control: `@Service` appears in 39 downstream files, confirming the search mechanism
+finds real matches). A module registering such an object for the first time in 6.3.0+ needs to
+declare it `@Service`/`@Component` instead, so the container constructs — and can proxy — it.
+
+**Blast radius when reached through `@Bean`/`@Configuration`.** `registerConfiguration` and
+`processBeanMethod` (the paths that call `registerSingleton` for `@Configuration` instances and
+`@Bean` products) previously caught any exception, logged it at `SEVERE`, and continued scanning
+the rest of the module. As of 6.3.0 (see the `@Bean` naming entry below) a `ContainerException` —
+whether from this refusal or from a malformed `@Bean` declaration — is no longer caught there: it
+escapes `processClass` and aborts the module's entire `scanPackage` call. A failure that was
+previously scoped to one bean is now scoped to the whole module.
+
+Both changes fall under "moving from silent degradation to failure": before 6.3.0, an unassembled
+singleton or an AOP-annotated one was accepted and silently non-functional; after 6.3.0, the
+module fails to load until it is fixed.
+
+### Recorded instance: `@Bean(name=)`/`@Bean(value=)` now determine the registered bean name (WIRE-09, 6.3.0)
+
+Before 6.3.0, `@Bean`'s `name` and `value` attributes were declared but read by nobody — every
+`@Bean` method registered under its own method name regardless of what `name()`/`value()` said.
+6.3.0 makes both attributes load-bearing: when either is declared, its first array element becomes
+the registered bean name, and any remaining elements register as aliases resolving to the same
+instance; with neither set, the method name is still used, unchanged. A module doing
+`getBean("<methodName>")` for a `@Bean` method that also declares a non-default `name()`/`value()`
+needs to change to `getBean("<declaredName>")` after upgrading — the method-name key no longer
+resolves once a custom name is declared.
+
+A malformed declaration — conflicting non-empty `name()` and `value()` content, or any blank
+declared name element — now fails module load with `ContainerException`, where before it silently
+registered under the method's own name (both attributes were previously read by nobody). See the
+entry above for the blast radius this failure carries as of 6.3.0.
+
+Measured in-house impact: **0** occurrences of `@Bean(name=` / `@Bean(value=` in `Modules/`,
+`Plugins/`, or the framework's own `src/main` — every existing `@Bean` method relies on the
+method-name default, unchanged by this release, so this is a forward-looking compatibility note
+rather than an observed break.
+
+### Recorded instance: `scanBasePackageClasses` now takes effect, and package-source resolution becomes additive (GEN-06, 6.3.0)
+
+Before 6.3.0, `scanBasePackageClasses()` on `@UltiToolsModule`/`@ComponentScan` was declared but
+read by nobody at either `PluginManager.getPluginScanPackages` or
+`SimpleContainer.processConfigurationClass`. 6.3.0 reads it at both sites, purely additively: any
+module that already declared the attribute (0 occurrences measured) sees no change, since a
+previously-inert declaration cannot regress by starting to work.
+
+The same change makes package-source resolution additive rather than first-match: a module
+declaring more than one of `scanBasePackages`, `scanBasePackageClasses`, or a directly-declared
+`@ComponentScan.basePackages` previously had every source after the first silently ignored; all
+now contribute. Measured in-house impact: **0** modules declare more than one source today, so no
+existing module's scanned-package set changes size. Falls under "correcting behaviour that plainly
+contradicts the documentation" — no migration period.
+
+### Recorded instance: the `eventListener`/`cmdExecutor`/`config` `@AliasFor` switches on `@UltiToolsModule` now take effect (WIRE-08, 6.3.0)
+
+Before 6.3.0, `@UltiToolsModule`'s `eventListener`, `cmdExecutor`, and `config` attributes were
+declared `@AliasFor`s onto `@EnableAutoRegister`'s corresponding attributes, but `registerBukkit`
+resolved `@EnableAutoRegister` by direct reflection, which never followed the alias — so setting
+any of the three to `false` on `@UltiToolsModule` had no effect at all; auto-registration ran
+regardless. 6.3.0 makes `registerBukkit` resolve `@EnableAutoRegister` through the same
+merged-annotation lookup the rest of this phase's work uses, which honours `@AliasFor`, so the
+three switches now do what their own annotation declared them to do since they were added.
+
+This is recorded under "correcting behaviour that plainly contradicts the documentation" — no
+migration period — because the previous behaviour was not merely an undocumented gap; it directly
+contradicted `@AliasFor`'s own stated contract on the same annotation. Measured in-house impact:
+**0** downstream modules set any of the three switches to a non-default value today, so no
+existing module's registered set of commands/listeners/configs changes as a result of this fix.
+
+### Recorded instance: `@ConditionalOnConfig` is now honoured on the listener package-scan path (WIRE-07, 6.3.0)
+
+Before 6.3.0, `ListenerManager.registerAll(plugin, packageName)` registered every discovered
+listener regardless of `@ConditionalOnConfig`, so a listener whose condition evaluated `false`
+still received events. 6.3.0 evaluates the condition on this path the same way the IoC component
+scan already does; a listener whose condition is false is registered with no events delivered.
+
+**Scope correction.** `@ConditionalOnConfig` on a `@CmdExecutor` class already worked before this
+release on the standard module-JAR path — that path resolves command classes as container beans,
+and a class whose condition is `false` was never constructed as a bean in the first place. This
+entry covers only the listener package-scan gap that was real. Falls under "correcting behaviour
+that plainly contradicts the documentation" — no migration period.
+
+### Recorded instance: `ComponentScanner`'s failure and skip diagnostics now carry a level and a stack trace (SILENT-07, 6.3.0)
+
+Before 6.3.0, `ComponentScanner` reported six distinct failure and skip conditions — an ambiguous
+`@CmdTarget` refusal, a component/configuration registration exception, a `@Bean` method
+invocation exception, an unresolvable package, and an unreadable JAR — with direct,
+stack-trace-free `System.err` writes that no log handler ever saw. 6.3.0 replaces all six with
+leveled `java.util.logging.Logger` calls carrying the original `Throwable` wherever one exists.
+Four registration-failure sites now log `Level.SEVERE`; because `SystemLogHandler` auto-forwards
+any `Level.SEVERE` record carrying a `Throwable` to `ErrorReportCollector` and on to the UltiPanel
+dashboard, these four failures — previously visible only on the server's own console — now reach
+the panel for any server with error reporting enabled. Two skip-and-continue sites log
+`Level.WARNING` and stay local.
+
+Separately, `scanJar` and `scanDirectory` now catch the identical `ClassNotFoundException |
+LinkageError` union per class, closing a mismatch where a class referencing an absent optional type
+skipped just that one class in production (JAR mode) but aborted the entire package's scan in
+development (directory mode); both modes now skip-and-continue identically.
+
+This falls under "changes in ... log wording" — no migration period — but the routing-to-panel
+fact is named explicitly because it changes what an existing server transmits off-box, not merely
+what it logs locally.
+
+### Recorded instance: composed stereotype annotations more than one meta-level above `@Component` are now recognised (6.3.0)
+
+Before 6.3.0, `ComponentScanner.hasComponentAnnotation` walked only one level of meta-annotation
+composition by hand. 6.3.0 collapses this onto the same `MergedAnnotationResolver` used across the
+rest of this phase's `AnnotationUtils.findAnnotation` migration (see the deprecation entry below),
+which walks the full composition graph — a stereotype annotation composed two or more levels above
+`@Component` is now recognised as a component where it previously was not. `UltiToolsPlugin`
+subclasses are excluded from this widened reach so that a module's own main class (which composes
+`@Configuration` → `@Component` through `@UltiToolsModule`) is not accidentally registered a
+second time as a component bean.
+
+Recorded honestly: the set of downstream classes this newly registers across `Modules/` and
+`Plugins/` was **not** measured — this is an absence of evidence, not a measured zero, unlike the
+other entries above.
+
+**Newly deprecated, not yet removal-eligible.** Three more `@Deprecated(since = "6.3.0", forRemoval =
+true)` additions land in this release but do not appear in the "Removal list for 6.3.0" table
 above, because condition 2 of [eligibility](#when-a-public-api-becomes-eligible-for-removal) — one
-MINOR since the *first* release carrying the annotation — is not yet satisfied by either: 6.3.0 is
-that first release, so neither is eligible for removal before 6.4.0 at the earliest.
+MINOR since the *first* release carrying the annotation — is not yet satisfied by any of the three:
+6.3.0 is that first release, so none is eligible for removal before 6.4.0 at the earliest.
 
 | Type / member | Replacement | Downstream references (informational) |
 |---|---|---|
 | `interfaces.TransactionManager.getConnection()` / `setIsolationLevel(int)` / `setReadOnly(boolean)` | `interfaces.JdbcTransactionManager`, which carries the same three as real abstract methods | 0 — `TransactionManager` appears in no published-jar signature of `DataStore`/`DataOperator`/`UltiToolsPlugin`/`UltiTools`; a module can only reach it today by downcasting `DataOperator` to `AbstractRelationalDataOperator` and supplying its own `DataSource` |
 | `interfaces.DataStore.getOperator(UltiToolsPlugin, Class)` and `getOperator(File, Class)` | `getOperator(DataScope, Class)` | Not separately measured — the documented, correct entry point for module authors is `getDataOperator(Class)` (94 downstream hits across 17 repositories, per the survey above), which still calls the deprecated overloads on your behalf and is unaffected by this deprecation |
+| `utils.AnnotationUtils.findAnnotation` | `context.MergedAnnotationResolver.find` | 0 — no occurrences of `AnnotationUtils` across `Modules/` and `Plugins/`; the method body is unchanged, serving only as the compatibility fallback for anything not yet migrated to the resolver |
 
 On `TransactionManager`, turning three previously-abstract methods into `@Deprecated` `default`
 methods that throw `UnsupportedOperationException` is, per `japicmp` 0.26.1's own
@@ -1586,8 +1767,162 @@ public final class MyService extends GuardedBase { }   // 6.2.5：能加载。6.
 全新的、正确归属的 `.db` 文件——不会自动找回旧共享文件里的行。升级前如果拿不准哪些模块受影响，
 请自行检查 `sqliteDB/unknown.db`。
 
-**新增废弃、尚未到可移除的时候。** 本版本还带来两处新增的 `@Deprecated(since = "6.3.0",
-forRemoval = true)`，但都没有出现在上面「6.3.0 的移除清单」表里，因为二者都不满足
+### 已记录的实例：无法解析的必需 `@Autowired` 依赖现在会导致模块加载失败（SILENT-05，6.3.0）
+
+6.3.0 之前，对于一个无法解析的 `@Autowired(required = true)` 字段或构造器参数，
+`SimpleContainer.autowireBean` 与构造器注入路径只会记一条 `WARNING` 并注入 `null`，
+而不是 `required = true` 这个默认值本该承诺的失败。6.3.0 改为抛出 `ContainerException`，
+点名声明该依赖的类、字段（或构造器参数位置）以及无法解析的依赖类型，模块直接加载失败，
+而不是带着一个静默为 `null` 的协作对象继续跑下去。`required = false` 不受影响——字段或参数
+仍然是 `null`，也不会有任何警告。
+
+这属于「从静默降级变为失败」，通常需要一个迁移期——但这个迁移期已经跑完了。issue #182
+在这条路径上加的一次性 `WARNING` 已经在 `v6.2.5` 里发布，给了下游模块作者整整一个发布周期
+的提前通知，6.3.0 才把它变成加载期失败。这条警告正是 D-08 依赖的前提条件，让 6.3.0 可以
+被当作两步流程里的「N+1」步，而不必重新走一遍两步流程。
+
+构造器注入携带完全相同的修法：一个无法解析的必需构造器依赖现在抛出的是 `ContainerException`，
+而不是裸的 `RuntimeException`。
+
+### 已记录的实例：同类型解析现在按 `@Service(priority)` 裁决，并对精确并列直接拒绝（SILENT-06，6.3.0）
+
+6.3.0 之前，`SimpleContainer.getBean(Class)` 在解析一个有多个匹配候选者的类型时，会返回
+内部 map 迭代先碰到的那一个——这是一个未指定、依赖具体实现的选择，尽管本仓库自己的
+`@Service` javadoc 从未这样文档化过，即便它早就带了一个 `priority` 属性。6.3.0 让 `priority`
+真正起作用：候选者按 `@Service(priority)` 排序，**数值更高者胜出**——这是框架自己选定的方向，
+之所以这样选，是因为这正是本代码库 6.2.5 版 javadoc 早已承诺的方向，刻意不采用 Spring 的
+`@Priority`（那里是数值更低者胜出）。排名前两位候选者精确并列时（包括两者都留在默认优先级
+`0` 这种常见情况），现在会在第一次触发该歧义的 `getBean(Class)` 调用上抛出
+`ContainerException`，点名两个候选类，并指向 `@Service(priority = ...)` 作为解决办法。
+
+**范围。** 候选者只从发起解析的那个容器里收集；父容器只在本地完全没有候选者命中时才会被
+查询。一个模块如果在自己的子容器里注册了自己的实现，用来覆盖框架提供的默认服务，这次
+改动不会影响它——这个覆盖压根不会和框架的默认实现放在同一个候选池里比较。
+
+这是「从静默降级变为失败」：6.3.0 之前，两个优先级相同的实现会静默解析成某个未指定的一个，
+并且这个选择会在容器的整个生命周期内被缓存；6.3.0 之后，同一个模块在用 `priority` 消除歧义
+之前会直接加载失败。
+
+### 已记录的实例：`registerSingleton` 现在会完整装配它的参数，并可能拒绝携带 AOP 注解的实例（SILENT-09、SILENT-10，6.3.0）
+
+6.3.0 之前，`SimpleContainer.registerSingleton` 会原样存下传给它的任何对象：不会执行
+`@Autowired` 注入，不会调用 `@PostConstruct`，也不会跑 `BeanPostProcessor` 链。6.3.0 把它的
+契约从「注册」拓宽为「注册并完整装配」——现在，传给 `registerSingleton` 的每个对象都会经过
+和容器自己构造的 bean 完全相同的
+`postProcessBeforeInitialization → autowireBean → @PostConstruct → postProcessAfterInitialization`
+流程。这会波及通过这条路径注册的配置实体、`@ContextEntry` bean、`@Configuration` 实例，
+以及 `@Bean` 产物——此前它们都没有被装配过。
+
+作为同一次拓宽的一部分，`registerSingleton` 现在会**拒绝**一个类上带有方法级或类级
+`@Transactional`/`@ExceptionCatch` 的实例——抛出 `ContainerException`，
+`ErrorCode.UNPROXYABLE_SINGLETON`（2007）——因为以这种方式注册的对象从未走过 AOP
+代理生成，否则这些注解只会静默地什么都不做。一个已经生成好的代理实例不受此限制。
+
+内部实测影响：在 `Modules/`、`Plugins/` 以及框架自己的 `src/main` 里，**0** 个通过
+`registerSingleton` 注册的对象带有 `@Transactional`/`@ExceptionCatch`（对照组：`@Service`
+在下游 39 个文件里出现，确认了这个搜索机制本身能找到真实命中）。一个模块如果要在 6.3.0+
+第一次注册这样一个对象，需要改成声明它为 `@Service`/`@Component`，这样容器才会构造它——
+并且能够代理它。
+
+**通过 `@Bean`/`@Configuration` 触发时的影响范围。** `registerConfiguration` 与
+`processBeanMethod`（分别为 `@Configuration` 实例和 `@Bean` 产物调用 `registerSingleton`
+的路径）此前会捕获任何异常，以 `SEVERE` 级别记录日志，然后继续扫描模块的其余部分。
+从 6.3.0 起（见下面 `@Bean` 命名那条实例），一个 `ContainerException`——无论是来自这个
+拒绝，还是来自一个格式错误的 `@Bean` 声明——不再在那里被捕获：它会逃出 `processClass`，
+中止整个模块的 `scanPackage` 调用。此前局限在单个 bean 上的失败，现在会波及整个模块。
+
+这两处改动都属于「从静默降级变为失败」：6.3.0 之前，一个未装配的单例或一个带 AOP 注解的
+单例会被接受，然后静默地不起作用；6.3.0 之后，模块在问题修好之前都会加载失败。
+
+### 已记录的实例：`@Bean(name=)`/`@Bean(value=)` 现在决定注册的 bean 名称（WIRE-09，6.3.0）
+
+6.3.0 之前，`@Bean` 的 `name` 和 `value` 属性只是声明了，从来没人读过——不管
+`name()`/`value()` 写了什么，每个 `@Bean` 方法都用自己的方法名注册。6.3.0 让这两个属性
+真正起作用：只要声明了任意一个，其数组的第一个元素就成为注册的 bean 名称，其余元素则
+注册为解析到同一实例的别名；两者都没设置时，仍然用方法名，行为不变。一个模块如果对某个
+同时声明了非默认 `name()`/`value()` 的 `@Bean` 方法写 `getBean("<方法名>")`，升级后需要改成
+`getBean("<声明的名称>")`——一旦声明了自定义名称，方法名这个 key 就不再能解析了。
+
+一个格式错误的声明——`name()` 与 `value()` 内容冲突且都非空，或声明的名称元素中有任何一个
+是空白——现在会以 `ContainerException` 使模块加载失败，而此前会静默地用方法自己的名称注册
+（两个属性此前都没人读）。这个失败带来的波及范围见上一条实例。
+
+内部实测影响：在 `Modules/`、`Plugins/` 以及框架自己的 `src/main` 里，**0** 处出现
+`@Bean(name=`/`@Bean(value=`——现存的每一个 `@Bean` 方法都依赖方法名默认值，本版本不改变
+这一点，所以这是一条前瞻性的兼容性说明，而不是一个已观测到的破坏。
+
+### 已记录的实例：`scanBasePackageClasses` 现在真正生效，包扫描来源解析变为累加而非首个命中（GEN-06，6.3.0）
+
+6.3.0 之前，`@UltiToolsModule`/`@ComponentScan` 上的 `scanBasePackageClasses()` 只是声明了，
+在 `PluginManager.getPluginScanPackages` 和 `SimpleContainer.processConfigurationClass` 这
+两个读取点都没人读它。6.3.0 在这两处都读取它，纯粹是增量式的：任何已经声明了这个属性的模块
+（实测 0 例）都不会有任何变化，因为一个此前静默失效的声明，开始生效并不会造成回归。
+
+同一次改动也让包来源的解析从「首个命中」变为「累加」：一个同时声明了 `scanBasePackages`、
+`scanBasePackageClasses`，或直接声明 `@ComponentScan.basePackages` 中一个以上的模块，此前
+第一个之后的来源都会被静默忽略；现在全部都会生效。内部实测影响：**0** 个模块今天同时声明
+了一个以上的来源，所以现存模块被扫描的包集合大小都不会改变。属于「修正与文档明显矛盾的
+行为」——不需要迁移期。
+
+### 已记录的实例：`@UltiToolsModule` 上 `eventListener`/`cmdExecutor`/`config` 的 `@AliasFor` 开关现在真正生效（WIRE-08，6.3.0）
+
+6.3.0 之前，`@UltiToolsModule` 的 `eventListener`、`cmdExecutor`、`config` 属性都被声明为
+指向 `@EnableAutoRegister` 对应属性的 `@AliasFor`，但 `registerBukkit` 是通过直接反射来解析
+`@EnableAutoRegister` 的，从不跟随别名——所以在 `@UltiToolsModule` 上把这三个属性中任意一个
+设为 `false` 完全没有效果；自动注册照常进行。6.3.0 让 `registerBukkit` 改用本阶段其余工作
+统一使用的合并注解查找来解析 `@EnableAutoRegister`，这个查找会遵循 `@AliasFor`，于是这三个
+开关现在终于做到了它们自己那个注解从被加上那天起就声明要做的事。
+
+这条被记在「修正与文档明显矛盾的行为」下——不需要迁移期——因为此前的行为不只是一个未文档化
+的缺口，而是直接和同一个注解上 `@AliasFor` 自己声明的契约相矛盾。内部实测影响：今天**没有**
+任何下游模块把这三个开关中的任何一个设为非默认值，所以现存模块注册的命令/监听器/配置集合
+不会因为这个修复而改变。
+
+### 已记录的实例：`@ConditionalOnConfig` 现在在监听器包扫描路径上生效（WIRE-07，6.3.0）
+
+6.3.0 之前，`ListenerManager.registerAll(plugin, packageName)` 会不管 `@ConditionalOnConfig`
+一律注册所有发现的监听器，所以一个条件求值为 `false` 的监听器仍然会收到事件。6.3.0 在这条
+路径上按 IoC 组件扫描早已使用的同样方式求值该条件；一个条件为假的监听器会被注册，但不会
+收到任何事件。
+
+**范围纠正。** `@ConditionalOnConfig` 在 `@CmdExecutor` 类上，在标准模块 JAR 路径上其实
+在本版本之前就已经生效了——那条路径把命令类当作容器 bean 解析，一个条件为 `false` 的类
+从一开始就不会被构造成 bean。这条记录只覆盖真实存在的监听器包扫描缺口。属于「修正与文档
+明显矛盾的行为」——不需要迁移期。
+
+### 已记录的实例：`ComponentScanner` 的失败与跳过诊断现在带有级别和堆栈（SILENT-07，6.3.0）
+
+6.3.0 之前，`ComponentScanner` 报告六种不同的失败与跳过情形——一次歧义 `@CmdTarget` 拒绝、
+一次组件/配置注册异常、一次 `@Bean` 方法调用异常、一个无法解析的包、一个无法读取的
+JAR——全部直接写到 `System.err`，没有堆栈，也没有任何日志处理器看得到。6.3.0 把这六处全部
+换成带级别的 `java.util.logging.Logger` 调用，在有 `Throwable` 的地方都带上原始异常。四个
+注册失败点现在以 `Level.SEVERE` 记录；由于 `SystemLogHandler` 会自动把任何携带
+`Throwable` 的 `Level.SEVERE` 记录转发给 `ErrorReportCollector` 并进一步转发到 UltiPanel
+控制台，这四个此前只在服务器自己控制台可见的失败，现在会送达面板——对任何开启了错误报告的
+服务器都是如此。两个「跳过并继续」的位置以 `Level.WARNING` 记录，且只留在本地。
+
+另外，`scanJar` 和 `scanDirectory` 现在对每个类都捕获完全相同的
+`ClassNotFoundException | LinkageError` 联合类型，弥合了此前的一个不一致：一个引用了缺失
+可选类型的类，在生产环境（JAR 模式）下只会跳过那一个类，但在开发环境（目录模式）下会中止
+整个包的扫描；现在两种模式的「跳过并继续」行为完全一致。
+
+这属于「日志措辞……的变化」——不需要迁移期——但转发到面板这个事实被明确记下来，因为它改变
+了一台现有服务器向外发送的内容，而不只是它本地记录了什么。
+
+### 已记录的实例：组合层级超过 `@Component` 一层的元注解现在也能被识别（6.3.0）
+
+6.3.0 之前，`ComponentScanner.hasComponentAnnotation` 只手写遍历了一层元注解组合。6.3.0
+把它收拢到本阶段其余工作（`AnnotationUtils.findAnnotation` 迁移，见下面的废弃条目）统一
+使用的同一个 `MergedAnnotationResolver` 上，它会遍历完整的组合图——一个组合层级在
+`@Component` 之上两层或更多层的原型注解，现在会被识别为组件，此前不会。`UltiToolsPlugin`
+的子类被排除在这次拓宽之外，这样一个模块自己的主类（通过 `@UltiToolsModule` 组合了
+`@Configuration` → `@Component`）就不会被意外地当作组件 bean 二次注册。
+
+如实记录：这次改动在 `Modules/` 和 `Plugins/` 里新登记的下游类集合**没有**被实测过——这是
+证据缺失，不是一个实测出来的零，和上面其他条目不同。
+
+**新增废弃、尚未到可移除的时候。** 本版本还带来三处新增的 `@Deprecated(since = "6.3.0",
+forRemoval = true)`，但都没有出现在上面「6.3.0 的移除清单」表里，因为三者都不满足
 [可移除性](#一个公开-api-何时可以被移除)的第 2 条——从**首个**带上该标注的发布起算已跨过一个
 MINOR：6.3.0 正是那个首个发布，所以最早也要到 6.4.0 才有资格被移除。
 
@@ -1595,6 +1930,7 @@ MINOR：6.3.0 正是那个首个发布，所以最早也要到 6.4.0 才有资�
 |---|---|---|
 | `interfaces.TransactionManager.getConnection()` / `setIsolationLevel(int)` / `setReadOnly(boolean)` | `interfaces.JdbcTransactionManager`，把同样这三个方法作为真正的抽象方法保留 | 0——`TransactionManager` 不出现在已发布 jar 里 `DataStore`/`DataOperator`/`UltiToolsPlugin`/`UltiTools` 的任何签名中；今天一个模块只能通过把 `DataOperator` 强转成 `AbstractRelationalDataOperator` 并自带 `DataSource` 才能碰到它 |
 | `interfaces.DataStore.getOperator(UltiToolsPlugin, Class)` 与 `getOperator(File, Class)` | `getOperator(DataScope, Class)` | 未单独实测——模块作者应当使用、也是文档承诺的正确入口是 `getDataOperator(Class)`（按上面的调查，17 个仓库里下游命中 94 次），它仍然会替你调用这两个已废弃的重载，不受这次废弃影响 |
+| `utils.AnnotationUtils.findAnnotation` | `context.MergedAnnotationResolver.find` | 0——`Modules/` 和 `Plugins/` 里没有任何 `AnnotationUtils` 出现；方法体本身未改动，只作为尚未迁移到该解析器的下游代码的兼容性兜底 |
 
 在 `TransactionManager` 上，把三个原本抽象的方法改成会抛 `UnsupportedOperationException` 的
 `@Deprecated` `default` 方法，按 `japicmp` 0.26.1 自己的 `METHOD_ABSTRACT_NOW_DEFAULT` 分类，
