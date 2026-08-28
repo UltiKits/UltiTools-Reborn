@@ -163,6 +163,7 @@ class ConfigEditorUtilsTest {
 
         @Test
         @DisplayName("getConfigMapString 应该调用 ConfigManager.toJson()")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void getConfigMapStringShouldCallToJson() throws Exception {
             String expectedJson = "{\"plugin\":{\"config.yml\":{\"key\":\"value\"}}}";
             when(mockConfigManager.toJson()).thenReturn(expectedJson);

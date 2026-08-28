@@ -71,7 +71,7 @@ class InMemeryTeleportServiceTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
     
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
     private void clearStaticMaps() {
         try {
             Field teleportingPlayersField = InMemeryTeleportService.class.getDeclaredField("teleportingPlayers");
@@ -302,7 +302,7 @@ class InMemeryTeleportServiceTest {
 
         @Test
         @DisplayName("应该将玩家添加到传送中列表")
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
         void shouldAddPlayerToTeleportingList() throws Exception {
             // Arrange
             PlayerMock player = server.addPlayer();

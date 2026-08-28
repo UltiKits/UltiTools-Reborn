@@ -183,6 +183,7 @@ class PlayerCacheManagerTest {
 
         @Test
         @DisplayName("Should clean both parent and child @PlayerCache fields when shadowed by same name")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldCleanBothShadowedFields() throws NoSuchFieldException, IllegalAccessException {
             PlayerCacheManager testManager = new PlayerCacheManager();
             ShadowChild bean = new ShadowChild();

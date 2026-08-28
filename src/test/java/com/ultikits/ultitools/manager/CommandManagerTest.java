@@ -664,6 +664,7 @@ class CommandManagerTest {
 
         @Test
         @DisplayName("handleHelp 应该发送帮助消息")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void handleHelpShouldSendMessage() {
             // Arrange
             ManualRegisterCommandExecutor executor = new ManualRegisterCommandExecutor();

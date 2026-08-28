@@ -118,6 +118,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should match method for valid arguments")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldMatchMethod() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method matchMethod = BaseCommandExecutor.class.getDeclaredMethod("matchMethod", String[].class);
@@ -146,6 +147,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should parse simple parameters")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldParseSimpleParameters() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method parseMethod = BaseCommandExecutor.class.getDeclaredMethod("parseParameters", String[].class, String.class);
@@ -303,6 +305,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should calculate higher score for exact match")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldCalculateHigherScoreForExactMatch() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method calcMethod = BaseCommandExecutor.class.getDeclaredMethod("calculateMatchScore", String[].class, String[].class);
@@ -435,6 +438,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should validate parameter count correctly")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldValidateParameterCount() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method validateMethod = BaseCommandExecutor.class.getDeclaredMethod(
@@ -495,6 +499,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should build params with no parameters")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldBuildParamsWithNoParameters() throws Exception {
             TypedParamsExecutor executor = new TypedParamsExecutor();
             Method buildMethod = BaseCommandExecutor.class.getDeclaredMethod(
@@ -773,6 +778,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should extract name from simple parameter")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldExtractSimpleName() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method extractMethod = BaseCommandExecutor.class.getDeclaredMethod("extractParameterName", String.class);
@@ -912,6 +918,7 @@ class BaseCommandExecutorTest {
         
         @Test
         @DisplayName("Should detect parameter placeholder")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldDetectParameter() throws Exception {
             TestCommandExecutor executor = new TestCommandExecutor();
             Method isParamMethod = BaseCommandExecutor.class.getDeclaredMethod("isParameter", String.class);

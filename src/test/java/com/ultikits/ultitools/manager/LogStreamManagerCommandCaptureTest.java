@@ -108,6 +108,7 @@ class LogStreamManagerCommandCaptureTest {
         logStreamManager = LogStreamManager.getInstance();
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void resetSingleton() throws Exception {
         Field instanceField = LogStreamManager.class.getDeclaredField("instance");
         instanceField.setAccessible(true);

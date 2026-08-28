@@ -371,6 +371,7 @@ class AopAdvisorTest {
             }
         }
 
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private Object readLookupCache(Object owner) throws Exception {
             Field field = owner.getClass().getDeclaredField("lookupCache");
             field.setAccessible(true);

@@ -359,6 +359,7 @@ class UltiToolsTest {
 
         @Test
         @DisplayName("getInstance should return null before initialization")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void getInstanceShouldReturnNullBeforeInitialization() {
             try {
                 Field ultiToolsField = UltiTools.class.getDeclaredField("ultiTools");

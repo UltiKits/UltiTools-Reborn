@@ -224,6 +224,7 @@ class AopActivationTest {
      * {@code @Transactional} is genuinely wired here too, not merely declared unavailable. See
      * {@link #shouldInterceptInheritedTransactionalMethod()}.
      */
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private static void invokeWireAop(SimpleContainer context) {
         try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
             UltiTools mockUltiTools = mock(UltiTools.class);
@@ -239,6 +240,7 @@ class AopActivationTest {
         }
     }
 
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private static DataScope newDataScope() {
         try {
             Constructor<DataScope> ctor = DataScope.class.getDeclaredConstructor(String.class, File.class, Set.class);

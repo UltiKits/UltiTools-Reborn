@@ -127,6 +127,7 @@ class JsonTransactionTest {
          * then itself throws so the outer rolls back. The inner's committed write must survive.
          */
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void outerRequiredThenSelfInvokesRequiresNewThenFails() {
             outerOperator.insert(new TestData("outer", "Outer", 1));
             innerRequiresNewSucceedsSelf();
@@ -225,6 +226,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Should rollback inserts on RuntimeException")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void rollbackInsertsOnException() {
             operator.insert(new TestData("0", "Pre-existing", 0));
 
@@ -246,6 +248,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Should rollback updates on exception")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void rollbackUpdatesOnException() {
             operator.insert(new TestData("1", "Original", 100));
 
@@ -263,6 +266,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Should rollback deletes on exception")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void rollbackDeletesOnException() {
             operator.insert(new TestData("1", "Alice", 100));
             operator.insert(new TestData("2", "Bob", 200));
@@ -283,6 +287,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Should rollback mixed operations on exception")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void rollbackMixedOperations() {
             operator.insert(new TestData("1", "Alice", 100));
 
@@ -302,6 +307,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Callable transaction should rollback on checked exception")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void callableRollbackOnCheckedException() throws Exception {
             operator.insert(new TestData("1", "Original", 100));
 
@@ -325,6 +331,7 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Rollback should restore entity state even after in-place mutation")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void deepCopyPreventsSharedReferenceCorruption() {
             // This tests that the snapshot is a deep copy, not a shallow copy.
             // update(T) calls BeanCopyUtil.copyProperties which mutates entities in-place.
@@ -743,6 +750,7 @@ class JsonTransactionTest {
             assertThat(suspendedStackValue()).isNull();
         }
 
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private Deque<?> suspendedStackValue() throws Exception {
             Field field = JsonTransactionManager.class.getDeclaredField("suspendedStack");
             field.setAccessible(true);

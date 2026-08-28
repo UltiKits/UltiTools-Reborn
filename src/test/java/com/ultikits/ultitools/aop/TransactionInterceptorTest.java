@@ -180,23 +180,27 @@ class TransactionInterceptorTest {
         }
 
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void inner() {
             write(1);
             throw new RuntimeException("boom - self-invocation");
         }
 
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void external() {
             write(2);
             throw new RuntimeException("boom - external call");
         }
 
         /** Negative control: not @Transactional, so its write must survive the throw. */
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void plainWriteThenThrow() {
             write(3);
             throw new RuntimeException("boom - not transactional");
         }
 
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         private void write(int id) {
             try (Statement st = txManager.getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
@@ -233,6 +237,7 @@ class TransactionInterceptorTest {
         // --- D-06: an unmatched rollbackFor no longer commits; it falls through to the default. ---
 
         @Transactional(rollbackFor = BusinessException.class)
+        @SuppressWarnings("PMD.AvoidThrowingNullPointerException")
         public void unmatchedRollbackForExternal() {
             write(101);
             throw new NullPointerException("boom - unmatched rollbackFor, external");
@@ -243,6 +248,7 @@ class TransactionInterceptorTest {
         }
 
         @Transactional(rollbackFor = BusinessException.class)
+        @SuppressWarnings("PMD.AvoidThrowingNullPointerException")
         public void unmatchedRollbackForSelf() {
             write(102);
             throw new NullPointerException("boom - unmatched rollbackFor, self-invocation");
@@ -369,6 +375,7 @@ class TransactionInterceptorTest {
         }
 
         @Transactional(propagation = Propagation.REQUIRES_NEW)
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void innerRequiresNewFailsSelf() {
             write(99);
             throw new RuntimeException("boom - inner REQUIRES_NEW, self-invocation");
@@ -401,6 +408,7 @@ class TransactionInterceptorTest {
 
         /** Externally-called REQUIRES_NEW method whose body throws. */
         @Transactional(propagation = Propagation.REQUIRES_NEW)
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void requiresNewExternalFails() {
             write(101);
             throw new RuntimeException("boom - external REQUIRES_NEW");
@@ -411,6 +419,7 @@ class TransactionInterceptorTest {
          * so the outer rolls back. The NOT_SUPPORTED write must survive the outer's rollback.
          */
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void outerRequiredThenSelfInvokesNotSupportedThenFails() {
             write(4);
             innerNotSupportedWriteSelf();

@@ -641,7 +641,7 @@ class ErrorReportCollectorTest {
     /**
      * Set a private field via reflection.
      */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private void setField(Object obj, String fieldName, Object value) {
         try {
             Field field = obj.getClass().getDeclaredField(fieldName);
@@ -655,7 +655,7 @@ class ErrorReportCollectorTest {
     /**
      * Clear the dedup map (simulates window reset).
      */
-    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "unchecked"})
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "unchecked", "PMD.AvoidThrowingRawExceptionTypes"})
     private void clearDedupMap(ErrorReportCollector collector) {
         try {
             Field field = ErrorReportCollector.class.getDeclaredField("dedupMap");

@@ -83,7 +83,7 @@ class ProxyFactoryIsolationTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
     @DisplayName("Should intercept package-private methods across class loaders")
     void shouldInterceptPackagePrivateAcrossClassLoaders() throws Exception {
         try (URLClassLoader isolated = newIsolatedLoader()) {
