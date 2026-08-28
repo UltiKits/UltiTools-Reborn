@@ -390,10 +390,33 @@ public class SimpleContainer {
             return (T) bean;
         }
 
-        // Check bean definitions and create bean if found
+        // Check bean definitions and create bean if found -- but only take this shortcut for a
+        // genuine self-match. getBeanName(type) synthesizes a decapitalized default name when
+        // `type` carries no explicit @Component/@Service of its own -- for an INTERFACE (the
+        // exact case this by-type lookup exists for), that default is just "decapitalize the
+        // interface's own simple name". If an unrelated implementer happens to be registered
+        // under that exact name (an ordinary, Spring-idiomatic naming choice: e.g.
+        // @Service("notificationService") on some impl of NotificationService), returning it
+        // here unconditionally would bypass the priority/ambiguity adjudication below entirely,
+        // even when a strictly higher-priority implementer also exists (CR-01).
+        //
+        // Two cases are still trusted as a deliberate, specific request and skip adjudication,
+        // matching Spring's own precedent that a by-name resolution is more specific than a
+        // by-type one (DefaultListableBeanFactory#resolveNamedBean) -- but note Spring itself
+        // never derives that name from the requested TYPE the way getBeanName(type) does here;
+        // it only trusts a name the caller or the bean itself explicitly supplied:
+        //   1. `type` IS the registered class -- querying a concrete class by itself always
+        //      resolves to itself, exactly the exactNameMatchStillShortCircuits case.
+        //   2. `type` itself explicitly declares @Component/@Service(value = beanName) -- i.e.
+        //      beanName did NOT come from getBeanName's decapitalized-default fallback, but from
+        //      a real annotation on `type`. This is `type` naming its own registration, not an
+        //      unrelated class's registration happening to collide with a synthesized guess.
+        // Anything else falls through to the same candidate-set/priority adjudication every
+        // other by-type lookup goes through.
         String beanName = getBeanName(type);
         BeanDefinition definition = beanDefinitions.get(beanName);
-        if (definition != null) {
+        if (definition != null && type.isAssignableFrom(definition.getBeanClass())
+                && (definition.getBeanClass().equals(type) || declaresOwnBeanName(type))) {
             bean = getBean(beanName); // Use getBean(name) for thread-safe creation
             return (T) bean;
         }
@@ -595,6 +618,29 @@ public class SimpleContainer {
         // Default to simple class name with first letter lowercase
         String className = type.getSimpleName();
         return Character.toLowerCase(className.charAt(0)) + className.substring(1);
+    }
+
+    /**
+     * True iff {@code type} itself carries an explicit {@code @Component(value = ...)} or
+     * {@code @Service(value = ...)} name -- the same condition {@link #getBeanName(Class)} checks
+     * before falling back to a decapitalized-simple-name guess.
+     * <p>
+     * Used by {@link #getBean(Class)}'s by-name shortcut (CR-01) to tell a deliberate, specific
+     * request ("{@code type} declares this exact name as its own") apart from an accidental
+     * collision between an unrelated implementer's explicit bean name and an interface's
+     * synthesized default -- only the former is a genuine self-match that should skip the
+     * priority/ambiguity adjudication a few lines below.
+     *
+     * @param type the requested type to check
+     * @return true if {@code type} declares its own non-empty {@code @Component}/{@code @Service} name
+     */
+    private boolean declaresOwnBeanName(Class<?> type) {
+        Component component = type.getAnnotation(Component.class);
+        if (component != null && !component.value().isEmpty()) {
+            return true;
+        }
+        Service service = type.getAnnotation(Service.class);
+        return service != null && !service.value().isEmpty();
     }
 
     /**
