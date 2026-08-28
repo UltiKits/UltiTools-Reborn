@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.exceptions;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 
 /**
  * Exception thrown when IoC container operations fail.
@@ -125,5 +126,28 @@ public class ContainerException extends UltiToolsException {
             String attribute, String reason) {
         return new ContainerException(ErrorCode.MALFORMED_ANNOTATION_ALIAS,
                 "Malformed @AliasFor on " + declaringAnnotation.getName() + "#" + attribute + "(): " + reason);
+    }
+
+    /**
+     * Creates an exception for an unresolvable {@code @Autowired(required = true)} field (D-08).
+     * <p>
+     * The message names both the dependency's type and the field's declaring class plus field
+     * name, and repeats the same actionable guidance the earlier warning-only diagnostic gave:
+     * check the target is annotated {@code @Service}/{@code @Component}, that it is inside the
+     * module's {@code scanBasePackages}, that the owning object was created by the container
+     * rather than with {@code new}, and that {@code @Autowired(required = false)} exists for
+     * genuinely optional dependencies.
+     *
+     * @param field the field whose dependency could not be resolved
+     * @return a new ContainerException
+     */
+    public static ContainerException requiredDependencyUnresolved(Field field) {
+        return new ContainerException(ErrorCode.DEPENDENCY_INJECTION_FAILED,
+                "@Autowired could not resolve " + field.getType().getName() + " for field "
+                        + field.getDeclaringClass().getName() + "." + field.getName()
+                        + " - check that the target class is annotated with @Service/@Component, "
+                        + "that it is inside the module's scanBasePackages, and that the owning "
+                        + "object was created by the container rather than with 'new'. "
+                        + "Use @Autowired(required = false) if the dependency really is optional.");
     }
 }
