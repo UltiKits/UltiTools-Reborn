@@ -561,6 +561,11 @@ public class SimpleContainer {
         beanPostProcessors.clear();
         currentlyCreating.clear();
         supplierTypes.clear();
+        // Release the by-type resolution cache too (WR-01): it holds both requested Class<?>
+        // keys and resolved bean-instance values loaded by this container's own classloader,
+        // exactly the kind of reference every other Class/instance-keyed collection above is
+        // cleared to stop pinning after a plugin unloads.
+        resolvedTypeCache.clear();
         isStarted = false;
         
         LOGGER.info("Container closed.");
