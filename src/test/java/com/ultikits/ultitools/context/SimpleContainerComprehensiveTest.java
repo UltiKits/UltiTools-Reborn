@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
+import com.ultikits.ultitools.exceptions.ContainerException;
 
 /**
  * Comprehensive tests for SimpleContainer covering all functionality.
@@ -510,6 +512,73 @@ class SimpleContainerComprehensiveTest {
         }
     }
 
+    @Nested
+    @DisplayName("Constructor Injection Failure Tests")
+    class ConstructorInjectionFailureTests {
+
+        @Test
+        @DisplayName("Should throw ContainerException when the bean class has no usable constructor")
+        void testNoUsableConstructorThrows() {
+            // Given - an interface has no constructors at all, so
+            // createBeanWithConstructorInjection's best-constructor search comes up empty
+            container.registerBean(NoConstructorInterface.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(NoConstructorInterface.class));
+
+            // Then
+            assertTrue(exception.getMessage().contains("No constructor found for: "));
+            assertTrue(exception.getMessage().contains(NoConstructorInterface.class.getName()));
+        }
+
+        @Test
+        @DisplayName("Should throw ContainerException when a constructor parameter cannot be resolved")
+        void testUnresolvableConstructorParameterThrows() {
+            // Given - UnresolvableConstructorDependency is never registered
+            container.registerBean(UnresolvableConstructorBean.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(UnresolvableConstructorBean.class));
+
+            // Then
+            assertTrue(exception.getMessage().contains(UnresolvableConstructorDependency.class.getName()));
+            assertTrue(exception.getMessage().contains(UnresolvableConstructorBean.class.getName()));
+        }
+
+        @Test
+        @DisplayName("Should surface the original throwable as the cause when the constructor itself throws")
+        void testThrowingConstructorPreservesCause() {
+            // Given - the dependency resolves, but the constructor body throws
+            container.registerType(SimpleConstructorDependency.class, new SimpleConstructorDependency());
+            container.registerBean(ThrowingConstructorBean.class);
+
+            // When
+            ContainerException exception = assertThrows(ContainerException.class,
+                    () -> container.getBean(ThrowingConstructorBean.class));
+
+            // Then
+            assertNotNull(exception.getCause(),
+                    "the cause is the only pointer to what actually failed inside the constructor");
+        }
+
+        @Test
+        @DisplayName("Should create the bean normally when all constructor parameters resolve")
+        void testResolvableConstructorSucceeds() {
+            // Given
+            container.registerType(SimpleConstructorDependency.class, new SimpleConstructorDependency());
+            container.registerBean(ResolvableConstructorBean.class);
+
+            // When
+            ResolvableConstructorBean bean = container.getBean(ResolvableConstructorBean.class);
+
+            // Then
+            assertNotNull(bean);
+            assertNotNull(bean.getDependency());
+        }
+    }
+
     // Test helper classes
     public static class LifecycleService {
         private boolean postConstructCalled = false;
@@ -705,6 +774,51 @@ class SimpleContainerComprehensiveTest {
     public static class TestFactory {
         public TestServiceA createService() {
             return new TestServiceA();
+        }
+    }
+
+    // Fixtures for ConstructorInjectionFailureTests -- exercise
+    // createBeanWithConstructorInjection through the full container.getBean(Class) path.
+    public interface NoConstructorInterface {
+        // Interfaces have zero declared constructors, so this reaches the
+        // "no usable constructor" branch of createBeanWithConstructorInjection.
+    }
+
+    public static class UnresolvableConstructorDependency {
+        // Deliberately never registered with the container.
+    }
+
+    public static class UnresolvableConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container's
+        // constructor-injection resolver down the "dependency type cannot be resolved" branch.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public UnresolvableConstructorBean(UnresolvableConstructorDependency dependency) {
+            // Never reached: the dependency cannot be resolved.
+        }
+    }
+
+    public static class SimpleConstructorDependency {
+        // A plain, resolvable dependency.
+    }
+
+    public static class ThrowingConstructorBean {
+        // The parameter's presence -- not its use -- is the point: it forces the container
+        // through constructor injection before the constructor body deliberately fails.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public ThrowingConstructorBean(SimpleConstructorDependency dependency) {
+            throw new IllegalStateException("constructor body deliberately fails");
+        }
+    }
+
+    public static class ResolvableConstructorBean {
+        private final SimpleConstructorDependency dependency;
+
+        public ResolvableConstructorBean(SimpleConstructorDependency dependency) {
+            this.dependency = dependency;
+        }
+
+        public SimpleConstructorDependency getDependency() {
+            return dependency;
         }
     }
 }

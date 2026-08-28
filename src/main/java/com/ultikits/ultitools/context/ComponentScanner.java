@@ -5,17 +5,19 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.JarURLConnection;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Component;
-import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
@@ -23,7 +25,6 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -33,6 +34,8 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class ComponentScanner {
+    private static final Logger LOGGER = Logger.getLogger(ComponentScanner.class.getName());
+
     private final SimpleContainer container;
 
     public ComponentScanner(SimpleContainer container) {
@@ -86,8 +89,11 @@ public class ComponentScanner {
             // happened. See issue #190.
             throw e;
         } catch (Exception e) {
-            // Log warning and continue
-            System.err.println("Failed to scan package: " + basePackage + ", " + e.getMessage());
+            // Skip-and-continue: the scan moves on to the next package, so this is an
+            // expected-shape event (a missing/unreadable package), not a registration
+            // failure - logged at WARNING and never forwarded to the UltiPanel dashboard
+            // (D-24).
+            LOGGER.log(Level.WARNING, "Failed to scan package: " + basePackage, e);
         }
     }
 
@@ -114,13 +120,19 @@ public class ComponentScanner {
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
                         processClass(clazz);
-                    } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                        // Ignore and continue
+                    } catch (ClassNotFoundException | LinkageError e) {
+                        // Skip-and-continue: the rest of the package still registers (D-25,
+                        // D-26). LinkageError covers NoClassDefFoundError,
+                        // UnsupportedClassVersionError and ExceptionInInitializerError with one
+                        // clause - the same union scanDirectory uses below, so the same missing
+                        // class behaves identically on both scan modes.
+                        LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }
             }
         } catch (IOException e) {
-            System.err.println("Failed to scan JAR for package: " + basePackage + ", " + e.getMessage());
+            // Skip-and-continue: the scan moves on to the next package (D-24).
+            LOGGER.log(Level.WARNING, "Failed to scan JAR for package: " + basePackage, e);
         }
     }
 
@@ -140,8 +152,12 @@ public class ComponentScanner {
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
                         processClass(clazz);
-                    } catch (ClassNotFoundException e) {
-                        // Ignore and continue
+                    } catch (ClassNotFoundException | LinkageError e) {
+                        // Skip-and-continue: the rest of the package still registers (D-25,
+                        // D-26). Same union as scanJar's per-class catch above - the same
+                        // missing/unlinkable class must behave identically on both scan modes,
+                        // rather than one skipping a class and the other killing the package.
+                        LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }
             }
@@ -150,8 +166,26 @@ public class ComponentScanner {
 
     /**
      * Process a class for component annotations.
+     * <p>
+     * Propagation rule (D-25), stated once here rather than duplicated at each per-class call
+     * site in {@code scanJar}/{@code scanDirectory}: {@link ContainerException} is the single
+     * type that propagates unconditionally out of this method and aborts the module's scan --
+     * every other exception thrown while registering an individual class is logged and that one
+     * class is skipped, and the rest of the package still registers. One type name is the whole
+     * rule, so no allowlist has to be kept in sync. The two deliberate {@code ContainerException}
+     * throws today are the {@code @Final} contract violation below and a malformed
+     * {@code @AliasFor} declaration surfaced by {@link MergedAnnotationResolver} during the same
+     * scan; neither may ever be caught by a blanket handler.
      * <br>
      * 处理类的组件注解。
+     * <p>
+     * 传播规则（D-25），在此统一声明一次，而不是在 {@code scanJar}/{@code scanDirectory}
+     * 各自的逐类调用点重复：{@link ContainerException} 是唯一会无条件穿透本方法、中止模块扫描的
+     * 类型；注册单个类时抛出的其他任何异常都会被记录，仅跳过该类，包内其余类照常注册。规则就是
+     * 这一个类型名，因此无需维护任何白名单。当前两处刻意抛出 {@code ContainerException}
+     * 的地方分别是下方的 {@code @Final} 契约违规检查，以及同一次扫描中由
+     * {@link MergedAnnotationResolver} 发现的畸形 {@code @AliasFor} 声明；两者都绝不能被任何
+     * 万能捕获吞掉。
      */
     private void processClass(Class<?> clazz) {
         // The @Final contract is checked before anything else, including @ConditionalOnConfig:
@@ -184,41 +218,21 @@ public class ComponentScanner {
 
     /**
      * Check if a class should be registered based on @ConditionalOnConfig.
+     * <p>
+     * Delegates to {@link ConditionalRegistrationEvaluator}, the single shared implementation
+     * of this decision (D-17) -- also consulted by {@code ListenerManager}'s package-scan
+     * overload, so the annotation is honoured identically on both reflection paths.
      * <br>
      * 根据 @ConditionalOnConfig 检查类是否应被注册。
+     * <p>
+     * 委托给 {@link ConditionalRegistrationEvaluator}——该判定逻辑唯一的共享实现（D-17），
+     * 同时也被 {@code ListenerManager} 的包扫描重载调用，从而使该注解在两条反射路径上表现一致。
      *
      * @param clazz the class to check
      * @return true if the class should be registered
      */
     private boolean shouldRegister(Class<?> clazz) {
-        ConditionalOnConfig condition = clazz.getAnnotation(ConditionalOnConfig.class);
-        if (condition == null) {
-            return true;
-        }
-
-        // Retrieve the plugin from the container
-        UltiToolsPlugin plugin = null;
-        try {
-            plugin = container.getBean(UltiToolsPlugin.class);
-        } catch (Exception e) {
-            // No plugin in container — skip conditional (register by default)
-            return true;
-        }
-
-        if (plugin == null || plugin.getResourceFolderPath() == null) {
-            return true;
-        }
-
-        // Load the referenced config file from the plugin's config folder
-        File configFile = new File(plugin.getResourceFolderPath(), condition.value());
-        if (!configFile.exists()) {
-            // Config file doesn't exist yet — feature disabled
-            return condition.negate();
-        }
-
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(configFile);
-        boolean value = yaml.getBoolean(condition.path(), false);
-        return condition.negate() ? !value : value;
+        return ConditionalRegistrationEvaluator.shouldRegister(clazz, container);
     }
 
     /**
@@ -309,8 +323,10 @@ public class ComponentScanner {
                 List<String> violations = CmdTargetComposition.check(clazz);
                 if (!violations.isEmpty()) {
                     for (String violation : violations) {
-                        System.err.println("Refused to register command class due to ambiguous "
-                                + "@CmdTarget composition: " + violation);
+                        // A refusal is a registration failure (SEVERE), even though there is no
+                        // exception object to attach - the class was refused, not merely skipped.
+                        LOGGER.log(Level.SEVERE, "Refused to register command class due to "
+                                + "ambiguous @CmdTarget composition: " + violation);
                     }
                     return;
                 }
@@ -319,7 +335,8 @@ public class ComponentScanner {
             BeanDefinition definition = new BeanDefinition(clazz, beanName);
             container.registerBeanDefinition(beanName, definition);
         } catch (Exception e) {
-            System.err.println("Failed to register component: " + clazz.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to register component: " + clazz.getName(), e);
         }
     }
 
@@ -340,25 +357,129 @@ public class ComponentScanner {
                     processBeanMethod(configInstance, method);
                 }
             }
+        } catch (ContainerException e) {
+            // A malformed @Bean name/value declaration (D-02/D-06) or a hard failure inside
+            // registerSingleton (an unresolvable required @Autowired dependency, D-08, or an AOP
+            // annotation registerSingleton can never honour, D-15) must abort the module's scan
+            // like every other ContainerException (D-25) -- not be caught here and demoted to an
+            // ordinary logged-and-skipped registration failure.
+            throw e;
         } catch (Exception e) {
-            System.err.println("Failed to register configuration: " + clazz.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to register configuration: " + clazz.getName(), e);
         }
     }
 
     /**
      * Process @Bean method.
+     * <p>
+     * The bean name is derived from {@code @Bean}'s {@code name()}/{@code value()} (D-06) via
+     * {@link #resolveBeanNames(Method)}, falling back to the method's own name exactly as before
+     * this attribute took effect. The <b>first</b> resolved name is registered through
+     * {@link SimpleContainer#registerSingleton(String, Object)}, which fully assembles the
+     * instance (D-14); any remaining names are bound as aliases to that <em>same, already
+     * assembled</em> reference via the package-visible
+     * {@link SimpleContainer#addSingleton(String, Object)} -- deliberately not a second
+     * {@code registerSingleton} call per name, which after D-14 would re-run autowiring and
+     * {@code @PostConstruct} once per alias on what should be one bean.
      * <br>
      * 处理@Bean方法。
+     * <p>
+     * Bean 名称通过 {@link #resolveBeanNames(Method)} 从 {@code @Bean} 的 {@code name()}/
+     * {@code value()} 派生（D-06），缺省时回退到方法自身的名称，与该属性生效前的行为一致。解析出的
+     * <b>第一个</b>名称通过 {@link SimpleContainer#registerSingleton(String, Object)} 注册，
+     * 该方法会完整装配实例（D-14）；其余名称则通过包内可见的
+     * {@link SimpleContainer#addSingleton(String, Object)} 绑定到<em>同一个已装配完成</em>的引用
+     * 上——刻意不对每个名称都调用一次 {@code registerSingleton}，因为在 D-14 之后那样做会让一个
+     * Bean 的自动装配与 {@code @PostConstruct} 按别名数量重复执行。
      */
     private void processBeanMethod(Object configInstance, Method method) {
         try {
             method.setAccessible(true);
             Object bean = method.invoke(configInstance);
-            String beanName = method.getName();
-            container.registerSingleton(beanName, bean);
+            String[] beanNames = resolveBeanNames(method);
+            String primaryName = beanNames[0];
+            container.registerSingleton(primaryName, bean);
+            if (beanNames.length > 1) {
+                Object assembled = container.getBean(primaryName);
+                for (int i = 1; i < beanNames.length; i++) {
+                    container.addSingleton(beanNames[i], assembled);
+                }
+            }
+        } catch (ContainerException e) {
+            // A malformed @Bean name/value declaration (D-02/D-06) or a hard failure inside
+            // registerSingleton (D-08/D-15) must abort the module's scan, not be demoted to an
+            // ordinary registration failure (D-25).
+            throw e;
         } catch (Exception e) {
-            System.err.println("Failed to process bean method: " + method.getName() + ", " + e.getMessage());
+            // A registration failure, not a skip - reported to the panel (D-24).
+            LOGGER.log(Level.SEVERE, "Failed to process bean method: " + method.getName(), e);
         }
+    }
+
+    /**
+     * Resolve the effective bean-name array for a {@code @Bean} method (D-06): {@code name()} if
+     * non-empty, else {@code value()} if non-empty, else the method's own name as a
+     * single-element array. {@code name()} and {@code value()} are mutual aliases -- declaring
+     * both with different content is a malformed declaration and hard-fails naming the method
+     * and both declared values, reusing the same {@link ContainerException#malformedAliasFor}
+     * factory (and therefore the same message shape) plan 03-01 built for malformed
+     * {@code @AliasFor} declarations, even though {@code @Bean} itself deliberately does not
+     * declare a real {@code @AliasFor} between its two attributes (see this method's own class's
+     * scope boundary). Declaring both with identical content is legal. Every resolved element
+     * must be non-blank -- a blank or whitespace-only element is also a malformed declaration,
+     * because a name that cannot name anything is not a usable third state between "declared" and
+     * "absent" (D-02). No element is normalized: two names differing only by Unicode
+     * normalization form are two distinct declared names, decided purely by
+     * {@code String.equals}.
+     * <br>
+     * 为一个 {@code @Bean} 方法解析有效的 Bean 名称数组（D-06）：{@code name()} 非空则使用它，
+     * 否则 {@code value()} 非空则使用它，否则回退到方法自身的名称作为单元素数组。{@code name()}
+     * 与 {@code value()} 互为别名——两者都非空且内容不同即为畸形声明，会导致加载失败，错误信息
+     * 同时指出该方法与两个已声明的值，复用了 03-01 为畸形 {@code @AliasFor}
+     * 声明构建的同一个 {@link ContainerException#malformedAliasFor} 工厂（因此消息形态一致），
+     * 尽管 {@code @Bean} 自身刻意不在两个属性之间声明真正的 {@code @AliasFor}
+     * （见本方法所在类的 scope boundary）。两者内容相同则合法。解析出的每个元素都必须非空白——
+     * 空白或仅由空白字符组成的元素同样是畸形声明，因为一个无法命名任何东西的名称，不是"已声明"
+     * 与"缺省"之间可用的第三种状态（D-02）。不对任何元素做归一化：两个仅在 Unicode
+     * 规范化形式上不同的名称，是两个不同的已声明名称，纯粹由 {@code String.equals} 决定。
+     *
+     * @param method the {@code @Bean}-annotated factory method <br> 携带 {@code @Bean} 的工厂方法
+     * @return the resolved name array; index 0 is the registered bean name, the rest are aliases
+     *         <br> 解析出的名称数组；索引 0 是注册的 Bean 名称，其余是别名
+     */
+    private String[] resolveBeanNames(Method method) {
+        Bean beanAnnotation = method.getAnnotation(Bean.class);
+        String[] name = beanAnnotation.name();
+        String[] value = beanAnnotation.value();
+
+        if (name.length > 0 && value.length > 0 && !Arrays.equals(name, value)) {
+            throw ContainerException.malformedAliasFor(Bean.class, "name",
+                    "@Bean method '" + method.getName() + "' declares both name=" + Arrays.toString(name)
+                            + " and value=" + Arrays.toString(value) + " with different content -- "
+                            + "name() and value() are mutual aliases and must agree, or only one "
+                            + "should be declared");
+        }
+
+        String[] resolved;
+        if (name.length > 0) {
+            resolved = name;
+        } else if (value.length > 0) {
+            resolved = value;
+        } else {
+            resolved = new String[]{method.getName()};
+        }
+
+        for (int i = 0; i < resolved.length; i++) {
+            String candidate = resolved[i];
+            if (candidate == null || candidate.trim().isEmpty()) {
+                throw ContainerException.malformedAliasFor(Bean.class, "name",
+                        "@Bean method '" + method.getName() + "' declares a blank or whitespace-only "
+                                + "name element at index " + i + " of " + Arrays.toString(resolved));
+            }
+        }
+
+        return resolved;
     }
 
     /**

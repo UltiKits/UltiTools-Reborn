@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +37,11 @@ import com.ultikits.ultitools.context.scan.cmdtargetlegalonly.NarrowingCommand;
  * <p>
  * 验证歧义的 @CmdTarget 组合（放宽或横向切换）在插件加载期被拒绝注册——永远不会成为
  * bean 定义——而同一模块中的其他指令类仍正常注册。
+ * <p>
+ * The refusal was converted from a direct standard-error write to a leveled
+ * {@code Logger}/{@code Level.SEVERE} call by 03-07 (D-24: a refusal is a registration failure,
+ * not a skip) - this test now captures {@link LogRecord}s from
+ * {@code Logger.getLogger(ComponentScanner.class.getName())} instead of {@code System.err}.
  */
 @DisplayName("ComponentScanner @CmdTarget ambiguity refusal")
 class ComponentScannerCmdTargetAmbiguityTest {
@@ -41,8 +49,9 @@ class ComponentScannerCmdTargetAmbiguityTest {
     private SimpleContainer container;
     private ComponentScanner scanner;
 
-    private ByteArrayOutputStream capturedErr;
-    private PrintStream originalErr;
+    private final List<LogRecord> capturedLogs = new ArrayList<>();
+    private Logger scannerLogger;
+    private Handler captureHandler;
 
     @BeforeEach
     void setUp() {
@@ -50,14 +59,41 @@ class ComponentScannerCmdTargetAmbiguityTest {
         container.setClassLoader(getClass().getClassLoader());
         scanner = new ComponentScanner(container);
 
-        originalErr = System.err;
-        capturedErr = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(capturedErr, true, StandardCharsets.UTF_8));
+        capturedLogs.clear();
+        scannerLogger = Logger.getLogger(ComponentScanner.class.getName());
+        captureHandler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                capturedLogs.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        };
+        scannerLogger.addHandler(captureHandler);
     }
 
     @AfterEach
     void tearDown() {
-        System.setErr(originalErr);
+        scannerLogger.removeHandler(captureHandler);
+    }
+
+    /** Concatenates every captured {@code Level.SEVERE} message, mirroring the old stderr capture's shape. */
+    private String severeMessages() {
+        StringBuilder sb = new StringBuilder();
+        for (LogRecord record : capturedLogs) {
+            if (Level.SEVERE.equals(record.getLevel()) && record.getMessage() != null) {
+                sb.append(record.getMessage()).append('\n');
+            }
+        }
+        return sb.toString();
     }
 
     @Test
@@ -78,9 +114,9 @@ class ComponentScannerCmdTargetAmbiguityTest {
     void refusalMessageNamesClassAndMethod() {
         scanner.scanPackage("com.ultikits.ultitools.context.scan.cmdtargetambiguity");
 
-        String stderr = capturedErr.toString(StandardCharsets.UTF_8);
-        assertTrue(stderr.contains(WideningCommand.class.getName()), stderr);
-        assertTrue(stderr.contains("widensToBoth"), stderr);
+        String severe = severeMessages();
+        assertTrue(severe.contains(WideningCommand.class.getName()), severe);
+        assertTrue(severe.contains("widensToBoth"), severe);
     }
 
     @Test
@@ -100,9 +136,9 @@ class ComponentScannerCmdTargetAmbiguityTest {
         assertFalse(container.containsBean(beanNameOf(LateralCommand.class)),
                 "LateralCommand must not become a bean definition");
 
-        String stderr = capturedErr.toString(StandardCharsets.UTF_8);
-        assertTrue(stderr.contains(LateralCommand.class.getName()), stderr);
-        assertTrue(stderr.contains("switchesToConsole"), stderr);
+        String severe = severeMessages();
+        assertTrue(severe.contains(LateralCommand.class.getName()), severe);
+        assertTrue(severe.contains("switchesToConsole"), severe);
     }
 
     /** Mirrors {@code ComponentScanner.getBeanName}'s default: decapitalized simple name. */

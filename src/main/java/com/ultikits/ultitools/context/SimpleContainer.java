@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,16 +19,25 @@ import java.util.logging.Logger;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Component;
 import com.ultikits.ultitools.annotations.ComponentScan;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.AopEligibility;
+import com.ultikits.ultitools.aop.ProxyFactory;
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ReflectionUtil;
+
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
  * <br>
  * 简单的依赖注入容器，用于替换Spring ApplicationContext。
  */
+@ApiStatus.Internal
 public class SimpleContainer {
     private static final Logger LOGGER = Logger.getLogger(SimpleContainer.class.getName());
     
@@ -44,6 +55,13 @@ public class SimpleContainer {
     private final Map<String, Supplier<Object>> suppliers = new ConcurrentHashMap<>();
     private final Map<Class<?>, Object> typeMappings = new ConcurrentHashMap<>();
     private final Map<Class<?>, Supplier<Object>> typeSuppliers = new ConcurrentHashMap<>();
+    // By-type assignability resolution cache. Populated only by getBean(Class)'s ambiguity
+    // adjudication (D-11/D-12) -- distinct from typeMappings, which holds author-declared
+    // bindings (registerType/registerTypeSupplier/registerSingleton's own concrete-class
+    // binding). Kept separate so a newly registered implementation can invalidate this cache
+    // without dropping an explicit binding. Instance-scoped, not static: a static Class-keyed
+    // map would pin module classes and block plugin ClassLoader unload (Phase 1 D-35/D-38).
+    private final Map<Class<?>, Object> resolvedTypeCache = new ConcurrentHashMap<>();
     private final Map<String, BeanScope> beanScopes = new ConcurrentHashMap<>();
     private final Map<String, Class<?>> beanTypes = new ConcurrentHashMap<>();
     private final List<BeanPostProcessor> beanPostProcessors = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -141,16 +159,126 @@ public class SimpleContainer {
     }
 
     /**
-     * Register a singleton instance.
-     * <br>
-     * 注册单例实例。
+     * Registers a singleton instance, fully assembling it before storage.
+     * <p>
+     * Runs the same {@code postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
+     * postProcessAfterInitialization} sequence {@link #createBean} runs for a container-constructed
+     * bean, in that order, before storing -- unconditionally, whether or not {@link #refresh()} has
+     * been called. Before 6.3.0 this method was two lines: {@code addSingleton} plus a type-mapping
+     * write, with no autowiring, no {@code @PostConstruct} invocation, and no
+     * {@link BeanPostProcessor} chain -- an object handed in through this method reached the
+     * container half-initialised. {@link #refresh()} only pre-instantiates non-lazy singleton
+     * <em>definitions</em> and never touches a {@code registerSingleton}-path object, so gating
+     * assembly on refresh state (as a narrower, window-guard fix would) would have left the config
+     * entities, the {@code @Configuration} instance, and the {@code @Bean} products -- all
+     * registered <em>before</em> {@code refresh()} runs -- exactly as uninjected as before (D-14).
+     * <p>
+     * The bean actually stored, and returned by a later {@link #getBean(String)}, is whichever
+     * reference {@code postProcessAfterInitialization} last returned -- not necessarily
+     * {@code instance} itself, if a registered {@link BeanPostProcessor} substitutes it.
+     * <p>
+     * <b>Refuses {@code instance} outright when its class carries {@code @Transactional} or
+     * {@code @ExceptionCatch} -- method-level or class-level -- that it can never honour (D-15).</b>
+     * A ByteBuddy proxy is the bean itself in this framework's design; there is no separate
+     * delegate target, so a proxy can never be retrofitted onto an object the caller already
+     * constructed. Before this refusal existed, the annotation was silently inert: the method ran
+     * completely unprotected/untransacted, with no signal anything was wrong. An instance that is
+     * already a generated proxy ({@link ProxyFactory#isProxyClass}) is exempt -- it already honours
+     * its own annotations, copied onto the generated subclass by {@code ProxyFactory} itself.
+     * <p>
+     * <b>No circular-dependency support between two {@code registerSingleton}-registered objects
+     * (WR-02).</b> Unlike {@link #createBean}, this method does not add an early reference to
+     * {@link #singletonFactories}/{@link #earlySingletonObjects} before autowiring -- and, unlike
+     * {@code createBean}, it structurally cannot benefit from doing so. {@code createBean}'s early
+     * exposure works because the container itself triggers a dependency's construction lazily,
+     * recursively, inside the same call stack that is still assembling the bean that depends on
+     * it -- so an early, not-yet-autowired self-reference can be handed back partway through. A
+     * {@code registerSingleton} caller, by contrast, hands in an object the caller already fully
+     * constructed <em>outside</em> the container; the container never constructs it and has no
+     * hook to trigger construction of a second, not-yet-registered object on the first one's
+     * behalf. Concretely: if object A and object B are registered via two separate, sequential
+     * {@code registerSingleton} calls and each has an {@code @Autowired} field pointing at the
+     * other, A's autowiring runs while B does not exist in this container in any form yet (no
+     * definition, no factory, nothing) -- there is nothing an early-reference mechanism could
+     * expose. A's field then either throws (if {@code required = true}) or stays {@code null} (if
+     * {@code required = false}); B, registered second, resolves normally since A already exists by
+     * then. This is reachable by an ordinary module author writing two {@code @Bean} methods (or a
+     * {@code @Configuration} class and one of its own {@code @Bean} products) that reference each
+     * other, since both paths register their product via this method. Workarounds: order the two
+     * registrations so the one with the {@code required = true} field is registered second, use
+     * {@code @Autowired(required = false)} plus manual post-registration wiring, or -- where
+     * possible -- register the pair through component scanning instead
+     * ({@code @Service}/{@code @Component}), where {@link #createBean}'s three-level cache does
+     * apply.
+     * <p>
+     * 注册单例实例，在存储前完成完整装配。运行与 {@link #createBean} 为容器自行构造的 Bean
+     * 所执行的同一套顺序——postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
+     * postProcessAfterInitialization——且无条件执行，与 {@link #refresh()} 是否已调用无关。
+     * 当 {@code instance} 的类携带其永远无法生效的 {@code @Transactional} 或
+     * {@code @ExceptionCatch}（方法级或类级）时直接拒绝注册（D-15）。
+     * 两个通过 registerSingleton 注册的对象之间不支持循环依赖（WR-02）：与 createBean 不同，
+     * 本方法在自动装配前不会向三级缓存暴露早期引用，且结构上也无法从中受益——createBean
+     * 的早期暴露之所以有效，是因为容器自己在同一调用栈内递归地、惰性地触发了依赖对象的构造；
+     * 而 registerSingleton 的调用方传入的是一个已经在容器之外完全构造好的对象，容器从未构造过
+     * 第二个对象，也没有任何钩子能代替它去触发第二个（尚未注册的）对象的构造。
      *
      * @param name instance name <br> 实例名称
      * @param instance instance object <br> 实例对象
+     * @throws com.ultikits.ultitools.exceptions.ContainerException if {@code instance}'s class
+     *         carries an AOP annotation it can never honour (D-15), or if a required
+     *         {@code @Autowired} dependency on it cannot be resolved (D-08)
      */
     public void registerSingleton(String name, Object instance) {
-        addSingleton(name, instance);
-        typeMappings.put(instance.getClass(), instance);
+        refuseIfAopAnnotated(instance);
+
+        Object bean = instance;
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessBeforeInitialization(bean, name);
+        }
+        getAutowireCapableBeanFactory().autowireBean(bean);
+        invokePostConstructMethods(bean);
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessAfterInitialization(bean, name);
+        }
+
+        addSingleton(name, bean);
+        typeMappings.put(bean.getClass(), bean);
+        // A newly registered singleton may be a new candidate for some already-resolved
+        // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
+        // instead of returning a stale cached resolution (D-12).
+        invalidateResolvedTypeCache();
+    }
+
+    /**
+     * Refuses {@code instance} when its class carries an AOP annotation
+     * ({@code @Transactional}/{@code @ExceptionCatch}) it can never honour (D-15).
+     * <p>
+     * A generated proxy ({@link ProxyFactory#isProxyClass}) is exempt -- it already honours its own
+     * annotations. Otherwise, method-level annotations are read via
+     * {@link AopEligibility#findAopAnnotatedMethods}, which deliberately omits class-level ones (see
+     * its own javadoc), so the class-level half is checked separately here -- omitting it would
+     * leave a class-level {@code @Transactional} silently inert, restating SILENT-10 rather than
+     * fixing it.
+     *
+     * @param instance the instance about to be registered
+     * @throws ContainerException naming the offending class and the annotated method (or
+     *         {@code "class-level"}) when a refusal applies
+     */
+    private void refuseIfAopAnnotated(Object instance) {
+        Class<?> clazz = instance.getClass();
+        if (ProxyFactory.isProxyClass(clazz)) {
+            return;
+        }
+        Set<Method> annotatedMethods = AopEligibility.findAopAnnotatedMethods(clazz);
+        if (!annotatedMethods.isEmpty()) {
+            Method offending = annotatedMethods.iterator().next();
+            throw ContainerException.aopAnnotationOnPreConstructedBean(clazz,
+                    offending.getDeclaringClass().getName() + "#" + offending.getName());
+        }
+        if (MergedAnnotationResolver.isPresent(clazz, Transactional.class)
+                || MergedAnnotationResolver.isPresent(clazz, ExceptionCatch.class)) {
+            throw ContainerException.aopAnnotationOnPreConstructedBean(clazz, "class-level");
+        }
     }
 
     /**
@@ -293,38 +421,81 @@ public class SimpleContainer {
             return (T) bean;
         }
 
-        // Check bean definitions and create bean if found
+        // Check bean definitions and create bean if found -- but only take this shortcut for a
+        // genuine self-match. getBeanName(type) synthesizes a decapitalized default name when
+        // `type` carries no explicit @Component/@Service of its own -- for an INTERFACE (the
+        // exact case this by-type lookup exists for), that default is just "decapitalize the
+        // interface's own simple name". If an unrelated implementer happens to be registered
+        // under that exact name (an ordinary, Spring-idiomatic naming choice: e.g.
+        // @Service("notificationService") on some impl of NotificationService), returning it
+        // here unconditionally would bypass the priority/ambiguity adjudication below entirely,
+        // even when a strictly higher-priority implementer also exists (CR-01).
+        //
+        // Two cases are still trusted as a deliberate, specific request and skip adjudication,
+        // matching Spring's own precedent that a by-name resolution is more specific than a
+        // by-type one (DefaultListableBeanFactory#resolveNamedBean) -- but note Spring itself
+        // never derives that name from the requested TYPE the way getBeanName(type) does here;
+        // it only trusts a name the caller or the bean itself explicitly supplied:
+        //   1. `type` IS the registered class -- querying a concrete class by itself always
+        //      resolves to itself, exactly the exactNameMatchStillShortCircuits case.
+        //   2. `type` itself explicitly declares @Component/@Service(value = beanName) -- i.e.
+        //      beanName did NOT come from getBeanName's decapitalized-default fallback, but from
+        //      a real annotation on `type`. This is `type` naming its own registration, not an
+        //      unrelated class's registration happening to collide with a synthesized guess.
+        // Anything else falls through to the same candidate-set/priority adjudication every
+        // other by-type lookup goes through.
         String beanName = getBeanName(type);
         BeanDefinition definition = beanDefinitions.get(beanName);
-        if (definition != null) {
+        if (definition != null && type.isAssignableFrom(definition.getBeanClass())
+                && (definition.getBeanClass().equals(type) || declaresOwnBeanName(type))) {
             bean = getBean(beanName); // Use getBean(name) for thread-safe creation
             return (T) bean;
         }
 
-        // Check bean definitions by assignability (interface/superclass → impl resolution)
-        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
-            if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
-                bean = getBean(entry.getKey());
-                if (bean != null) {
-                    typeMappings.put(type, bean);
-                    return (T) bean;
-                }
+        // A prior assignability adjudication for this exact type, if one has already happened
+        // and no registration has invalidated it since (D-12).
+        bean = resolvedTypeCache.get(type);
+        if (bean != null) {
+            return (T) bean;
+        }
+
+        // Collect every assignable candidate in this container and order by @Service(priority)
+        // descending, reusing getOrderedBeansOfType -- which had zero production callers before
+        // this change (D-11) -- instead of writing a third ordering implementation. It already
+        // dedups a definition-backed singleton that has already been instantiated, it
+        // identity-dedups a singleton registered under two names (e.g. DependenceManagers'
+        // TeleportService/NotificationService/EmailService, each aliased under a short name plus
+        // the interface FQN -- regression fixed after PR #352's real-machine UAT), and it reads
+        // priority off each candidate's actual resolved instance class, so a proxied bean's
+        // priority is read correctly: ProxyFactory copies the target's annotations onto the
+        // generated subclass, and getServicePriority relies on that.
+        List<T> candidates = getOrderedBeansOfType(type);
+
+        if (candidates.isEmpty()) {
+            // Total miss in this container -- only now is the parent consulted, so a child that
+            // has any candidates (even an ambiguous pair that goes on to throw) never falls
+            // through to a parent's unrelated bean (D-13).
+            if (parent != null) {
+                return parent.getBean(type);
+            }
+            return null;
+        }
+
+        if (candidates.size() > 1) {
+            // Only the top two matter: a tie further down the list, among beans that already
+            // lose to the top candidate, is not ambiguous.
+            T first = candidates.get(0);
+            T second = candidates.get(1);
+            if (getServicePriority(first.getClass()) == getServicePriority(second.getClass())) {
+                throw ContainerException.ambiguousBeanType(type, first.getClass(), second.getClass());
             }
         }
 
-        // Fallback: check all singletons by assignability (interface/superclass resolution)
-        for (Object singleton : singletonObjects.values()) {
-            if (type.isInstance(singleton)) {
-                typeMappings.put(type, singleton); // cache for next lookup
-                return (T) singleton;
-            }
-        }
-
-        if (parent != null) {
-            return parent.getBean(type);
-        }
-
-        return null;
+        // Adjudicate before caching: this is reached only once exactly one winner is
+        // determined -- either there was a single candidate, or priority broke the tie (D-12).
+        bean = candidates.get(0);
+        resolvedTypeCache.put(type, bean);
+        return (T) bean;
     }
 
     /**
@@ -424,6 +595,11 @@ public class SimpleContainer {
         beanPostProcessors.clear();
         currentlyCreating.clear();
         supplierTypes.clear();
+        // Release the by-type resolution cache too (WR-01): it holds both requested Class<?>
+        // keys and resolved bean-instance values loaded by this container's own classloader,
+        // exactly the kind of reference every other Class/instance-keyed collection above is
+        // cleared to stop pinning after a plugin unloads.
+        resolvedTypeCache.clear();
         isStarted = false;
         
         LOGGER.info("Container closed.");
@@ -481,6 +657,29 @@ public class SimpleContainer {
         // Default to simple class name with first letter lowercase
         String className = type.getSimpleName();
         return Character.toLowerCase(className.charAt(0)) + className.substring(1);
+    }
+
+    /**
+     * True iff {@code type} itself carries an explicit {@code @Component(value = ...)} or
+     * {@code @Service(value = ...)} name -- the same condition {@link #getBeanName(Class)} checks
+     * before falling back to a decapitalized-simple-name guess.
+     * <p>
+     * Used by {@link #getBean(Class)}'s by-name shortcut (CR-01) to tell a deliberate, specific
+     * request ("{@code type} declares this exact name as its own") apart from an accidental
+     * collision between an unrelated implementer's explicit bean name and an interface's
+     * synthesized default -- only the former is a genuine self-match that should skip the
+     * priority/ambiguity adjudication a few lines below.
+     *
+     * @param type the requested type to check
+     * @return true if {@code type} declares its own non-empty {@code @Component}/{@code @Service} name
+     */
+    private boolean declaresOwnBeanName(Class<?> type) {
+        Component component = type.getAnnotation(Component.class);
+        if (component != null && !component.value().isEmpty()) {
+            return true;
+        }
+        Service service = type.getAnnotation(Service.class);
+        return service != null && !service.value().isEmpty();
     }
 
     /**
@@ -593,6 +792,24 @@ public class SimpleContainer {
     public void registerBeanDefinition(String name, BeanDefinition definition) {
         beanDefinitions.put(name, definition);
         beanTypes.put(name, definition.getBeanClass());
+        // A newly registered bean definition may be a new candidate for some already-resolved
+        // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
+        // instead of returning a stale cached resolution (D-12).
+        invalidateResolvedTypeCache();
+    }
+
+    /**
+     * Invalidates the by-type assignability resolution cache ({@link #resolvedTypeCache}).
+     * <p>
+     * Called whenever a new bean definition or singleton is registered, so a subsequently
+     * registered implementation of an already-resolved type participates in the next
+     * adjudication instead of being masked by a resolution cached before it existed (D-12).
+     * Never touches {@link #typeMappings} -- that map holds author-declared bindings
+     * ({@code registerType}/{@code registerTypeSupplier}/{@code registerSingleton}'s own
+     * concrete-class binding), which must survive registration of unrelated beans.
+     */
+    private void invalidateResolvedTypeCache() {
+        resolvedTypeCache.clear();
     }
 
     /**
@@ -682,6 +899,18 @@ public class SimpleContainer {
 
             LOGGER.fine("Successfully created bean: " + name);
             return bean;
+        } catch (ContainerException e) {
+            // A ContainerException raised deeper in bean creation (e.g. an unresolvable
+            // @Autowired(required = true) dependency, or a constructor-injection failure) is
+            // already a deliberate, correctly-typed refusal -- rethrow it unchanged instead of
+            // letting the catch-all below downgrade it to an anonymous RuntimeException. Mirrors
+            // ComponentScanner.scanPackage's own catch (ContainerException e) { throw e; }
+            // rethrow for the same reason: a refusal that is swallowed or re-typed upstream is
+            // indistinguishable from the silent no-op it replaces (D-08, D-09).
+            singletonFactories.remove(name);
+            earlySingletonObjects.remove(name);
+            LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
+            throw e;
         } catch (Exception e) {
             // Clean up caches on failure
             singletonFactories.remove(name);
@@ -712,14 +941,16 @@ public class SimpleContainer {
             }
         }
         if (bestConstructor == null) {
-            throw new RuntimeException("No constructor found for: " + beanClass.getName());
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "No constructor found for: " + beanClass.getName());
         }
         Class<?>[] paramTypes = bestConstructor.getParameterTypes();
         Object[] args = new Object[paramTypes.length];
         for (int i = 0; i < paramTypes.length; i++) {
             args[i] = getBean(paramTypes[i]);
             if (args[i] == null) {
-                throw new RuntimeException("Cannot resolve constructor parameter " + paramTypes[i].getName() +
+                throw new ContainerException(ErrorCode.DEPENDENCY_INJECTION_FAILED,
+                        "Cannot resolve constructor parameter " + paramTypes[i].getName() +
                     " for bean: " + beanClass.getName());
             }
         }
@@ -727,7 +958,8 @@ public class SimpleContainer {
         try {
             return bestConstructor.newInstance(args);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to instantiate via constructor injection: " + beanClass.getName(), e);
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "Failed to instantiate via constructor injection: " + beanClass.getName(), e);
         }
     }
 
@@ -966,7 +1198,29 @@ public class SimpleContainer {
      */
     public <T> List<T> getOrderedBeansOfType(Class<T> type) {
         Map<String, T> beans = getBeansOfType(type);
-        List<T> result = new ArrayList<>(beans.values());
+
+        // Identity-dedup before ordering: getBeansOfType() is keyed by bean NAME, so the same
+        // singleton instance registered under two names (e.g. DependenceManagers.initCoreServices()
+        // deliberately registers TeleportService/NotificationService/EmailService twice each --
+        // once under a short internal name, once under the interface's FQN, so both getBean(String)
+        // and getBean(Class) resolve it) appears as two separate map entries whose VALUES are the
+        // same object. Without this dedup, getBean(Class)'s ambiguity check below sees that one
+        // object twice and throws a false "ambiguous" error naming the same instance against
+        // itself (regression caught by real-machine UAT on PR #352).
+        //
+        // IdentityHashMap (== semantics), not a HashSet/equals()-based dedup: a bean may override
+        // equals()/hashCode(), and two DISTINCT instances of the same class that happen to be
+        // equal must still be counted as two separate candidates so the ambiguity check below can
+        // still refuse a genuine tie (SILENT-06 / this milestone's own success criterion). Only
+        // reference identity -- the same object reached through two names -- collapses to one.
+        Map<T, Boolean> seenByIdentity = new IdentityHashMap<>();
+        List<T> result = new ArrayList<>();
+        for (T bean : beans.values()) {
+            if (seenByIdentity.put(bean, Boolean.TRUE) == null) {
+                result.add(bean);
+            }
+        }
+
         result.sort((a, b) -> {
             int priorityA = getServicePriority(a.getClass());
             int priorityB = getServicePriority(b.getClass());
@@ -1123,24 +1377,49 @@ public class SimpleContainer {
 
     /**
      * Process configuration class.
+     * <p>
+     * Reads {@code @ComponentScan} through {@link MergedAnnotationResolver#find} rather than a
+     * bare {@code configClass.getAnnotation(ComponentScan.class)} -- a class meta-annotated with
+     * {@code @UltiToolsModule} carries its {@code scanBasePackages()}/{@code
+     * scanBasePackageClasses()} values onto the merged {@code @ComponentScan} view via their
+     * {@code @AliasFor} declarations (D-01), which a bare lookup would miss entirely. The result
+     * is additive across {@code value()}, {@code basePackages()} and the packages named by
+     * {@code basePackageClasses()} -- in that declaration order, with duplicates collapsed to
+     * their first occurrence (GEN-06) -- not a first-match choice among them.
      * <br>
      * 处理配置类。
+     * <p>
+     * 通过 {@link MergedAnnotationResolver#find} 而非裸的
+     * {@code configClass.getAnnotation(ComponentScan.class)} 读取 {@code @ComponentScan}——一个
+     * 元注解了 {@code @UltiToolsModule} 的类，会通过其 {@code @AliasFor} 声明把
+     * {@code scanBasePackages()}/{@code scanBasePackageClasses()} 的值带入合并后的
+     * {@code @ComponentScan} 视图（D-01），裸查找会完全错过这一点。结果是在 {@code value()}、
+     * {@code basePackages()} 以及 {@code basePackageClasses()} 指名的包之间做累加——按此声明顺序，
+     * 重复项折叠为首次出现（GEN-06）——而不是在它们之间做首个匹配的选择。
      *
      * @param configClass configuration class <br> 配置类
      */
     public void processConfigurationClass(Class<?> configClass) {
-        ComponentScanner scanner = new ComponentScanner(this);
-        if (configClass.isAnnotationPresent(ComponentScan.class)) {
-            ComponentScan componentScan = configClass.getAnnotation(ComponentScan.class);
-            String[] basePackages = componentScan.value();
-            if (basePackages.length == 0) {
-                basePackages = componentScan.basePackages();
-            }
-            if (basePackages.length == 0) {
-                // Default to the package of the configuration class
-                basePackages = new String[]{configClass.getPackage().getName()};
-            }
-            scanner.scanPackages(basePackages);
+        ComponentScan merged = MergedAnnotationResolver.find(configClass, ComponentScan.class);
+        if (merged == null) {
+            return;
         }
+        LinkedHashSet<String> basePackages = new LinkedHashSet<>();
+        basePackages.addAll(Arrays.asList(merged.value()));
+        basePackages.addAll(Arrays.asList(merged.basePackages()));
+        for (Class<?> markerClass : merged.basePackageClasses()) {
+            // Class.getPackage() is null for an array type/primitive/void -- skip rather than
+            // fold a null entry into the scan set (T-03-31).
+            Package markerPackage = markerClass.getPackage();
+            if (markerPackage != null) {
+                basePackages.add(markerPackage.getName());
+            }
+        }
+        if (basePackages.isEmpty()) {
+            // Default to the package of the configuration class, exactly as before.
+            basePackages.add(configClass.getPackage().getName());
+        }
+        ComponentScanner scanner = new ComponentScanner(this);
+        scanner.scanPackages(basePackages.toArray(new String[0]));
     }
 }

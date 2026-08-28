@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
@@ -328,6 +331,61 @@ class ListenerManagerTest {
             Map<UltiToolsPlugin, List<Listener>> map = (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
 
             assertThat(map.get(mockPlugin)).isNull();
+        }
+
+        /**
+         * WIRE-07 / D-17: registerAll(plugin, packageName) must consult
+         * {@code @ConditionalOnConfig} before instantiating a scanned listener, exactly like
+         * {@code ComponentScanner} already does on the IoC-scan path. Scans a real fixture
+         * package (see {@code com.ultikits.testfixtures.conditionallistener}) containing one
+         * false-condition and one true-condition {@code @EventListener} class, over a real
+         * {@link SimpleContainer} (not a mock) so the evaluator can actually resolve the plugin
+         * and read a real config file. This is the registration-bookkeeping half of the proof;
+         * the event-dispatch half lives in
+         * {@code ConditionalOnConfigRegistrationIntegrationTest} (Task 2).
+         * <br>
+         * WIRE-07 / D-17：registerAll(plugin, packageName) 必须在实例化被扫描到的监听器之前
+         * 查询 {@code @ConditionalOnConfig}，就像 {@code ComponentScanner} 在 IoC 扫描路径上
+         * 已经做的那样。本用例扫描一个真实的 fixture 包
+         * （见 {@code com.ultikits.testfixtures.conditionallistener}），其中包含一个 false 条件
+         * 与一个 true 条件的 {@code @EventListener} 类，并使用真实的 {@link SimpleContainer}
+         * （而非 mock），以便判定器能够真正解析插件并读取真实的配置文件。这是"注册台账"这一半的
+         * 证明；事件分发那一半的证明在 {@code ConditionalOnConfigRegistrationIntegrationTest}
+         * （Task 2）中。
+         */
+        @Test
+        @DisplayName("应该跳过 @ConditionalOnConfig 条件为 false 的监听器，只注册条件为 true 的")
+        void conditionalListenersAreGatedByConditionalOnConfig(@TempDir File tempDir) throws Exception {
+            // Arrange
+            File configFile = new File(tempDir, "config/config.yml");
+            configFile.getParentFile().mkdirs();
+            try (FileWriter writer = new FileWriter(configFile)) {
+                writer.write("enableFalseListener: false\nenableTrueListener: true\n");
+            }
+
+            SimpleContainer realContainer = new SimpleContainer();
+            when(mockPlugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
+            realContainer.registerType(UltiToolsPlugin.class, mockPlugin);
+            when(mockPlugin.getContext()).thenReturn(realContainer);
+
+            try {
+                // Act
+                listenerManager.registerAll(mockPlugin, "com.ultikits.testfixtures.conditionallistener");
+
+                // Assert
+                Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
+                mapField.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Map<UltiToolsPlugin, List<Listener>> map =
+                        (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
+
+                List<Listener> registered = map.get(mockPlugin);
+                assertThat(registered).isNotNull();
+                assertThat(registered).hasSize(1);
+                assertThat(registered.get(0).getClass().getSimpleName()).isEqualTo("TrueConditionListener");
+            } finally {
+                realContainer.close();
+            }
         }
     }
 

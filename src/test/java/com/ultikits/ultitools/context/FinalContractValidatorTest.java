@@ -17,12 +17,21 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.testfixtures.finalviolation.chain.p1.ChainRoot;
+import com.ultikits.testfixtures.finalviolation.chain.p2.ChainLeaf;
+import com.ultikits.testfixtures.finalviolation.validator.ExtendsSealedMarkerInterface;
 import com.ultikits.testfixtures.finalviolation.validator.IllegalOverride;
 import com.ultikits.testfixtures.finalviolation.validator.IllegalSubclass;
 import com.ultikits.testfixtures.finalviolation.validator.IllegalSubclassWithMissingTypeMethod;
+import com.ultikits.testfixtures.finalviolation.validator.ImplementsSealedDefaultMethod;
+import com.ultikits.testfixtures.finalviolation.validator.ImplementsSealedMarkerInterface;
+import com.ultikits.testfixtures.finalviolation.validator.InheritsSealedDefaultMethod;
 import com.ultikits.testfixtures.finalviolation.validator.OpenBase;
+import com.ultikits.testfixtures.finalviolation.validator.OverridesInheritedSealedDefaultMethod;
 import com.ultikits.testfixtures.finalviolation.validator.PackagePrivateSealedBase;
 import com.ultikits.testfixtures.finalviolation.validator.SealedBase;
+import com.ultikits.testfixtures.finalviolation.validator.SealedInterface;
+import com.ultikits.testfixtures.finalviolation.validator.SealedMarkerInterface;
 import com.ultikits.testfixtures.finalviolation.validator.WideningOverrideOfSealedPackageMethod;
 import com.ultikits.testfixtures.missingdependency.HasMethodReferencingMissingType;
 import com.ultikits.testfixtures.missingdependency.MissingDependencyType;
@@ -196,6 +205,100 @@ class FinalContractValidatorTest {
                 "fixture must be a real generated proxy for this test to mean anything");
 
         assertTrue(FinalContractValidator.validate(proxyClass).isEmpty());
+    }
+
+    // --- Transitive chain and interface coverage (D-21 / D-22, issue #190) ------------------------
+
+    @Test
+    @DisplayName("Should accept an annotation type")
+    void shouldAcceptAnnotationType() {
+        // Annotation types are, at the JVM level, also interfaces - this pins that the isEnum()/
+        // isAnnotation() short-circuits in validate() are untouched by removing isInterface().
+        assertTrue(FinalContractValidator.validate(Final.class).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should accept an enum type")
+    void shouldAcceptEnumType() {
+        assertTrue(FinalContractValidator.validate(java.lang.annotation.RetentionPolicy.class)
+                .isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should reject a cross-package transitive override of a @Final package-private "
+            + "method reached through a same-package widening class")
+    void shouldRejectCrossPackageTransitiveWideningOverride() {
+        // ChainRoot#m() (package-private, @Final) is widened to public by the same-package
+        // ChainMiddle, then overridden again by ChainLeaf from a third, different package.
+        // Comparing ChainLeaf#m() directly against ChainRoot#m() fails the package-private access
+        // check - that is issue #190's original gap - but the override genuinely holds
+        // transitively through ChainMiddle#m(), which the widened chain walk now follows.
+        List<String> violations = FinalContractValidator.validate(ChainLeaf.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("#m"), violations.get(0));
+        assertTrue(violations.get(0).contains(ChainRoot.class.getName()), violations.get(0));
+    }
+
+    @Test
+    @DisplayName("Should reject directly overriding a @Final default method declared on an "
+            + "interface")
+    void shouldRejectOverridingSealedDefaultMethod() {
+        List<String> violations =
+                FinalContractValidator.validate(ImplementsSealedDefaultMethod.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("#m"), violations.get(0));
+        assertTrue(violations.get(0).contains(SealedInterface.class.getName()), violations.get(0));
+    }
+
+    @Test
+    @DisplayName("Should not flag merely inheriting a @Final default method without overriding it")
+    void shouldNotFlagInheritingSealedDefaultMethodWithoutOverride() {
+        // @Final restricts overriding, not use - a class that implements the interface and never
+        // redeclares the method has not violated anything.
+        assertTrue(FinalContractValidator.validate(InheritsSealedDefaultMethod.class).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should reject overriding a @Final default method reached through an interface "
+            + "of a superclass, not only through the superclass chain")
+    void shouldRejectOverridingSealedDefaultMethodInheritedThroughSuperclass() {
+        // InheritsSealedDefaultMethod never redeclares m() itself, so the only way to find
+        // SealedInterface#m() is to walk InheritsSealedDefaultMethod's own interfaces during the
+        // chain walk - proving the walk follows an ancestor's interfaces, not only its superclass.
+        List<String> violations =
+                FinalContractValidator.validate(OverridesInheritedSealedDefaultMethod.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("#m"), violations.get(0));
+        assertTrue(violations.get(0).contains(SealedInterface.class.getName()), violations.get(0));
+    }
+
+    @Test
+    @DisplayName("Should reject an interface extending a @Final interface")
+    void shouldRejectInterfaceExtendingSealedInterface() {
+        // Before this plan's change, validate() returned immediately for any clazz.isInterface(),
+        // so this case was never enforced at all.
+        List<String> violations =
+                FinalContractValidator.validate(ExtendsSealedMarkerInterface.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("extends"), violations.get(0));
+        assertTrue(violations.get(0).contains(SealedMarkerInterface.class.getName()),
+                violations.get(0));
+    }
+
+    @Test
+    @DisplayName("Should reject a class implementing a @Final interface")
+    void shouldRejectImplementingSealedInterface() {
+        List<String> violations =
+                FinalContractValidator.validate(ImplementsSealedMarkerInterface.class);
+
+        assertEquals(1, violations.size(), violations.toString());
+        assertTrue(violations.get(0).contains("implements"), violations.get(0));
+        assertTrue(violations.get(0).contains(SealedMarkerInterface.class.getName()),
+                violations.get(0));
     }
 
     // --- NoClassDefFoundError tolerance (Important 2 of the 2026-08-20 final review) -------------

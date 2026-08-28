@@ -1,10 +1,13 @@
 package com.ultikits.ultitools.context;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Bean post processor interface to customize bean initialization.
  * <br>
  * Bean后处理器接口，用于自定义Bean初始化。
  */
+@ApiStatus.Internal
 public interface BeanPostProcessor {
     
     /**
