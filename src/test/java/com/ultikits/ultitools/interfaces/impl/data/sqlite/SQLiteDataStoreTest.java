@@ -426,6 +426,41 @@ class SQLiteDataStoreTest {
                 assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
             }
         }
+
+        /**
+         * 02-13 (CR-01/CR-03): {@code buildScope}'s folder is always {@code tempDir}, which {@code
+         * setUp()} also stubs as {@code mockUltiTools.getDataFolder()} -- i.e. every scope this
+         * nested class builds is, by {@code dbPathFor(DataScope)}'s own internal/external
+         * disambiguation, an INTERNAL scope. Before 02-13, {@code getOperator(DataScope, Class)}'s
+         * default body delegated to the public {@code getOperator(File, Class)} overload using
+         * {@code scope.getDataFolder()} directly -- which is the SAME shared core folder for every
+         * internal scope, so two different internal plugins would have resolved to the SAME {@code
+         * .db} file (02-07's stated regression, reopened as CR-01's security bypass). 02-13 routes
+         * through {@code getOperatorUnchecked}, which resolves via {@code dbPathForPlugin(scope
+         * .getPluginName())} instead -- this pins that two internal plugins still get separate
+         * files.
+         */
+        @Test
+        @DisplayName("两个内部 scope（不同插件名）不应该退化成共享同一个 .db 文件（02-07 回归防护，CR-01/02-13）")
+        void twoInternalScopesShouldNotCollapseOntoOneFile() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scopeA =
+                    buildScope("InternalPluginA", java.util.Collections.singleton(TestDataEntity.class));
+            com.ultikits.ultitools.manager.DataScope scopeB =
+                    buildScope("InternalPluginB", java.util.Collections.singleton(TestDataEntity.class));
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                DataOperator<TestDataEntity> operatorA = store.getOperator(scopeA, TestDataEntity.class);
+                DataOperator<TestDataEntity> operatorB = store.getOperator(scopeB, TestDataEntity.class);
+
+                assertThat(operatorA).isNotSameAs(operatorB);
+                assertThat(mockedDataSource.constructed())
+                        .as("two internal plugins must each get their own connection pool/file, not share one")
+                        .hasSize(2);
+            }
+        }
     }
 
     /**
