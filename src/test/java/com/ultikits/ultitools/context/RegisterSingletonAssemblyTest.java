@@ -6,11 +6,30 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.io.File;
+import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.testfixtures.registersingletonordering.OrderingFixtureModule;
+import com.ultikits.testfixtures.registersingletonordering.OrderingFixtureService;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.PostConstruct;
@@ -20,6 +39,10 @@ import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.DependenceManagers;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Pins D-14 (full assembly, unconditional on {@code refresh()} state) and D-15 (refusal of an
@@ -352,6 +375,160 @@ class RegisterSingletonAssemblyTest {
 
             assertDoesNotThrow(() -> container.registerSingleton("bootstrap", new NoAopAnnotationBean()));
             assertNotNull(container.getBean("bootstrap"));
+        }
+    }
+
+    // ===== Task 2: initializePlugin ordering (T-03-27) =====
+
+    @Nested
+    @DisplayName("PluginManager.initializePlugin: the plugin's own @Autowired field resolves "
+            + "against its own scanned beans")
+    class InitializePluginOrdering {
+
+        @TempDir
+        File tempDir;
+
+        @org.junit.jupiter.api.BeforeEach
+        void setUpBukkit() {
+            // scanEntitiesInJar's own IOException/LinkageError/RuntimeException catch (D-19)
+            // reaches Bukkit.getLogger() when this fixture's untrusted-package SecurityException
+            // is logged; that call NPEs without a real Bukkit server present.
+            com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+            org.mockbukkit.mockbukkit.MockBukkit.mock();
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void tearDownBukkit() {
+            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        }
+
+        /**
+         * Child-first for the fixture package only. {@link OrderingFixtureModule} and
+         * {@link OrderingFixtureService} are also compiled normally onto the ambient test
+         * classpath (so {@code ComponentScanner}'s directory-based package scan can discover
+         * them there via ordinary parent-first {@code getResource}), but {@code
+         * UltiToolsPlugin}'s no-arg constructor needs the plugin class's own {@code CodeSource}
+         * to be a real jar file, which {@code target/test-classes} is not. Trying this loader's
+         * own jar FIRST for the fixture package (instead of standard parent-first delegation) is
+         * what gives {@code OrderingFixtureModule} a jar-backed {@code CodeSource}; every other
+         * class (supertypes, annotations) still delegates to the parent normally.
+         */
+        private final class FixtureJarClassLoader extends URLClassLoader {
+            private final String isolatedPrefix;
+
+            FixtureJarClassLoader(URL jarUrl, ClassLoader parent, String isolatedPrefix) {
+                super(new URL[]{jarUrl}, parent);
+                this.isolatedPrefix = isolatedPrefix;
+            }
+
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                synchronized (getClassLoadingLock(name)) {
+                    Class<?> found = findLoadedClass(name);
+                    if (found == null && name.startsWith(isolatedPrefix)) {
+                        try {
+                            found = findClass(name);
+                        } catch (ClassNotFoundException ignored) {
+                            // Not present in this loader's own jar -- fall through to normal
+                            // parent-first delegation below.
+                        }
+                    }
+                    if (found == null) {
+                        found = super.loadClass(name, false);
+                    }
+                    if (resolve) {
+                        resolveClass(found);
+                    }
+                    return found;
+                }
+            }
+        }
+
+        private File buildFixtureJar() throws Exception {
+            File jar = new File(tempDir, "ordering-fixture.jar");
+            try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeClassEntry(output, OrderingFixtureService.class);
+                writeClassEntry(output, OrderingFixtureModule.class);
+
+                output.putNextEntry(new JarEntry("plugin.yml"));
+                output.write("name: OrderingFixtureModule\nversion: 1.0.0\n"
+                        .getBytes(StandardCharsets.UTF_8));
+                output.closeEntry();
+            }
+            return jar;
+        }
+
+        private void writeClassEntry(JarOutputStream output, Class<?> clazz) throws Exception {
+            String resourceName = clazz.getName().replace('.', '/') + ".class";
+            output.putNextEntry(new JarEntry(resourceName));
+            try (InputStream input = clazz.getResourceAsStream("/" + resourceName)) {
+                assertNotNull(input, "compiled class resource for " + clazz.getName());
+                byte[] buffer = new byte[4096];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+            output.closeEntry();
+        }
+
+        @Test
+        @DisplayName("the module main class's @Autowired field is populated after initializePlugin returns")
+        void autowiredFieldOnModuleMainClassIsPopulated() throws Exception {
+            File jar = buildFixtureJar();
+            FixtureJarClassLoader loader = new FixtureJarClassLoader(jar.toURI().toURL(),
+                    Thread.currentThread().getContextClassLoader(),
+                    "com.ultikits.testfixtures.registersingletonordering.");
+            Class<?> pluginClass = Class.forName(
+                    "com.ultikits.testfixtures.registersingletonordering.OrderingFixtureModule",
+                    true, loader);
+
+            DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
+            when(mockDependenceManagers.getContext()).thenReturn(new SimpleContainer());
+
+            JsonStore jsonStore = new JsonStore(new File(tempDir, "json").getAbsolutePath());
+
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            lenient().when(mockUltiTools.getDataFolder()).thenReturn(tempDir);
+            lenient().when(mockUltiTools.getLogger()).thenReturn(
+                    Logger.getLogger("RegisterSingletonAssemblyTest.InitializePluginOrdering"));
+            lenient().when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
+            lenient().when(mockUltiTools.getDependenceManagers()).thenReturn(mockDependenceManagers);
+            lenient().when(mockUltiTools.getConfigManager()).thenReturn(mock(ConfigManager.class));
+            // UltiToolsPlugin's no-arg constructor reads getConfig().getString("language")
+            // (Bukkit's own JavaPlugin.getConfig(), unstubbed on a full mock returns null and
+            // NPEs) -- an empty YamlConfiguration is enough; a missing "language" key just falls
+            // through to the {} default language.
+            lenient().when(mockUltiTools.getConfig())
+                    .thenReturn(new org.bukkit.configuration.file.YamlConfiguration());
+
+            PluginManager pluginManager = new PluginManager();
+            Method initializePlugin = PluginManager.class.getDeclaredMethod(
+                    "initializePlugin", ClassLoader.class, Class.class, Object[].class);
+            initializePlugin.setAccessible(true);
+
+            Object plugin;
+            // passesCompatibilityGates -> UltiTools.getPluginVersion() -> getEnv() reads env.yml
+            // through getInstance().getTextResource(String), which is protected on Bukkit's own
+            // JavaPlugin and cannot be stubbed from this package -- so the STATIC call site is
+            // stubbed directly instead, the same workaround PluginManagerTest's own
+            // CompatibilityGateOrderingTests uses for the identical problem.
+            try (org.mockito.MockedStatic<UltiTools> ultiToolsStatic = org.mockito.Mockito.mockStatic(
+                    UltiTools.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+                ultiToolsStatic.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                ultiToolsStatic.when(UltiTools::getPluginVersion).thenReturn(Integer.MAX_VALUE);
+
+                plugin = initializePlugin.invoke(pluginManager, loader, pluginClass, new Object[0]);
+            }
+
+            assertNotNull(plugin, "initializePlugin must not refuse this module");
+            Field serviceField = pluginClass.getDeclaredField("service");
+            serviceField.setAccessible(true);
+            assertNotNull(serviceField.get(plugin),
+                    "the module main class's own @Autowired field must be populated -- inert "
+                            + "case: asserting only that initializePlugin returned non-null passes "
+                            + "even if the field is null, which is the pre-6.3.0 defect this "
+                            + "milestone exists to delete");
         }
     }
 }

@@ -1154,19 +1154,28 @@ public class PluginManager {
      * a {@code DataStore} that can supply neither a {@code DataSource} nor its own
      * {@code TransactionManager} still declares {@code @Transactional} unavailable.
      * <p>
-     * <b>Scope limit 1 — {@code registerSingleton} bypasses this entirely.</b> Only beans the
-     * container constructs itself (through {@code registerBean} or component scanning) are ever
-     * offered to the resolver, because {@link AopProxyResolver#resolve(Class)} only runs on the
-     * constructor branch of bean creation. The plugin instance itself, an {@code @ContextEntry}
-     * bean (built by hand with reflection), config entities, {@code @Configuration} classes, and
-     * the beans their {@code @Bean} methods produce are all registered with
-     * {@code registerSingleton} instead, so none of them ever reach it:
-     * {@code @ExceptionCatch} on such a class stays a no-op, and {@code @Transactional} on it is
-     * silently allowed to run rather than rejected. Unlike the first three, {@code @Configuration}
-     * classes and {@code @Bean} methods are written by module authors rather than the framework,
-     * and they are also constructed before {@code wireAop} runs in {@code initializePlugin}, an
-     * independent second reason they can never be proxied. The "beans using it are rejected"
-     * promise above only reaches beans built through a bean definition. Tracked in issue #308.
+     * <b>Scope limit 1 — {@code registerSingleton} objects are never proxied, but no longer
+     * silently unprotected.</b> Only beans the container constructs itself (through
+     * {@code registerBean} or component scanning) are ever offered to the resolver, because
+     * {@link AopProxyResolver#resolve(Class)} only runs on the constructor branch of bean creation.
+     * The plugin instance itself, an {@code @ContextEntry} bean (built by hand with reflection),
+     * config entities, {@code @Configuration} classes, and the beans their {@code @Bean} methods
+     * produce are all registered with {@code registerSingleton} instead, so none of them can ever be
+     * proxied: a ByteBuddy proxy is the bean itself in this framework's design, and it cannot be
+     * retrofitted onto an object the caller already constructed. Unlike the first three,
+     * {@code @Configuration} classes and {@code @Bean} methods are written by module authors rather
+     * than the framework, and they are also constructed before {@code wireAop} runs in
+     * {@code initializePlugin}, an independent second reason they can never be proxied.
+     * <p>
+     * As of 6.3.0, {@code registerSingleton} itself refuses to register an instance whose class
+     * carries {@code @Transactional} or {@code @ExceptionCatch} — method-level or class-level — for
+     * exactly that reason: an annotation that can never take effect must fail the load rather than
+     * silently do nothing (D-15). An instance that is already a generated proxy is exempt, since it
+     * already honours its own annotations. {@code registerSingleton} also now fully assembles
+     * (autowires, invokes {@code @PostConstruct}, runs the {@code BeanPostProcessor} chain)
+     * whatever it does accept, unconditionally and regardless of {@link SimpleContainer#refresh()}
+     * state (D-14) — it is only proxying, not assembly, that remains structurally impossible here.
+     * See issue #308.
      * <p>
      * <b>Class-level scope.</b> A class-level annotation is a default for the methods the
      * annotated class declares, and for its subclasses. It does not apply to ancestors, so a bean
@@ -1203,13 +1212,20 @@ public class PluginManager {
      * 当 getDataSource(DataScope) 抛出异常时从 JsonStore 获取。只有既不能提供 DataSource
      * 也不能提供自身 TransactionManager 的 DataStore，才仍会把 @Transactional 声明为不可用。
      * <p>
-     * 范围限制一：以 registerSingleton 方式注册的对象完全绕开这套机制——插件实例本身、
-     * {@code @ContextEntry} bean（反射手工构造）、config 实体、{@code @Configuration} 类
-     * 及其 {@code @Bean} 方法产出的 bean 都是这样注册的，它们上面的
-     * {@code @ExceptionCatch} 依旧是空注解，{@code @Transactional} 也不会被拒绝，
-     * 只会静默地不受事务保护地运行。与前三者不同，{@code @Configuration}/{@code @Bean}
-     * 是模块作者自己写的代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop}
-     * 执行前就已构造完成，这是它们永远不会被代理的另一个独立原因。见 issue #308。
+     * 范围限制一：以 registerSingleton 方式注册的对象永远不会被代理，但不再是静默不受保护。
+     * 插件实例本身、{@code @ContextEntry} bean（反射手工构造）、config 实体、
+     * {@code @Configuration} 类及其 {@code @Bean} 方法产出的 bean 都是这样注册的，
+     * 它们永远无法被代理——本框架中 ByteBuddy 代理就是 bean 本身，无法在调用方已经构造好的
+     * 对象上重新套一层。与前三者不同，{@code @Configuration}/{@code @Bean} 是模块作者自己写的
+     * 代码，而且它们在 {@code initializePlugin} 中于 {@code wireAop} 执行前就已构造完成，
+     * 这是它们永远不会被代理的另一个独立原因。
+     * 自 6.3.0 起，registerSingleton 本身会拒绝注册携带 {@code @Transactional} 或
+     * {@code @ExceptionCatch}（方法级或类级）的对象——原因很直接：一个永远不会生效的注解必须
+     * 让加载失败，而不是静默地什么也不做（D-15）。已经是生成代理的实例可以豁免，因为它已经
+     * 遵循自己的注解。对于它确实接受的对象，registerSingleton 现在也会无条件完成完整装配
+     * （自动装配、调用 @PostConstruct、执行 BeanPostProcessor 链），与
+     * {@link SimpleContainer#refresh()} 的状态无关（D-14）——这里仍然结构性不可能的只是代理，
+     * 不再是装配。见 issue #308。
      * 类级作用域：类级注解是「被注解类自己声明的方法」及其子类的默认值，不作用于祖先类。
      * 因此 bean 不会把自己的注解扩张到它继承来的一切——尤其不会扩张到它继承的框架基类上，
      * 在那里吞掉异常会变成一个 null，并在远离原因的地方以不相干的故障重新浮现。
@@ -1474,8 +1490,12 @@ public class PluginManager {
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(classLoader);
         try {
-            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
-            // Register plugin as UltiToolsPlugin type so services can inject it via constructor
+            // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
+            // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
+            // (03-04) resolves the plugin via getBean(UltiToolsPlugin.class) during the scan.
+            // registerType writes the type registry directly and never goes through
+            // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+            // move.
             pluginContext.registerType(UltiToolsPlugin.class, plugin);
 
             // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
@@ -1483,6 +1503,14 @@ public class PluginManager {
             if (scanPackages.length > 0) {
                 pluginContext.scanComponents(scanPackages);
             }
+
+            // Register the plugin instance itself by name AFTER scanComponents, not before:
+            // registerSingleton now fully assembles its argument unconditionally (D-14), so
+            // registering the plugin instance before any @Service bean exists would attempt to
+            // autowire it against an empty bean graph -- after 03-03, an unresolvable
+            // @Autowired(required = true) field on the plugin's own main class would then throw,
+            // turning a working module into one that cannot load (T-03-27).
+            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
 
             // Register config entities as beans for @Autowired injection
             java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =

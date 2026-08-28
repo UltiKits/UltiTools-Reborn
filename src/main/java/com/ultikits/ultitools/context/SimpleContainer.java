@@ -17,9 +17,13 @@ import java.util.logging.Logger;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Component;
 import com.ultikits.ultitools.annotations.ComponentScan;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.AopEligibility;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -168,16 +172,30 @@ public class SimpleContainer {
      * reference {@code postProcessAfterInitialization} last returned -- not necessarily
      * {@code instance} itself, if a registered {@link BeanPostProcessor} substitutes it.
      * <p>
+     * <b>Refuses {@code instance} outright when its class carries {@code @Transactional} or
+     * {@code @ExceptionCatch} -- method-level or class-level -- that it can never honour (D-15).</b>
+     * A ByteBuddy proxy is the bean itself in this framework's design; there is no separate
+     * delegate target, so a proxy can never be retrofitted onto an object the caller already
+     * constructed. Before this refusal existed, the annotation was silently inert: the method ran
+     * completely unprotected/untransacted, with no signal anything was wrong. An instance that is
+     * already a generated proxy ({@link ProxyFactory#isProxyClass}) is exempt -- it already honours
+     * its own annotations, copied onto the generated subclass by {@code ProxyFactory} itself.
+     * <p>
      * 注册单例实例，在存储前完成完整装配。运行与 {@link #createBean} 为容器自行构造的 Bean
      * 所执行的同一套顺序——postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
      * postProcessAfterInitialization——且无条件执行，与 {@link #refresh()} 是否已调用无关。
+     * 当 {@code instance} 的类携带其永远无法生效的 {@code @Transactional} 或
+     * {@code @ExceptionCatch}（方法级或类级）时直接拒绝注册（D-15）。
      *
      * @param name instance name <br> 实例名称
      * @param instance instance object <br> 实例对象
-     * @throws com.ultikits.ultitools.exceptions.ContainerException if a required {@code @Autowired}
-     *         dependency on {@code instance} cannot be resolved (D-08)
+     * @throws com.ultikits.ultitools.exceptions.ContainerException if {@code instance}'s class
+     *         carries an AOP annotation it can never honour (D-15), or if a required
+     *         {@code @Autowired} dependency on it cannot be resolved (D-08)
      */
     public void registerSingleton(String name, Object instance) {
+        refuseIfAopAnnotated(instance);
+
         Object bean = instance;
         for (BeanPostProcessor processor : beanPostProcessors) {
             bean = processor.postProcessBeforeInitialization(bean, name);
@@ -194,6 +212,38 @@ public class SimpleContainer {
         // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
         // instead of returning a stale cached resolution (D-12).
         invalidateResolvedTypeCache();
+    }
+
+    /**
+     * Refuses {@code instance} when its class carries an AOP annotation
+     * ({@code @Transactional}/{@code @ExceptionCatch}) it can never honour (D-15).
+     * <p>
+     * A generated proxy ({@link ProxyFactory#isProxyClass}) is exempt -- it already honours its own
+     * annotations. Otherwise, method-level annotations are read via
+     * {@link AopEligibility#findAopAnnotatedMethods}, which deliberately omits class-level ones (see
+     * its own javadoc), so the class-level half is checked separately here -- omitting it would
+     * leave a class-level {@code @Transactional} silently inert, restating SILENT-10 rather than
+     * fixing it.
+     *
+     * @param instance the instance about to be registered
+     * @throws ContainerException naming the offending class and the annotated method (or
+     *         {@code "class-level"}) when a refusal applies
+     */
+    private void refuseIfAopAnnotated(Object instance) {
+        Class<?> clazz = instance.getClass();
+        if (ProxyFactory.isProxyClass(clazz)) {
+            return;
+        }
+        Set<Method> annotatedMethods = AopEligibility.findAopAnnotatedMethods(clazz);
+        if (!annotatedMethods.isEmpty()) {
+            Method offending = annotatedMethods.iterator().next();
+            throw ContainerException.aopAnnotationOnPreConstructedBean(clazz,
+                    offending.getDeclaringClass().getName() + "#" + offending.getName());
+        }
+        if (MergedAnnotationResolver.isPresent(clazz, Transactional.class)
+                || MergedAnnotationResolver.isPresent(clazz, ExceptionCatch.class)) {
+            throw ContainerException.aopAnnotationOnPreConstructedBean(clazz, "class-level");
+        }
     }
 
     /**

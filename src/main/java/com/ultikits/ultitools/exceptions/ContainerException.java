@@ -173,4 +173,32 @@ public class ContainerException extends UltiToolsException {
                         + " are assignable candidates with equal @Service(priority). "
                         + "Disambiguate with a higher @Service(priority = ...) on the intended bean.");
     }
+
+    /**
+     * Creates an exception refusing to register, via {@code registerSingleton}, an instance whose
+     * class carries an AOP annotation ({@code @Transactional} or {@code @ExceptionCatch}) that can
+     * never take effect on it (D-15).
+     * <p>
+     * A ByteBuddy proxy is the bean itself in this framework's design -- there is no separate
+     * delegate target -- so a proxy can never be retrofitted onto an object the caller already
+     * constructed. Before this refusal existed, the annotation was silently inert: the method ran
+     * completely unprotected/untransacted, with no signal that anything was wrong. An instance that
+     * is already a generated proxy ({@code ProxyFactory.isProxyClass}) is never passed here -- it
+     * already honours its own annotations and is exempt from this check entirely.
+     *
+     * @param beanClass the class of the pre-constructed instance that was refused
+     * @param location  the offending method's {@code "ClassName#methodName"}, or the literal
+     *                  {@code "class-level"} when the annotation was found at class level
+     * @return a new ContainerException
+     */
+    public static ContainerException aopAnnotationOnPreConstructedBean(Class<?> beanClass, String location) {
+        return new ContainerException(ErrorCode.UNPROXYABLE_SINGLETON,
+                "Refusing to register " + beanClass.getName() + " via registerSingleton: it carries "
+                        + "an AOP annotation (@Transactional/@ExceptionCatch) at " + location
+                        + ", but this object was constructed outside the container. A ByteBuddy proxy "
+                        + "IS the bean in this framework's design, so it cannot be retrofitted onto an "
+                        + "already-constructed instance -- the annotation would otherwise be silently "
+                        + "inert. Declare " + beanClass.getName() + " as @Service or @Component so the "
+                        + "container constructs (and proxies) it instead.");
+    }
 }
