@@ -464,8 +464,14 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("checkOwnership(File, Class) should still exempt the framework's own core data folder")
-        void checkOwnershipFileShouldExemptFrameworkCoreFolder() {
+        @DisplayName("checkOwnership(File, Class) should no longer exempt the framework's own core data folder (CR-01, 02-13)")
+        void checkOwnershipFileShouldRefuseFrameworkCoreFolder() {
+            // CR-01 (02-REVIEW.md): the old isFrameworkCoreFolder exemption was keyed purely on a
+            // value any caller can obtain (UltiTools#getDataFolder() is public in the published
+            // jar), not on any credential -- so any code sharing the JVM could reach it. 02-13
+            // deletes the exemption. With no PluginManager registered, the reverse lookup finds no
+            // scope for the core folder either, so this must refuse exactly like any other
+            // unregistered folder.
             File coreFolder = new File(System.getProperty("java.io.tmpdir"), "ultitools-test-core-folder");
             UltiTools ultiTools = mock(UltiTools.class);
             when(ultiTools.getDataFolder()).thenReturn(coreFolder);
@@ -473,10 +479,10 @@ class DataStoreTest {
             try (MockedStatic<UltiTools> ultiToolsStatic = mockStatic(UltiTools.class)) {
                 ultiToolsStatic.when(UltiTools::getInstance).thenReturn(ultiTools);
 
-                // No PluginManager stub at all -- if the core-folder exemption did not fire first,
-                // this would NPE-or-refuse rather than pass silently.
-                assertThat(org.assertj.core.api.Assertions.catchThrowable(
-                        () -> stub().checkOwnership(coreFolder, UnownedEntity.class))).isNull();
+                assertThatThrownBy(() -> stub().checkOwnership(coreFolder, UnownedEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
             }
         }
 

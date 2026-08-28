@@ -396,16 +396,28 @@ class JsonStoreTest {
         }
 
         @Test
-        @DisplayName("The framework's own core data folder should still be exempt on getOperator(File, Class)")
-        void shouldExemptFrameworkCoreFolderViaFileOverload() {
+        @DisplayName("The framework's own core data folder should no longer be exempt on getOperator(File, Class) -- CR-01, 02-13")
+        void shouldRefuseFrameworkCoreFolderViaFileOverload() {
             // mockUltiToolsInstance.getDataFolder() is stubbed to tempDir.toFile() above -- passing
-            // tempDir.toFile() itself is exactly the framework-core-folder sentinel
-            // checkOwnership(File, Class) exempts. No PluginManager stub needed for this call to
-            // succeed.
-            DataOperator<AnnotatedTestData> operator = store.getOperator(tempDir.toFile(), AnnotatedTestData.class);
+            // tempDir.toFile() itself used to be exactly the framework-core-folder sentinel
+            // checkOwnership(File, Class) exempted (02-07/02-12). CR-01 (02-REVIEW.md): the
+            // exemption was keyed purely on a value any caller can obtain
+            // (UltiTools#getDataFolder() is public in the published jar), not on any credential.
+            // 02-13 deletes the exemption; no PluginManager stub for this folder is registered
+            // here, so the reverse lookup finds no scope and the call must refuse exactly like any
+            // other unregistered folder -- not silently succeed.
+            //
+            // Fixed outside this plan's own files_modified list (Rule 3 deviation, matching the
+            // precedent 02-07/02-12-SUMMARY.md both recorded for the identical situation): this
+            // test asserted behavior CR-01's fix in DataStore.java directly breaks.
+            assertThatThrownBy(() -> store.getOperator(tempDir.toFile(), AnnotatedTestData.class))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
 
-            assertThat(operator).isNotNull();
-            assertThat(store.getDataOperatorCount()).isEqualTo(1);
+            assertThat(store.getDataOperatorCount())
+                    .as("a refused call must not have built an operator")
+                    .isZero();
         }
     }
 

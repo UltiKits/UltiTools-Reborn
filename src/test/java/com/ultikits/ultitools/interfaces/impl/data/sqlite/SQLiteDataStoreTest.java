@@ -490,21 +490,34 @@ class SQLiteDataStoreTest {
         }
 
         @Test
-        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上仍然豁免")
-        void shouldExemptFrameworkCoreFolderViaFileOverload() {
+        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上不再豁免 -- CR-01, 02-13")
+        void shouldRefuseFrameworkCoreFolderViaFileOverload() {
             // mockUltiTools.getDataFolder() is stubbed to tempDir in setUp() -- passing tempDir
-            // itself is exactly the framework-core-folder sentinel checkOwnership(File, Class)
-            // exempts. No PluginManager stub needed for this call to succeed.
+            // itself used to be exactly the framework-core-folder sentinel checkOwnership(File,
+            // Class) exempted (D-14/D-17, 02-07/02-12). CR-01 (02-REVIEW.md): that exemption was
+            // keyed purely on a value any caller can obtain (UltiTools#getDataFolder() is public
+            // in the published jar), not on any credential -- so any code sharing the JVM could
+            // reach another module's real MySQL table through it. 02-13 deletes the exemption; no
+            // PluginManager stub is registered here, so the reverse lookup finds no scope for the
+            // core folder either, and the call must refuse exactly like any other unregistered
+            // folder -- not silently succeed.
             SQLiteDataStore store = new SQLiteDataStore();
 
             try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
                  MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
                  MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
 
-                DataOperator<UnownedEntity> operator = store.getOperator(tempDir, UnownedEntity.class);
+                assertThatThrownBy(() -> store.getOperator(tempDir, UnownedEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
 
-                assertThat(operator).isNotNull();
-                assertThat(mockedOperator.constructed()).hasSize(1);
+                assertThat(mockedDataSource.constructed())
+                        .as("a refused call must not have built a connection pool")
+                        .isEmpty();
+                assertThat(mockedOperator.constructed())
+                        .as("a refused call must not have built an operator")
+                        .isEmpty();
             }
         }
     }

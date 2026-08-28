@@ -992,8 +992,15 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("拥有的实体不受影响 -- UltiToolsPlugin.getDataOperator 仍然委托给原来的 plugin 重载")
-        void ultiToolsPluginGetDataOperatorShouldStillDelegateForOwnedEntity() {
+        @DisplayName("拥有的实体不受影响 -- UltiToolsPlugin.getDataOperator 现在路由到 getOperator(DataScope, Class)（CR-03, 02-13）")
+        void ultiToolsPluginGetDataOperatorShouldRouteThroughDataScopeOverload() {
+            // Was: ultiToolsPluginGetDataOperatorShouldStillDelegateForOwnedEntity, which verified
+            // this called the deprecated getOperator(UltiToolsPlugin, Class) overload. CR-03
+            // (02-REVIEW.md) found getOperator(DataScope, Class) -- the method D-17/02-07 built
+            // specifically as "the supported path" -- had ZERO real callers under src/main; both
+            // framework entry points performed their own ownership check and then called straight
+            // into the legacy overloads instead. 02-13 fixes this: production now reaches the
+            // credential-typed method it was built for.
             DataScope scope = scopeFor("PluginOwns", java.util.Collections.singleton(OwnedEntity.class),
                     new File(System.getProperty("java.io.tmpdir"), "ultitools-test-legacy-plugin-owns"));
             com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin =
@@ -1004,7 +1011,7 @@ class DataStoreManagerTest {
             com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> fakeOperator =
                     mock(com.ultikits.ultitools.interfaces.DataOperator.class);
             DataStore dataStore = mock(DataStore.class);
-            when(dataStore.getOperator(plugin, OwnedEntity.class)).thenReturn(fakeOperator);
+            when(dataStore.getOperator(scope, OwnedEntity.class)).thenReturn(fakeOperator);
             com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
                     ultiTools -> when(ultiTools.getDataStore()).thenReturn(dataStore));
 
@@ -1012,8 +1019,9 @@ class DataStoreManagerTest {
                     plugin.getDataOperator(OwnedEntity.class);
 
             assertThat(result).isSameAs(fakeOperator);
-            // Still the original, path-correct plugin overload -- no relocation.
-            verify(dataStore).getOperator(plugin, OwnedEntity.class);
+            // The documented supported path, not the deprecated plugin overload.
+            verify(dataStore).getOperator(scope, OwnedEntity.class);
+            verify(dataStore, org.mockito.Mockito.never()).getOperator(plugin, OwnedEntity.class);
         }
 
         @Test
@@ -1042,6 +1050,41 @@ class DataStoreManagerTest {
                 assertThat(viaWrapper.getErrorCode())
                         .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
                 assertThat(viaWrapper.getMessage()).isEqualTo(viaDataScope.getMessage());
+            } finally {
+                removeAdapter(externalPlugin);
+            }
+        }
+
+        @Test
+        @DisplayName("拥有的实体不受影响 -- UltiToolsAPI.getDataOperator 现在路由到 getOperator(DataScope, Class)（CR-03, 02-13）")
+        void ultiToolsApiGetDataOperatorShouldRouteThroughDataScopeOverload() throws Exception {
+            // Counterpart of ultiToolsPluginGetDataOperatorShouldRouteThroughDataScopeOverload for
+            // the external-plugin entry point (CR-03, 02-REVIEW.md).
+            org.bukkit.plugin.java.JavaPlugin externalPlugin =
+                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("UltiToolsApiDataScopeRoutingFixture");
+            com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
+                    new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
+            DataScope scope = scopeFor(adapter.getPluginName(),
+                    java.util.Collections.singleton(OwnedEntity.class), adapter.getDataFolder());
+            adapter.setDataScope(scope);
+            putAdapter(externalPlugin, adapter);
+
+            try {
+                @SuppressWarnings("unchecked")
+                com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> fakeOperator =
+                        mock(com.ultikits.ultitools.interfaces.DataOperator.class);
+                DataStore dataStore = mock(DataStore.class);
+                when(dataStore.getOperator(scope, OwnedEntity.class)).thenReturn(fakeOperator);
+                com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                        ultiTools -> when(ultiTools.getDataStore()).thenReturn(dataStore));
+
+                com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> result =
+                        com.ultikits.ultitools.api.UltiToolsAPI.getDataOperator(externalPlugin, OwnedEntity.class);
+
+                assertThat(result).isSameAs(fakeOperator);
+                verify(dataStore).getOperator(scope, OwnedEntity.class);
+                verify(dataStore, org.mockito.Mockito.never())
+                        .getOperator(adapter.getDataFolder(), OwnedEntity.class);
             } finally {
                 removeAdapter(externalPlugin);
             }

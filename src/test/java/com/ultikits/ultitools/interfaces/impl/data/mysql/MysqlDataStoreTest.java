@@ -729,22 +729,31 @@ class MysqlDataStoreTest {
         }
 
         @Test
-        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上仍然豁免")
-        void shouldExemptFrameworkCoreFolderViaFileOverload() {
+        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上不再豁免 -- CR-01, 02-13")
+        void shouldRefuseFrameworkCoreFolderViaFileOverload() {
             setupMysqlConfig();
             // mockUltiTools.getDataFolder() is stubbed to tempDir in setUp() -- passing tempDir
-            // itself is exactly the framework-core-folder sentinel checkOwnership(File, Class)
-            // exempts. No PluginManager stub needed for this call to succeed.
-
+            // itself used to be exactly the framework-core-folder sentinel checkOwnership(File,
+            // Class) exempted (02-07/02-12). CR-01 (02-REVIEW.md): on MySQL this was a genuine,
+            // unauthenticated read/write bypass -- MysqlDataStore has exactly one global
+            // HikariDataSource for the whole server, so the operator this call used to receive
+            // read and wrote the same real @Table-named table the legitimate owning plugin uses,
+            // with zero ownership verification anywhere on the path. 02-13 deletes the exemption;
+            // no PluginManager stub is registered here, so the call must refuse exactly like any
+            // other unregistered folder.
             try (MockedConstruction<HikariDataSource> hikariMock = mockConstruction(HikariDataSource.class);
                  MockedConstruction<MysqlDataOperator> operatorMock = mockConstruction(MysqlDataOperator.class)) {
 
                 MysqlDataStore store = new MysqlDataStore();
 
-                DataOperator<TestDataEntity> operator = store.getOperator(tempDir, TestDataEntity.class);
+                assertThatThrownBy(() -> store.getOperator(tempDir, TestDataEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
 
-                assertThat(operator).isNotNull();
-                assertThat(operatorMock.constructed()).hasSize(1);
+                assertThat(operatorMock.constructed())
+                        .as("a refused call must not have built an operator against the shared MySQL table")
+                        .isEmpty();
             }
         }
     }
