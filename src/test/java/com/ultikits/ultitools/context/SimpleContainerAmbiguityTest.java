@@ -389,6 +389,76 @@ class SimpleContainerAmbiguityTest {
         }
     }
 
+    // === Regression: PR #352 real-machine UAT -- singleton alias identity dedup ===
+
+    /**
+     * {@code getOrderedBeansOfType} must identity-deduplicate a singleton registered under two
+     * names before the ambiguity check runs. {@code DependenceManagers.initCoreServices()}
+     * deliberately registers the same {@code TeleportService}/{@code NotificationService}/
+     * {@code EmailService} instance under two names each (a short internal name plus the
+     * interface's FQN, so both {@code getBean(String)} and {@code getBean(Class)} resolve it) --
+     * before this fix, {@code getBean(NotificationService.class)} threw
+     * {@code ContainerException.ambiguousBeanType} naming the SAME instance against itself, which
+     * broke UltiSocial's {@code socialListener} bean on real-machine UAT (module load regressed
+     * 14/16 -> 13/16 against the #349 control run).
+     */
+    @Nested
+    @DisplayName("Singleton alias identity deduplication (regression: PR #352 UAT)")
+    class SingletonAliasIdentityDeduplicationTests {
+
+        @Test
+        @DisplayName("One instance registered under two names resolves by type without a false ambiguity")
+        void sameInstanceRegisteredUnderTwoNamesResolvesWithoutThrowing() {
+            SimpleContainer container = new SimpleContainer();
+            HighPriorityGreeter instance = new HighPriorityGreeter();
+            container.registerSingleton("aliasOne", instance);
+            container.registerSingleton("aliasTwo", instance);
+
+            Greeter resolved = assertDoesNotThrow(() -> container.getBean(Greeter.class),
+                    "the same object reached through two registration names is ONE candidate, "
+                            + "not two -- it must not trip the equal-priority ambiguity check");
+
+            assertSame(instance, resolved);
+        }
+
+        @Test
+        @DisplayName("Two DISTINCT instances of the same type at equal priority still throw "
+                + "(identity dedup must not reopen SILENT-06)")
+        void distinctInstancesAtEqualPriorityStillThrowAfterDedup() {
+            SimpleContainer container = new SimpleContainer();
+            HighPriorityGreeter first = new HighPriorityGreeter();
+            HighPriorityGreeter second = new HighPriorityGreeter();
+            container.registerSingleton("first", first);
+            container.registerSingleton("second", second);
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.getBean(Greeter.class),
+                    "two genuinely distinct instances of the same class at equal priority must "
+                            + "still be adjudicated as ambiguous -- deduping by class or by equals() "
+                            + "would silently delete the guarantee this milestone exists to add");
+
+            assertTrue(thrown.getMessage().contains(HighPriorityGreeter.class.getName()));
+        }
+
+        @Test
+        @DisplayName("A singleton aliased twice in the parent resolves from a child container (D-13)")
+        void aliasedParentSingletonResolvesFromChildWithoutThrowing() {
+            SimpleContainer parent = new SimpleContainer();
+            HighPriorityGreeter instance = new HighPriorityGreeter();
+            parent.registerSingleton("aliasOne", instance);
+            parent.registerSingleton("aliasTwo", instance);
+
+            SimpleContainer child = new SimpleContainer();
+            child.setParent(parent);
+
+            Greeter resolved = assertDoesNotThrow(() -> child.getBean(Greeter.class),
+                    "the child has zero candidates of its own, so it must fall through to the "
+                            + "parent (D-13) and the parent's own alias-dedup must not throw");
+
+            assertSame(instance, resolved);
+        }
+    }
+
     // === Task 2: cache invalidation ===
 
     @Nested

@@ -18,6 +18,9 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.services.EmailService;
+import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import java.util.Comparator;
@@ -521,6 +524,61 @@ class DependenceManagersTest {
             // Act & Assert
             int result = comparator.compare("1.0.0-SNAPSHOT", "1.0.0");
             assertThat(result).isNotEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("initCoreServices real registration shape (regression: PR #352 UAT)")
+    class InitCoreServicesRegistrationTests {
+
+        /**
+         * Drives the ACTUAL {@code initCoreServices()} private method -- not a reproduction of
+         * lines 70-81 -- so this test fails the moment the real registration shape in
+         * {@code DependenceManagers} changes, not just when a copy of it drifts out of sync.
+         *
+         * <p>Before the identity-dedup fix in {@code SimpleContainer#getOrderedBeansOfType},
+         * each of these three {@code getBean(Interface.class)} calls threw
+         * {@code ContainerException.ambiguousBeanType}, because the same singleton instance is
+         * deliberately registered under two names each ({@code :70-81}) so both a short internal
+         * name and the interface FQN resolve it. A test covering only {@code NotificationService}
+         * would leave {@code TeleportService} and {@code EmailService} unproven -- all three are
+         * broken by the same defect.
+         */
+        @Test
+        @DisplayName("TeleportService, NotificationService and EmailService all resolve by type without a false ambiguity")
+        void allThreeAliasedCoreServicesResolveByType() throws Exception {
+            // Arrange: a real DependenceManagers instance (constructor bypassed via Unsafe, same
+            // as every other test in this file) with a real, un-mocked SimpleContainer -- the
+            // ambiguity adjudication under test lives in SimpleContainer, so it must be real.
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = new SimpleContainer();
+            setField(managers, "context", context);
+
+            // Act: invoke the real private initCoreServices() method -- the exact code path
+            // DependenceManagers' own constructor runs, not a hand-copied reproduction of it.
+            java.lang.reflect.Method initCoreServices =
+                    DependenceManagers.class.getDeclaredMethod("initCoreServices");
+            initCoreServices.setAccessible(true); // NOPMD
+            initCoreServices.invoke(managers);
+
+            // Assert: each interface-typed lookup resolves without throwing.
+            TeleportService teleportService = assertDoesNotThrow(
+                    () -> context.getBean(TeleportService.class),
+                    "TeleportService is aliased under two names (:70-71) -- must not be seen as "
+                            + "two ambiguous candidates");
+            assertThat(teleportService).isNotNull();
+
+            NotificationService notificationService = assertDoesNotThrow(
+                    () -> context.getBean(NotificationService.class),
+                    "NotificationService is aliased under two names (:75-76) -- must not be seen "
+                            + "as two ambiguous candidates");
+            assertThat(notificationService).isNotNull();
+
+            EmailService emailService = assertDoesNotThrow(
+                    () -> context.getBean(EmailService.class),
+                    "EmailService is aliased under two names (:80-81) -- must not be seen as two "
+                            + "ambiguous candidates");
+            assertThat(emailService).isNotNull();
         }
     }
 
