@@ -267,10 +267,14 @@ class ConditionalOnConfigTest {
 
                 @Override
                 public void flush() {
+                    // Intentionally empty: this in-memory capture handler has no buffered
+                    // output to flush -- records are appended directly in publish().
                 }
 
                 @Override
                 public void close() {
+                    // Intentionally empty: no resource to release; the handler is detached
+                    // via releaseLogs()/removeHandler() below.
                 }
             };
             evaluatorLogger.addHandler(captureHandler);

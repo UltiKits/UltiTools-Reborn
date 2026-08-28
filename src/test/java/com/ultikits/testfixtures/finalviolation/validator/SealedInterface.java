@@ -17,5 +17,7 @@ import com.ultikits.ultitools.annotations.Final;
 public interface SealedInterface {
     @Final
     default void m() {
+        // Intentionally empty: this fixture only exercises the @Final default-method
+        // sealing shape (see class javadoc), not runtime behavior.
     }
 }

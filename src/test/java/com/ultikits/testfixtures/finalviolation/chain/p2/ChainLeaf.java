@@ -15,5 +15,7 @@ import com.ultikits.testfixtures.finalviolation.chain.p1.ChainMiddle;
 public class ChainLeaf extends ChainMiddle {
     @Override
     public void m() {
+        // Intentionally empty: this fixture only exercises the cross-package transitive
+        // override shape (see class javadoc), not runtime behavior.
     }
 }

@@ -10,5 +10,7 @@ import com.ultikits.ultitools.annotations.Final;
 public class ChainRoot {
     @Final
     void m() {
+        // Intentionally empty: this fixture only exercises override eligibility across the
+        // p1/p2 package boundary (see class javadoc), not runtime behavior.
     }
 }

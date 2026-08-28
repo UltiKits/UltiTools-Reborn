@@ -11,5 +11,7 @@ package com.ultikits.testfixtures.finalviolation.validator;
 public class ImplementsSealedDefaultMethod implements SealedInterface {
     @Override
     public void m() {
+        // Intentionally empty: this fixture only exercises the illegal-override shape
+        // (see class javadoc), not runtime behavior.
     }
 }

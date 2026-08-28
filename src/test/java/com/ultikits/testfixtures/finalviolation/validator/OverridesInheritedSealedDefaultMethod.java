@@ -16,5 +16,7 @@ package com.ultikits.testfixtures.finalviolation.validator;
 public class OverridesInheritedSealedDefaultMethod extends InheritsSealedDefaultMethod {
     @Override
     public void m() {
+        // Intentionally empty: this fixture only exercises the interface-of-a-superclass
+        // chain-walk shape (see class javadoc), not runtime behavior.
     }
 }

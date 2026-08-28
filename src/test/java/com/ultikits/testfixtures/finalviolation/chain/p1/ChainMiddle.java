@@ -15,5 +15,7 @@ package com.ultikits.testfixtures.finalviolation.chain.p1;
 public class ChainMiddle extends ChainRoot {
     @Override
     public void m() {
+        // Intentionally empty: this fixture only exercises the widening-override shape
+        // (see class javadoc), not runtime behavior.
     }
 }
