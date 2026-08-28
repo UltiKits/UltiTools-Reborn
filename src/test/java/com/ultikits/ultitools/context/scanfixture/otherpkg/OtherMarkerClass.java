@@ -5,6 +5,7 @@ package com.ultikits.ultitools.context.scanfixture.otherpkg;
  * {@link com.ultikits.ultitools.context.scanfixture.markerpkg.MarkerClass} so the ordering and
  * adjacency test cases have two real, differently-named packages to combine.
  */
+@SuppressWarnings("PMD.MissingStaticMethodInNonInstantiatableClass")
 public final class OtherMarkerClass {
     private OtherMarkerClass() {
     }

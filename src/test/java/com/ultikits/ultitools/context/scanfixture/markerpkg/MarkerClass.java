@@ -6,6 +6,7 @@ package com.ultikits.ultitools.context.scanfixture.markerpkg;
  * never itself scanned or registered as a bean; only its <em>package</em> is what
  * {@code getPluginScanPackages}/{@code processConfigurationClass} must add to the scan set.
  */
+@SuppressWarnings("PMD.MissingStaticMethodInNonInstantiatableClass")
 public final class MarkerClass {
     private MarkerClass() {
     }
