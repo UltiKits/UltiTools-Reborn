@@ -554,6 +554,7 @@ class RegisterSingletonAssemblyTest {
 
         @Test
         @DisplayName("the module main class's @Autowired field is populated after initializePlugin returns")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void autowiredFieldOnModuleMainClassIsPopulated() throws Exception {
             File jar = buildFixtureJar();
             FixtureJarClassLoader loader = new FixtureJarClassLoader(jar.toURI().toURL(),

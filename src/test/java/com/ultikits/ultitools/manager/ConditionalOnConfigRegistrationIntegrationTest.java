@@ -79,6 +79,7 @@ class ConditionalOnConfigRegistrationIntegrationTest {
         }
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void publishUltiToolsInstance(UltiTools mock) throws Exception {
         java.lang.reflect.Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);

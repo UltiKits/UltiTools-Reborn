@@ -211,6 +211,7 @@ class ConditionalOnConfigTest {
 
         @Test
         @DisplayName("No plugin in container should register by default")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void noPluginRegisters() throws Exception {
             SimpleContainer emptyContainer = new SimpleContainer();
             ComponentScanner scanner = new ComponentScanner(emptyContainer);
