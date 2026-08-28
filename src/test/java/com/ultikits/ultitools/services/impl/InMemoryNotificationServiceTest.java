@@ -70,7 +70,7 @@ class InMemoryNotificationServiceTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
     
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
     private void clearStaticMaps() {
         try {
             Field atedPlayerField = InMemoryNotificationService.class.getDeclaredField("atedPlayer");
@@ -353,7 +353,7 @@ class InMemoryNotificationServiceTest {
 
         @Test
         @DisplayName("同一玩家多次发送应该复用 BossBar")
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
         void shouldReuseBossBarForSamePlayer() throws Exception {
             // Arrange
             PlayerMock player = server.addPlayer();

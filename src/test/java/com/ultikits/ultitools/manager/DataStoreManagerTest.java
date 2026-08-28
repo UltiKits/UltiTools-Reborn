@@ -80,6 +80,7 @@ class DataStoreManagerTest {
     /**
      * 清理 DataStoreManager 的静态 map
      */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void clearDataMap() {
         try {
             Field dataMapField = DataStoreManager.class.getDeclaredField("dataMap");
@@ -292,6 +293,7 @@ class DataStoreManagerTest {
 
         @Test
         @DisplayName("关闭时应该调用每个 DataStore 的 destroyAllOperators")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void shouldDestroyAllOperatorsOnClose() {
             // Arrange
             DataStore store1 = mock(DataStore.class);
@@ -560,6 +562,7 @@ class DataStoreManagerTest {
 
         @Test
         @DisplayName("close 时应该为每个 store 调用 destroyAllOperators")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void closeShouldCallDestroyForEach() {
             // Arrange
             DataStore store1 = mock(DataStore.class);
@@ -608,6 +611,7 @@ class DataStoreManagerTest {
          */
         @Test
         @DisplayName("close() 应该让已注册 SQLiteDataStore 持有的每个连接池归零")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void closeShouldLeaveZeroOpenConnectionsAcrossRegisteredStore() throws Exception {
             SQLiteDataStore sqliteStore = new SQLiteDataStore();
             HikariDataSource poolA = createH2Pool();
@@ -1230,7 +1234,7 @@ class DataStoreManagerTest {
             adaptersField().remove(plugin);
         }
 
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
         private Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>
                 adaptersField() throws Exception {
             Field field = com.ultikits.ultitools.api.UltiToolsAPI.class.getDeclaredField("adapters");

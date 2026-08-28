@@ -34,6 +34,7 @@ class PlayerTempListenerTest {
     private static PluginManager mockPluginManager;
 
     @BeforeAll
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     static void setUpClass() throws Exception {
         if (Bukkit.getServer() == null) {
             mockServer = mock(Server.class);

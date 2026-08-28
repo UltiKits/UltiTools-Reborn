@@ -336,6 +336,7 @@ class ReflectiveMethodInvocationTest {
         void shouldPropagateTargetException() throws NoSuchMethodException {
             TestTarget exceptionTarget = new TestTarget() {
                 @Override
+                @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
                 public String process(String input) {
                     throw new RuntimeException("Target error");
                 }
@@ -383,6 +384,7 @@ class ReflectiveMethodInvocationTest {
         void shouldAllowInterceptorToCatchException() throws Throwable {
             TestTarget exceptionTarget = new TestTarget() {
                 @Override
+                @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
                 public String process(String input) {
                     throw new RuntimeException("Original error");
                 }

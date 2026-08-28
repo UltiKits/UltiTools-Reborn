@@ -458,6 +458,7 @@ class ChatCallbackManagerTest {
 
         @Test
         @DisplayName("多个回调可以独立执行")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void multipleCallbacksAreIndependent() throws Exception {
             // Arrange
             AtomicInteger successCount = new AtomicInteger(0);

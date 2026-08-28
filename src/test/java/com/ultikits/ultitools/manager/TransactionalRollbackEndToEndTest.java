@@ -139,6 +139,7 @@ class TransactionalRollbackEndToEndTest {
         }
 
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void writeThenFail() {
             insert(1);
             throw new RuntimeException("boom - external call");
@@ -155,11 +156,13 @@ class TransactionalRollbackEndToEndTest {
         }
 
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void innerWriteThenFail() {
             insert(3);
             throw new RuntimeException("boom - self-invocation");
         }
 
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         private void insert(int id) {
             try (Statement st = txManager.getConnection().createStatement()) {
                 st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");

@@ -654,6 +654,7 @@ class PluginInstallCommandsEnhancedTest {
         server.getScheduler().performTicks(20);
     }
     
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void registerPluginToMockBukkit(org.bukkit.plugin.Plugin plugin) {
         try {
             org.bukkit.plugin.PluginManager pluginManager = server.getPluginManager();

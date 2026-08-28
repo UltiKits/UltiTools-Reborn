@@ -42,6 +42,7 @@ class ProxyIdentityConsolidationTest {
     }
 
     /** Reflectively invokes {@code TaskManager}'s private unwrap site. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static Class<?> taskManagerResolves(Class<?> clazz) throws Exception {
         Method getTargetClass = TaskManager.class.getDeclaredMethod("getTargetClass", Class.class);
         getTargetClass.setAccessible(true);
@@ -50,6 +51,7 @@ class ProxyIdentityConsolidationTest {
     }
 
     /** Reflectively invokes {@code ExceptionInterceptor}'s private unwrap site. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static Class<?> exceptionInterceptorResolves(Object target) throws Exception {
         Method beanClassOf = ExceptionInterceptor.class
                 .getDeclaredMethod("beanClassOf", MethodInvocation.class, Method.class);

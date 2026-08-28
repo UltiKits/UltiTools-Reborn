@@ -202,6 +202,7 @@ class MysqlDataStoreTest {
 
         @Test
         @DisplayName("应该处理 HikariDataSource 初始化失败")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldHandleHikariDataSourceInitializationFailure() {
             // Arrange
             setupMysqlConfig();
@@ -456,6 +457,7 @@ class MysqlDataStoreTest {
 
         @Test
         @DisplayName("应该安全处理当 dataSource 为 null")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldHandleNullDataSourceSafely() {
             // Arrange
             setupMysqlConfig();
@@ -591,6 +593,7 @@ class MysqlDataStoreTest {
 
         @Test
         @DisplayName("应该正确处理 HikariDataSource 构造函数异常")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldHandleHikariDataSourceConstructorException() {
             // Arrange
             setupMysqlConfig();
@@ -611,6 +614,7 @@ class MysqlDataStoreTest {
 
         @Test
         @DisplayName("应该使用 i18n 转换错误消息")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldUseI18nForErrorMessage() {
             // Arrange
             setupMysqlConfig();

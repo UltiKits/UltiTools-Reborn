@@ -317,6 +317,7 @@ class CommandExecutionManagerTest {
 
         @Test
         @DisplayName("sendMessage(String) 应该捕获消息并添加换行")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void sendMessageShouldCaptureWithNewline() throws Exception {
             // 使用反射访问内部类
             Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
@@ -706,6 +707,7 @@ class CommandExecutionManagerTest {
 
         @Test
         @DisplayName("pendingCommands 应该初始化为 ConcurrentHashMap")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void pendingCommandsShouldBeConcurrentHashMap() throws Exception {
             // Arrange
             CommandExecutionManager newManager = new CommandExecutionManager();

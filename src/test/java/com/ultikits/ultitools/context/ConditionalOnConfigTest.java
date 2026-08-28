@@ -88,6 +88,7 @@ class ConditionalOnConfigTest {
      * But scanPackages needs actual classes on classpath — so we test the
      * shouldRegister logic directly by reflectively invoking it.
      */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private boolean invokesShouldRegister(Class<?> clazz) throws Exception {
         ComponentScanner scanner = new ComponentScanner(container);
         java.lang.reflect.Method shouldRegister =

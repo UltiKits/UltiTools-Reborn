@@ -60,6 +60,7 @@ public class ExternalDataStoreTest {
      * before Task 3, since this default body genuinely has no storage implementation of its own.
      */
     @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void defaultMethodThrowsUnsupportedOnceOwnershipCheckPasses() throws Exception {
         java.lang.reflect.Method forExternal = DataScope.class.getDeclaredMethod(
                 "forExternal", String.class, File.class, java.util.Set.class);

@@ -59,6 +59,7 @@ class DataSourceTransactionManagerTest {
         mocks.close();
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void clearThreadLocalContext() {
         try {
             Field contextHolderField = DataSourceTransactionManager.class.getDeclaredField("contextHolder");
@@ -1015,6 +1016,7 @@ class DataSourceTransactionManagerTest {
             assertThat(suspendedStackValue()).isNull();
         }
 
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private Deque<?> suspendedStackValue() throws Exception {
             Field field = DataSourceTransactionManager.class.getDeclaredField("suspendedStack");
             field.setAccessible(true);

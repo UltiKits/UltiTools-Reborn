@@ -989,6 +989,7 @@ class SimpleJsonDataOperatorTest {
 
         @Test
         @DisplayName("a snapshot restore (rolled-back transaction) does not re-fire onLoad for restored entries")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void snapshotRestoreDoesNotRefireOnLoad() {
             hookOperator.insert(newEntity("txn-1"));
             DataEntityTest.CountingAuditableEntity.resetCounters();

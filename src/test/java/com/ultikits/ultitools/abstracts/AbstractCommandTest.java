@@ -285,6 +285,7 @@ class AbstractCommandTest {
             return executeCommand(sender, command, label, args);
         }
 
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         protected boolean executeCommand(CommandSender sender, Command command, String alias, String[] args) {
             if (shouldThrowException) {
                 throw new RuntimeException("Test exception");

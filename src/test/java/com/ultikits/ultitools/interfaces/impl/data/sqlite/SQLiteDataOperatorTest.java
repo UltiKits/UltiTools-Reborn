@@ -495,6 +495,7 @@ class SQLiteDataOperatorTest {
 
         @Test
         @DisplayName("Test G: 守卫在触及 QueryRunner 之前就已生效——update 从未被调用")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void delWithNoConditionsShouldNeverReachQueryRunner() throws Exception {
             QueryRunner spyRunner = Mockito.spy(new QueryRunner(dataSource));
             Field field = AbstractRelationalDataOperator.class.getDeclaredField("queryRunner");

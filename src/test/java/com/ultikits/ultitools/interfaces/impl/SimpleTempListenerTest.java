@@ -35,6 +35,7 @@ class SimpleTempListenerTest {
     private static PluginManager mockPluginManager;
 
     @BeforeAll
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     static void setUpClass() throws Exception {
         // Mock Server and PluginManager
         if (Bukkit.getServer() == null) {

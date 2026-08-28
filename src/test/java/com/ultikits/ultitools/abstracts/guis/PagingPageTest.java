@@ -82,6 +82,7 @@ class PagingPageTest {
 
     @Test
     @DisplayName("Should calculate correct page count")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void testPageCount() {
         // We can check if pagination manager has items
         // Accessing private field via reflection

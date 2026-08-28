@@ -273,6 +273,7 @@ class SQLiteDataStoreTest {
          */
         @Test
         @DisplayName("destroyAllOperators 应该关闭它持有的每一个连接池")
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void destroyAllOperatorsShouldCloseEveryPool() throws Exception {
             SQLiteDataStore store = new SQLiteDataStore();
             HikariDataSource poolA = (HikariDataSource) createH2DataSource();
@@ -386,6 +387,7 @@ class SQLiteDataStoreTest {
     @DisplayName("getOperator(DataScope, Class) 所有权测试 (D-14, 继承自 DataStore 的 default 方法)")
     class GetOperatorDataScopeTests {
 
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private com.ultikits.ultitools.manager.DataScope buildScope(
                 String pluginName, java.util.Set<Class<?>> ownedEntities
         ) throws ReflectiveOperationException {

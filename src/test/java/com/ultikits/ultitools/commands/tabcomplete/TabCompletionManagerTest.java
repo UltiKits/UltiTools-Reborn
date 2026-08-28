@@ -58,6 +58,7 @@ class TabCompletionManagerTest {
         resetSingleton();
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void resetSingleton() throws Exception {
         Field instanceField = TabCompletionManager.class.getDeclaredField("instance");
         instanceField.setAccessible(true);

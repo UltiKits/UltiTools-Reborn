@@ -917,6 +917,7 @@ public class DataEntityTest {
             // Not exercised by these tests.
         }
 
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         private void probeBody() {
             observedDuringHandler = AuditableDataEntity.getCurrentUser();
             invoked = true;

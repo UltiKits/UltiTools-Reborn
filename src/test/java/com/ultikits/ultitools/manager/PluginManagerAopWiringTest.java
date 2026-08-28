@@ -205,6 +205,7 @@ class PluginManagerAopWiringTest {
         }
 
         @Transactional
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void writeThenFail() {
             operator.insert(new JsonTestEntity("json-tx-fail", "before-rollback"));
             throw new RuntimeException("boom - json backend");

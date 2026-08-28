@@ -22,6 +22,7 @@ class ButtonsTest {
     private static UltiTools originalInstance;
 
     @BeforeAll
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     static void setUp() throws Exception {
         // Save original instance
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");

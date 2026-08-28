@@ -76,6 +76,7 @@ class MessageHandlerRegistryTest {
         }
 
         @Override
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void handle(JsonObject message) {
             throw new RuntimeException("Test exception");
         }

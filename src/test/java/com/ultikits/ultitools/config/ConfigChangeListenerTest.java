@@ -168,6 +168,7 @@ class ConfigChangeListenerTest {
 
         @Test
         @DisplayName("should continue notifying after listener exception")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldContinueAfterListenerException() {
             AtomicBoolean firstCalled = new AtomicBoolean(false);
             AtomicBoolean secondCalled = new AtomicBoolean(false);
@@ -186,6 +187,7 @@ class ConfigChangeListenerTest {
 
         @Test
         @DisplayName("should handle multiple exceptions")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void shouldHandleMultipleExceptions() {
             AtomicInteger callCount = new AtomicInteger(0);
             

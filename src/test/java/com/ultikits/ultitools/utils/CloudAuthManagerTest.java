@@ -37,6 +37,7 @@ class CloudAuthManagerTest {
     /**
      * Read the value of a private static field from CloudAuthManager via reflection.
      */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static Object getStaticField(String name) throws Exception {
         Field field = CloudAuthManager.class.getDeclaredField(name);
         field.setAccessible(true);

@@ -179,6 +179,7 @@ class DefaultEmailServiceTest {
 
         @Test
         @DisplayName("有效邮箱地址应通过验证")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldValidateCorrectEmails() throws Exception {
             Method isValidEmail = DefaultEmailService.class.getDeclaredMethod("isValidEmail", String.class);
             isValidEmail.setAccessible(true);
@@ -273,6 +274,7 @@ class DefaultEmailServiceTest {
 
         @Test
         @DisplayName("验证码邮件模板应包含验证码")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldContainVerificationCode() throws Exception {
             Method buildTemplate = DefaultEmailService.class.getDeclaredMethod(
                 "buildVerificationEmailTemplate", String.class, String.class, int.class);
@@ -288,6 +290,7 @@ class DefaultEmailServiceTest {
 
         @Test
         @DisplayName("模板应正确转义 HTML 特殊字符")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void shouldEscapeHtmlCharacters() throws Exception {
             Method escapeHtml = DefaultEmailService.class.getDeclaredMethod("escapeHtml", String.class);
             escapeHtml.setAccessible(true);

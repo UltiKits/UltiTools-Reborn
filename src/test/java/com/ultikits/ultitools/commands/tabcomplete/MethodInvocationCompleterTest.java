@@ -399,6 +399,7 @@ class MethodInvocationCompleterTest {
         public void testMethod(@CmdParam(value = "param", suggest = "suggestThrowing") String param) {
         }
 
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public List<String> suggestThrowing() {
             throw new RuntimeException("Test exception");
         }

@@ -97,6 +97,7 @@ class ExceptionHandlerRethrowTest {
     @Service
     public static class NoThrowsClauseTarget {
         @ExceptionCatch(handler = "checkedRethrowingHandler", defaultValue = "fallback")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public String call() {
             throw new RuntimeException("target-trigger");
         }
@@ -167,6 +168,7 @@ class ExceptionHandlerRethrowTest {
      * the duration of the call: this file is about {@code @ExceptionCatch}'s custom-handler
      * rethrow semantics, not the {@code @Transactional} JDBC path 02-01 added.
      */
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private static void invokeWireAop(SimpleContainer context) {
         try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
             UltiTools mockUltiTools = mock(UltiTools.class);
@@ -182,6 +184,7 @@ class ExceptionHandlerRethrowTest {
         }
     }
 
+    @SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "PMD.AvoidThrowingRawExceptionTypes"})
     private static DataScope newDataScope() {
         try {
             Constructor<DataScope> ctor = DataScope.class.getDeclaredConstructor(String.class, File.class, Set.class);

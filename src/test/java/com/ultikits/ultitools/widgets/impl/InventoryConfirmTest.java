@@ -98,6 +98,7 @@ class InventoryConfirmTest {
 
         @Test
         @DisplayName("GUI_ID 应该是 confirm_gui")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void guiIdShouldBeConfirmGui() throws Exception {
             Field field = InventoryConfirm.class.getDeclaredField("GUI_ID");
             field.setAccessible(true);
