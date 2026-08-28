@@ -2,7 +2,11 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -31,7 +35,10 @@ import com.ultikits.ultitools.abstracts.data.DataEntityTest;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 class SimpleJsonDataOperatorTest {
 
@@ -598,10 +605,64 @@ class SimpleJsonDataOperatorTest {
         void testDelSkipNullPath() {
             operator.insert(new TestData("1", "test", 10));
             int sizeBefore = operator.getAll().size();
-            
+
             operator.del(WhereCondition.builder().column("nonexistent").value("value").build());
-            
+
             assertThat(operator.getAll()).hasSize(sizeBefore);
+        }
+
+        /**
+         * CR-02 (02-REVIEW.md, 02-13): {@link com.ultikits.ultitools.interfaces.DataOperator#del}'s
+         * interface javadoc, added in this same phase, promises a {@code null} or zero-length
+         * {@code whereConditions} is rejected with a {@code DataAccessException} -- the guarantee
+         * {@code AbstractRelationalDataOperator.del()} already enforces. Before 02-13,
+         * {@code SimpleJsonDataOperator.del()} did not: a zero-length array made the {@code for}
+         * loop body never run, so the call returned normally having deleted nothing, in direct
+         * contradiction of the promise; a {@code null} array threw a raw {@code
+         * NullPointerException} instead of the promised exception type.
+         */
+        @Test
+        @DisplayName("del() with a zero-length array should throw DataAccessException, not silently delete nothing (CR-02, 02-13)")
+        void testDelZeroLengthArrayShouldThrow() {
+            operator.insert(new TestData("1", "test", 10));
+
+            assertThatThrownBy(() -> operator.del())
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+
+            // A refused call must not have deleted anything as a side effect.
+            assertThat(operator.getById("1")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("del(null) should throw DataAccessException, not a raw NullPointerException (CR-02, 02-13)")
+        void testDelNullArrayShouldThrowDataAccessException() {
+            operator.insert(new TestData("1", "test", 10));
+
+            assertThatThrownBy(() -> operator.del((WhereCondition[]) null))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
+
+            assertThat(operator.getById("1")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("a refused del() must not capture a transaction snapshot as a side effect (CR-02, 02-13)")
+        void testRefusedDelShouldNotCaptureTransactionSnapshot() {
+            // Data inserted BEFORE begin(), so a snapshot capture triggered by this transaction's
+            // own first write would be observable via captureIfAbsent(...) being invoked -- del()
+            // is the only operation performed inside the transaction below, so if the refusal
+            // fires before beforeMutate() runs, captureIfAbsent(...) is never called at all.
+            operator.insert(new TestData("1", "test", 10));
+            JsonTransactionManager manager = spy(new JsonTransactionManager("del-guard-test"));
+            operator.bindTransactionManager(manager);
+            manager.begin();
+
+            assertThatThrownBy(() -> operator.del()).isInstanceOf(DataAccessException.class);
+
+            verify(manager, never()).captureIfAbsent(any(), any(), any());
         }
     }
 
