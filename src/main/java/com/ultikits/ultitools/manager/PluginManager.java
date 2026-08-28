@@ -254,6 +254,31 @@ public class PluginManager {
             pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
             pluginContext.registerShutdownHook();
             pluginContext.setClassLoader(classLoader);
+
+            // Register the plugin as UltiToolsPlugin type so services can inject it via
+            // constructor. Must run BEFORE scanComponents, mirroring initializePlugin's own
+            // T-03-27 fix: registerType writes the type registry directly and never goes through
+            // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+            // move.
+            pluginContext.registerType(UltiToolsPlugin.class, plugin);
+
+            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+            // BEFORE the plugin instance itself is registered as a singleton below (WR-03). This
+            // overload had no scanComponents call at all until this fix -- unlike initializePlugin,
+            // it was never given the T-03-27 reordering, even though it registers the same kind of
+            // object through the same registerSingleton call two lines below.
+            String[] scanPackages = getPluginScanPackages(plugin.getClass());
+            if (scanPackages.length > 0) {
+                pluginContext.scanComponents(scanPackages);
+            }
+
+            // Register the plugin instance itself by name AFTER scanComponents, not before:
+            // registerSingleton now fully assembles its argument unconditionally (D-14), so
+            // registering the plugin instance before any @Service bean exists would attempt to
+            // autowire it against an empty bean graph -- an unresolvable
+            // @Autowired(required = true) field on the plugin's own class would then throw,
+            // turning a working module into one that cannot load. This is the exact ordering bug
+            // T-03-27 already fixed in initializePlugin; this overload had it too (WR-03).
             pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
             DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
             registerEntityOwnership(scope);
