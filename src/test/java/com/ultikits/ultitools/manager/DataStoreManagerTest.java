@@ -869,25 +869,33 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("拥有的实体应该返回一个可用的操作器（走 default 方法委托给 File 重载）")
+        @DisplayName("拥有的实体应该返回一个可用的操作器（走 default 方法委托给 getOperatorUnchecked，CR-01/02-13）")
         void ownedEntityShouldReturnAWorkingOperator() {
+            // Was: delegates to the File overload. CR-01 (02-REVIEW.md) found that delegation path
+            // was exactly how the framework-core-folder ownership bypass reached an INTERNAL
+            // scope -- 02-13 changes getOperator(DataScope, Class)'s default body to delegate to
+            // the new unchecked getOperatorUnchecked(DataScope, Class) instead, which carries no
+            // ownership check of its own and is reachable only after this method's own
+            // scope.owns(...) check has already passed.
             @SuppressWarnings("unchecked")
             com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> fakeOperator =
                     mock(com.ultikits.ultitools.interfaces.DataOperator.class);
             DataStore stubStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
             when(stubStore.getStoreType()).thenReturn("stub-store");
-            // doReturn().when(), not when().thenReturn(): the File-overload's real default body
+            // doReturn().when(), not when().thenReturn(): getOperatorUnchecked's real default body
             // throws unconditionally, and with CALLS_REAL_METHODS as the mock's default answer,
-            // when(stubStore.getOperator(...)) would evaluate that real (throwing) call as part of
-            // recording the stub. doReturn() never invokes the real method to determine this.
-            org.mockito.Mockito.doReturn(fakeOperator).when(stubStore)
-                    .getOperator(org.mockito.ArgumentMatchers.any(File.class), eq(OwnedEntity.class));
+            // when(stubStore.getOperatorUnchecked(...)) would evaluate that real (throwing) call as
+            // part of recording the stub. doReturn() never invokes the real method to determine this.
             DataScope scope = scopeFor("Owner", java.util.Collections.singleton(OwnedEntity.class));
+            org.mockito.Mockito.doReturn(fakeOperator).when(stubStore)
+                    .getOperatorUnchecked(scope, OwnedEntity.class);
 
             com.ultikits.ultitools.interfaces.DataOperator<OwnedEntity> result =
                     stubStore.getOperator(scope, OwnedEntity.class);
 
             assertThat(result).isSameAs(fakeOperator);
+            verify(stubStore, org.mockito.Mockito.never())
+                    .getOperator(org.mockito.ArgumentMatchers.any(File.class), eq(OwnedEntity.class));
         }
 
         @Test
@@ -972,11 +980,19 @@ class DataStoreManagerTest {
         @Test
         @DisplayName("UltiToolsPlugin.getDataOperator 拒绝未拥有的实体，消息与 DataScope 重载完全一致")
         void ultiToolsPluginGetDataOperatorShouldRefuseUnownedEntityIdentically() {
+            // 02-13 (CR-03): getDataOperator now routes unconditionally through
+            // getDataStore().getOperator(dataScope, dataClazz) -- including the refusal path,
+            // which previously short-circuited on its own inline dataScope.owns(...) check before
+            // ever touching getDataStore(). A real DataStore (default methods live) is needed here
+            // so the interface's own getOperator(DataScope, Class) body actually runs the check.
             DataScope scope = scopeFor("PluginX", java.util.Collections.emptySet(),
                     new File(System.getProperty("java.io.tmpdir"), "ultitools-test-legacy-plugin"));
             com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin =
                     mock(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class, org.mockito.Answers.CALLS_REAL_METHODS);
             plugin.setDataScope(scope);
+            DataStore dataStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getDataStore()).thenReturn(dataStore));
 
             com.ultikits.ultitools.exceptions.DataAccessException viaWrapper =
                     org.junit.jupiter.api.Assertions.assertThrows(
@@ -1027,6 +1043,11 @@ class DataStoreManagerTest {
         @Test
         @DisplayName("UltiToolsAPI.getDataOperator 拒绝未拥有的实体，消息与 DataScope 重载完全一致")
         void ultiToolsApiGetDataOperatorShouldRefuseUnownedEntityIdentically() throws Exception {
+            // 02-13 (CR-03): getDataOperator now routes unconditionally through
+            // getDataStore().getOperator(scope, dataEntity) -- including the refusal path, which
+            // previously short-circuited on its own inline scope.owns(...) check before ever
+            // touching getDataStore(). A real DataStore (default methods live) is needed here so
+            // the interface's own getOperator(DataScope, Class) body actually runs the check.
             org.bukkit.plugin.java.JavaPlugin externalPlugin =
                     org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("UltiToolsApiLegacyRoutingFixture");
             com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
@@ -1035,6 +1056,9 @@ class DataStoreManagerTest {
                     adapter.getDataFolder());
             adapter.setDataScope(scope);
             putAdapter(externalPlugin, adapter);
+            DataStore dataStore = mock(DataStore.class, org.mockito.Answers.CALLS_REAL_METHODS);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getDataStore()).thenReturn(dataStore));
 
             try {
                 com.ultikits.ultitools.exceptions.DataAccessException viaWrapper =

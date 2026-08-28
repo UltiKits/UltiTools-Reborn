@@ -468,10 +468,30 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Class)} builds, so the exception type, error code, and message shape are identical
      * regardless of which entry point a caller reaches.
      * <p>
+     * <strong>02-13 (CR-03):</strong> before this, {@code dataScope.owns(...)} was checked here
+     * inline and this method then delegated to the deprecated {@code getOperator(UltiToolsPlugin,
+     * Class)} overload directly -- so {@code DataStore.getOperator(DataScope, Class)}, the method
+     * D-17/02-07 built specifically as the credential-typed supported path, had zero real callers
+     * anywhere in the framework. This now routes through it, so production actually uses the path
+     * it was built for. {@code dataScope} is normally non-null by the time any module calls this
+     * (set by {@code PluginManager} right after minting, before {@code registerSelf()} runs); the
+     * {@code null} fallback below only covers a bare instance constructed outside the normal
+     * {@code PluginManager} load flow (e.g. a test), where the deprecated overload's own {@code
+     * checkOwnership(...)} call still refuses correctly on its own.
+     * <p>
      * 获取数据操作器。若 {@code dataClazz} 未向本模块注册则直接拒绝（D-14）——校验依据是本模块
      * 加载时铸造的同一个 {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式
      * 与 {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个
      * 入口，异常类型、错误码和消息形态都一致。
+     * <p>
+     * <strong>02-13（CR-03）：</strong>在此之前，这里内联检查 {@code dataScope.owns(...)}，
+     * 然后本方法直接委托给已废弃的 {@code getOperator(UltiToolsPlugin, Class)} 重载——于是
+     * {@code DataStore.getOperator(DataScope, Class)}，即 D-17/02-07 专门构建的、携带凭证的受支持
+     * 路径，在整个框架里没有任何真实调用方。现在改为通过它路由，生产环境真正用上了它当初构建的
+     * 目的。到任何模块调用本方法时 {@code dataScope} 通常已经非空（由 {@code PluginManager} 在铸造
+     * 之后、{@code registerSelf()} 运行之前立即设置）；下面的 {@code null} 回退分支只覆盖在正常
+     * {@code PluginManager} 加载流程之外直接构造出的裸实例（例如测试场景），此时已废弃重载自身的
+     * {@code checkOwnership(...)} 调用依然能正确拒绝。
      *
      * @param dataClazz the class of the data entity <br> 数据实体的类
      * @param <T>       the type of the data entity <br> 数据实体的类型
@@ -480,8 +500,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *         registered to this module <br> 如果 {@code dataClazz} 未向本模块注册
      */
     public final <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(Class<T> dataClazz) {
-        if (dataScope != null && !dataScope.owns(dataClazz)) {
-            throw dataScope.refusalFor(dataClazz);
+        if (dataScope != null) {
+            return UltiTools.getInstance().getDataStore().getOperator(dataScope, dataClazz);
         }
         return UltiTools.getInstance().getDataStore().getOperator(this, dataClazz);
     }

@@ -129,11 +129,30 @@ public final class UltiToolsAPI {
      * exception type, error code, and message shape are identical regardless of which entry point
      * a caller reaches.
      * <p>
+     * <strong>02-13 (CR-03):</strong> before this, {@code scope.owns(...)} was checked here inline
+     * and this method then delegated to the deprecated {@code getOperator(File, Class)} overload
+     * directly -- so {@code DataStore.getOperator(DataScope, Class)}, the method D-17/02-07 built
+     * specifically as the credential-typed supported path, had zero real callers anywhere in the
+     * framework. This now routes through it, so production actually uses the path it was built
+     * for. {@code scope} is normally non-null by the time a connected plugin calls this (set by
+     * {@code PluginManager.registerExternal} right after minting); the {@code null} fallback below
+     * only covers an adapter that predates that wiring, where the deprecated overload's own {@code
+     * checkOwnership(...)} call still refuses correctly on its own.
+     * <p>
      * 获取外部插件的数据操作器。数据存储在插件自己的数据文件夹中。若 {@code dataEntity} 未向
      * {@code plugin} 注册则直接拒绝（D-14）——校验依据是该插件 {@code connect(...)} 时铸造的同一个
      * {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式与
      * {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个入口，
      * 异常类型、错误码和消息形态都一致。
+     * <p>
+     * <strong>02-13（CR-03）：</strong>在此之前，这里内联检查 {@code scope.owns(...)}，然后本方法
+     * 直接委托给已废弃的 {@code getOperator(File, Class)} 重载——于是
+     * {@code DataStore.getOperator(DataScope, Class)}，即 D-17/02-07 专门构建的、携带凭证的受支持
+     * 路径，在整个框架里没有任何真实调用方。现在改为通过它路由，生产环境真正用上了它当初构建的
+     * 目的。到已连接插件调用本方法时 {@code scope} 通常已经非空（由
+     * {@code PluginManager.registerExternal} 在铸造之后立即设置）；下面的 {@code null} 回退分支只
+     * 覆盖早于该接入逻辑的 adapter，此时已废弃重载自身的 {@code checkOwnership(...)} 调用依然能
+     * 正确拒绝。
      *
      * @param plugin the external JavaPlugin
      * @param dataEntity the data entity class (must have @Table annotation)
@@ -148,8 +167,8 @@ public final class UltiToolsAPI {
             throw new IllegalStateException("Plugin " + plugin.getName() + " is not connected to UltiTools");
         }
         com.ultikits.ultitools.manager.DataScope scope = adapter.getDataScope();
-        if (scope != null && !scope.owns(dataEntity)) {
-            throw scope.refusalFor(dataEntity);
+        if (scope != null) {
+            return UltiTools.getInstance().getDataStore().getOperator(scope, dataEntity);
         }
         return UltiTools.getInstance().getDataStore().getOperator(adapter.getDataFolder(), dataEntity);
     }

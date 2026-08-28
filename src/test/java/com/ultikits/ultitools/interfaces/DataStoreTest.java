@@ -100,19 +100,22 @@ class DataStoreTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 8 methods (3 abstract + 5 default)")
-        void shouldHaveExactlyEightMethods() {
+        @DisplayName("Should have exactly 9 methods (3 abstract + 6 default)")
+        void shouldHaveExactlyNineMethods() {
             // 02-01: added default getDataSource(DataScope) (D-01/D-17), alongside the existing
             // default getOperator(File, Class). 02-07 Task 2: added default
             // getOperator(DataScope, Class) (D-14/D-17), the fail-closed, ownership-checked entry
             // point. 02-12 Task 1: added the two checkOwnership(...) default methods extracting
             // the ownership check into one reusable member, called by both this interface's own
             // getOperator(File, Class) default body and, as their first statement, by every
-            // concrete store's own getOperator overrides (D-14/D-18).
+            // concrete store's own getOperator overrides (D-14/D-18). 02-13 Task 1: added default
+            // getOperatorUnchecked(DataScope, Class) (CR-01/CR-03) -- the internal, unchecked
+            // construction path getOperator(DataScope, Class) now delegates to instead of the
+            // public, previously ownership-exempt getOperator(File, Class) overload.
             long count = java.util.Arrays.stream(DataStore.class.getDeclaredMethods())
                     .filter(m -> !m.isSynthetic())
                     .count();
-            assertThat(count).isEqualTo(8);
+            assertThat(count).isEqualTo(9);
         }
 
         @Test
@@ -144,6 +147,15 @@ class DataStoreTest {
         @DisplayName("Should have getOperator(DataScope, Class) as a default method (D-17)")
         void shouldHaveGetOperatorDataScopeMethod() throws NoSuchMethodException {
             Method method = DataStore.class.getMethod("getOperator",
+                    com.ultikits.ultitools.manager.DataScope.class, Class.class);
+            assertThat(method).isNotNull();
+            assertThat(method.isDefault()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should have getOperatorUnchecked(DataScope, Class) as a default method (CR-01/CR-03, 02-13)")
+        void shouldHaveGetOperatorUncheckedMethod() throws NoSuchMethodException {
+            Method method = DataStore.class.getMethod("getOperatorUnchecked",
                     com.ultikits.ultitools.manager.DataScope.class, Class.class);
             assertThat(method).isNotNull();
             assertThat(method.isDefault()).isTrue();

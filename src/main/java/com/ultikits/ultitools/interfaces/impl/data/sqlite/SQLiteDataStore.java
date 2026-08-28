@@ -83,29 +83,45 @@ public class SQLiteDataStore implements DataStore {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         checkOwnership(plugin, dataEntity);
-        if (!dataEntity.isAnnotationPresent(Table.class)) {
-            throw new RuntimeException("No Table annotation is presented!");
-        }
-        String dbPath = dbPathForPlugin(plugin.getPluginName());
-        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(dbPath, dataEntity),
-                key -> {
-                    SQLiteDataOperator<T> operator = new SQLiteDataOperator<>(poolFor(dbPath), dataEntity);
-                    operator.setTransactionManager(transactionManagerForPath(dbPath));
-                    return operator;
-                });
+        return getOperatorForPath(dbPathForPlugin(plugin.getPluginName()), dataEntity);
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
         checkOwnership(dataFolder, dataEntity);
+        return getOperatorForPath(dbPathForFolder(dataFolder), dataEntity);
+    }
+
+    /**
+     * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
+     * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
+     * calls this only after its own {@code scope.owns(...)} check has already passed. Resolves
+     * {@code scope} to the exact same {@code .db} path {@link #dbPathFor(DataScope)} already
+     * derives for {@link #transactionManagerFor(DataScope)} -- internal scopes resolve to {@link
+     * #dbPathForPlugin(String)} keyed on the plugin's own name, external scopes to {@link
+     * #dbPathForFolder(File)} -- so an internal scope never collapses onto the framework's shared
+     * core folder the way routing through the public {@code getOperator(File, Class)} overload
+     * used to (the exact regression 02-07 guarded against and CR-01 found reopened as a security
+     * bypass).
+     */
+    @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
+        return getOperatorForPath(dbPathFor(scope), dataEntity);
+    }
+
+    /**
+     * Shared operator-construction body for all three entry points above, once ownership has
+     * already been established by whichever one of them was called. Single-sourced so the pool
+     * cache (keyed by backing-file path), the operator cache (keyed by (path, entity)), and the
+     * {@code transactionManagerFor(...)} wiring are each written in exactly one place.
+     */
+    @SuppressWarnings("unchecked")
+    private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForPath(String dbPath, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        String dbPath = dbPathForFolder(dataFolder);
         return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(dbPath, dataEntity),
                 key -> {
                     SQLiteDataOperator<T> operator = new SQLiteDataOperator<>(poolFor(dbPath), dataEntity);

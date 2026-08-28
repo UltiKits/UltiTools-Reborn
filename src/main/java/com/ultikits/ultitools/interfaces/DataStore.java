@@ -90,24 +90,46 @@ public interface DataStore {
      * (D-14/D-18/02-12). Called both by this interface's own {@code default} body above and, as
      * the first statement (before any path resolution, cache lookup, or connection-pool creation),
      * by the {@code getOperator(File, Class)} override of every backend this framework ships --
-     * so a refused call has not created a pool, a file, or a cache entry as a side effect. The
-     * reverse lookup only ever registers EXTERNAL scopes (D-18) -- every internal plugin shares
-     * the framework's own data folder ({@code DataScope.forPlugin}), so that one folder can never
-     * be attributed to a single owner by folder alone. The framework's own core data folder is
-     * exempt from the reverse-lookup refusal for exactly that reason (same disambiguation
-     * {@code JsonStore.identityOf(DataScope)} already uses, 02-05) -- it is also what lets {@link
-     * #getOperator(DataScope, Class)}'s delegation reach an INTERNAL scope's own {@code
-     * getOperator(File, Class)} without being refused a second time.
+     * so a refused call has not created a pool, a file, or a cache entry as a side effect.
+     * <p>
+     * The reverse lookup only ever registers EXTERNAL scopes (D-18) -- every internal plugin
+     * shares the framework's own data folder ({@code DataScope.forPlugin}), so that one folder can
+     * never be attributed to a single owner by folder alone, and any call reaching here with the
+     * framework's own core data folder is refused exactly like any other unregistered folder.
+     * <strong>Before 02-13 this method exempted the framework's own core data folder from the
+     * reverse-lookup refusal</strong>, on the reasoning that {@link #getOperator(DataScope, Class)}
+     * needed to reach an INTERNAL scope's own {@code getOperator(File, Class)} without being
+     * refused a second time. CR-01 (02-REVIEW.md) found that exemption was keyed purely on the
+     * <em>value</em> of {@code dataFolder} -- and {@code UltiTools#getDataFolder()} is {@code
+     * public} in the published jar, the exact fact D-17's own javadoc names as the reason {@link
+     * DataScope} had to be unforgeable -- not on any credential or caller identity, so any code
+     * sharing the JVM could reach it. On {@code MysqlDataStore} this was a genuine,
+     * unauthenticated read/write bypass onto another module's real table (there is exactly one
+     * global {@code DataSource} for the whole server). 02-13's fix: {@link
+     * #getOperator(DataScope, Class)} no longer routes an INTERNAL scope through this method at
+     * all -- it resolves directly via an internal, unchecked construction path (see {@code
+     * getOperatorUnchecked} on the framework's three shipped backends) that never touches this
+     * check, so no exemption is needed here anymore.
      * <p>
      * {@link #getOperator(java.io.File, Class)} 旧重载的共享所有权校验（D-14/D-18/02-12）。既被
      * 本接口上面的 {@code default} 方法体调用，也被本框架自带的每一个后端在其
      * {@code getOperator(File, Class)} 覆写方法体的第一条语句（先于任何路径解析、缓存查找或连接池
-     * 创建）调用——因此被拒绝的调用不会产生连接池、文件或缓存条目这类副作用。反向查找只会登记
-     * EXTERNAL scope（D-18）——每个内部插件共享的都是框架自己的数据文件夹（{@code
-     * DataScope.forPlugin}），单靠文件夹本身永远无法把它归属到某一个所有者。框架自己的核心数据
-     * 文件夹正因如此被排除在反向查找拒绝之外（与 {@code JsonStore.identityOf(DataScope)}
-     * 已经使用的判别方式相同，02-05）——这也是 {@link #getOperator(DataScope, Class)} 的委托能够
-     * 到达 INTERNAL scope 自己的 {@code getOperator(File, Class)} 而不被二次拒绝的原因。
+     * 创建）调用——因此被拒绝的调用不会产生连接池、文件或缓存条目这类副作用。
+     * <p>
+     * 反向查找只会登记 EXTERNAL scope（D-18）——每个内部插件共享的都是框架自己的数据文件夹
+     * （{@code DataScope.forPlugin}），单靠文件夹本身永远无法把它归属到某一个所有者，因此任何
+     * 携带框架自身核心数据文件夹到达这里的调用，都会像任何其他未注册文件夹一样被拒绝。
+     * <strong>02-13 之前，本方法把框架自己的核心数据文件夹排除在反向查找拒绝之外</strong>，理由是
+     * {@link #getOperator(DataScope, Class)} 需要让 INTERNAL scope 到达自己的
+     * {@code getOperator(File, Class)} 而不被二次拒绝。CR-01（02-REVIEW.md）发现那个豁免仅仅依据
+     * {@code dataFolder} 的「值」来判断——而 {@code UltiTools#getDataFolder()} 在已发布 jar 中是
+     * {@code public} 的，正是 D-17 自己 javadoc 里点名的、{@link DataScope} 之所以必须无法伪造的
+     * 那个事实——而不是依据任何凭证或调用方身份，因此共享同一 JVM 的任何代码都能触达它。在
+     * {@code MysqlDataStore} 上这是一个真实的、未经身份验证的读写绕过，直接触及另一个模块的真实表
+     * （整个服务器只有一个全局 {@code DataSource}）。02-13 的修复：{@link
+     * #getOperator(DataScope, Class)} 不再让 INTERNAL scope 经过本方法——它改为通过一条内部的、
+     * 不带校验的构造路径直接解析（见本框架三个自带后端各自的 {@code getOperatorUnchecked}），
+     * 这条路径完全不会触及本检查，因此这里也就不再需要任何豁免了。
      *
      * @param dataFolder the external plugin's data folder <br> 外部插件的数据文件夹
      * @param dataEntity data entity class <br> 数据实体类
@@ -119,11 +141,6 @@ public interface DataStore {
      */
     default void checkOwnership(java.io.File dataFolder, Class<?> dataEntity) {
         com.ultikits.ultitools.UltiTools ultiTools = com.ultikits.ultitools.UltiTools.getInstance();
-        boolean isFrameworkCoreFolder = ultiTools != null && ultiTools.getDataFolder() != null
-                && ultiTools.getDataFolder().equals(dataFolder);
-        if (isFrameworkCoreFolder) {
-            return;
-        }
         DataScope scope = ultiTools != null && ultiTools.getPluginManager() != null
                 ? ultiTools.getPluginManager().findScopeForDataFolder(dataFolder)
                 : null;
@@ -232,6 +249,15 @@ public interface DataStore {
      * this method: there is no credential to skip checking, because there is no way to obtain one
      * that was not already checked at minting time.
      * <p>
+     * <strong>02-13 (CR-01):</strong> the check above used to delegate to {@link
+     * #getOperator(java.io.File, Class)} for every scope, internal or external -- which for an
+     * INTERNAL scope meant reaching {@link #checkOwnership(java.io.File, Class)}'s now-removed
+     * core-folder exemption. It now delegates to {@link #getOperatorUnchecked(DataScope, Class)}
+     * instead, an internal construction path with no ownership check of its own, reachable only
+     * after this method's own {@code scope.owns(...)} check has already passed -- so the
+     * unforgeability guarantee above is no longer contingent on a second method's exemption logic
+     * agreeing with it.
+     * <p>
      * 获取 {@code scope} 拥有的实体的数据操作器，不拥有时直接拒绝（D-14）。该凭证由框架签发且
      * 无法伪造（{@code DataScope} 的构造器和静态工厂方法对 {@code manager} 包之外均为包私有），
      * 因此这是受支持的路径：与 {@link #getOperator(UltiToolsPlugin, Class)} 和
@@ -248,6 +274,13 @@ public interface DataStore {
      * {@link #checkOwnership(UltiToolsPlugin, Class)}，就会为那一个重载重新打开绕过的口子——
      * 除了约定（以及这段 javadoc）之外，没有任何机制能拦住它。本方法不存在这种缺口：没有凭证可以
      * 跳过校验，因为根本不存在一种获取凭证的方式，而这种方式在铸造时没有被校验过。
+     * <p>
+     * <strong>02-13（CR-01）：</strong>上面这个检查过去会把每一个 scope（无论内部还是外部）都
+     * 委托给 {@link #getOperator(java.io.File, Class)} 处理——对 INTERNAL scope 而言，这意味着
+     * 会走到 {@link #checkOwnership(java.io.File, Class)} 现已删除的核心文件夹豁免逻辑。现在它改为
+     * 委托给 {@link #getOperatorUnchecked(DataScope, Class)}——一条自身不带所有权校验的内部构造
+     * 路径，只有在本方法自己的 {@code scope.owns(...)} 检查已经通过之后才能到达——因此上面说的
+     * 「无法伪造」这个保证，不再依赖另一个方法的豁免逻辑是否与它保持一致。
      *
      * @param scope      the requesting scope <br> 请求方的 scope
      * @param dataEntity data entity class <br> 数据实体类
@@ -261,7 +294,53 @@ public interface DataStore {
         if (!scope.owns(dataEntity)) {
             throw scope.refusalFor(dataEntity);
         }
-        return getOperator(scope.getDataFolder(), dataEntity);
+        return getOperatorUnchecked(scope, dataEntity);
+    }
+
+    /**
+     * Internal, unchecked construction path used ONLY by {@link #getOperator(DataScope, Class)},
+     * called after its own {@code scope.owns(...)} check has already passed (CR-01, 02-13).
+     * Building the actual operator -- path/identity resolution, connection-pool cache, operator
+     * cache, {@code transactionManagerFor(...)} wiring -- is exactly what the legacy overloads
+     * have always done for the internal/external shape {@code scope} resolves to; what changed is
+     * that {@link #getOperator(DataScope, Class)} no longer reaches that construction logic via
+     * the public, previously ownership-exempt {@link #getOperator(java.io.File, Class)} overload.
+     * <p>
+     * This member is technically {@code public} -- Java gives interface members no narrower
+     * visibility -- but it is not reachable as a bypass: nothing outside the {@code manager}
+     * package can construct a {@link DataScope} to pass to it (the same unforgeability {@link
+     * #getOperator(DataScope, Class)} itself relies on), so a caller able to invoke this method at
+     * all already holds a scope it could just as validly pass to the checked entry point instead.
+     * It is not part of the officially-extensible {@link DataStore} contract in the same sense the
+     * other members are; the default throws, matching the same "backend does not support this by
+     * default" posture {@link #getDataSource(DataScope)} already uses. The three backends this
+     * framework ships each override it.
+     * <p>
+     * 仅供 {@link #getOperator(DataScope, Class)} 内部使用的、不带校验的构造路径，只有在它自己的
+     * {@code scope.owns(...)} 检查已经通过之后才会被调用（CR-01，02-13）。构造操作器本身——路径/
+     * 身份解析、连接池缓存、操作器缓存、{@code transactionManagerFor(...)} 装配——与旧重载对
+     * {@code scope} 所解析出的内部/外部两种形态一直以来的做法完全相同；变化的只是
+     * {@link #getOperator(DataScope, Class)} 不再通过公开的、曾经对所有权豁免的
+     * {@link #getOperator(java.io.File, Class)} 重载来到达这段构造逻辑。
+     * <p>
+     * 这个成员在技术上是 {@code public} 的——Java 不允许接口成员拥有更窄的可见性——但它并不构成
+     * 绕过口子：{@code manager} 包之外没有任何代码能够构造出一个 {@link DataScope} 传给它（与
+     * {@link #getOperator(DataScope, Class)} 自身依赖的不可伪造性完全相同），因此任何能够调用这个
+     * 方法的调用方，手上本就已经握着一个同样能合法传给受校验入口的 scope。它不属于
+     * {@link DataStore} 正式对外开放的扩展契约那一部分；默认实现直接抛出，与
+     * {@link #getDataSource(DataScope)} 已经使用的「后端默认不支持」姿态一致。本框架自带的三个
+     * 后端各自都覆写了它。
+     *
+     * @param scope      the requesting scope, already verified to own {@code dataEntity} <br>
+     *                   请求方的 scope，已确认拥有 {@code dataEntity}
+     * @param dataEntity data entity class <br> 数据实体类
+     * @param <T>        Must inherit {@link BaseDataEntity}
+     * @return data operator for that entity <br> 该实体的数据操作器
+     * @since 6.3.0
+     */
+    default <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
+        throw new UnsupportedOperationException(
+                "This DataStore (" + getStoreType() + ") does not support DataScope-based operator resolution");
     }
 
     /**

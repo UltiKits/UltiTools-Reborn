@@ -122,15 +122,52 @@ public class JsonStore implements DataStore {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         checkOwnership(plugin, dataEntity);
-        if (!dataEntity.isAnnotationPresent(Table.class)) {
-            throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
-        }
+        ensureTableAnnotation(dataEntity);
         String identity = plugin.getPluginName();
-        String location = storeLocation + File.separator + identity + File.separator
-                + ReflectionUtil.getAnnotation(dataEntity, Table.class).value();
+        return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+    }
+
+    @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
+        checkOwnership(dataFolder, dataEntity);
+        ensureTableAnnotation(dataEntity);
+        String identity = canonicalPath(dataFolder);
+        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+    }
+
+    /**
+     * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
+     * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
+     * calls this only after its own {@code scope.owns(...)} check has already passed. Branches
+     * internal/external exactly like {@link #identityOf(DataScope)} already does for {@link
+     * #transactionManagerFor(DataScope)} -- an internal scope resolves to {@link
+     * #internalLocation(String, Class)} keyed on the plugin's own name (never the framework's
+     * shared core folder, the collapse regression 02-07 guarded against and CR-01 found reopened
+     * as a bypass), an external scope to {@link #externalLocation(File, Class)}.
+     */
+    @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
+        ensureTableAnnotation(dataEntity);
+        if (isInternalScope(scope)) {
+            String identity = scope.getPluginName();
+            return getOperatorForIdentity(identity, internalLocation(identity, dataEntity), dataEntity);
+        }
+        File dataFolder = scope.getDataFolder();
+        String identity = canonicalPath(dataFolder);
+        return getOperatorForIdentity(identity, externalLocation(dataFolder, dataEntity), dataEntity);
+    }
+
+    /**
+     * Shared operator-construction body for all three entry points above, once ownership and the
+     * {@code @Table} annotation have already been established by whichever one of them was
+     * called. Single-sourced so the operator cache (keyed by (identity, entity)) and the {@code
+     * transactionManagerFor(...)} wiring are each written in exactly one place.
+     */
+    @SuppressWarnings("unchecked")
+    private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForIdentity(
+            String identity, String location, Class<T> dataEntity) {
         Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
                 key -> new SimpleJsonDataOperator<>(location, dataEntity));
         SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
@@ -138,21 +175,44 @@ public class JsonStore implements DataStore {
         return operator;
     }
 
-    @Override
-    @SuppressWarnings("unchecked")
-    public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
-        checkOwnership(dataFolder, dataEntity);
+    private static void ensureTableAnnotation(Class<?> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new IllegalArgumentException("No @Table annotation is present on: " + dataEntity.getName());
         }
-        String identity = canonicalPath(dataFolder);
-        String location = dataFolder.getAbsolutePath() + File.separator + "data" + File.separator
+    }
+
+    /**
+     * The internal-plugin storage location shape: {@code <store location>/<plugin name>/<@Table
+     * value>}. Shared by {@link #getOperator(UltiToolsPlugin, Class)} and {@link
+     * #getOperatorUnchecked(DataScope, Class)}'s internal branch.
+     */
+    private String internalLocation(String identity, Class<?> dataEntity) {
+        return storeLocation + File.separator + identity + File.separator
                 + ReflectionUtil.getAnnotation(dataEntity, Table.class).value();
-        Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
-                key -> new SimpleJsonDataOperator<>(location, dataEntity));
-        SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
-        operator.bindTransactionManager(transactionManagerFor(identity));
-        return operator;
+    }
+
+    /**
+     * The external-plugin storage location shape: {@code <plugin's own data folder>/data/<@Table
+     * value>}. Shared by {@link #getOperator(File, Class)} and {@link
+     * #getOperatorUnchecked(DataScope, Class)}'s external branch.
+     */
+    private static String externalLocation(File dataFolder, Class<?> dataEntity) {
+        return dataFolder.getAbsolutePath() + File.separator + "data" + File.separator
+                + ReflectionUtil.getAnnotation(dataEntity, Table.class).value();
+    }
+
+    /**
+     * Whether {@code scope} is an internal plugin's own scope -- its {@code dataFolder} is exactly
+     * the core framework's own data folder ({@code DataScope.forPlugin}'s construction). The same
+     * disambiguation {@link #identityOf(DataScope)} already uses for {@link
+     * #transactionManagerFor(DataScope)} (02-05), extracted so {@link
+     * #getOperatorUnchecked(DataScope, Class)} can also pick the matching location-construction
+     * formula, not just the matching identity string.
+     */
+    private static boolean isInternalScope(DataScope scope) {
+        File coreDataFolder = UltiTools.getInstance() == null ? null : UltiTools.getInstance().getDataFolder();
+        return coreDataFolder != null
+                && Objects.equals(canonicalPath(scope.getDataFolder()), canonicalPath(coreDataFolder));
     }
 
     /**
@@ -193,12 +253,7 @@ public class JsonStore implements DataStore {
      * #canonicalPath}) is used.
      */
     private static String identityOf(DataScope scope) {
-        File coreDataFolder = UltiTools.getInstance() == null ? null : UltiTools.getInstance().getDataFolder();
-        if (coreDataFolder != null
-                && Objects.equals(canonicalPath(scope.getDataFolder()), canonicalPath(coreDataFolder))) {
-            return scope.getPluginName();
-        }
-        return canonicalPath(scope.getDataFolder());
+        return isInternalScope(scope) ? scope.getPluginName() : canonicalPath(scope.getDataFolder());
     }
 
     private static String canonicalPath(File dataFolder) {

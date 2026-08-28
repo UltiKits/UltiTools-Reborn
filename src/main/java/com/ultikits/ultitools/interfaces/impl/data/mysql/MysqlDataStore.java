@@ -94,29 +94,43 @@ public class MysqlDataStore implements DataStore {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity) {
         checkOwnership(plugin, dataEntity);
-        if (!dataEntity.isAnnotationPresent(Table.class)) {
-            throw new RuntimeException("No Table annotation is presented!");
-        }
-        String identity = plugin.getPluginName();
-        return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
-                key -> {
-                    MysqlDataOperator<T> operator = new MysqlDataOperator<>(dataSource, dataEntity);
-                    operator.setTransactionManager(transactionManagerForIdentity(identity));
-                    return operator;
-                });
+        return getOperatorForIdentity(plugin.getPluginName(), dataEntity);
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(File dataFolder, Class<T> dataEntity) {
         checkOwnership(dataFolder, dataEntity);
+        return getOperatorForIdentity(canonicalPath(dataFolder), dataEntity);
+    }
+
+    /**
+     * Internal, unchecked construction path (CR-01/CR-03, 02-13): {@link
+     * com.ultikits.ultitools.interfaces.DataStore#getOperator(DataScope, Class)}'s default body
+     * calls this only after its own {@code scope.owns(...)} check has already passed. Resolves
+     * {@code scope} to the exact same identity {@link #identityFor(DataScope)} already derives for
+     * {@link #transactionManagerFor(DataScope)} -- internal scopes resolve to the plugin's own
+     * name, external scopes to the canonical data-folder path -- so an internal scope's operator
+     * cache entry is keyed identically whether reached through here or through {@link
+     * #getOperator(UltiToolsPlugin, Class)}.
+     */
+    @Override
+    public <T extends BaseDataEntity<String>> DataOperator<T> getOperatorUnchecked(DataScope scope, Class<T> dataEntity) {
+        return getOperatorForIdentity(identityFor(scope), dataEntity);
+    }
+
+    /**
+     * Shared operator-construction body for all three entry points above, once ownership has
+     * already been established by whichever one of them was called. Single-sourced so the
+     * operator cache (keyed by (identity, entity)) and the {@code transactionManagerForIdentity}
+     * wiring are each written in exactly one place.
+     */
+    @SuppressWarnings("unchecked")
+    private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForIdentity(String identity, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
             throw new RuntimeException("No Table annotation is presented!");
         }
-        String identity = canonicalPath(dataFolder);
         return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
                 key -> {
                     MysqlDataOperator<T> operator = new MysqlDataOperator<>(dataSource, dataEntity);
@@ -142,11 +156,24 @@ public class MysqlDataStore implements DataStore {
      * @return the shared manager for that scope's identity <br> 该 scope 身份共享的管理器
      */
     public JdbcTransactionManager transactionManagerFor(DataScope scope) {
+        return transactionManagerForIdentity(identityFor(scope));
+    }
+
+    /**
+     * Resolves {@code scope}'s operator-cache identity, matching whichever legacy {@code
+     * getOperator} overload the same scope would actually route through: the internal (plugin
+     * name) shape when {@code scope} is an internal plugin's own scope (its {@code dataFolder} is
+     * exactly the core framework's own data folder, {@code DataScope.forPlugin}'s construction --
+     * the same disambiguation {@code JsonStore.identityOf(DataScope)} and {@code
+     * SQLiteDataStore.dbPathFor(DataScope)} use, 02-05), the external (canonical folder path)
+     * shape otherwise. Shared by {@link #transactionManagerFor(DataScope)} and {@link
+     * #getOperatorUnchecked(DataScope, Class)} (02-13) so the two never disagree on identity.
+     */
+    private static String identityFor(DataScope scope) {
         UltiTools ultiTools = UltiTools.getInstance();
         boolean internal = ultiTools != null && ultiTools.getDataFolder() != null
                 && ultiTools.getDataFolder().equals(scope.getDataFolder());
-        String identity = internal ? scope.getPluginName() : canonicalPath(scope.getDataFolder());
-        return transactionManagerForIdentity(identity);
+        return internal ? scope.getPluginName() : canonicalPath(scope.getDataFolder());
     }
 
     /**
