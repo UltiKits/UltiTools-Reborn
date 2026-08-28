@@ -467,6 +467,42 @@ class SimpleContainerAmbiguityTest {
         }
     }
 
+    @Nested
+    @DisplayName("close() releases resolvedTypeCache (WR-01)")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    class CloseReleasesResolvedTypeCache {
+
+        @Test
+        @DisplayName("resolvedTypeCache is empty after close(), not merely stale")
+        void closeClearsResolvedTypeCache() throws Exception {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(HighPriorityGreeter.class);
+            container.refresh();
+
+            // Populate resolvedTypeCache via the normal by-type adjudication path -- the exact
+            // cache close() is supposed to release.
+            Greeter bean = container.getBean(Greeter.class);
+            assertNotNull(bean);
+
+            java.lang.reflect.Field cacheField = SimpleContainer.class.getDeclaredField("resolvedTypeCache");
+            cacheField.setAccessible(true);
+            java.util.Map<?, ?> cacheBeforeClose = (java.util.Map<?, ?>) cacheField.get(container);
+            assertFalse(cacheBeforeClose.isEmpty(),
+                    "guard: resolvedTypeCache must actually be populated before close(), or "
+                            + "clearing it proves nothing");
+
+            container.close();
+
+            java.util.Map<?, ?> cacheAfterClose = (java.util.Map<?, ?>) cacheField.get(container);
+            assertTrue(cacheAfterClose.isEmpty(),
+                    "close() must release resolvedTypeCache the same way it releases every other "
+                            + "Class/instance-keyed collection (singletonObjects, typeMappings, "
+                            + "beanDefinitions, ...), so a plugin's classloader-loaded Class objects "
+                            + "and instances stop being reachable through the container after "
+                            + "unload (WR-01)");
+        }
+    }
+
     // === Task 3: the proxy-annotation-copy dependency ===
 
     @Nested
