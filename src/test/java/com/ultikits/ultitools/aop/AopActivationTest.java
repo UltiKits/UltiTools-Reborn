@@ -1,15 +1,23 @@
 package com.ultikits.ultitools.aop;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import lombok.Data;
@@ -19,7 +27,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
@@ -30,7 +40,9 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.ModuleEvent;
-import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
+import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
 
@@ -44,7 +56,7 @@ import com.ultikits.ultitools.manager.PluginManager;
  * {@code ExternalPluginIntegrationTest}, which assert that the real {@code register(plugin)} /
  * {@code registerExternal(adapter)} entry points call {@code wireAop(...)} at all (a non-null
  * {@code getAopProxyResolver()}). This file assumes wiring happened - it calls
- * {@link PluginManager#wireAop(SimpleContainer)} directly to isolate proxy behaviour from plugin
+ * {@link PluginManager#wireAop(SimpleContainer, DataScope)} directly to isolate proxy behaviour from plugin
  * bootstrap - and instead asserts that proxying does not break anything else on the resulting
  * bean: interception actually runs, injection lands on the right instance, and every scanner that
  * reads annotations off {@code getMethods()}/{@code getClass()} still finds them.
@@ -196,21 +208,44 @@ class AopActivationTest {
     }
 
     /**
-     * {@link PluginManager#wireAop(SimpleContainer)} is package-private in
+     * {@link PluginManager#wireAop(SimpleContainer, DataScope)} is package-private in
      * {@code com.ultikits.ultitools.manager} - a different package than this test - by deliberate
      * choice of the task that introduced it. Reflection reaches the exact production method
      * instead of duplicating its logic here, so this test still exercises the real wiring code and
      * still goes red under the negative control in the task brief (commenting out
      * {@code context.setAopProxyResolver(resolver)} inside {@code wireAop}), rather than a
      * stand-in that would pass regardless of whether wireAop itself is broken.
+     * <p>
+     * {@link DataScope} is also package-private-constructed in {@code manager}; reflection builds
+     * one here too. {@code UltiTools.getInstance().getDataStore()} is stubbed to a {@link JsonStore}
+     * for the duration of the call only (this file is about {@code @ExceptionCatch}, not the
+     * {@code @Transactional} JDBC path added in 02-01) - since 02-05 (D-03) a {@link JsonStore}
+     * gets a real snapshot-based {@code TransactionManager} from {@code wireAop}'s JSON branch, so
+     * {@code @Transactional} is genuinely wired here too, not merely declared unavailable. See
+     * {@link #shouldInterceptInheritedTransactionalMethod()}.
      */
     private static void invokeWireAop(SimpleContainer context) {
-        try {
-            Method wireAop = PluginManager.class.getDeclaredMethod("wireAop", SimpleContainer.class);
+        try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            DataStore jsonStore = new JsonStore("build/test-aop-activation-json");
+            when(mockUltiTools.getDataStore()).thenReturn(jsonStore);
+            ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+            Method wireAop = PluginManager.class.getDeclaredMethod("wireAop", SimpleContainer.class, DataScope.class);
             wireAop.setAccessible(true);
-            wireAop.invoke(null, context);
+            wireAop.invoke(null, context, newDataScope());
         } catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to invoke PluginManager.wireAop via reflection", e);
+        }
+    }
+
+    private static DataScope newDataScope() {
+        try {
+            Constructor<DataScope> ctor = DataScope.class.getDeclaredConstructor(String.class, File.class, Set.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance("aop-activation-test", new File("."), Collections.emptySet());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to construct DataScope via reflection", e);
         }
     }
 
@@ -416,32 +451,18 @@ class AopActivationTest {
     }
 
     @Test
-    @DisplayName("@Transactional on a superclass method must trigger the load-time refusal")
-    void shouldRefuseInheritedTransactional() {
-        SimpleContainer context = new SimpleContainer();
-        invokeWireAop(context);
-        context.registerBean(InheritsTransactionalBean.class);
+    @DisplayName("A method-level @Transactional declared on a superclass must be intercepted "
+            + "(flipped from a pre-02-05 refusal case, D-03: JSON now wires @Transactional "
+            + "instead of declaring it unavailable, exactly like @ExceptionCatch's sibling case "
+            + "above)")
+    void shouldInterceptInheritedTransactionalMethod() {
+        SimpleContainer context = wiredContainer(InheritsTransactionalBean.class);
 
-        // SimpleContainer.createBean catches Exception and rewraps it, and ContainerException is
-        // itself a RuntimeException, so the refusal arrives wrapped and its text is no longer the
-        // top-level message. The chain is searched rather than the assertion being loosened to
-        // RuntimeException, which any unrelated container failure would also satisfy.
-        RuntimeException thrown = assertThrows(RuntimeException.class, context::refresh);
-        ContainerException refusal = null;
-        Throwable cursor = thrown;
-        for (int depth = 0; cursor != null && depth < 16; depth++) {
-            if (cursor instanceof ContainerException) {
-                refusal = (ContainerException) cursor;
-                break;
-            }
-            cursor = cursor.getCause();
-        }
-
-        assertNotNull(refusal, "the cause chain must contain the refusal, but was: " + thrown);
-        assertTrue(refusal.getMessage().contains("Transactional"),
-                "the refusal must name the annotation: " + refusal.getMessage());
-        assertTrue(refusal.getMessage().contains("transactionalOnBase"),
-                "the refusal must name the inherited method, not just the bean: "
-                        + refusal.getMessage());
+        InheritsTransactionalBean bean = context.getBean(InheritsTransactionalBean.class);
+        assertTrue(ProxyFactory.isProxyClass(bean.getClass()),
+                "neither @ExceptionCatch nor @Transactional is @Inherited, so this only proxies "
+                        + "if the scan walks the hierarchy itself");
+        assertDoesNotThrow(bean::transactionalOnBase,
+                "the inherited @Transactional method must actually be reachable through the proxy");
     }
 }

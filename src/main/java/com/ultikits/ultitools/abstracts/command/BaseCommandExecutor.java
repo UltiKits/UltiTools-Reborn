@@ -30,6 +30,7 @@ import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownVa
 import com.ultikits.ultitools.abstracts.command.validation.validators.PermissionValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.SenderTypeValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
+import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -242,27 +243,45 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         BukkitRunnable runnable = new BukkitRunnable() {
             @Override
             public void run() {
-                lockValidator.acquireLock(context);
+                // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
+                // AuditableDataEntity's audit columns is set and cleared HERE, inside the
+                // runnable that actually invokes the matched method -- not around the
+                // runTask()/runTaskAsynchronously() call below that schedules this runnable.
+                // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
+                // run on another thread entirely; a ThreadLocal write made on the scheduling
+                // thread would be invisible on whichever thread actually executes this run()
+                // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
+                // finally around the whole body so a pooled Bukkit worker thread never carries
+                // one command's user into the next, whether this command's sender was a Player
+                // or not, and whether the handler returned normally or threw.
+                if (context.isPlayer()) {
+                    AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
+                }
                 try {
-                    method.setAccessible(true);
-                    method.invoke(BaseCommandExecutor.this, params);
-                    cooldownValidator.applyCooldown(context);
-                } catch (Exception e) {
-                    context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
-                    Logger.getLogger(BaseCommandExecutor.class.getName())
-                            .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
-                    // Report to error collector
+                    lockValidator.acquireLock(context);
                     try {
-                        ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-                        if (erc != null) {
-                            Throwable cause = e.getCause() != null ? e.getCause() : e;
-                            erc.reportError(cause, extractModuleName(), triggerCtx);
+                        method.setAccessible(true);
+                        method.invoke(BaseCommandExecutor.this, params);
+                        cooldownValidator.applyCooldown(context);
+                    } catch (Exception e) {
+                        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
+                        Logger.getLogger(BaseCommandExecutor.class.getName())
+                                .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
+                        // Report to error collector
+                        try {
+                            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                            if (erc != null) {
+                                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                                erc.reportError(cause, extractModuleName(), triggerCtx);
+                            }
+                        } catch (Exception ignored) {
+                            // Never re-enter logging from error reporting
                         }
-                    } catch (Exception ignored) {
-                        // Never re-enter logging from error reporting
+                    } finally {
+                        lockValidator.releaseLock(context);
                     }
                 } finally {
-                    lockValidator.releaseLock(context);
+                    AuditableDataEntity.clearCurrentUser();
                 }
             }
         };

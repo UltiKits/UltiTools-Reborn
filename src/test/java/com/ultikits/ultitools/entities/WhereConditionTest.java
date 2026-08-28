@@ -26,6 +26,15 @@ class WhereConditionTest {
     }
 
     @Test
+    void testComparisonDefaultsToEqualWhenUnspecified() {
+        // WIRE-04: every WhereCondition must carry a non-null Comparison so relational
+        // builders never have to null-check it. Pins WhereCondition.comparison's
+        // @Builder.Default rather than assuming it stays that way.
+        WhereCondition condition = WhereCondition.builder().column("name").value("test").build();
+        assertEquals(Comparison.EQUAL, condition.getComparison());
+    }
+
+    @Test
     void testSetters() {
         WhereCondition condition = WhereCondition.builder().build();
         condition.setColumn("age");

@@ -9,6 +9,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -29,12 +30,19 @@ import org.bukkit.ChatColor;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonNull;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
 import com.ultikits.ultitools.utils.JsonPathUtil;
@@ -50,7 +58,25 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @version 1.0.0
  */
 public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T>, Cached {
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /**
+     * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
+     * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
+     * system refuses without {@code --add-opens java.base/java.time}, throwing
+     * {@code JsonIOException} the first time this operator serializes an entity carrying a
+     * non-null {@code LocalDateTime}-typed {@code @Column} (02-08 --
+     * {@code AuditableDataEntity#createdAt}/{@code updatedAt} were always {@code null} before
+     * this plan, so the whole-entity {@code GSON.toJson(...)} calls below never reached this type
+     * until the lifecycle hooks started populating it). Mirrors
+     * {@code AbstractRelationalDataOperator}'s identical adapter (02-08), serializing to/from
+     * {@link LocalDateTime#toString()}'s ISO-8601 form.
+     */
+    private static final Gson GSON = new GsonBuilder()
+            .setPrettyPrinting()
+            .registerTypeAdapter(LocalDateTime.class, (JsonSerializer<LocalDateTime>) (src, type, context) ->
+                    src == null ? JsonNull.INSTANCE : new JsonPrimitive(src.toString()))
+            .registerTypeAdapter(LocalDateTime.class, (JsonDeserializer<LocalDateTime>) (json, type, context) ->
+                    json.isJsonNull() ? null : LocalDateTime.parse(json.getAsString()))
+            .create();
 
     private final String storeLocation;
     private final Class<T> type;
@@ -64,6 +90,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      * {@code AbstractRelationalDataOperator#getListHandler()} 的读路径一致。见 issue #176。
      */
     private final Map<String, String> columnToFieldName;
+
+    /**
+     * The per-plugin {@link JsonTransactionManager} governing this operator, or {@code null} if
+     * this operator was never bound to one (e.g. constructed directly, as every pre-existing
+     * caller of the two-arg constructor still does -- see {@link #transaction(Callable)}, which
+     * is a separate, independent snapshot mechanism this field does not affect).
+     * <p>
+     * Set via {@link #bindTransactionManager(JsonTransactionManager)} by {@code JsonStore} (same
+     * package) right after this operator is constructed or retrieved from its cache (02-05, D-03).
+     * {@code volatile} because a write can happen on a different Bukkit worker thread than the one
+     * that bound the manager.
+     */
+    private volatile JsonTransactionManager transactionManager;
 
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
@@ -81,6 +120,70 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 }
             });
         }
+    }
+
+    /**
+     * Binds the {@link JsonTransactionManager} this operator participates in (02-05, D-03).
+     * <p>
+     * Package-private: called only by {@code JsonStore}, right after it constructs or retrieves
+     * this operator from its cache, with the manager it resolves for the same identity. Not part
+     * of this class's public API.
+     *
+     * @param transactionManager the manager governing the plugin (or external caller) this
+     *                           operator belongs to
+     */
+    void bindTransactionManager(JsonTransactionManager transactionManager) {
+        this.transactionManager = transactionManager;
+    }
+
+    /**
+     * Called as the first statement of every cache-mutating method ({@link #insert}, {@link #del},
+     * {@link #delById}, the two {@code update} overloads). A no-op unless a {@link
+     * #bindTransactionManager bound} {@link JsonTransactionManager} has an active transaction on
+     * this thread and has not already captured this operator this transaction (D-03: lazy
+     * snapshot on first touch, so an operator never written to during the transaction is neither
+     * snapshotted nor restored).
+     * <p>
+     * The actual deep-copy capture ({@link #snapshotCache()}) and restore ({@link
+     * #restoreCache(Map)}) stay entirely inside this class; {@link JsonTransactionManager} only
+     * ever holds the {@code Supplier}/{@code Consumer} lambdas below, never this operator's cache
+     * directly.
+     */
+    private void beforeMutate() {
+        JsonTransactionManager manager = this.transactionManager;
+        if (manager != null) {
+            manager.captureIfAbsent(this, this::snapshotCache, snapshot -> restoreCache(uncheckedCast(snapshot)));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<Object, T> uncheckedCast(Object snapshot) {
+        return (Map<Object, T>) snapshot;
+    }
+
+    /**
+     * Deep-copies this operator's current cache: serialize/deserialize to break references, since
+     * {@code update(T)} mutates cached entities in-place via {@link
+     * BeanCopyUtil#copyProperties}. Package-private hook shared by {@link #transaction(Callable)}
+     * (the pre-existing per-operator mechanism, unchanged) and {@link #beforeMutate()} (the new
+     * per-plugin {@link JsonTransactionManager} hook, 02-05) -- one copy of the deep-copy logic,
+     * two callers.
+     */
+    synchronized Map<Object, T> snapshotCache() {
+        Map<Object, T> snapshot = new HashMap<>();
+        for (Map.Entry<Object, T> entry : cache.entrySet()) {
+            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
+        }
+        return snapshot;
+    }
+
+    /**
+     * Restores this operator's cache from a snapshot previously captured by {@link
+     * #snapshotCache()}.
+     */
+    synchronized void restoreCache(Map<Object, T> snapshot) {
+        cache.clear();
+        cache.putAll(snapshot);
     }
 
     /**
@@ -127,12 +230,18 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public boolean exist(WhereCondition... whereConditions) {
-        return !getAll(whereConditions).isEmpty();
+        // getAllRaw, not getAll: an existence check is not a read that returns entities to the
+        // caller, so it must not fire onLoad() as a side effect of computing a boolean.
+        return !getAllRaw(whereConditions).isEmpty();
     }
 
     @Override
     public T getById(Object id) {
-        return cache.get(id);
+        T entity = cache.get(id);
+        if (entity != null) {
+            entity.onLoad();
+        }
+        return entity;
     }
 
     @Override
@@ -140,8 +249,23 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         return getAll(WhereCondition.empty());
     }
 
+    /**
+     * Fires {@code onLoad()} once per entity actually returned to the caller. Delegates the
+     * matching logic to {@link #getAllRaw}, which {@link #exist(WhereCondition...)} and
+     * {@link #page} also call directly -- {@code exist} because a boolean check should not fire
+     * a load hook, and {@code page} because firing on every matched row (rather than only the
+     * page's slice) would fire {@code onLoad()} for entities the caller never actually receives.
+     */
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
+        List<T> results = getAllRaw(whereConditions);
+        for (T entity : results) {
+            entity.onLoad();
+        }
+        return results;
+    }
+
+    private List<T> getAllRaw(WhereCondition... whereConditions) {
         // 空条件表示「不施加过滤」，先摘出去，免得它出现在第二个位置时中途返回全量。
         List<WhereCondition> effective = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
@@ -215,12 +339,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     break;
             }
         }
+        for (T entity : res) {
+            entity.onLoad();
+        }
         return res;
     }
 
     @Override
     public List<T> page(int page, int size, WhereCondition... whereConditions) {
-        List<T> all = new ArrayList<>(getAll(whereConditions));
+        // getAllRaw, not getAll: firing onLoad() on every matched row here (rather than only
+        // the slice actually returned below) would fire the hook for entities outside the
+        // requested page -- mirrors AbstractRelationalDataOperator's LIMIT/OFFSET behavior,
+        // which only ever materializes the page it returns.
+        List<T> all = new ArrayList<>(getAllRaw(whereConditions));
         int start = (page - 1) * size;
         int end = page * size;
         if (start > all.size()) {
@@ -229,11 +360,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (end > all.size()) {
             end = all.size();
         }
-        return all.subList(start, end);
+        List<T> slice = all.subList(start, end);
+        for (T entity : slice) {
+            entity.onLoad();
+        }
+        return slice;
     }
 
     @Override
     public synchronized void insert(T obj) {
+        beforeMutate();
         // 关系型后端在 id 为空时自动补一个 UUID（AbstractRelationalDataOperator.insert），
         // 所以模块从来不自己设 id —— 全部 Modules 加起来的 setId 调用是 0 次。
         // JSON 侧过去不补，null 直接进 ConcurrentHashMap 当 key，于是同一份模块代码
@@ -242,13 +378,45 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (obj.getId() == null) {
             obj.setId(UUID.randomUUID().toString());
         }
+        // Fires before the cache is touched, mirroring AbstractRelationalDataOperator.insert:
+        // whatever onCreate() writes (e.g. AuditableDataEntity's createdAt/createdBy) is exactly
+        // what ends up cached (and, on flush(), persisted) -- obj is the same instance stored
+        // below, not a copy.
+        obj.onCreate();
         cache.putIfAbsent(obj.getId(), obj);
     }
 
+    /**
+     * Deletes by predicate, without loading matched entries into entities first. Consequently
+     * this overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to
+     * fire it on without fabricating one, and this class does not fabricate entities to satisfy
+     * a hook. {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()}
+     * on it (02-08-PLAN.md's delete-hook-path split, mirrored from
+     * {@code AbstractRelationalDataOperator}).
+     * <p>
+     * A {@code null} or zero-length {@code whereConditions} is refused with a {@link
+     * DataAccessException}, matching {@code AbstractRelationalDataOperator.del()}'s guard and the
+     * contract {@link com.ultikits.ultitools.interfaces.DataOperator#del}'s interface javadoc
+     * promises (CR-02, 02-13). The refusal runs before {@link #beforeMutate()}, so a refused call
+     * does not capture a transaction snapshot as a side effect.
+     */
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
-        // 这里刻意不照搬 getAll 对空条件的处理：在查询侧「空条件 = 不过滤 = 返回全量」是合理的，
-        // 搬到删除侧就成了「删光全表」。空条件目前会在下面取 getValue() 时抛 NPE，难看但失败方向安全。
+        // Deliberately does NOT mirror getAll's empty-condition handling: on the query side,
+        // "empty conditions = no filter = return everything" is a reasonable convention; carried
+        // over to the delete side it becomes "delete the entire table", which is precisely the
+        // silent-full-wipe defect class this milestone exists to remove -- refuse both shapes
+        // before beforeMutate() runs (a zero-length array previously made the loop body below
+        // never run, so the call returned normally having deleted nothing; a null array threw a
+        // raw NullPointerException from the enhanced-for loop, not the DataAccessException the
+        // interface promises).
+        if (whereConditions == null || whereConditions.length == 0) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to delete every entry of JSON store '" + type.getSimpleName() + "' with no "
+                            + "WhereCondition. Pass an explicit condition, or use a dedicated full-table "
+                            + "operation if one genuinely exists.");
+        }
+        beforeMutate();
         Collection<Map.Entry<Object, T>> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
@@ -282,13 +450,26 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         }
     }
 
+    /**
+     * Deletes by id, fetching the entity first so {@code onDelete()} can fire on it -- unlike
+     * {@link #del(WhereCondition...)}, which deletes by predicate without materializing entries
+     * and therefore does not fire the hook. If no entry matches {@code id}, nothing fires. Reads
+     * the cache directly (not {@link #getById}) so this does not also fire {@code onLoad()} --
+     * deleting is not loading.
+     */
     @Override
     public synchronized void delById(Object id) {
+        beforeMutate();
+        T entity = cache.get(id);
+        if (entity != null) {
+            entity.onDelete();
+        }
         cache.remove(id);
     }
 
     @Override
     public synchronized void update(String column, Object value, Object id) {
+        beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             throw new RuntimeException("Query value is not serializable");
         }
@@ -303,12 +484,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void update(T obj) {
+        beforeMutate();
         Object id = obj.getId();
         T old = cache.get(id);
         if (old == null) {
             old = cache.get(id.toString());
         }
         BeanCopyUtil.copyProperties(obj, old, "id");
+        // Fires on old (the instance actually cached below), after the incoming obj's fields have
+        // been copied onto it -- callers may pass either the same cached instance (the common
+        // get-mutate-update pattern) or a fresh detached instance with the same id; either way,
+        // whatever onUpdate() writes on the entity that ends up cached is what persists. Mirrors
+        // AbstractRelationalDataOperator.update(T)'s "fires before the row is written" ordering.
+        old.onUpdate();
         cache.put(old.getId(), old);
     }
 
@@ -358,16 +546,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
         // Deep copy: serialize/deserialize to break references
         // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
-        Map<Object, T> snapshot = new HashMap<>();
-        for (Map.Entry<Object, T> entry : cache.entrySet()) {
-            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
-        }
+        Map<Object, T> snapshot = snapshotCache();
         try {
             return action.call();
         } catch (Exception e) {
             // Rollback: restore cache from deep copy
-            cache.clear();
-            cache.putAll(snapshot);
+            restoreCache(snapshot);
             throw e;
         }
     }

@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.aop;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -12,7 +14,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
+import javax.sql.DataSource;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,6 +34,9 @@ import com.ultikits.ultitools.annotations.Isolation;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 /**
  * Unit tests for TransactionInterceptor.
@@ -90,11 +102,6 @@ class TransactionInterceptorTest {
         public String never() {
             return "never";
         }
-
-        @Transactional(propagation = Propagation.NESTED)
-        public String nested() {
-            return "nested";
-        }
     }
 
     public static class TransactionSettingsService {
@@ -149,6 +156,284 @@ class TransactionInterceptorTest {
 
         public String method2() {
             return "method2";
+        }
+    }
+
+    /**
+     * Fixture for {@link SelfInvocationAndExternalCallTests}. Un-annotated {@code outerCallsInner()}
+     * self-invokes annotated {@code inner()}, mirroring {@link AopSelfInvocationFixture}'s shape:
+     * the caller method is never overridden by the proxy, so its call to {@code this.inner()} is a
+     * plain virtual dispatch that must still resolve to the proxy's override. Declared at the
+     * top level (not inside the {@code @Nested} class) because JUnit 5 {@code @Nested} classes are
+     * non-static inner classes, and a {@code static} member class cannot be declared inside one on
+     * this project's Java 8 target.
+     */
+    public static class SelfInvocationBean {
+        private final TransactionManager txManager;
+
+        public SelfInvocationBean(TransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        public void outerCallsInner() {
+            inner();
+        }
+
+        @Transactional
+        public void inner() {
+            write(1);
+            throw new RuntimeException("boom - self-invocation");
+        }
+
+        @Transactional
+        public void external() {
+            write(2);
+            throw new RuntimeException("boom - external call");
+        }
+
+        /** Negative control: not @Transactional, so its write must survive the throw. */
+        public void plainWriteThenThrow() {
+            write(3);
+            throw new RuntimeException("boom - not transactional");
+        }
+
+        private void write(int id) {
+            try (Statement st = txManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * Marker exception standing in for {@code Transactional.java}'s own
+     * {@code rollbackFor = {BusinessException.class}} javadoc example (D-06).
+     */
+    public static class BusinessException extends Exception {
+        public BusinessException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Fixture for {@link RollbackRuleCombinationTests} (D-06/D-07): additive {@code rollbackFor}
+     * plus the shallowest-inheritance-depth tiebreak against {@code noRollbackFor}, each case
+     * proven through both an external call and a self-invocation call (WIRE-13). Declared at the
+     * top level for the same Java 8 / JUnit 5 {@code @Nested} reason documented on
+     * {@link SelfInvocationBean}.
+     */
+    public static class RollbackRuleBean {
+        private final TransactionManager txManager;
+
+        public RollbackRuleBean(TransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        // --- D-06: an unmatched rollbackFor no longer commits; it falls through to the default. ---
+
+        @Transactional(rollbackFor = BusinessException.class)
+        public void unmatchedRollbackForExternal() {
+            write(101);
+            throw new NullPointerException("boom - unmatched rollbackFor, external");
+        }
+
+        public void outerCallsUnmatchedRollbackFor() {
+            unmatchedRollbackForSelf();
+        }
+
+        @Transactional(rollbackFor = BusinessException.class)
+        public void unmatchedRollbackForSelf() {
+            write(102);
+            throw new NullPointerException("boom - unmatched rollbackFor, self-invocation");
+        }
+
+        // --- D-07: a narrower rollbackFor rule wins over a broader noRollbackFor rule. ---
+
+        @Transactional(noRollbackFor = Exception.class, rollbackFor = IllegalStateException.class)
+        public void narrowerRollbackForWinsExternal() {
+            write(103);
+            throw new IllegalStateException("boom - narrower rollbackFor wins, external");
+        }
+
+        public void outerCallsNarrowerRollbackForWins() {
+            narrowerRollbackForWinsSelf();
+        }
+
+        @Transactional(noRollbackFor = Exception.class, rollbackFor = IllegalStateException.class)
+        public void narrowerRollbackForWinsSelf() {
+            write(104);
+            throw new IllegalStateException("boom - narrower rollbackFor wins, self-invocation");
+        }
+
+        // --- D-07 mirror: a narrower noRollbackFor rule wins over a broader rollbackFor rule. ---
+
+        @Transactional(rollbackFor = Exception.class, noRollbackFor = IllegalStateException.class)
+        public void narrowerNoRollbackForWinsExternal() {
+            write(109);
+            throw new IllegalStateException("boom - narrower noRollbackFor wins, external");
+        }
+
+        public void outerCallsNarrowerNoRollbackForWins() {
+            narrowerNoRollbackForWinsSelf();
+        }
+
+        @Transactional(rollbackFor = Exception.class, noRollbackFor = IllegalStateException.class)
+        public void narrowerNoRollbackForWinsSelf() {
+            write(110);
+            throw new IllegalStateException("boom - narrower noRollbackFor wins, self-invocation");
+        }
+
+        // --- Sole noRollbackFor rule (no rollbackFor configured) still commits, unaffected. ---
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void soleNoRollbackForCommitsExternal() {
+            write(105);
+            throw new IllegalStateException("boom - sole noRollbackFor commits, external");
+        }
+
+        public void outerCallsSoleNoRollbackForCommits() {
+            soleNoRollbackForCommitsSelf();
+        }
+
+        @Transactional(noRollbackFor = IllegalStateException.class)
+        public void soleNoRollbackForCommitsSelf() {
+            write(106);
+            throw new IllegalStateException("boom - sole noRollbackFor commits, self-invocation");
+        }
+
+        // --- D-07: an exact-depth tie (same class in both arrays) favors rollback. ---
+
+        @Transactional(rollbackFor = IllegalStateException.class, noRollbackFor = IllegalStateException.class)
+        public void exactTieRollsBackExternal() {
+            write(107);
+            throw new IllegalStateException("boom - exact-depth tie rolls back, external");
+        }
+
+        public void outerCallsExactTieRollsBack() {
+            exactTieRollsBackSelf();
+        }
+
+        @Transactional(rollbackFor = IllegalStateException.class, noRollbackFor = IllegalStateException.class)
+        public void exactTieRollsBackSelf() {
+            write(108);
+            throw new IllegalStateException("boom - exact-depth tie rolls back, self-invocation");
+        }
+
+        private void write(int id) {
+            try (Statement st = txManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * Fixture for {@link PropagationSuspendResumeTests} (D-09): real suspend/resume around
+     * {@code REQUIRES_NEW} and {@code NOT_SUPPORTED}, each proven through both an external call
+     * and a self-invocation call. Declared at the top level for the same Java 8 / JUnit 5
+     * {@code @Nested} reason documented on {@link SelfInvocationBean}. Exposes the raw
+     * {@link DataSourceTransactionManager} (rather than the {@link TransactionManager} interface,
+     * like the other fixtures in this file) because the tests need {@link
+     * DataSourceTransactionManager#getConnection()} and {@link
+     * DataSourceTransactionManager#getTransactionDepth()} directly.
+     */
+    public static class PropagationBean {
+        private final DataSourceTransactionManager txManager;
+
+        volatile Connection capturedOuterConnectionBeforeInner;
+        volatile Connection capturedOuterConnectionAfterInner;
+
+        public PropagationBean(DataSourceTransactionManager txManager) {
+            this.txManager = txManager;
+        }
+
+        /**
+         * Outer REQUIRED transaction that self-invokes a REQUIRES_NEW method whose body throws.
+         * The inner failure must not strand the suspended outer frame, nor mark it rollback-only -
+         * the outer keeps writing and commits normally afterwards.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesRequiresNewThatFails() {
+            capturedOuterConnectionBeforeInner = txManager.getConnection();
+            write(1);
+            try {
+                innerRequiresNewFailsSelf();
+            } catch (RuntimeException ignored) {
+                // The inner REQUIRES_NEW transaction's own failure and rollback must not
+                // propagate into the outer transaction's state.
+            }
+            capturedOuterConnectionAfterInner = txManager.getConnection();
+            write(2);
+        }
+
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void innerRequiresNewFailsSelf() {
+            write(99);
+            throw new RuntimeException("boom - inner REQUIRES_NEW, self-invocation");
+        }
+
+        /**
+         * Outer REQUIRED transaction that self-invokes a REQUIRES_NEW method that succeeds -
+         * the self-invocation counterpart of {@link #requiresNewExternalSucceeds()}, pairing with
+         * it so connection-identity preservation is proven both ways even on the non-throwing path.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesRequiresNewThatSucceeds() {
+            capturedOuterConnectionBeforeInner = txManager.getConnection();
+            write(5);
+            innerRequiresNewSucceedsSelf();
+            capturedOuterConnectionAfterInner = txManager.getConnection();
+            write(6);
+        }
+
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void innerRequiresNewSucceedsSelf() {
+            write(98);
+        }
+
+        /** Externally-called REQUIRES_NEW method that writes and returns normally. */
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void requiresNewExternalSucceeds() {
+            write(100);
+        }
+
+        /** Externally-called REQUIRES_NEW method whose body throws. */
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void requiresNewExternalFails() {
+            write(101);
+            throw new RuntimeException("boom - external REQUIRES_NEW");
+        }
+
+        /**
+         * Outer REQUIRED transaction that self-invokes a NOT_SUPPORTED write, then itself throws
+         * so the outer rolls back. The NOT_SUPPORTED write must survive the outer's rollback.
+         */
+        @Transactional
+        public void outerRequiredThenSelfInvokesNotSupportedThenFails() {
+            write(4);
+            innerNotSupportedWriteSelf();
+            throw new RuntimeException("boom - outer rolls back after NOT_SUPPORTED write, self-invocation");
+        }
+
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        public void innerNotSupportedWriteSelf() {
+            write(102);
+        }
+
+        /** Externally-called NOT_SUPPORTED write. */
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        public void notSupportedExternalWrite() {
+            write(103);
+        }
+
+        private void write(int id) {
+            try (Statement st = txManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (" + id + ")");
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
@@ -234,7 +519,7 @@ class TransactionInterceptorTest {
     class RequiresNewPropagationTests {
 
         @Test
-        @DisplayName("Should always create new transaction")
+        @DisplayName("Should always create new transaction, suspending and resuming around it (D-09)")
         void shouldAlwaysCreateNewTransaction() throws Throwable {
             Method method = PropagationService.class.getMethod("requiresNew");
             Object target = new PropagationService();
@@ -245,24 +530,49 @@ class TransactionInterceptorTest {
             Object result = interceptor.invoke(mockInvocation);
 
             assertEquals("requires_new", result);
+            verify(transactionManager).suspend();
             verify(transactionManager).begin();
             verify(transactionManager).commit();
+            verify(transactionManager).resume(null);
         }
 
         @Test
-        @DisplayName("Should create new transaction even when one exists")
+        @DisplayName("Should suspend the existing transaction, create a genuinely new one, and resume "
+                + "the suspended handle (D-09)")
         void shouldCreateNewTransactionEvenWhenOneExists() throws Throwable {
             Method method = PropagationService.class.getMethod("requiresNew");
             Object target = new PropagationService();
+            Object suspendedHandle = new Object();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenReturn("requires_new");
             when(transactionManager.hasActiveTransaction()).thenReturn(true);
+            when(transactionManager.suspend()).thenReturn(suspendedHandle);
 
-            Object result = interceptor.invoke(mockInvocation);
+            interceptor.invoke(mockInvocation);
 
+            verify(transactionManager).suspend();
             verify(transactionManager).begin();
             verify(transactionManager).commit();
+            verify(transactionManager).resume(suspendedHandle);
+        }
+
+        @Test
+        @DisplayName("D-09: an inner REQUIRES_NEW failure still resumes the suspended handle, via a "
+                + "finally, so no frame is stranded")
+        void shouldResumeSuspendedTransactionWhenInnerThrows() throws Throwable {
+            Method method = PropagationService.class.getMethod("requiresNew");
+            Object target = new PropagationService();
+            Object suspendedHandle = new Object();
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenThrow(new RuntimeException("inner boom"));
+            when(transactionManager.suspend()).thenReturn(suspendedHandle);
+
+            assertThrows(RuntimeException.class, () -> interceptor.invoke(mockInvocation));
+
+            verify(transactionManager).rollback();
+            verify(transactionManager).resume(suspendedHandle);
         }
     }
 
@@ -342,19 +652,40 @@ class TransactionInterceptorTest {
     class NotSupportedPropagationTests {
 
         @Test
-        @DisplayName("Should proceed without transaction")
+        @DisplayName("Should proceed without transaction, suspending and resuming around it (D-09)")
         void shouldProceedWithoutTransaction() throws Throwable {
             Method method = PropagationService.class.getMethod("notSupported");
             Object target = new PropagationService();
 
             when(mockInvocation.getMethod()).thenReturn(method);
             when(mockInvocation.proceed()).thenReturn("not_supported");
-            when(transactionManager.hasActiveTransaction()).thenReturn(false);
 
             Object result = interceptor.invoke(mockInvocation);
 
             assertEquals("not_supported", result);
             verify(transactionManager, never()).begin();
+            verify(transactionManager).suspend();
+            verify(transactionManager).resume(null);
+        }
+
+        @Test
+        @DisplayName("Should suspend an existing transaction and resume the suspended handle "
+                + "afterwards (D-09)")
+        void shouldSuspendAndResumeExistingTransaction() throws Throwable {
+            Method method = PropagationService.class.getMethod("notSupported");
+            Object target = new PropagationService();
+            Object suspendedHandle = new Object();
+
+            when(mockInvocation.getMethod()).thenReturn(method);
+            when(mockInvocation.proceed()).thenReturn("not_supported");
+            when(transactionManager.hasActiveTransaction()).thenReturn(true);
+            when(transactionManager.suspend()).thenReturn(suspendedHandle);
+
+            interceptor.invoke(mockInvocation);
+
+            verify(transactionManager, never()).begin();
+            verify(transactionManager).suspend();
+            verify(transactionManager).resume(suspendedHandle);
         }
     }
 
@@ -393,40 +724,17 @@ class TransactionInterceptorTest {
     }
 
     @Nested
-    @DisplayName("NESTED Propagation Tests")
-    class NestedPropagationTests {
+    @DisplayName("Propagation enum tests (D-09)")
+    class PropagationEnumTests {
 
         @Test
-        @DisplayName("Should start new transaction when none exists")
-        void shouldStartNewTransactionWhenNoneExists() throws Throwable {
-            Method method = PropagationService.class.getMethod("nested");
-            Object target = new PropagationService();
-
-            when(mockInvocation.getMethod()).thenReturn(method);
-            when(mockInvocation.proceed()).thenReturn("nested");
-            when(transactionManager.hasActiveTransaction()).thenReturn(false);
-
-            Object result = interceptor.invoke(mockInvocation);
-
-            assertEquals("nested", result);
-            verify(transactionManager).begin();
-            verify(transactionManager).commit();
-        }
-
-        @Test
-        @DisplayName("Should join existing transaction")
-        void shouldJoinExistingTransaction() throws Throwable {
-            Method method = PropagationService.class.getMethod("nested");
-            Object target = new PropagationService();
-
-            when(mockInvocation.getMethod()).thenReturn(method);
-            when(mockInvocation.proceed()).thenReturn("nested");
-            when(transactionManager.hasActiveTransaction()).thenReturn(true);
-
-            Object result = interceptor.invoke(mockInvocation);
-
-            assertEquals("nested", result);
-            verify(transactionManager, never()).begin();
+        @DisplayName("Propagation has exactly six constants, matching Jakarta Transactions 2.0's "
+                + "TxType - NESTED is removed")
+        void hasExactlySixConstants() {
+            assertThat(Propagation.values()).hasSize(6);
+            assertThat(Propagation.values()).containsExactlyInAnyOrder(
+                    Propagation.REQUIRED, Propagation.REQUIRES_NEW, Propagation.SUPPORTS,
+                    Propagation.NOT_SUPPORTED, Propagation.MANDATORY, Propagation.NEVER);
         }
     }
 
@@ -579,8 +887,9 @@ class TransactionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Should commit for non-matching rollbackFor exception")
-        void shouldCommitForNonMatchingRollbackForException() throws Throwable {
+        @DisplayName("D-06: an unmatched rollbackFor now falls through to the RuntimeException/Error "
+                + "default and rolls back, instead of committing")
+        void shouldRollbackForNonMatchingRollbackForExceptionViaDefaultFallthrough() throws Throwable {
             Method method = RollbackService.class.getMethod("rollbackFor");
             Object target = new RollbackService();
 
@@ -590,7 +899,8 @@ class TransactionInterceptorTest {
 
             assertThrows(NullPointerException.class, () -> interceptor.invoke(mockInvocation));
 
-            verify(transactionManager).commit();
+            verify(transactionManager).rollback();
+            verify(transactionManager, never()).commit();
         }
 
         @Test
@@ -718,6 +1028,464 @@ class TransactionInterceptorTest {
 
             assertSame(original, thrown);
             verify(transactionManager).rollback();
+        }
+    }
+
+    /**
+     * WIRE-15: the same rollback must be observed whether a {@code @Transactional} method is
+     * reached by an external caller or by self-invocation from another method on the same bean.
+     * Self-invocation <b>is</b> intercepted in this codebase - the ByteBuddy subclass proxy is
+     * the bean, not a delegate wrapper - re-verified in Phase 1 against the four pre-existing
+     * {@code shouldInterceptSelfInvocation} tests ({@link AopActivationTest},
+     * {@link ProxyFactoryTest}, {@link AopProxyResolverTest}, {@code SimpleContainerAopTest}).
+     * <p>
+     * Unlike the rest of this file, these cases build a real {@link AopProxyResolver}-generated
+     * proxy over a real {@link DataSourceTransactionManager} bound to an in-memory H2
+     * {@link DataSource} - a mocked {@link TransactionManager} cannot distinguish self-invocation
+     * from an external call (the interceptor's own {@code invoke()} body is identical either way;
+     * only the proxy's dispatch differs), so only a real proxy + real JDBC connection can pin this.
+     */
+    @Nested
+    @DisplayName("外部调用与自调用的回滚一致性（WIRE-15）")
+    class SelfInvocationAndExternalCallTests {
+
+        private DataSource h2DataSource;
+        private DataSourceTransactionManager realManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:txinterceptorselfinvoke" + System.nanoTime()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            // Deliberately no setPassword(): see TransactionalRollbackEndToEndTest's identical
+            // comment - the in-memory DB has no credential to hardcode.
+            h2DataSource = new HikariDataSource(config);
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE tx_test (id INT PRIMARY KEY)");
+            }
+
+            realManager = new DataSourceTransactionManager(h2DataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, realInterceptor, 100));
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (h2DataSource instanceof HikariDataSource) {
+                ((HikariDataSource) h2DataSource).close();
+            }
+        }
+
+        private int countRows() throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+
+        private SelfInvocationBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(SelfInvocationBean.class);
+            return (SelfInvocationBean) proxyClass
+                    .getDeclaredConstructor(TransactionManager.class)
+                    .newInstance(realManager);
+        }
+
+        @Test
+        @DisplayName("Should intercept self-invocation and roll back the same as an external call")
+        void shouldInterceptSelfInvocation() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::outerCallsInner);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("Should roll back identically when @Transactional is reached by an external call")
+        void shouldRollBackOnExternalCall() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::external);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("Negative control: a non-@Transactional write survives the throw, proving the "
+                + "rollback above came from the interceptor, not an ambient rollback")
+        void shouldCommitNonTransactionalWriteDespiteThrow() throws Exception {
+            SelfInvocationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class, bean::plainWriteThenThrow);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * D-06/D-07: additive {@code rollbackFor} plus the shallowest-inheritance-depth tiebreak
+     * against {@code noRollbackFor}, each case proven through both an external call and a
+     * self-invocation call (WIRE-13). Same real-proxy-plus-real-JDBC rationale as
+     * {@link SelfInvocationAndExternalCallTests} - a mocked {@link TransactionManager} cannot
+     * distinguish self-invocation from an external call.
+     */
+    @Nested
+    @DisplayName("D-06/D-07: additive rollbackFor with shallowest-depth tiebreak（WIRE-13）")
+    class RollbackRuleCombinationTests {
+
+        private DataSource h2DataSource;
+        private DataSourceTransactionManager realManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:txinterceptorrollbackrule" + System.nanoTime()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            // Deliberately no setPassword(): see TransactionalRollbackEndToEndTest's identical
+            // comment - the in-memory DB has no credential to hardcode.
+            h2DataSource = new HikariDataSource(config);
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE tx_test (id INT PRIMARY KEY)");
+            }
+
+            realManager = new DataSourceTransactionManager(h2DataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, realInterceptor, 100));
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (h2DataSource instanceof HikariDataSource) {
+                ((HikariDataSource) h2DataSource).close();
+            }
+        }
+
+        private int countRows() throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+
+        private RollbackRuleBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(RollbackRuleBean.class);
+            return (RollbackRuleBean) proxyClass
+                    .getDeclaredConstructor(TransactionManager.class)
+                    .newInstance(realManager);
+        }
+
+        @Test
+        @DisplayName("D-06: unmatched rollbackFor rolls back on the RuntimeException default (external)")
+        void unmatchedRollbackForRollsBackExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(NullPointerException.class, bean::unmatchedRollbackForExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-06: unmatched rollbackFor rolls back on the RuntimeException default (self-invocation)")
+        void unmatchedRollbackForRollsBackSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(NullPointerException.class, bean::outerCallsUnmatchedRollbackFor);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: a narrower rollbackFor wins over a broader noRollbackFor (external)")
+        void narrowerRollbackForWinsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::narrowerRollbackForWinsExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: a narrower rollbackFor wins over a broader noRollbackFor (self-invocation)")
+        void narrowerRollbackForWinsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsNarrowerRollbackForWins);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07 mirror: a narrower noRollbackFor wins over a broader rollbackFor (external)")
+        void narrowerNoRollbackForWinsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::narrowerNoRollbackForWinsExternal);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("D-07 mirror: a narrower noRollbackFor wins over a broader rollbackFor (self-invocation)")
+        void narrowerNoRollbackForWinsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsNarrowerNoRollbackForWins);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("A sole noRollbackFor rule still commits, unaffected by D-06 (external)")
+        void soleNoRollbackForStillCommitsExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::soleNoRollbackForCommitsExternal);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("A sole noRollbackFor rule still commits, unaffected by D-06 (self-invocation)")
+        void soleNoRollbackForStillCommitsSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsSoleNoRollbackForCommits);
+
+            assertThat(countRows()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("D-07: an exact-depth tie between rollbackFor and noRollbackFor favors rollback (external)")
+        void exactDepthTieFavorsRollbackExternal() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::exactTieRollsBackExternal);
+
+            assertThat(countRows()).isZero();
+        }
+
+        @Test
+        @DisplayName("D-07: an exact-depth tie between rollbackFor and noRollbackFor favors rollback "
+                + "(self-invocation)")
+        void exactDepthTieFavorsRollbackSelfInvocation() throws Exception {
+            RollbackRuleBean bean = newProxiedBean();
+
+            assertThrows(IllegalStateException.class, bean::outerCallsExactTieRollsBack);
+
+            assertThat(countRows()).isZero();
+        }
+    }
+
+    /**
+     * D-09: real suspend/resume around {@code REQUIRES_NEW} and {@code NOT_SUPPORTED}, each proven
+     * through both an external call and a self-invocation call. "External call" here means the
+     * call site is outside {@link PropagationBean} entirely - the test itself, standing in for a
+     * caller on a thread that already has a transaction active from elsewhere - dispatched
+     * directly onto the proxy, exactly the same distinction {@link SelfInvocationAndExternalCallTests}
+     * draws between {@code external()} and {@code outerCallsInner()}.
+     */
+    @Nested
+    @DisplayName("D-09: real suspend/resume for REQUIRES_NEW and NOT_SUPPORTED")
+    class PropagationSuspendResumeTests {
+
+        private DataSource h2DataSource;
+        private DataSourceTransactionManager realManager;
+        private AopProxyResolver resolver;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:txinterceptorpropagation" + System.nanoTime()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            // Deliberately no setPassword(): see TransactionalRollbackEndToEndTest's identical
+            // comment - the in-memory DB has no credential to hardcode.
+            h2DataSource = new HikariDataSource(config);
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE tx_test (id INT PRIMARY KEY)");
+            }
+
+            realManager = new DataSourceTransactionManager(h2DataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+            resolver = new AopProxyResolver();
+            resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, realInterceptor, 100));
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (h2DataSource instanceof HikariDataSource) {
+                ((HikariDataSource) h2DataSource).close();
+            }
+        }
+
+        private int countRows() throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+
+        private boolean rowExists(int id) throws SQLException {
+            try (Connection conn = h2DataSource.getConnection();
+                    Statement st = conn.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM tx_test WHERE id = " + id)) {
+                rs.next();
+                return rs.getInt(1) > 0;
+            }
+        }
+
+        private PropagationBean newProxiedBean() throws ReflectiveOperationException {
+            Class<?> proxyClass = resolver.resolve(PropagationBean.class);
+            return (PropagationBean) proxyClass
+                    .getDeclaredConstructor(DataSourceTransactionManager.class)
+                    .newInstance(realManager);
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (self-invocation): suspends the outer transaction, restores the "
+                + "same Connection afterwards, and an inner failure does not mark the outer "
+                + "rollback-only")
+        void requiresNewSelfInvocationSuspendsAndRestoresConnectionIdentity() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            bean.outerRequiredThenSelfInvokesRequiresNewThatFails();
+
+            assertThat(bean.capturedOuterConnectionAfterInner)
+                    .isSameAs(bean.capturedOuterConnectionBeforeInner);
+            // Outer's own writes (1, 2) committed; inner's write (99) rolled back independently.
+            assertThat(countRows()).isEqualTo(2);
+            assertThat(rowExists(1)).isTrue();
+            assertThat(rowExists(2)).isTrue();
+            assertThat(rowExists(99)).isFalse();
+
+            // No suspended frame left behind: a fresh begin() on this thread reports depth 1.
+            realManager.begin();
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (self-invocation): a successful inner transaction still "
+                + "preserves outer Connection identity")
+        void requiresNewSelfInvocationSuccessPreservesConnectionIdentity() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            bean.outerRequiredThenSelfInvokesRequiresNewThatSucceeds();
+
+            assertThat(bean.capturedOuterConnectionAfterInner)
+                    .isSameAs(bean.capturedOuterConnectionBeforeInner);
+            // Outer's writes (5, 6) and the inner's own write (98) all committed independently.
+            assertThat(countRows()).isEqualTo(3);
+            assertThat(rowExists(5)).isTrue();
+            assertThat(rowExists(6)).isTrue();
+            assertThat(rowExists(98)).isTrue();
+
+            realManager.begin();
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (external call): suspends and restores the outer transaction, "
+                + "preserving Connection identity")
+        void requiresNewExternalCallSuspendsAndRestoresConnectionIdentity() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            realManager.begin(); // simulates a transaction already active from an external caller
+            Connection before = realManager.getConnection();
+
+            bean.requiresNewExternalSucceeds(); // external call: outside PropagationBean entirely
+
+            Connection after = realManager.getConnection();
+            assertThat(after).isSameAs(before);
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+
+            realManager.commit();
+            // Only the REQUIRES_NEW transaction's own write (100), already committed independently.
+            assertThat(countRows()).isEqualTo(1);
+            assertThat(rowExists(100)).isTrue();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW (external call): an inner failure does not strand the suspended "
+                + "outer frame or mark it rollback-only")
+        void requiresNewExternalCallFailureDoesNotStrandOrMarkOuterRollbackOnly() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            realManager.begin();
+            Connection before = realManager.getConnection();
+
+            assertThrows(RuntimeException.class, bean::requiresNewExternalFails);
+
+            Connection after = realManager.getConnection();
+            assertThat(after).isSameAs(before);
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+
+            // The outer must still be committable - the inner failure must not have marked it
+            // rollback-only.
+            assertThatCode(realManager::commit).doesNotThrowAnyException();
+            // Row 101 was written inside the failed inner REQUIRES_NEW and rolled back with it.
+            assertThat(countRows()).isZero();
+
+            realManager.begin();
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
+        }
+
+        @Test
+        @DisplayName("NOT_SUPPORTED (self-invocation): a write made with no active transaction "
+                + "survives the outer transaction's rollback")
+        void notSupportedSelfInvocationWriteSurvivesOuterRollback() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            assertThrows(RuntimeException.class,
+                    bean::outerRequiredThenSelfInvokesNotSupportedThenFails);
+
+            // Row 4 (outer's own write) rolled back with the outer transaction; row 102
+            // (NOT_SUPPORTED write) executed with no active transaction and survives.
+            assertThat(countRows()).isEqualTo(1);
+            assertThat(rowExists(102)).isTrue();
+            assertThat(rowExists(4)).isFalse();
+        }
+
+        @Test
+        @DisplayName("NOT_SUPPORTED (external call): a write made with no active transaction "
+                + "survives a separately-active outer transaction's rollback")
+        void notSupportedExternalCallWriteSurvivesOuterRollback() throws Exception {
+            PropagationBean bean = newProxiedBean();
+
+            realManager.begin();
+            try (Statement st = realManager.getConnection().createStatement()) {
+                st.execute("INSERT INTO tx_test (id) VALUES (5)");
+            }
+
+            bean.notSupportedExternalWrite(); // external call: outside PropagationBean entirely
+
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
+
+            assertThat(countRows()).isEqualTo(1);
+            assertThat(rowExists(103)).isTrue();
+            assertThat(rowExists(5)).isFalse();
+
+            realManager.begin();
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+            realManager.rollback();
         }
     }
 }

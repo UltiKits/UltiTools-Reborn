@@ -1,12 +1,16 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Deque;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.sql.DataSource;
 
@@ -20,6 +24,9 @@ import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
+import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
+import com.ultikits.ultitools.interfaces.TransactionManager;
 
 /**
  * DataSourceTransactionManager 测试类
@@ -56,8 +63,9 @@ class DataSourceTransactionManagerTest {
         try {
             Field contextHolderField = DataSourceTransactionManager.class.getDeclaredField("contextHolder");
             contextHolderField.setAccessible(true);
+            // Instance field now (FOUND-04) -- read off transactionManager, not off the class (null).
             @SuppressWarnings("unchecked")
-            ThreadLocal<?> contextHolder = (ThreadLocal<?>) contextHolderField.get(null);
+            ThreadLocal<?> contextHolder = (ThreadLocal<?>) contextHolderField.get(transactionManager);
             contextHolder.remove();
         } catch (Exception ignored) {
         }
@@ -226,18 +234,22 @@ class DataSourceTransactionManagerTest {
         }
 
         @Test
-        @DisplayName("嵌套事务 rollback 应该完全回滚")
-        void shouldFullyRollbackNestedTransactions() throws Exception {
+        @DisplayName("嵌套事务 rollback 只标记 rollback-only 并递减深度，不立即清除（D-08，修正自「完全回滚」旧断言）")
+        void nestedRollbackShouldMarkRollbackOnlyInsteadOfTearingDownImmediately() throws Exception {
+            // D-08 corrects this test's pre-6.3.0 assumption: rollback() used to call cleanup(ctx)
+            // "regardless of depth" (the exact HEAD comment this fix removes), silently discarding
+            // whatever the outer scope(s) still expected to do. A rollback() at depth > 1 now only
+            // marks the context rollback-only and decrements depth -- see RollbackOnlyMarkerTests
+            // below for the full depth-2 RED/GREEN pair and the outer commit()'s throw.
             transactionManager.begin();
             transactionManager.begin();
             transactionManager.begin();
 
-            // 回滚应该完全清除，不管嵌套深度
             transactionManager.rollback();
 
-            verify(mockConnection).rollback();
-            assertThat(transactionManager.hasActiveTransaction()).isFalse();
-            assertThat(transactionManager.getTransactionDepth()).isZero();
+            verify(mockConnection, never()).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
         }
 
         @Test
@@ -407,6 +419,99 @@ class DataSourceTransactionManagerTest {
             // 不应该有异常
             assertThat(true).isTrue();
         }
+
+        // ===== D-10: setTimeout records a real deadline (02-09 Task 2) =====
+
+        @Test
+        @DisplayName("no active transaction: getTimeoutDeadlineNanos() returns null")
+        void deadlineIsNullWithNoActiveTransaction() {
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout(N) with an active transaction records a deadline ~N seconds out")
+        void setTimeoutRecordsDeadlineWhenTransactionActive() throws Exception {
+            transactionManager.begin();
+            long before = System.nanoTime();
+
+            transactionManager.setTimeout(10);
+
+            Long deadline = transactionManager.getTimeoutDeadlineNanos();
+            assertThat(deadline).isNotNull();
+            // Bounds rather than an exact value: real wall-clock time elapses between "before"
+            // and the setTimeout() call itself.
+            assertThat(deadline - before).isBetween(
+                    java.util.concurrent.TimeUnit.SECONDS.toNanos(9),
+                    java.util.concurrent.TimeUnit.SECONDS.toNanos(11));
+        }
+
+        @Test
+        @DisplayName("setTimeout(0) with an active transaction leaves the deadline null")
+        void zeroTimeoutDoesNotRecordDeadlineWhenActive() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.setTimeout(0);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout(negative) with an active transaction leaves the deadline null")
+        void negativeTimeoutDoesNotRecordDeadlineWhenActive() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.setTimeout(-5);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("setTimeout with no active transaction records nothing and does not throw")
+        void setTimeoutWithNoActiveTransactionRecordsNothing() {
+            transactionManager.setTimeout(30);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("commit() clears the deadline along with the rest of the context")
+        void deadlineClearedAfterCommit() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNotNull();
+
+            transactionManager.commit();
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("rollback() clears the deadline along with the rest of the context")
+        void deadlineClearedAfterRollback() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+
+            transactionManager.rollback();
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isNull();
+        }
+
+        @Test
+        @DisplayName("suspend()/resume() carry the deadline with the detached context")
+        void deadlineSurvivesSuspendResume() throws Exception {
+            transactionManager.begin();
+            transactionManager.setTimeout(10);
+            Long deadlineBeforeSuspend = transactionManager.getTimeoutDeadlineNanos();
+
+            Object suspended = transactionManager.suspend();
+            assertThat(transactionManager.getTimeoutDeadlineNanos())
+                    .as("no active transaction while suspended")
+                    .isNull();
+
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.getTimeoutDeadlineNanos()).isEqualTo(deadlineBeforeSuspend);
+        }
     }
 
     @Nested
@@ -489,8 +594,8 @@ class DataSourceTransactionManagerTest {
         @Test
         @DisplayName("没有事务时应该返回 null")
         void shouldReturnNullWhenNoTransaction() {
-            DataSourceTransactionManager.TransactionContext ctx = 
-                DataSourceTransactionManager.getCurrentContext();
+            DataSourceTransactionManager.TransactionContext ctx =
+                transactionManager.getCurrentContext();
             assertThat(ctx).isNull();
         }
 
@@ -498,10 +603,10 @@ class DataSourceTransactionManagerTest {
         @DisplayName("有事务时应该返回上下文")
         void shouldReturnContextWhenTransactionActive() {
             transactionManager.begin();
-            
-            DataSourceTransactionManager.TransactionContext ctx = 
-                DataSourceTransactionManager.getCurrentContext();
-            
+
+            DataSourceTransactionManager.TransactionContext ctx =
+                transactionManager.getCurrentContext();
+
             assertThat(ctx).isNotNull();
             assertThat(ctx.active).isTrue();
             assertThat(ctx.depth).isEqualTo(1);
@@ -523,6 +628,7 @@ class DataSourceTransactionManagerTest {
             assertThat(ctx.depth).isZero();
             assertThat(ctx.originalIsolation).isEqualTo(-1);
             assertThat(ctx.originalAutoCommit).isTrue();
+            assertThat(ctx.rollbackOnly).isFalse();
         }
     }
 
@@ -546,6 +652,375 @@ class DataSourceTransactionManagerTest {
 
             // 主线程的事务应该仍然活动
             assertThat(transactionManager.hasActiveTransaction()).isTrue();
+        }
+    }
+
+    /**
+     * FOUND-04: contextHolder is an instance field, not static, so two
+     * {@code DataSourceTransactionManager} instances - each bound to a different
+     * {@link DataSource} - never observe each other's {@link Connection} or transaction state.
+     * These tests fail against the pre-fix {@code static} field: with a static contextHolder,
+     * manager A and manager B would share the same ThreadLocal slot, so B's {@code begin()}
+     * would silently overwrite A's context on the same thread (Test 1), and on two threads the
+     * two managers would still resolve to independent ThreadLocal entries only by accident of
+     * per-thread storage - Test 1 is the one that actually distinguishes "static" from
+     * "instance", because same-thread reuse of one static field is exactly where the two
+     * shapes diverge.
+     */
+    @Nested
+    @DisplayName("跨 DataSource 隔离测试（FOUND-04）")
+    class CrossDataSourceIsolationTests {
+
+        @Test
+        @DisplayName("同一线程上，两个 manager 各自持有独立的连接，互不可见")
+        void shouldIsolateConnectionsAcrossManagersOnSameThread() throws Exception {
+            DataSource dataSourceA = mock(DataSource.class);
+            DataSource dataSourceB = mock(DataSource.class);
+            Connection connectionA = mock(Connection.class);
+            Connection connectionB = mock(Connection.class);
+            when(dataSourceA.getConnection()).thenReturn(connectionA);
+            when(dataSourceB.getConnection()).thenReturn(connectionB);
+
+            DataSourceTransactionManager managerA = new DataSourceTransactionManager(dataSourceA);
+            DataSourceTransactionManager managerB = new DataSourceTransactionManager(dataSourceB);
+
+            managerA.begin();
+            managerB.begin();
+
+            assertThat(managerA.getConnection()).isSameAs(connectionA);
+            assertThat(managerB.getConnection()).isSameAs(connectionB);
+            assertThat(managerA.getConnection()).isNotSameAs(managerB.getConnection());
+
+            // Rolling back manager A must never touch manager B's connection or transaction state.
+            managerA.rollback();
+
+            assertThat(managerA.hasActiveTransaction()).isFalse();
+            assertThat(managerB.hasActiveTransaction()).isTrue();
+            verify(connectionB, never()).rollback();
+            verify(connectionB, never()).close();
+        }
+
+        @Test
+        @DisplayName("两个线程上，两个 manager 的事务同时打开时互不可见")
+        void shouldIsolateConnectionsAcrossManagersOnDifferentThreads() throws Exception {
+            DataSource dataSourceA = mock(DataSource.class);
+            DataSource dataSourceB = mock(DataSource.class);
+            Connection connectionA = mock(Connection.class);
+            Connection connectionB = mock(Connection.class);
+            when(dataSourceA.getConnection()).thenReturn(connectionA);
+            when(dataSourceB.getConnection()).thenReturn(connectionB);
+
+            DataSourceTransactionManager managerA = new DataSourceTransactionManager(dataSourceA);
+            DataSourceTransactionManager managerB = new DataSourceTransactionManager(dataSourceB);
+
+            CountDownLatch bothBegun = new CountDownLatch(2);
+            CountDownLatch releaseThreadA = new CountDownLatch(1);
+            AtomicReference<Connection> seenByThreadA = new AtomicReference<>();
+            AtomicReference<Connection> seenByThreadB = new AtomicReference<>();
+
+            Thread threadA = new Thread(() -> {
+                managerA.begin();
+                bothBegun.countDown();
+                try {
+                    // Hold A's transaction open until B has begun too, so both are active
+                    // simultaneously before either reads its connection back.
+                    releaseThreadA.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                seenByThreadA.set(managerA.getConnection());
+            });
+            Thread threadB = new Thread(() -> {
+                managerB.begin();
+                bothBegun.countDown();
+                seenByThreadB.set(managerB.getConnection());
+                releaseThreadA.countDown();
+            });
+
+            threadA.start();
+            threadB.start();
+            threadA.join();
+            threadB.join();
+
+            assertThat(bothBegun.getCount()).isZero();
+            assertThat(seenByThreadA.get()).isSameAs(connectionA);
+            assertThat(seenByThreadB.get()).isSameAs(connectionB);
+            assertThat(seenByThreadA.get()).isNotSameAs(seenByThreadB.get());
+        }
+    }
+
+    /**
+     * D-04: {@code TransactionManager} is split additively. A backend that only needs the
+     * lifecycle half (begin/commit/rollback/hasActiveTransaction/setTimeout/getTransactionDepth)
+     * implements {@link TransactionManager} directly and is never forced to answer the three
+     * JDBC-only members - those now live only on {@link JdbcTransactionManager}, with a
+     * {@code default} fallback on the base interface that refuses rather than lies.
+     */
+    @Nested
+    @DisplayName("TransactionManager / JdbcTransactionManager split（D-04）")
+    class JdbcSplitTests {
+
+        /**
+         * Test-only backend supplying only the six lifecycle methods - deliberately does not
+         * implement {@link JdbcTransactionManager}, and does not override any of the three
+         * JDBC-only default methods either.
+         */
+        private final class LifecycleOnlyTransactionManager implements TransactionManager {
+            private boolean active;
+            private int depth;
+
+            @Override
+            public void begin() {
+                active = true;
+                depth++;
+            }
+
+            @Override
+            public void commit() {
+                depth = Math.max(0, depth - 1);
+                active = depth > 0;
+            }
+
+            @Override
+            public void rollback() {
+                depth = 0;
+                active = false;
+            }
+
+            @Override
+            public boolean hasActiveTransaction() {
+                return active;
+            }
+
+            @Override
+            public void setTimeout(int seconds) {
+                // no-op: not exercised by this test
+            }
+
+            @Override
+            public int getTransactionDepth() {
+                return depth;
+            }
+        }
+
+        @Test
+        @DisplayName("A lifecycle-only TransactionManager implementation compiles and instantiates")
+        void lifecycleOnlyImplementationCompilesAndInstantiates() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThat(manager).isNotNull();
+            manager.begin();
+            assertThat(manager.hasActiveTransaction()).isTrue();
+        }
+
+        @Test
+        @DisplayName("getConnection() on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void getConnectionThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(manager::getConnection)
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("setIsolationLevel(int) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void setIsolationLevelThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(() -> manager.setIsolationLevel(Connection.TRANSACTION_SERIALIZABLE))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("setReadOnly(boolean) on a lifecycle-only manager throws UnsupportedOperationException naming JdbcTransactionManager")
+        void setReadOnlyThrowsNamingJdbcTransactionManager() {
+            TransactionManager manager = new LifecycleOnlyTransactionManager();
+
+            assertThatThrownBy(() -> manager.setReadOnly(true))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(JdbcTransactionManager.class.getName());
+        }
+
+        @Test
+        @DisplayName("DataSourceTransactionManager is assignable to both TransactionManager and JdbcTransactionManager")
+        void concreteManagerIsAssignableToBothInterfaces() {
+            assertThat(transactionManager).isInstanceOf(TransactionManager.class);
+            assertThat(transactionManager).isInstanceOf(JdbcTransactionManager.class);
+        }
+    }
+
+    /**
+     * D-08: an inner {@code rollback()} at depth &gt; 1 marks the transaction rollback-only and
+     * decrements depth instead of tearing the whole {@link DataSourceTransactionManager.TransactionContext}
+     * down. The outer {@code commit()} then performs the real rollback, cleans up, and throws
+     * {@link UnexpectedRollbackException} instead of silently returning after a WARNING log line -
+     * observed HEAD behaviour before this fix (pinned by
+     * {@code shouldFullyRollbackNestedTransactions} above, now rewritten to match the corrected
+     * semantics).
+     */
+    @Nested
+    @DisplayName("回滚只读标记 — 外层 commit() 不再静默丢弃工作（D-08）")
+    class RollbackOnlyMarkerTests {
+
+        @Test
+        @DisplayName("深度 2：内层 rollback() 打标记；外层 commit() 执行真正回滚并抛出 UnexpectedRollbackException")
+        void innerRollbackThenOuterCommitThrowsUnexpectedRollback() throws Exception {
+            transactionManager.begin(); // depth 1
+            transactionManager.begin(); // depth 2
+
+            transactionManager.rollback(); // inner rollback at depth 2 -- must only mark, not tear down
+
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+            verify(mockConnection, never()).rollback();
+            verify(mockConnection, never()).close();
+
+            assertThatThrownBy(() -> transactionManager.commit())
+                .isInstanceOf(UnexpectedRollbackException.class)
+                .hasMessageContaining("nested")
+                .satisfies(e -> assertThat(((UnexpectedRollbackException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.TRANSACTION_ROLLBACK_ONLY));
+
+            // Outer commit must have performed the real rollback and cleaned up -- no leaked context.
+            verify(mockConnection).rollback();
+            verify(mockConnection, never()).commit();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("深度 2：内层 commit() 再外层 commit() 正常提交，不抛出任何异常（对照组）")
+        void innerCommitThenOuterCommitCommitsNormally() throws Exception {
+            transactionManager.begin();
+            transactionManager.begin();
+
+            transactionManager.commit(); // inner commit, depth 2 -> 1
+
+            assertThatCode(() -> transactionManager.commit()).doesNotThrowAnyException();
+
+            verify(mockConnection).commit();
+            verify(mockConnection, never()).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("深度 1 的 rollback() 行为不变：真正回滚并清理")
+        void depthOneRollbackUnchanged() throws Exception {
+            transactionManager.begin();
+
+            transactionManager.rollback();
+
+            verify(mockConnection).rollback();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+            assertThat(transactionManager.getTransactionDepth()).isZero();
+        }
+
+        @Test
+        @DisplayName("没有活动事务时 commit()/rollback() 仍然只记 WARNING 并正常返回")
+        void noActiveTransactionStillReturnsQuietly() {
+            assertThatCode(() -> transactionManager.commit()).doesNotThrowAnyException();
+            assertThatCode(() -> transactionManager.rollback()).doesNotThrowAnyException();
+        }
+    }
+
+    /**
+     * D-09: {@code suspend()}/{@code resume(Object)} are the mechanism {@code REQUIRES_NEW} and
+     * {@code NOT_SUPPORTED} need in 02-06 - detach the current context from this thread, let an
+     * independent transaction run in its place, then restore the original at its original depth
+     * with its original {@link Connection}.
+     */
+    @Nested
+    @DisplayName("suspend()/resume() — REQUIRES_NEW/NOT_SUPPORTED 所需的挂起机制（D-09）")
+    class SuspendResumeTests {
+
+        @Test
+        @DisplayName("没有活动事务时 suspend() 返回 null，不抛出异常")
+        void suspendWithNothingActiveReturnsNull() {
+            Object suspended = transactionManager.suspend();
+
+            assertThat(suspended).isNull();
+        }
+
+        @Test
+        @DisplayName("resume(null) 是空操作，不会抛出异常，也不会遗留状态")
+        void resumeWithNullIsNoOp() {
+            assertThatCode(() -> transactionManager.resume(null)).doesNotThrowAnyException();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() 摘除当前上下文，之后 hasActiveTransaction() 为 false")
+        void suspendDetachesCurrentContext() {
+            transactionManager.begin();
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+
+            Object suspended = transactionManager.suspend();
+
+            assertThat(suspended).isNotNull();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("suspend() -> begin() -> commit() -> resume(saved)：原事务在原深度、原 Connection 上恢复")
+        void suspendThenResumeRestoresOriginalContextAtOriginalDepthAndConnection() throws Exception {
+            Connection outerConnection = mock(Connection.class);
+            Connection innerConnection = mock(Connection.class);
+            when(mockDataSource.getConnection()).thenReturn(outerConnection, innerConnection);
+
+            transactionManager.begin(); // outer, depth 1, outerConnection
+            transactionManager.begin(); // outer, depth 2 (still nested on the same context)
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+
+            Object suspended = transactionManager.suspend();
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+
+            transactionManager.begin(); // inner, independent, depth 1, innerConnection
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+            assertThat(transactionManager.getConnection()).isSameAs(innerConnection);
+            transactionManager.commit(); // inner finishes and cleans up completely
+            assertThat(transactionManager.hasActiveTransaction()).isFalse();
+
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.hasActiveTransaction()).isTrue();
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+            assertThat(transactionManager.getConnection()).isSameAs(outerConnection);
+        }
+
+        @Test
+        @DisplayName("getTransactionDepth() 只报告当前上下文的深度，不会跨挂起栈求和")
+        void depthReportsCurrentContextOnlyNotSummedAcrossStack() {
+            transactionManager.begin(); // depth 1
+            transactionManager.begin(); // depth 2
+            Object suspended = transactionManager.suspend();
+
+            transactionManager.begin(); // new, independent, depth 1
+
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(1);
+
+            transactionManager.commit();
+            transactionManager.resume(suspended);
+
+            assertThat(transactionManager.getTransactionDepth()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("挂起后正常 resume：挂起栈的 ThreadLocal 不遗留悬空帧（T-02-DOS-5）")
+        void suspendedStackLeavesNoDanglingFrameAfterResume() throws Exception {
+            transactionManager.begin();
+            Object suspended = transactionManager.suspend();
+            transactionManager.resume(suspended);
+
+            assertThat(suspendedStackValue()).isNull();
+        }
+
+        private Deque<?> suspendedStackValue() throws Exception {
+            Field field = DataSourceTransactionManager.class.getDeclaredField("suspendedStack");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            ThreadLocal<Deque<?>> threadLocal = (ThreadLocal<Deque<?>>) field.get(transactionManager);
+            return threadLocal.get();
         }
     }
 }

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
 
@@ -110,6 +111,46 @@ class MysqlDataOperatorTest {
 
             assertThat(operator.exist(entity)).isTrue();
             assertThat(operator.exist(WhereCondition.builder().column("id").value("test-1").build())).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Comparison 语义测试（GREATER 与 SQLite/JSON 后端一致，WIRE-04）")
+    class ComparisonSemanticsTests {
+
+        @BeforeEach
+        void insertNumericRows() {
+            insertNumeric("cmp-1", 1);
+            insertNumeric("cmp-5", 5);
+            insertNumeric("cmp-9", 9);
+        }
+
+        private void insertNumeric(String id, int age) {
+            TestEntity entity = new TestEntity();
+            entity.setId(id);
+            entity.setName("Entity" + age);
+            entity.setAge(age);
+            operator.insert(entity);
+        }
+
+        @Test
+        @DisplayName("getAll(GREATER) 只返回大于阈值的行，而不是等于阈值")
+        void getAllGreaterShouldReturnOnlyRowsAboveThreshold() {
+            List<TestEntity> result = operator.getAll(
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build());
+
+            assertThat(result).extracting(TestEntity::getAge).containsExactly(9);
+        }
+
+        @Test
+        @DisplayName("exist(GREATER) 与 getAll 的 GREATER 语义一致")
+        void existGreaterShouldMatchGetAllSemantics() {
+            assertThat(operator.exist(
+                    WhereCondition.builder().column("age").value(5).comparison(Comparison.GREATER).build()))
+                    .isTrue();
+            assertThat(operator.exist(
+                    WhereCondition.builder().column("age").value(9).comparison(Comparison.GREATER).build()))
+                    .isFalse();
         }
     }
 

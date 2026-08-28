@@ -2,12 +2,15 @@ package com.ultikits.ultitools.interfaces.impl.data.sqlite;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.Map;
 
 import javax.sql.DataSource;
@@ -20,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
+import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -30,7 +34,11 @@ import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.testutil.PoolStateAssertions;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -54,6 +62,9 @@ class SQLiteDataStoreTest {
     @Mock
     private UltiToolsPlugin mockPlugin;
 
+    @Mock
+    private PluginManager mockPluginManager;
+
     private MockedStatic<UltiTools> ultiToolsStaticMock;
 
     @EqualsAndHashCode(callSuper = true)
@@ -76,23 +87,38 @@ class SQLiteDataStoreTest {
         public void setValue(int value) { this.value = value; }
     }
 
+    @EqualsAndHashCode(callSuper = true)
+    @Table("third_data")
+    public static class ThirdDataEntity extends BaseDataEntity<String> {
+        @Column("label")
+        private String label;
+
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+    }
+
     public static class NoTableAnnotationEntity extends BaseDataEntity<String> {}
+
+    @EqualsAndHashCode(callSuper = true)
+    @Table("unowned_entity")
+    public static class UnownedEntity extends BaseDataEntity<String> {}
 
     @BeforeEach
     void setUp() {
         ultiToolsStaticMock = mockStatic(UltiTools.class);
         ultiToolsStaticMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         when(mockUltiTools.getDataFolder()).thenReturn(tempDir);
-        
-        // 清空静态缓存
-        try {
-            Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-            field.setAccessible(true); // NOPMD
-            @SuppressWarnings("unchecked")
-            Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-            map.clear();
-        } catch (Exception ignored) {
-        }
+        // dataOperatorMap is instance-scoped since Task 2 (SILENT-03) - each test constructs its own
+        // fresh SQLiteDataStore(), so there is no shared static cache left to clear here anymore.
+
+        // 02-12 Task 2: every getOperator(UltiToolsPlugin, Class) call now runs checkOwnership()
+        // first. Default every entity to "owned by whoever mockPlugin currently claims to be" --
+        // an Answer, not a fixed thenReturn, so it stays correct across the different plugin names
+        // individual tests stub onto mockPlugin. Tests exercising a genuine ownership refusal
+        // override this with a more specific, entity-scoped stub (Mockito: the more specific /
+        // later-registered stub wins for a matching call).
+        when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        when(mockPluginManager.findOwningPlugin(any())).thenAnswer(inv -> mockPlugin.getPluginName());
     }
 
     @AfterEach
@@ -120,26 +146,23 @@ class SQLiteDataStoreTest {
         @Test
         @DisplayName("应该成功获取带 @Table 注解的实体的 DataOperator")
         void shouldGetOperatorForAnnotatedEntity() {
-            // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            // Arrange - dataOperatorMap is instance-scoped and keyed by a private composite type
+            // since Task 2 (SILENT-03), so this drives the real getOperator() path with
+            // HikariConfig/HikariDataSource/SQLiteDataOperator construction mocked out (the SQLite
+            // JDBC driver is not on the test classpath - see PoolStateTests for why).
+            when(mockPlugin.getPluginName()).thenReturn("annotated-entity-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator);
-                
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator = store.getOperator(mockPlugin, TestDataEntity.class);
 
                 // Assert
                 assertThat(operator).isNotNull();
-                assertThat(operator).isSameAs(h2Operator);
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
+                assertThat(mockedOperator.constructed()).hasSize(1);
+                assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
             }
         }
 
@@ -159,25 +182,19 @@ class SQLiteDataStoreTest {
         @DisplayName("应该返回缓存的 DataOperator 实例")
         void shouldReturnCachedOperator() {
             // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            when(mockPlugin.getPluginName()).thenReturn("cached-operator-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator);
 
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator1 = store.getOperator(mockPlugin, TestDataEntity.class);
                 DataOperator<TestDataEntity> operator2 = store.getOperator(mockPlugin, TestDataEntity.class);
 
                 // Assert
                 assertThat(operator1).isSameAs(operator2);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+                assertThat(mockedOperator.constructed()).hasSize(1);
             }
         }
 
@@ -185,27 +202,155 @@ class SQLiteDataStoreTest {
         @DisplayName("应该为不同的实体类返回不同的 DataOperator")
         void shouldReturnDifferentOperatorsForDifferentEntities() {
             // Arrange
-            DataSource h2DataSource = createH2DataSource();
+            when(mockPlugin.getPluginName()).thenReturn("different-entities-plugin");
             SQLiteDataStore store = new SQLiteDataStore();
-            
-            try {
-                SQLiteDataOperator<TestDataEntity> h2Operator1 = new SQLiteDataOperator<>(h2DataSource, TestDataEntity.class);
-                SQLiteDataOperator<AnotherDataEntity> h2Operator2 = new SQLiteDataOperator<>(h2DataSource, AnotherDataEntity.class);
-                Field field = SQLiteDataStore.class.getDeclaredField("dataOperatorMap");
-                field.setAccessible(true); // NOPMD
-                @SuppressWarnings("unchecked")
-                Map<Class<?>, DataOperator<?>> map = (Map<Class<?>, DataOperator<?>>) field.get(null);
-                map.put(TestDataEntity.class, h2Operator1);
-                map.put(AnotherDataEntity.class, h2Operator2);
 
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
                 // Act
                 DataOperator<TestDataEntity> operator1 = store.getOperator(mockPlugin, TestDataEntity.class);
                 DataOperator<AnotherDataEntity> operator2 = store.getOperator(mockPlugin, AnotherDataEntity.class);
 
                 // Assert
                 assertThat(operator1).isNotSameAs(operator2);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+                assertThat(mockedOperator.constructed()).hasSize(2);
+                // Both entity classes are backed by the same .db file (same plugin) -> one pool.
+                assertThat(mockedDataSource.constructed()).hasSize(1);
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("连接池状态测试 (Wave 0 gap 1, SILENT-03)")
+    class PoolStateTests {
+
+        /**
+         * Pins the pool-per-file defect described in 02-VALIDATION.md's Wave 0 requirements: at HEAD,
+         * {@code getOperator(UltiToolsPlugin, Class)} caches by entity class only, so each new entity
+         * class for the same plugin (same backing .db file) triggers its own {@code new
+         * HikariConfig()}/{@code new HikariDataSource(config)} pair. Both are intercepted with
+         * {@code mockConstruction} so the SQLite JDBC driver is never touched -
+         * {@code HikariConfig.setDriverClassName("org.sqlite.JDBC")} performs its own
+         * {@code Class.forName} eagerly and throws on the real class, and that driver ships with
+         * Paper, not with this project's test dependencies.
+         * <p>
+         * RED at HEAD (before Task 2's fix): 3 entity classes -&gt; 3 pool constructions. GREEN after
+         * Task 2 re-keys the pool map by backing-file path with {@code computeIfAbsent}.
+         */
+        @Test
+        @DisplayName("同一 .db 文件的多个实体类应该只创建一个连接池")
+        void shouldShareOnePoolAcrossEntitiesInSameFile() {
+            when(mockPlugin.getPluginName()).thenReturn("pool-state-plugin");
+            SQLiteDataStore store = new SQLiteDataStore();
+
+            // SQLiteDataOperator's constructor eagerly runs a CREATE TABLE against the DataSource it
+            // is given; mocking its construction too keeps this test about pool *count*, not about
+            // whether a mocked DataSource can serve a real connection.
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedConstruction = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                store.getOperator(mockPlugin, TestDataEntity.class);
+                store.getOperator(mockPlugin, AnotherDataEntity.class);
+                store.getOperator(mockPlugin, ThirdDataEntity.class);
+
+                assertThat(mockedConstruction.constructed())
+                        .as("expected 1 pool for 3 entity classes backed by the same .db file, found %d",
+                                mockedConstruction.constructed().size())
+                        .hasSize(1);
+            }
+        }
+
+        /**
+         * Pins the empty-body {@code destroyAllOperators()} defect: at HEAD it does nothing, so pools
+         * it is handed stay open. Seeds the pool map reflectively with real, H2-backed pools (not
+         * SQLite - the driver is unavailable in tests) so this observes real
+         * {@link com.zaxxer.hikari.HikariPoolMXBean} state via {@link PoolStateAssertions}, not merely
+         * the absence of a thrown exception.
+         * <p>
+         * RED at HEAD (before Task 2's fix): pools remain open. GREEN after Task 2 makes teardown
+         * actually close what it holds.
+         */
+        @Test
+        @DisplayName("destroyAllOperators 应该关闭它持有的每一个连接池")
+        void destroyAllOperatorsShouldCloseEveryPool() throws Exception {
+            SQLiteDataStore store = new SQLiteDataStore();
+            HikariDataSource poolA = (HikariDataSource) createH2DataSource();
+            HikariDataSource poolB = (HikariDataSource) createH2DataSource();
+
+            Field poolMapField = SQLiteDataStore.class.getDeclaredField("dataSourceMap");
+            poolMapField.setAccessible(true); // NOPMD
+            @SuppressWarnings("unchecked")
+            Map<String, DataSource> poolMap = (Map<String, DataSource>) poolMapField.get(store);
+            poolMap.put("fileA", poolA);
+            poolMap.put("fileB", poolB);
+
+            try {
+                store.destroyAllOperators();
+
+                PoolStateAssertions.assertNoOpenConnections(Arrays.asList(poolA, poolB));
+            } finally {
+                if (!poolA.isClosed()) {
+                    poolA.close();
+                }
+                if (!poolB.isClosed()) {
+                    poolB.close();
+                }
+                poolMap.remove("fileA");
+                poolMap.remove("fileB");
+            }
+        }
+
+        /**
+         * Same defect as {@link #shouldShareOnePoolAcrossEntitiesInSameFile()}, but through a real,
+         * live pool instead of a construction count -- pre-seeds a real H2-backed pool at the exact
+         * canonical path {@code getOperator} will resolve to for this plugin, so {@code poolFor}'s
+         * {@code computeIfAbsent} finds it already cached and never attempts a real
+         * {@code jdbc:sqlite:} connection. This lets {@link SQLiteDataOperator} run its real {@code
+         * CREATE TABLE} against the pool, and lets {@link PoolStateAssertions#assertTotalConnections}
+         * assert against genuine {@link com.zaxxer.hikari.HikariPoolMXBean} state, per this plan's
+         * acceptance criteria.
+         */
+        @Test
+        @DisplayName("同一 .db 文件的多个实体类应该共享同一个连接池的真实连接")
+        void shouldReportRealPoolConnectionsSharedAcrossEntities() throws Exception {
+            when(mockPlugin.getPluginName()).thenReturn("real-pool-plugin");
+            File dataFolder = new File(tempDir, "sqliteDB");
+            dataFolder.mkdirs();
+            String dbPath = new File(dataFolder, "real-pool-plugin.db").getCanonicalPath();
+
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:h2:mem:realpooltest" + System.nanoTime() + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            config.setUsername("sa");
+            config.setMinimumIdle(0);
+            config.setMaximumPoolSize(10);
+            HikariDataSource realPool = new HikariDataSource(config);
+
+            SQLiteDataStore store = new SQLiteDataStore();
+            Field poolMapField = SQLiteDataStore.class.getDeclaredField("dataSourceMap");
+            poolMapField.setAccessible(true); // NOPMD
+            @SuppressWarnings("unchecked")
+            Map<String, DataSource> poolMap = (Map<String, DataSource>) poolMapField.get(store);
+            poolMap.put(dbPath, realPool);
+
+            try {
+                // Each getOperator() call runs a CREATE TABLE that borrows a connection from the pool
+                // and returns it; sequential (non-concurrent) borrow/return cycles against the same
+                // pool settle on one physical connection, so this observes real
+                // HikariPoolMXBean.getTotalConnections() state - not a construction count and not the
+                // absence of a thrown exception.
+                DataOperator<TestDataEntity> op1 = store.getOperator(mockPlugin, TestDataEntity.class);
+                DataOperator<AnotherDataEntity> op2 = store.getOperator(mockPlugin, AnotherDataEntity.class);
+                DataOperator<ThirdDataEntity> op3 = store.getOperator(mockPlugin, ThirdDataEntity.class);
+
+                assertThat(op1).isNotNull();
+                assertThat(op2).isNotNull();
+                assertThat(op3).isNotNull();
+                assertThat(poolMap).hasSize(1);
+                PoolStateAssertions.assertTotalConnections(realPool, 1);
+            } finally {
+                poolMap.remove(dbPath);
+                realPool.close();
             }
         }
     }
@@ -225,6 +370,190 @@ class SQLiteDataStoreTest {
 
             // Assert
             assertThat(storeType).isEqualTo("sqlite");
+        }
+    }
+
+    /**
+     * getOperator(DataScope, Class) 所有权测试（D-14/D-17）。{@code SQLiteDataStore} 没有覆写
+     * 这个新方法（不在本计划的 files_modified 范围内），所以这里验证的是它从 {@code DataStore}
+     * 接口继承来的 default 方法本身在真实存储实现上依然生效——不是只在 stub 上生效。
+     * <p>
+     * {@link com.ultikits.ultitools.manager.DataScope#forExternal} 对 {@code manager} 包之外
+     * 是包私有的（D-17 的不可伪造凭证设计），因此这里通过反射构造 scope，与
+     * {@code PluginManagerClassScanningTest} 里访问私有方法的既有做法一致。
+     */
+    @Nested
+    @DisplayName("getOperator(DataScope, Class) 所有权测试 (D-14, 继承自 DataStore 的 default 方法)")
+    class GetOperatorDataScopeTests {
+
+        private com.ultikits.ultitools.manager.DataScope buildScope(
+                String pluginName, java.util.Set<Class<?>> ownedEntities
+        ) throws ReflectiveOperationException {
+            Class<?> dataScopeClass = com.ultikits.ultitools.manager.DataScope.class;
+            java.lang.reflect.Method factory = dataScopeClass.getDeclaredMethod(
+                    "forExternal", String.class, File.class, java.util.Set.class);
+            factory.setAccessible(true);
+            return (com.ultikits.ultitools.manager.DataScope) factory.invoke(null, pluginName, tempDir, ownedEntities);
+        }
+
+        @Test
+        @DisplayName("继承的 default 方法应该拒绝未拥有的实体")
+        void shouldRefuseUnownedEntity() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scope =
+                    buildScope("Requester", java.util.Collections.emptySet());
+
+            assertThatThrownBy(() -> store.getOperator(scope, TestDataEntity.class))
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+        }
+
+        @Test
+        @DisplayName("继承的 default 方法应该为拥有的实体返回一个真实可用的操作器")
+        void shouldReturnWorkingOperatorForOwnedEntity() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scope =
+                    buildScope("Owner", java.util.Collections.singleton(TestDataEntity.class));
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                DataOperator<TestDataEntity> operator = store.getOperator(scope, TestDataEntity.class);
+
+                assertThat(operator).isNotNull();
+                assertThat(mockedOperator.constructed()).hasSize(1);
+                assertThat(operator).isSameAs(mockedOperator.constructed().get(0));
+            }
+        }
+
+        /**
+         * 02-13 (CR-01/CR-03): {@code buildScope}'s folder is always {@code tempDir}, which {@code
+         * setUp()} also stubs as {@code mockUltiTools.getDataFolder()} -- i.e. every scope this
+         * nested class builds is, by {@code dbPathFor(DataScope)}'s own internal/external
+         * disambiguation, an INTERNAL scope. Before 02-13, {@code getOperator(DataScope, Class)}'s
+         * default body delegated to the public {@code getOperator(File, Class)} overload using
+         * {@code scope.getDataFolder()} directly -- which is the SAME shared core folder for every
+         * internal scope, so two different internal plugins would have resolved to the SAME {@code
+         * .db} file (02-07's stated regression, reopened as CR-01's security bypass). 02-13 routes
+         * through {@code getOperatorUnchecked}, which resolves via {@code dbPathForPlugin(scope
+         * .getPluginName())} instead -- this pins that two internal plugins still get separate
+         * files.
+         */
+        @Test
+        @DisplayName("两个内部 scope（不同插件名）不应该退化成共享同一个 .db 文件（02-07 回归防护，CR-01/02-13）")
+        void twoInternalScopesShouldNotCollapseOntoOneFile() throws ReflectiveOperationException {
+            SQLiteDataStore store = new SQLiteDataStore();
+            com.ultikits.ultitools.manager.DataScope scopeA =
+                    buildScope("InternalPluginA", java.util.Collections.singleton(TestDataEntity.class));
+            com.ultikits.ultitools.manager.DataScope scopeB =
+                    buildScope("InternalPluginB", java.util.Collections.singleton(TestDataEntity.class));
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+                DataOperator<TestDataEntity> operatorA = store.getOperator(scopeA, TestDataEntity.class);
+                DataOperator<TestDataEntity> operatorB = store.getOperator(scopeB, TestDataEntity.class);
+
+                assertThat(operatorA).isNotSameAs(operatorB);
+                assertThat(mockedDataSource.constructed())
+                        .as("two internal plugins must each get their own connection pool/file, not share one")
+                        .hasSize(2);
+            }
+        }
+    }
+
+    /**
+     * 02-12 Task 2: {@code checkOwnership} is now called as the first statement of both legacy
+     * {@code getOperator} overrides -- closing the residual bypass 02-07 disclosed (D-14/D-18).
+     * A refused call must not have created a pool, a file, or a cache entry as a side effect
+     * (asserted via {@link PoolStateAssertions} / construction counts, not merely the absence of a
+     * thrown exception).
+     */
+    @Nested
+    @DisplayName("所有权校验测试 (D-14/D-18, 02-12 Task 2)")
+    class OwnershipTests {
+
+        @Test
+        @DisplayName("getOperator(UltiToolsPlugin, Class) 应该拒绝未拥有的实体，且不产生任何连接池或缓存副作用")
+        void shouldRefuseUnownedEntityViaPluginOverloadWithNoSideEffects() {
+            when(mockPlugin.getPluginName()).thenReturn("unowned-test-plugin");
+            when(mockPluginManager.findOwningPlugin(UnownedEntity.class)).thenReturn("SomeOtherPlugin");
+            SQLiteDataStore store = new SQLiteDataStore();
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+
+                assertThatThrownBy(() -> store.getOperator(mockPlugin, UnownedEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+                assertThat(mockedDataSource.constructed())
+                        .as("a refused call must not have built a connection pool")
+                        .isEmpty();
+                assertThat(mockedOperator.constructed())
+                        .as("a refused call must not have built an operator")
+                        .isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("getOperator(File, Class) 应该拒绝其他插件的未注册文件夹，且不产生任何连接池或缓存副作用")
+        void shouldRefuseUnregisteredFolderViaFileOverloadWithNoSideEffects() {
+            File someOtherPluginsFolder = new File(tempDir, "some-other-plugin");
+            when(mockPluginManager.findScopeForDataFolder(someOtherPluginsFolder)).thenReturn(null);
+            SQLiteDataStore store = new SQLiteDataStore();
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+
+                assertThatThrownBy(() -> store.getOperator(someOtherPluginsFolder, UnownedEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+                assertThat(mockedDataSource.constructed())
+                        .as("a refused call must not have built a connection pool")
+                        .isEmpty();
+                assertThat(mockedOperator.constructed())
+                        .as("a refused call must not have built an operator")
+                        .isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("框架自身的核心数据文件夹在 getOperator(File, Class) 上不再豁免 -- CR-01, 02-13")
+        void shouldRefuseFrameworkCoreFolderViaFileOverload() {
+            // mockUltiTools.getDataFolder() is stubbed to tempDir in setUp() -- passing tempDir
+            // itself used to be exactly the framework-core-folder sentinel checkOwnership(File,
+            // Class) exempted (D-14/D-17, 02-07/02-12). CR-01 (02-REVIEW.md): that exemption was
+            // keyed purely on a value any caller can obtain (UltiTools#getDataFolder() is public
+            // in the published jar), not on any credential -- so any code sharing the JVM could
+            // reach another module's real MySQL table through it. 02-13 deletes the exemption; no
+            // PluginManager stub is registered here, so the reverse lookup finds no scope for the
+            // core folder either, and the call must refuse exactly like any other unregistered
+            // folder -- not silently succeed.
+            SQLiteDataStore store = new SQLiteDataStore();
+
+            try (MockedConstruction<HikariConfig> mockedConfig = mockConstruction(HikariConfig.class);
+                 MockedConstruction<HikariDataSource> mockedDataSource = mockConstruction(HikariDataSource.class);
+                 MockedConstruction<SQLiteDataOperator> mockedOperator = mockConstruction(SQLiteDataOperator.class)) {
+
+                assertThatThrownBy(() -> store.getOperator(tempDir, UnownedEntity.class))
+                        .isInstanceOf(DataAccessException.class)
+                        .extracting(e -> ((DataAccessException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
+
+                assertThat(mockedDataSource.constructed())
+                        .as("a refused call must not have built a connection pool")
+                        .isEmpty();
+                assertThat(mockedOperator.constructed())
+                        .as("a refused call must not have built an operator")
+                        .isEmpty();
+            }
         }
     }
 }

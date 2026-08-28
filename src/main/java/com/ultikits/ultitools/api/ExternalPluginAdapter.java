@@ -7,6 +7,7 @@ import java.util.logging.Logger;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.manager.DataScope;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -40,6 +41,19 @@ public class ExternalPluginAdapter {
     @Getter
     @Setter
     private boolean connected;
+    /**
+     * The credential {@code PluginManager.registerExternal} mints for this adapter (D-17), set
+     * immediately after minting and before {@code wireAop} runs. {@code null} only in the brief
+     * window between adapter construction and that assignment.
+     * <p>
+     * {@code PluginManager.registerExternal} 为该适配器铸造的凭证（D-17），铸造后、
+     * {@code wireAop} 运行前立即设置。仅在适配器构造完成到该赋值之间的短暂窗口内为 {@code null}。
+     *
+     * @since 6.3.0
+     */
+    @Getter
+    @Setter
+    private DataScope dataScope;
 
     public ExternalPluginAdapter(JavaPlugin javaPlugin) {
         this.javaPlugin = javaPlugin;

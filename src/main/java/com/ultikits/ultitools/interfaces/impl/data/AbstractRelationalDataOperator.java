@@ -5,11 +5,15 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.logging.Logger;
 
@@ -20,9 +24,15 @@ import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonNull;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -45,13 +55,35 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T> {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
-    private static final Gson GSON = new Gson();
+    /**
+     * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
+     * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
+     * system refuses without {@code --add-opens java.base/java.time}, throwing
+     * {@code JsonIOException} at the first non-null {@code @Column}-mapped {@code LocalDateTime}
+     * value (02-08 -- {@code AuditableDataEntity#createdAt}/{@code updatedAt} were always
+     * {@code null} before this plan, so the per-field {@link #insert} / {@link #update} JSON
+     * fallback below never reached this type until the lifecycle hooks started populating it).
+     * Serializes to/from {@link LocalDateTime#toString()}'s ISO-8601 form, which
+     * {@link LocalDateTime#parse(CharSequence)} reads back exactly.
+     */
+    private static final Gson GSON = new GsonBuilder()
+            .registerTypeAdapter(LocalDateTime.class, (JsonSerializer<LocalDateTime>) (src, type, context) ->
+                    src == null ? JsonNull.INSTANCE : new JsonPrimitive(src.toString()))
+            .registerTypeAdapter(LocalDateTime.class, (JsonDeserializer<LocalDateTime>) (json, type, context) ->
+                    json.isJsonNull() ? null : LocalDateTime.parse(json.getAsString()))
+            .create();
 
     protected final Class<T> type;
     protected final DataSource dataSource;
     protected final String tableName;
     protected final QueryRunner queryRunner;
     protected TransactionManager transactionManager;
+    /**
+     * The entity's own {@code @Column} names, reflected once at construction. The allow-list
+     * {@link #validateColumn(String)} checks every WHERE-clause column identifier against
+     * before it is concatenated into SQL text (T-02-SQLI-1).
+     */
+    private final Set<String> knownColumns;
 
     /**
      * Creates a new data operator.
@@ -65,14 +97,54 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         // transaction, getConnection() returns the transaction's connection instead
         // of a fresh auto-commit one.
         this.dataSource = new TransactionAwareDataSource(dataSource, () -> this.transactionManager);
-        this.queryRunner = new QueryRunner(this.dataSource);
+        // D-10: TimeoutAwareQueryRunner reads the active transaction's remaining-time budget
+        // fresh on every statement via currentTimeoutDeadlineNanos() -- this operator outlives
+        // any single transaction, and transactionManager itself can be swapped out.
+        this.queryRunner = new TimeoutAwareQueryRunner(this.dataSource, this::currentTimeoutDeadlineNanos);
         Table tableAnnotation = ReflectionUtil.getAnnotation(type, Table.class);
         if (tableAnnotation == null) {
             throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                     "Entity class " + type.getName() + " must have @Table annotation");
         }
         this.tableName = tableAnnotation.value();
+        this.knownColumns = buildKnownColumns(type);
         initializeTable();
+    }
+
+    /**
+     * Reflects the entity's {@code @Column} mappings once, for {@link #validateColumn(String)}'s
+     * allow-list. This mirrors the same reflected metadata {@link #buildColumnDefinitions(Class)}
+     * and {@link #getColumnMappings()} already read from the entity class — a dedicated pass over
+     * it, not a second scan of anything already cached.
+     *
+     * @param entityType the entity class
+     * @return an unmodifiable set of every {@code @Column} SQL name declared on {@code entityType}
+     *         (including inherited fields, e.g. {@code AbstractDataEntity}'s {@code id})
+     */
+    private static Set<String> buildKnownColumns(Class<?> entityType) {
+        Set<String> columns = new HashSet<>();
+        for (Field field : ReflectionUtil.getFields(entityType)) {
+            if (field.isAnnotationPresent(Column.class)) {
+                columns.add(field.getAnnotation(Column.class).value());
+            }
+        }
+        return Collections.unmodifiableSet(columns);
+    }
+
+    /**
+     * Refuses a column identifier that is not among the entity's own reflected {@code @Column}
+     * mappings, before it can be concatenated into SQL text (T-02-SQLI-1). Called from
+     * {@link #appendConditions} on behalf of all four relational WHERE builders.
+     *
+     * @param column the column name from a caller-supplied {@link WhereCondition}
+     * @throws DataAccessException if {@code column} is not a known column of {@link #type}
+     */
+    private void validateColumn(String column) {
+        if (!knownColumns.contains(column)) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Unknown column '" + column + "' for entity " + type.getName()
+                            + " -- it is not among the entity's @Column mappings.");
+        }
     }
 
     /**
@@ -82,6 +154,39 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     public void setTransactionManager(TransactionManager transactionManager) {
         this.transactionManager = transactionManager;
+    }
+
+    /**
+     * Supplies {@link #queryRunner}'s per-statement query timeout deadline (D-10): the active
+     * transaction's remaining-time budget, or {@code null} when none is configured (no active
+     * transaction, or {@code @Transactional(timeout=0)}, the default). Also used directly by
+     * {@link #applyStatementTimeout} for the two {@code PreparedStatement} call sites that
+     * bypass {@link #queryRunner} entirely. A method reference rather than a field capture, so
+     * every call reads {@link #transactionManager}'s *current* value -- this operator outlives
+     * any single transaction, and {@link #setTransactionManager} can swap the manager out.
+     *
+     * @return the active transaction's timeout deadline, or {@code null} if none is configured
+     */
+    private Long currentTimeoutDeadlineNanos() {
+        return transactionManager != null ? transactionManager.getTimeoutDeadlineNanos() : null;
+    }
+
+    /**
+     * Applies the same per-statement query timeout {@link #queryRunner} (a {@link
+     * TimeoutAwareQueryRunner}) would, to a {@link PreparedStatement} built directly against
+     * {@link #dataSource} -- the two call sites in {@link #insertAll} and {@link #updateAll}
+     * that bypass {@code QueryRunner} entirely. A timeout wired only into {@link #queryRunner}'s
+     * path would leave these two batch operations silently ignoring
+     * {@code @Transactional(timeout=)}, exactly the gap 02-RESEARCH.md warns about.
+     *
+     * @param statement the statement to apply the timeout to, already prepared
+     * @throws SQLException if the driver rejects the timeout value
+     */
+    private void applyStatementTimeout(PreparedStatement statement) throws SQLException {
+        Long deadlineNanos = currentTimeoutDeadlineNanos();
+        if (deadlineNanos != null) {
+            statement.setQueryTimeout(TimeoutAwareQueryRunner.remainingSecondsFloored(deadlineNanos));
+        }
     }
 
     /**
@@ -97,7 +202,31 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * The read handler used by {@link #getAll(WhereCondition...)}, {@link #getLike}, and
+     * {@link #page}: fires {@code onLoad()} once per row it materializes. {@link #getById} and
+     * {@link #delById} deliberately do *not* go through this handler -- see
+     * {@link #getRawListHandler()}.
+     */
     protected ResultSetHandler<List<T>> getListHandler() {
+        ResultSetHandler<List<T>> raw = getRawListHandler();
+        return rs -> {
+            List<T> list = raw.handle(rs);
+            for (T entity : list) {
+                entity.onLoad();
+            }
+            return list;
+        };
+    }
+
+    /**
+     * The same row-materialization logic as {@link #getListHandler()}, without firing
+     * {@code onLoad()}. Used internally by {@link #getById} (which fires {@code onLoad()} itself,
+     * exactly once, on the single entity it returns) and {@link #delById} (which needs the
+     * entity to fire {@code onDelete()} on, but deleting is not loading -- see 02-08-PLAN.md's
+     * delete-hook-path split).
+     */
+    private ResultSetHandler<List<T>> getRawListHandler() {
         // Build mappings from SQL column names to Java field names and boolean detection.
         // Gson matches JSON keys to Java field names, so we must use field names (camelCase)
         // as map keys, not SQL column names (snake_case).
@@ -140,6 +269,113 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         };
     }
 
+    /**
+     * Fetches a single row by id without firing {@code onLoad()}. Shared by {@link #getById}
+     * (which fires {@code onLoad()} on the result) and {@link #delById} (which fires
+     * {@code onDelete()} instead -- deleting is not loading).
+     */
+    private T fetchRawById(Object id) {
+        String sql = "SELECT * FROM " + tableName + " WHERE id = ?";
+        try {
+            List<T> list = queryRunner.query(sql, getRawListHandler(), id);
+            return list.isEmpty() ? null : list.get(0);
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to get entity by id: " + id, e);
+        }
+    }
+
+    /**
+     * Maps a {@link Comparison} to its SQL operator fragment (including the placeholder).
+     * <p>
+     * Shared by all four relational WHERE builders ({@link #exist(WhereCondition...)},
+     * {@link #getAll(WhereCondition...)}, {@link #page(int, int, WhereCondition...)},
+     * {@link #del(WhereCondition...)}) so a given {@code Comparison} means the same thing on
+     * every one of them, and on {@code SimpleJsonDataOperator}'s JSON backend. There is no
+     * silent fallback to equality: an unhandled constant throws rather than being misread as
+     * {@code EQUAL}, since a silent default is exactly how this defect stayed invisible before.
+     *
+     * @param comparison the comparison operator
+     * @return the SQL fragment, e.g. {@code " > ?"}
+     */
+    private String sqlOperatorFor(Comparison comparison) {
+        switch (comparison) {
+            case EQUAL:
+                return " = ?";
+            case GREATER:
+                return " > ?";
+            case LESS:
+                return " < ?";
+            case INCLUDE:
+            case STARTSWITH:
+            case ENDSWITH:
+                return " LIKE ?";
+            default:
+                throw new IllegalArgumentException("Unhandled comparison: " + comparison);
+        }
+    }
+
+    /**
+     * Wraps a condition's value with the {@code %} wildcards its {@link Comparison} implies,
+     * matching {@code SimpleJsonDataOperator#conditionCal}'s existing placement exactly:
+     * {@code INCLUDE} wraps both sides, {@code STARTSWITH} appends a trailing wildcard,
+     * {@code ENDSWITH} prepends a leading wildcard. {@code EQUAL}/{@code GREATER}/{@code LESS}
+     * pass the value through unchanged.
+     *
+     * @param condition the condition supplying the comparison and the raw value
+     * @return the value to bind as the SQL parameter
+     */
+    private Object likeWrappedValue(WhereCondition condition) {
+        Object value = condition.getValue();
+        switch (condition.getComparison()) {
+            case INCLUDE:
+                return "%" + value + "%";
+            case STARTSWITH:
+                return value + "%";
+            case ENDSWITH:
+                return "%" + value;
+            default:
+                return value;
+        }
+    }
+
+    /**
+     * Appends a {@code WHERE} clause built from {@code conditions} to {@code sql} and their
+     * bound values to {@code params}, routing every column through {@link #sqlOperatorFor} so
+     * the four relational builders cannot diverge in how they honor a {@link Comparison} again.
+     * <p>
+     * When {@code skipEmpty} is {@code true}, conditions whose {@code WhereCondition#isEmpty()}
+     * is {@code true} are skipped — {@link #getAll(WhereCondition...)}'s pre-existing behavior,
+     * preserved here rather than changed. {@link #exist(WhereCondition...)},
+     * {@link #page(int, int, WhereCondition...)}, and {@link #del(WhereCondition...)} do not
+     * skip empty conditions; that asymmetry already existed before this method and is not
+     * resolved by this change (see 02-03-SUMMARY.md).
+     *
+     * @param sql        the SQL being built; must already hold the statement up to (not
+     *                   including) the WHERE clause
+     * @param params     the parameter list to append bound values to, in SQL order
+     * @param conditions the conditions to render; must be non-null and non-empty
+     * @param skipEmpty  whether to skip conditions whose {@code isEmpty()} is true
+     */
+    private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
+                                   boolean skipEmpty) {
+        boolean first = true;
+        for (WhereCondition condition : conditions) {
+            if (skipEmpty && condition.isEmpty()) {
+                continue;
+            }
+            validateColumn(condition.getColumn());
+            if (first) {
+                sql.append(" WHERE ");
+                first = false;
+            } else {
+                sql.append(" AND ");
+            }
+            sql.append(condition.getColumn()).append(sqlOperatorFor(condition.getComparison()));
+            params.add(likeWrappedValue(condition));
+        }
+    }
+
     @Override
     public boolean exist(T object) {
         return exist(WhereCondition.builder().column("id").value(object.getId()).build());
@@ -150,15 +386,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         try {
             Long count = queryRunner.query(sql.toString(), new ScalarHandler<>(), params.toArray());
@@ -171,14 +399,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public T getById(Object id) {
-        String sql = "SELECT * FROM " + tableName + " WHERE id = ?";
-        try {
-            List<T> list = queryRunner.query(sql, getListHandler(), id);
-            return list.isEmpty() ? null : list.get(0);
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to get entity by id: " + id, e);
+        T entity = fetchRawById(id);
+        if (entity != null) {
+            entity.onLoad();
         }
+        return entity;
     }
 
     @Override
@@ -191,21 +416,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            // Filter out empty conditions
-            boolean first = true;
-            for (WhereCondition condition : whereConditions) {
-                if (condition.isEmpty()) {
-                    continue;
-                }
-                if (first) {
-                    sql.append(" WHERE ");
-                    first = false;
-                } else {
-                    sql.append(" AND ");
-                }
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-            }
+            appendConditions(sql, params, whereConditions, true);
         }
         try {
             return queryRunner.query(sql.toString(), getListHandler(), params.toArray());
@@ -243,15 +454,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         StringBuilder sql = new StringBuilder("SELECT * FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
         if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
+            appendConditions(sql, params, whereConditions, false);
         }
         sql.append(" LIMIT ? OFFSET ?");
         params.add(size);
@@ -270,6 +473,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         if (obj.getId() == null) {
             obj.setId(java.util.UUID.randomUUID().toString());
         }
+        // Fires before the fields below are read for the SQL parameters, so whatever onCreate()
+        // writes (e.g. AuditableDataEntity's createdAt/createdBy) is what actually gets persisted.
+        obj.onCreate();
         StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
         StringBuilder values = new StringBuilder(") VALUES (");
         List<Object> params = new ArrayList<>();
@@ -311,21 +517,28 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * Deletes by predicate, without loading matched rows into entities first. Consequently this
+     * overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to fire it
+     * on without fabricating one, and this class does not fabricate entities to satisfy a hook.
+     * {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()} on it
+     * (02-08-PLAN.md's delete-hook-path split).
+     */
     @Override
     public void del(WhereCondition... whereConditions) {
+        // T-02-TAM-1 / SILENT-01 / D-12: refuse before any SQL text is built and before any
+        // QueryRunner interaction. The varargs no-arg call produces a zero-length array, not
+        // null -- both shapes are refused here. Stateless: every call re-checks, so this is
+        // not a one-shot latch and cannot partially execute on a retry.
+        if (whereConditions == null || whereConditions.length == 0) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to delete every row of table '" + tableName + "' with no WhereCondition. "
+                            + "Pass an explicit condition, or use a dedicated full-table operation "
+                            + "if one genuinely exists.");
+        }
         StringBuilder sql = new StringBuilder("DELETE FROM ").append(tableName);
         List<Object> params = new ArrayList<>();
-        if (whereConditions != null && whereConditions.length > 0) {
-            sql.append(" WHERE ");
-            for (int i = 0; i < whereConditions.length; i++) {
-                WhereCondition condition = whereConditions[i];
-                sql.append(condition.getColumn()).append(" = ?");
-                params.add(condition.getValue());
-                if (i < whereConditions.length - 1) {
-                    sql.append(" AND ");
-                }
-            }
-        }
+        appendConditions(sql, params, whereConditions, false);
         try {
             queryRunner.update(sql.toString(), params.toArray());
         } catch (SQLException e) {
@@ -334,8 +547,18 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
     }
 
+    /**
+     * Deletes by id, fetching the entity first so {@code onDelete()} can fire on it -- unlike
+     * {@link #del(WhereCondition...)}, which deletes by predicate without materializing rows and
+     * therefore does not fire the hook. If no row matches {@code id}, nothing is fetched and
+     * {@code onDelete()} does not fire.
+     */
     @Override
     public void delById(Object id) {
+        T entity = fetchRawById(id);
+        if (entity != null) {
+            entity.onDelete();
+        }
         String sql = "DELETE FROM " + tableName + " WHERE id = ?";
         try {
             queryRunner.update(sql, id);
@@ -361,6 +584,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(T obj) throws IllegalAccessException {
+        // Fires before the fields below are read for the SQL parameters, so whatever onUpdate()
+        // writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is what actually gets
+        // persisted. onUpdate() does not touch createdAt/createdBy, so an entity carrying its
+        // original creation values in memory persists them unchanged here.
+        obj.onUpdate();
         StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
         List<Object> params = new ArrayList<>();
         Field[] fields = ReflectionUtil.getFields(obj.getClass());
@@ -436,11 +664,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             return;
         }
         transaction(() -> {
-            // Auto-generate UUID for entities without id
+            // Auto-generate UUID for entities without id, then fire onCreate() once per entity
+            // in list order -- before the second loop below reads fields for the batch
+            // PreparedStatement, exactly mirroring insert()'s single-entity ordering. This loop
+            // builds its own statement rather than delegating to insert(), so a hook wired only
+            // into insert() would silently skip this path.
             for (T entity : entities) {
                 if (entity.getId() == null) {
                     entity.setId(java.util.UUID.randomUUID().toString());
                 }
+                entity.onCreate();
             }
             List<ColumnMapping> columns = getColumnMappings();
             StringBuilder sql = new StringBuilder("INSERT INTO ").append(tableName).append(" (");
@@ -459,6 +692,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                // D-10: this statement bypasses queryRunner entirely, so it needs the same
+                // per-statement timeout applied explicitly -- see applyStatementTimeout's javadoc.
+                applyStatementTimeout(pstmt);
                 for (T entity : entities) {
                     int idx = 1;
                     for (ColumnMapping col : columns) {
@@ -503,7 +739,15 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
                 try (Connection conn = dataSource.getConnection();
                      PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+                    // D-10: this statement bypasses queryRunner entirely -- same reasoning as
+                    // insertAll's identical call above.
+                    applyStatementTimeout(pstmt);
                     for (T entity : entities) {
+                        // Fires once per entity, in list order, before this entity's fields are
+                        // read below -- this loop builds its own statement rather than
+                        // delegating to update(T), so a hook wired only into update(T) would
+                        // silently skip this path.
+                        entity.onUpdate();
                         int idx = 1;
                         for (ColumnMapping col : columns) {
                             Object value = col.field.get(entity);

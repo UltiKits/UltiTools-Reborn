@@ -204,8 +204,9 @@ conclusion that nobody is using something.
 | `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` — same constructor shape (a list of interceptors); its `createProxy` methods have no direct replacement, see the next two rows | 0 |
 | `aop.ProxyFactory.createProxy(T)` and `createProxy(Class<T>, T)` | 6.3.0 | `aop.ProxyFactory.createProxyClass(Class<T>, Set<Method>)`, used through the container. Proxy creation moved to *before* the bean is constructed (issue #190: a `BeanPostProcessor` only ever sees an already-built instance, which is structurally too late) | 0 |
 | `aop.AopProxyBeanPostProcessor` | 6.3.0 | `aop.AopProxyResolver`, consulted by the container before construction instead of after | 0 |
+| `annotations.Propagation.NESTED` | 6.3.0 | No direct replacement — the six remaining constants (`REQUIRED`, `REQUIRES_NEW`, `SUPPORTS`, `NOT_SUPPORTED`, `MANDATORY`, `NEVER`) are exactly Jakarta Transactions 2.0's `TxType` set | 0 |
 
-All three entries above are removed in the same release that announces them, which the policy
+All four entries above are removed in the same release that announces them, which the policy
 above normally does not allow, and for two different reasons:
 
 - `aop.CglibProxyFactory` could not work on any supported server: it requires
@@ -222,6 +223,21 @@ above normally does not allow, and for two different reasons:
   the proxy class before the bean is constructed; a `BeanPostProcessor` cannot do that by interface
   contract, since both of its callbacks take an already-built instance. Neither had any downstream
   references. See issue #190.
+- `annotations.Propagation.NESTED` uses clause 2 for a reason distinct from the other three: all
+  seven original `Propagation` values, `NESTED` included, *are* implementable against the storage
+  layer — `NESTED` maps cleanly to `Connection.setSavepoint()`. It is dropped on
+  **controllability, not impossibility**: savepoint behaviour depends on whichever `sqlite-jdbc`
+  version the server's own Paper build happens to ship (`org.xerial:sqlite-jdbc` is not declared in
+  this project's `pom.xml` or `plugin.yml` — Paper supplies it — and versions `3.45.3.0`, `3.46.0.0`
+  and `3.47.0.0` have all been observed across local server caches), which this project can neither
+  pin nor test across. Clause 2's evidence, stated rather than argued: `@Transactional` has never
+  executed in any released version — the published 6.2.5 jar's `AopProxyBeanPostProcessor` is
+  referenced only by itself, and `PluginManager` has zero references to `AopAdvisor`, `addAdvisor`,
+  or `TransactionInterceptor` — so no released server ever evaluated `NESTED` regardless of this
+  reasoning. Across 17 in-house module/plugin repositories, `TransactionManager` /
+  `@Transactional` / `.transaction(` score **zero** hits, against a control of **94** hits for
+  `getDataOperator` (confirming the survey mechanism itself works). `NESTED` may be restored later
+  if savepoint behaviour ever becomes reliably pinnable across supported Paper builds.
 
 ## Migrating off `AbstractCommandExecutor`
 
@@ -450,76 +466,132 @@ exact-match requirement. Connector authors hitting this should use
 `api.UltiToolsAPI.connect(JavaPlugin)` instead, which does not go through reflective constructor
 resolution at all.
 
-### Recorded instance: `@Transactional` now refuses to load a module (6.3.0)
+### Recorded instance: `del()` with no conditions is now refused (6.3.0)
 
-Before 6.3.0, `@Transactional` was recognised by the framework's annotations but never wired to
-anything: there was no AOP container integration at all, so a bean carrying `@Transactional`
-loaded normally and ran completely untransacted, with no warning that the annotation had done
-nothing. 6.3.0 wires AOP into the container as part of issue #190, and `PluginManager.wireAop`
-declares `@Transactional` explicitly **unavailable** rather than leave it silently inert now that
-AOP itself works: `AopProxyResolver.rejectUnavailableAnnotations` throws a `ContainerException`
-for any container-created bean that carries it, which propagates through `createBean` →
-`refresh()` → `initializePlugin` → `register(...)`. `register` catches it, logs a WARNING, and
-returns `false` — **the module does not load at all.**
+Before 6.3.0, `AbstractRelationalDataOperator.del()` built its `DELETE FROM <table>` statement from
+whatever `WhereCondition`s it was given, with no check that there were any. Calling `del()` with a
+zero-length varargs array — a bare `dataOperator.del()`, no arguments at all — produced a
+WHERE-less `DELETE FROM <table>` and emptied the entire table in one statement. An explicit
+`del((WhereCondition[]) null)` reached the same code path.
 
-Method signatures are unchanged, so `japicmp` cannot detect this. It is recorded here because it
-is real, immediate breakage for a module that declares `@Transactional` today: before 6.3.0 the
-module loaded, just without the transaction it asked for; from 6.3.0 it does not load. The
-framework's own 17 in-house Modules were measured and use `@Transactional` zero times, but that
-measurement is about this organization's own code, not about third-party modules — exactly the
-audience this file exists to warn.
+6.3.0 refuses both shapes outright: `del()`'s zero-condition guard is the literal first statement
+of the method, ahead of building the SQL `StringBuilder` and ahead of touching the operator's
+`QueryRunner` at all — proven against a Mockito spy (zero interactions recorded after the throw),
+not merely the absence of a thrown exception. A `del(condition)` call carrying at least one real
+condition is unaffected.
 
-The reason is that the framework has no `TransactionManager` to give `@Transactional` real
-meaning: `DataStore` does not expose its `DataSource`, and the default SQLite backend opens one
-connection pool per entity class, so a single `.db` file would need several unrelated transaction
-managers before this could work correctly. Rather than continue running such beans untransacted —
-the exact silent-degradation failure mode this whole branch exists to close — 6.3.0 rejects them
-outright. Tracked in issues **#195** and **#196**; once the framework can supply a real
-`TransactionManager`, `@Transactional` will move from "unavailable" to "wired," which will be
-recorded here in its own right when it happens.
+**This takes the security-fix channel** ("Behavioral changes that need no migration period"
+above), not the two-step migration period the "silent degradation becoming failure" bucket would
+otherwise call for. The case-specific reason, not a generic "it's a bug fix" appeal: an
+unconditioned `del()` is an **unbounded data-loss primitive** reachable from any code that holds a
+`DataOperator` — one missing argument, or one `WhereCondition[]` built from a collection that
+happened to be empty at runtime, and the entire table is gone, with no transaction boundary on
+most call paths that could undo it. That is qualitatively different from a bug whose worst case is
+a wrong query result; here the worst case is unrecoverable data loss triggered by an easy-to-write
+mistake. Continuing to allow it for one more MINOR under a warning is not a safer default than
+refusing it now — the failure mode a warning would be protecting against is "I read the warning
+and kept shipping code that empties tables on typos," which a louder log line does not meaningfully
+improve.
 
-**How far the refusal reaches.** "Carries it" is wider than the annotation appearing in the file
-you are looking at, and it got wider still while 6.3.0 was being built. The refusal fires when
-either of these is true anywhere in the bean's superclass chain:
+A control-grouped survey (both a negative and a control query, per this project's own search-hazard
+rule) found no shipping caller relying on the old behaviour: `src/main` — 0 hits for a zero-argument
+`.del()`/null-array call, against 1 control hit (an unrelated `FileUtils.del(file)`); `src/test` —
+0 hits, against 11 control hits on `.del(` calls carrying real conditions; the 17 in-house
+`Modules/*` repositories — 0 hits, against 42 control hits on `.insert(` (confirming the grep
+mechanism itself works); the legacy, pre-6.2.0 `Plugins/` tree — 0 hits on both queries.
 
-- a method carries `@Transactional` — including a method your class inherits and never mentions,
-  and including one your class overrides without repeating the annotation;
-- a class carries `@Transactional` and declares at least one of the methods your bean ends up
-  with — including a base class your bean merely extends.
+### Recorded instance: `@Transactional` moves from refusing to load a module to being wired (6.3.0)
 
-So a module that never types the word `Transactional` still fails to load if it extends a class
-that does — from a shared internal base class, or from a library you depend on. Check your base
-classes, not only your own files.
+**Through the refusal described in earlier `6.3.0-SNAPSHOT` builds of this file, `@Transactional`
+was recognised by the framework's annotations but never wired to anything real.** No AOP container
+integration existed at all before this milestone, so a bean carrying `@Transactional` loaded
+normally and ran completely untransacted, with no warning that the annotation had done nothing.
+Rather than leave that silent no-op in place once AOP itself started working elsewhere in 6.3.0's
+development, `PluginManager.wireAop` declared `@Transactional` explicitly **unavailable**:
+`AopProxyResolver.rejectUnavailableAnnotations` refused to load any bean carrying it — including a
+method or class merely inherited or extended, not just one you wrote yourself — logging a WARNING
+and returning `false` from `register(...)` instead. That refusal is now withdrawn.
 
-Two edges are worth stating exactly, because both are easy to guess wrong:
+**6.3.0 ships `@Transactional` wired end to end, on all three storage backends:**
 
-- **Overriding does not hide the annotation.** Java does not inherit method annotations, but the
-  lookup falls back from a method to the declaration it overrides, the way Spring's transaction
-  attribute lookup does. So overriding an annotated superclass method still refuses — you do not
-  have to repeat the annotation on the override, and repeating it changes nothing.
-- **A class-level annotation on a class that declares no methods of its own governs nothing**,
-  because class-level scope reaches the declaring class and its subclasses, never its ancestors.
+- **SQLite and MySQL**, through `JdbcTransactionManager` — one manager instance per plugin
+  container, shared between the AOP interceptor and every `DataOperator` the store hands out
+  (`SQLiteDataStore.transactionManagerFor(DataScope)` / `MysqlDataStore.transactionManagerFor(DataScope)`,
+  each backed by a per-identity cache), so a `@Transactional` method that calls
+  `insertAll`/`updateAll` opens exactly one transaction, not two. SQLite is keyed by the plugin's
+  own backing `.db` file (one manager per file, mirroring the one-pool-per-file fix elsewhere in
+  this release); MySQL is keyed by requesting identity, since that backend has one global
+  `DataSource` shared by every plugin.
+- **JSON**, through `JsonTransactionManager` — a snapshot-based manager: on first touch inside a
+  transaction, an operator's cache is deep-copied; on rollback, the whole cache is restored from
+  that snapshot. **What this does not guarantee:** the restore replaces an operator's *entire*
+  cache, not individual entities. `REQUIRES_NEW`/`NOT_SUPPORTED`'s independence from an outer scope
+  is therefore only observable when the inner and outer scopes touch *different*
+  `SimpleJsonDataOperator` instances — if both write to the *same* operator, the outer scope's
+  eventual rollback restores that operator's cache to its pre-outer-write snapshot, discarding the
+  inner scope's already-committed write too. That is a property of whole-cache-granularity
+  rollback, not a defect in the suspend/resume mechanism.
 
-How far the annotation is *found* is shared with `@ExceptionCatch` by construction — one rule
-walks the override chain and the class hierarchy for both. What the two do with it differs, and
-deliberately so. `@ExceptionCatch` is wired, so it applies where the proxy can reach and is ignored
-with a warning where it cannot. `@Transactional` is unavailable in this release, so its presence
-alone refuses the load — including on a method no proxy could reach. Degrading `@ExceptionCatch`
-to "the exception propagates" is visible; degrading `@Transactional` to "no transaction" is not,
-and a body that writes several rows would run half-applied with nothing to show for it.
+`REQUIRES_NEW` and `NOT_SUPPORTED` now genuinely suspend the active transaction on every backend
+(JDBC via a sibling `ThreadLocal<Deque<TransactionContext>>`; JSON via the equivalent construction
+on `JsonTransactionManager`) instead of silently nesting into it. `Propagation.NESTED` is removed
+— see its entry under [AOP](#aop) above.
 
-If your module declares `@Transactional` anywhere, or extends anything that does, before upgrading
-to 6.3.0 you must either:
+**Worked before/after example.** `rollbackFor` is now **additive** to the unchecked
+`RuntimeException`/`Error` default, not a replacement for it — matching what the javadoc already
+said before this fix ("Specify **additional** exception types") but the code did not do. When both
+`rollbackFor` and `noRollbackFor` match the thrown exception, the rule whose listed class is the
+**shallower inheritance-depth match** wins (Spring's `RuleBasedTransactionAttribute` tiebreak); an
+exact-depth tie — including the same class listed in both arrays — favours rollback.
 
-- remove the annotation, or
-- call `DataOperator.transaction(Callable)` explicitly instead.
+```java
+class OrderException extends RuntimeException { }
+class ValidationException extends OrderException { }
 
-This falls under "moving from silent degradation to failure" in the table above, which normally
-asks for the two-step migration period described there. There is no safe intermediate step to walk
-through here: the "old behaviour" being phased out is a bean running without the transaction
-guarantee its own annotation promises, and continuing to allow that for one more release — even
-with a louder warning — is exactly the risk this document exists to flag, not something worth
-preserving a little longer.
+@Transactional(rollbackFor = ValidationException.class, noRollbackFor = OrderException.class)
+public void processOrder(Order order) throws ValidationException {
+    if (!order.hasShippingAddress()) {
+        throw new ValidationException("missing shipping address");
+    }
+}
+```
+
+`ValidationException` is an exact (depth-0) match for `rollbackFor`, and a depth-1 match for
+`noRollbackFor` (`ValidationException` → `OrderException`, one step up its own hierarchy).
+
+- **On 6.2.5** (`noRollbackFor` checked first, unconditionally): `noRollbackFor` matches, so the
+  method **commits** — the write that threw `ValidationException` is silently kept.
+- **After 6.3.0** (shallowest depth wins): `rollbackFor`'s depth-0 match beats `noRollbackFor`'s
+  depth-1 match, so the method **rolls back**.
+
+The plainer case this fix targets — an exception matching neither array:
+
+```java
+@Transactional(rollbackFor = BusinessException.class)
+public void chargeCard(Payment payment) throws BusinessException {
+    // ...
+    throw new NullPointerException(); // unrelated to BusinessException
+}
+```
+
+- **On 6.2.5**: a non-empty `rollbackFor` replaced the default rule entirely, so an exception not
+  on the list **committed** instead of rolling back — this exact annotation committed on an
+  unrelated `NullPointerException`.
+- **After 6.3.0**: neither array matches, so `shouldRollback` falls through to the unchanged
+  `RuntimeException`/`Error` default, and the method **rolls back** — exactly as it would with no
+  `rollbackFor` attribute at all.
+
+Both directions are proven through an external call and a self-invocation call on a real ByteBuddy
+proxy with a real JDBC connection, on both the JDBC and JSON backends.
+
+**If you removed `@Transactional` or switched to `DataOperator.transaction(Callable)` to work
+around the pre-6.3.0 refusal**, you can now re-add the annotation — but re-read the worked example
+above first if your method combines `rollbackFor` and `noRollbackFor`: the rollback direction may
+have changed under you.
+
+See the entry below, "Entity ownership is now enforced, and other 6.3.0 persistence
+deprecations," for `TransactionManager.getConnection()`/`setIsolationLevel(int)`/`setReadOnly(boolean)`,
+now `@Deprecated` `default` methods rather than abstract ones.
 
 ### Recorded instance: `@ExceptionCatch` can now stop a module from loading (6.3.0)
 
@@ -551,6 +623,90 @@ method, which is what Spring does for a method it cannot advise. The annotation 
 but the module loads.
 
 Method signatures are unchanged, so `japicmp` cannot detect any of this.
+
+### Recorded instance: entity ownership is now enforced, and other 6.3.0 persistence deprecations (SILENT-04)
+
+**Entity ownership.** Before 6.3.0, `getDataOperator(Class)` never asked *whose* entity you were
+asking for — a third-party module writing `getDataOperator(SomeoneElsesEntity.class)` received that
+other module's real `DataOperator` and could read and write its rows. Fixing this release's
+cache-keying isolation defect alone (see the pool-per-file/operator-per-scope work elsewhere in
+this milestone) would have made this *worse*, not better: with the cache keyed per requesting
+identity instead of entity class alone, the same call would instead return a **fresh, empty**
+operator over the caller's own storage, and every query on it would silently return nothing —
+"shouldn't work but does" becoming "looks like it works, always empty," exactly the defect class
+this milestone exists to remove.
+
+6.3.0 closes it with a real check instead. `DataStore.getOperator(DataScope, Class)` — the new,
+recommended entry point — refuses an entity outside the caller's own scope with
+`DataAccessException`/`ErrorCode.ENTITY_NOT_OWNED` (3010), naming the entity, the owning module
+(when known), and pointing at that module's own exposed service or the `EventBus` instead.
+`UltiToolsPlugin.getDataOperator(Class)` and `UltiToolsAPI.getDataOperator(JavaPlugin, Class)`
+apply the identical check before delegating to the legacy overloads, and — closing a gap disclosed
+mid-phase — `SQLiteDataStore`, `MysqlDataStore`, and `JsonStore` now run the same check as the
+*first statement* of their own `getOperator(UltiToolsPlugin, Class)`/`getOperator(File, Class)`
+overrides too, so reaching persistence through `UltiTools.getInstance().getDataStore()` directly
+(public in the published jar) no longer bypasses it. One caveat remains, stated in `DataStore.java`'s
+own javadoc rather than left implicit: nothing mechanically stops a *fourth*, hypothetical
+`DataStore` implementation from skipping the check inside its own override of the still-abstract
+`getOperator(UltiToolsPlugin, Class)` — the framework's own call-site checks
+(`UltiToolsPlugin.getDataOperator`/`UltiToolsAPI.getDataOperator`) are the backstop for that case.
+
+This takes **no migration period**, for the same reason the AOP proxy class naming and the
+superclass `@CmdMapping` registration entries above did: cross-module entity access was never a
+documented contract. No javadoc, guide page, or annotation ever stated that `getDataOperator`
+could reach another module's entity; the previous permissive behaviour was an accident of a shared
+cache key, not a promise. Measured, not assumed: 21 `@Table` classes across 17 in-house module
+repositories, **zero** naming collisions — and, per the maintainer's own framing of the risk, the
+realistic danger was never accidental collision but a third-party developer deliberately
+requesting an entity they already knew was not theirs.
+
+**The `"unknown"` plugin-name fallback is refused, not silently shared, at load.** Before 6.3.0, a
+module JAR whose `plugin.yml` carried no `name:` key resolved to the literal string `"unknown"`
+(`pluginConfig.getString("name", "unknown")`) and shared `sqliteDB/unknown.db` with every other
+name-less module ever deployed on that server. 6.3.0 refuses to load such a module at all —
+`PluginModuleException`, naming the JAR, thrown as the first statement of `UltiToolsPlugin`'s
+no-arg constructor, before any resource extraction or config initialisation runs. Like the
+entity-ownership case above, this takes **no migration period**: the `"unknown"` fallback was
+never a documented contract either — an internal default value with an accidental cross-module
+consequence, not a feature. A control-grouped survey of all 17 in-house module `plugin.yml` files
+found zero missing a `name:` key (17/17 control hits confirm the grep itself works), so no
+shipping module is refused at load by this change.
+
+*Fate of existing `sqliteDB/unknown.db` data.* This release does not migrate it. Measured on a live
+deployment: 96 KB, 10 tables belonging to 8 different modules, all zero rows except
+`world_settings` (3 rows — the same 3 rows already present in the module's own correctly-named
+`UltiWorlds.db`, so this measurement found no uniquely-held data there). If a name-less module's
+data existed *only* in `unknown.db` on your server, fixing its `plugin.yml` and reloading gives it
+a fresh, correctly-scoped `.db` file — it does not automatically recover the old shared file's
+rows. Inspect `sqliteDB/unknown.db` yourself before upgrading if you are unsure whether any of your
+modules were affected.
+
+**Newly deprecated, not yet removal-eligible.** Two more `@Deprecated(since = "6.3.0", forRemoval =
+true)` additions land in this release but do not appear in the "Removal list for 6.3.0" table above
+above, because condition 2 of [eligibility](#when-a-public-api-becomes-eligible-for-removal) — one
+MINOR since the *first* release carrying the annotation — is not yet satisfied by either: 6.3.0 is
+that first release, so neither is eligible for removal before 6.4.0 at the earliest.
+
+| Type / member | Replacement | Downstream references (informational) |
+|---|---|---|
+| `interfaces.TransactionManager.getConnection()` / `setIsolationLevel(int)` / `setReadOnly(boolean)` | `interfaces.JdbcTransactionManager`, which carries the same three as real abstract methods | 0 — `TransactionManager` appears in no published-jar signature of `DataStore`/`DataOperator`/`UltiToolsPlugin`/`UltiTools`; a module can only reach it today by downcasting `DataOperator` to `AbstractRelationalDataOperator` and supplying its own `DataSource` |
+| `interfaces.DataStore.getOperator(UltiToolsPlugin, Class)` and `getOperator(File, Class)` | `getOperator(DataScope, Class)` | Not separately measured — the documented, correct entry point for module authors is `getDataOperator(Class)` (94 downstream hits across 17 repositories, per the survey above), which still calls the deprecated overloads on your behalf and is unaffected by this deprecation |
+
+On `TransactionManager`, turning three previously-abstract methods into `@Deprecated` `default`
+methods that throw `UnsupportedOperationException` is, per `japicmp` 0.26.1's own
+`METHOD_ABSTRACT_NOW_DEFAULT` classification, reported as `binaryCompatible="false"`. Read
+literally in isolation that looks like a breaking change; in practice no compiled 6.2.x
+`TransactionManager` implementor breaks at link time from it. A previously-compiled **concrete**
+class was required to implement all nine of the interface's abstract methods to compile in the
+first place, so its own three overrides still resolve via ordinary virtual dispatch — the new
+`default` bodies are never reached for it. A previously-compiled **abstract** class that left the
+three JDBC-specific methods unimplemented (legal, since it was abstract) now has a working
+`default` fallback where none existed before, resolved via interface-method inheritance — exactly
+the case `default` methods exist to make safe. Neither case produces an `AbstractMethodError` or a
+`NoSuchMethodError`. `japicmp`'s conservative classification appears stricter than the JVM's actual
+binary-compatibility guarantee for this specific transformation (abstract → default, same
+signature, same return type) — recorded here so a reader trusting the raw `japicmp` report is not
+misled, without this document's own compatibility promise overstating it either.
 
 ## Binary incompatibilities the removal list cannot cover
 
@@ -1023,8 +1179,9 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
 | `aop.CglibProxyFactory` | 6.3.0 | `aop.ProxyFactory` —— 构造器形状相同（都接收拦截器列表）；其 `createProxy` 方法没有直接替代，见下两行 | 0 |
 | `aop.ProxyFactory.createProxy(T)` 与 `createProxy(Class<T>, T)` | 6.3.0 | `aop.ProxyFactory.createProxyClass(Class<T>, Set<Method>)`，经容器间接使用。代理创建时机提前到 bean 构造*之前*（issue #190：`BeanPostProcessor` 拿到的永远是已经造好的实例，结构上就晚了） | 0 |
 | `aop.AopProxyBeanPostProcessor` | 6.3.0 | `aop.AopProxyResolver`，由容器在构造前而非构造后咨询 | 0 |
+| `annotations.Propagation.NESTED` | 6.3.0 | 无直接替代——剩下的六个常量（`REQUIRED`、`REQUIRES_NEW`、`SUPPORTS`、`NOT_SUPPORTED`、`MANDATORY`、`NEVER`）恰好就是 Jakarta Transactions 2.0 的 `TxType` 取值集合 | 0 |
 
-以上三条都在宣布移除的同一个版本里被移除，这不符合上面的常规策略，理由分两类：
+以上四条都在宣布移除的同一个版本里被移除，这不符合上面的常规策略，理由分两类：
 
 - `aop.CglibProxyFactory` 在任何受支持的服务器上都无法工作：它需要
   `--add-opens java.base/java.lang=ALL-UNNAMED`，而 Paper 服务器不会设置这个参数，插件也无法
@@ -1038,6 +1195,18 @@ Maven Central、只是没有对应的 git 标签，但它在仓库历史里有�
   不会破坏任何真正在工作的集成。二者都在本周期内被 `AopProxyResolver` 取代：它在 bean 构造之前
   就解析出代理类，而 `BeanPostProcessor` 按接口约定拿到的两个回调都只能是已构造好的实例，结构上
   做不到这一点。两者都没有任何下游引用。详见 issue #190。
+- `annotations.Propagation.NESTED` 走第 2 条的理由和前三条不同：原本七个 `Propagation` 取值——
+  包括 `NESTED`——**在存储层上全都能实现**，`NESTED` 完全可以映射到 `Connection.setSavepoint()`。
+  它被砍掉是因为**可控性，不是不可实现**：保存点的实际行为取决于服务器所装 Paper 构建自带的
+  `sqlite-jdbc` 版本（`org.xerial:sqlite-jdbc` 既不在本项目 `pom.xml` 也不在 `plugin.yml` 里声明，
+  是 Paper 自带的——本机服务器缓存里就观测到过 `3.45.3.0`、`3.46.0.0`、`3.47.0.0` 三个不同版本），
+  这不是本项目能钉住或能跨版本测试的东西。第 2 条的证据，如实陈述而非论证：`@Transactional` 从未
+  在任何已发布版本上真正执行过——已发布的 6.2.5 jar 里 `AopProxyBeanPostProcessor` 只被自己引用，
+  `PluginManager` 对 `AopAdvisor`、`addAdvisor`、`TransactionInterceptor` 的引用为零——所以无论上面
+  这条理由是否成立，都没有任何已发布的服务器真正求值过 `NESTED`。对 UltiKits 组织内 17 个模块/
+  插件仓库的实测：`TransactionManager` / `@Transactional` / `.transaction(` 命中 **零次**，对照组
+  `getDataOperator` 命中 **94** 次（证明这次调查方法本身是有效的）。如果保存点行为将来能在受支持的
+  Paper 构建之间稳定钉住，`NESTED` 可以考虑恢复。
 
 ## `AbstractCommandExecutor` 的迁移
 
@@ -1235,63 +1404,115 @@ Constructor<? extends UltiToolsPlugin> constructor =
 六参数调用满足 `getDeclaredConstructor` 的精确匹配要求。命中这个问题的连接器作者应改用
 `api.UltiToolsAPI.connect(JavaPlugin)`，它完全不走反射构造器解析这条路。
 
-### 已记录的实例：`@Transactional` 现在会直接拒绝加载模块（6.3.0）
+### 已记录的实例：`del()` 不带任何条件时现在会被拒绝（6.3.0）
 
-6.3.0 之前，框架的注解体系认得 `@Transactional`，但它没有接到任何东西上——AOP 完全没有接入
-容器，所以带 `@Transactional` 的 bean 照常加载、完全不受事务保护地运行，也没有任何警告提示
-这个注解其实什么都没做。6.3.0 作为 issue #190 的一部分把 AOP 接入了容器，`PluginManager.wireAop`
-把 `@Transactional` 显式声明为**不可用**，而不是在 AOP 真正生效后仍然让它静默失效：
-`AopProxyResolver.rejectUnavailableAnnotations` 会为任何带有该注解的、由容器构造的 bean 抛出
-`ContainerException`，一路传播到 `createBean` → `refresh()` → `initializePlugin` →
-`register(...)`。`register` 捕获它、打一条 WARNING、返回 `false`——**模块完全不加载。**
+6.3.0 之前，`AbstractRelationalDataOperator.del()` 拿到什么 `WhereCondition` 就用什么拼
+`DELETE FROM <table>`，从不检查条件是否存在。不带任何参数直接调用 `del()`——一次裸调用，零参
+数——会生成一条没有 WHERE 子句的 `DELETE FROM <table>`，一条语句清空整张表。显式传入
+`del((WhereCondition[]) null)` 会走到同一条代码路径。
 
-方法签名没有变化，`japicmp` 抓不到这个变更。之所以记在这里，是因为它对今天声明了
-`@Transactional` 的模块是真实且立即的破坏：6.3.0 之前模块能加载（只是拿不到它要的事务保护），
-6.3.0 起直接不加载。本组织自己的 17 个 Modules 已核实 `@Transactional` 使用次数为零，但这只说明
-本组织自己的代码，说明不了第三方模块——而后者正是本文件要提醒的对象。
+6.3.0 把这两种形状都直接拒绝：`del()` 的零条件保护是方法的字面第一条语句，早于构建 SQL 用的
+`StringBuilder`，也早于碰操作器自己的 `QueryRunner`——用 Mockito spy 验证过（抛出之后
+`QueryRunner` 上零次交互记录），而不只是「没抛异常」这种弱证据。带至少一个真实条件的
+`del(condition)` 调用不受影响。
 
-原因是框架目前没有能让 `@Transactional` 真正生效的 TransactionManager：`DataStore` 不暴露自己的
-`DataSource`，默认的 SQLite 后端又是每个实体类开一个独立连接池，同一个 `.db` 文件底下会出现好几个
-互不相干的事务管理器，这个前提不解决就没法正确工作。与其让这样的 bean 继续静默地不受事务保护地
-运行——这正是本分支存在的目的所要消灭的那种静默失效——6.3.0 选择直接拒绝加载。跟踪于 issue
-**#195** 与 **#196**；等框架能提供真正的 TransactionManager，`@Transactional` 会从「不可用」变为
-「已接线」，届时会作为它自己的一条记录写在这里。
+**这走的是安全修复通道**（见上方「哪些行为变更可以在 MINOR 直接做」），而不是「从静默降级改成
+失败」那一类通常要求的两步迁移期。给出针对这个具体案例的理由，而不是笼统的「这是在修 bug」：
+一个不带条件的 `del()` 是任何持有 `DataOperator` 的代码都能触发的**无界数据丢失原语**——少传
+一个参数，或者一个运行时恰好为空集合构建出来的 `WhereCondition[]`，整张表就没了，而且大多数
+调用路径上没有事务边界能撤销它。这和「最坏情况是查询结果错了」这类 bug 有质的不同：这里的最坏
+情况是一个很容易写错就触发的、不可恢复的数据丢失。让它在警告下再多活一个 MINOR 并不比现在直接
+拒绝更安全——警告要防的失败模式是「我看到警告了，但照样继续发布会把表清空的代码」，这不是一条
+更响的日志能有效改善的。
 
-**这条拒绝的射程有多远。**「带有该注解」比「你正在看的这个文件里出现了这个注解」要宽，而且在
-6.3.0 的开发过程中又变得更宽了。只要 bean 的整条父类链上满足下面任意一条，拒绝就会触发：
+一次控制分组调查（按本项目自己的搜索陷阱规则，同时带负向查询和对照查询）没有找到任何依赖旧行为
+的现网调用方：`src/main`——零参数 `.del()`/null 数组调用 0 命中，对照组（一个无关的
+`FileUtils.del(file)`）1 命中；`src/test`——0 命中，对照组（带真实条件的 `.del(` 调用）11 命中；
+17 个内部 `Modules/*` 仓库——0 命中，对照组 `.insert(` 命中 42 次（证明 grep 机制本身有效）；
+6.2.0 之前的遗留 `Plugins/` 目录——两个查询都是 0 命中。
 
-- 某个方法带 `@Transactional`——包括你的类继承下来、自己从未提及的方法，也包括你的类覆写了、
-  但没有重复标注的方法；
-- 某个类带 `@Transactional`，且它自己声明了你的 bean 最终拥有的某个方法——包括你的 bean 只是
-  继承了它的某个基类。
+### 已记录的实例：`@Transactional` 从拒绝加载模块变为真正接线（6.3.0）
 
-也就是说，一个从头到尾没打过 `Transactional` 这个词的模块，只要它继承的类打了，就同样加载不了
-——可能来自你们内部共用的基类，也可能来自你依赖的某个库。请连基类一起检查，不要只看自己的文件。
+**在本文件早期 `6.3.0-SNAPSHOT` 版本所记录的那次拒绝期间，框架的注解体系认得 `@Transactional`，
+但它没有真正接到任何东西上。** 在本里程碑之前，AOP 完全没有接入容器，所以带 `@Transactional`
+的 bean 照常加载、完全不受事务保护地运行，也没有任何警告提示这个注解其实什么都没做。与其在
+6.3.0 开发过程中 AOP 本身已经在别处开始工作之后，继续放任这种静默空转，`PluginManager.wireAop`
+把 `@Transactional` 显式声明为**不可用**：`AopProxyResolver.rejectUnavailableAnnotations` 拒绝
+加载任何带有该注解的 bean——包括仅仅继承或扩展来的方法/类，不只是你自己写的那些——打一条
+WARNING，然后让 `register(...)` 返回 `false`。**这条拒绝现在被撤回了。**
 
-有两处边界值得写明，因为都容易猜错：
+**6.3.0 在全部三个存储后端上把 `@Transactional` 端到端接了线：**
 
-- **覆写不会遮住注解。** Java 确实不继承方法注解，但查找会从一个方法回退到它所覆写的那条声明，
-  与 Spring 的事务属性查找同理。所以覆写了父类上带注解的方法，同样会被拒绝——你不需要在覆写
-  方法上重复标注一次，重复标注也不改变结果。
-- **一个自己不声明任何方法的类，其类级注解什么都不管**，因为类级作用域只到「声明它的那个类
-  及其子类」，从不上溯到祖先。
+- **SQLite 与 MySQL**，通过 `JdbcTransactionManager`——每个插件容器一个管理器实例，
+  AOP 拦截器与该 store 分发出去的每一个 `DataOperator` 共用同一个实例
+  （`SQLiteDataStore.transactionManagerFor(DataScope)` / `MysqlDataStore.transactionManagerFor(DataScope)`，
+  各自由一个按身份缓存的 map 支撑），所以一个调用了 `insertAll`/`updateAll` 的 `@Transactional`
+  方法只会开出恰好一个事务，不是两个。SQLite 按插件自己的 `.db` 文件路径分 key（一个文件一个
+  管理器，与本版本其他地方「一个文件一个连接池」的修法呼应）；MySQL 按请求方身份分 key，因为
+  该后端所有插件共用同一个全局 `DataSource`。
+- **JSON**，通过 `JsonTransactionManager`——一个基于快照的管理器：事务内第一次触碰某个操作器时
+  深拷贝其缓存；回滚时从该快照整体恢复。**这不保证什么：** 恢复替换的是操作器**整个**缓存，
+  不是逐个实体的撤销。因此 `REQUIRES_NEW`/`NOT_SUPPORTED` 相对外层作用域的独立性，只有在内外
+  层触碰的是**不同的** `SimpleJsonDataOperator` 实例时才能被观察到——如果两者写的是**同一个**
+  操作器，外层作用域最终的回滚会把该操作器的缓存恢复到外层写入之前的快照，把内层作用域已经
+  提交的写入也一并丢弃。这是整体缓存粒度回滚的固有属性，不是 suspend/resume 机制本身的缺陷。
 
-注解被**找到**的射程与 `@ExceptionCatch` 是同一条规则算出来的——两者共用同一趟覆写链与类层级
-遍历。但两者拿它做的事不同，而且是有意为之。`@ExceptionCatch` 已接线，代理够得着就生效，够不着
-就忽略并打警告。`@Transactional` 在本版本不可用，因此它**只要存在**就拒绝加载——包括标在代理
-根本够不着的方法上。`@ExceptionCatch` 降级成「异常照常抛出」是看得见的；`@Transactional` 降级成
-「没有事务」看不见，一个要写好几行的方法体会半途而废，且不留任何痕迹。
+`REQUIRES_NEW` 与 `NOT_SUPPORTED` 现在在每个后端上都真正挂起当前活动事务（JDBC 侧靠一个
+sibling 的 `ThreadLocal<Deque<TransactionContext>>`；JSON 侧在 `JsonTransactionManager` 上有
+同等构造），而不是静默嵌套进去。`Propagation.NESTED` 已被移除——见上文 [AOP](#aop) 一节的条目。
 
-如果你的模块任何地方声明了 `@Transactional`，或者继承了任何声明了它的类，升级到 6.3.0 之前
-必须二选一：
+**前后对比的实例。** `rollbackFor` 现在是对未受检 `RuntimeException`/`Error` 默认规则的
+**叠加**，不是替换——这正是修复前 javadoc 已经写着的话（"指定**额外**的异常类型"），只是代码
+没有照做。当 `rollbackFor` 与 `noRollbackFor` 同时匹配抛出的异常时，胜出的是**继承深度更浅**
+的那条规则所列的类（Spring `RuleBasedTransactionAttribute` 的 tiebreak）；深度恰好相同——包括
+同一个类同时出现在两个数组里——时回滚胜出。
 
-- 移除该注解；或
-- 改为显式调用 `DataOperator.transaction(Callable)`。
+```java
+class OrderException extends RuntimeException { }
+class ValidationException extends OrderException { }
 
-按上面的分类，这属于「从静默降级改成失败」，通常需要走那里描述的两步迁移期。但这里没有安全的
-中间态可走：要逐步淘汰的「旧行为」本身就是一个 bean 在没有它自己注解承诺的事务保护下运行，哪怕
-只是多打一条更响的警告、再多放行一个版本，都正是本文件存在的目的要拦下的那种风险，不值得再多
-保留一会儿。
+@Transactional(rollbackFor = ValidationException.class, noRollbackFor = OrderException.class)
+public void processOrder(Order order) throws ValidationException {
+    if (!order.hasShippingAddress()) {
+        throw new ValidationException("missing shipping address");
+    }
+}
+```
+
+`ValidationException` 对 `rollbackFor` 是精确（深度 0）匹配，对 `noRollbackFor` 是深度 1 匹配
+（`ValidationException` → `OrderException`，往上一层）。
+
+- **在 6.2.5 上**（`noRollbackFor` 无条件优先检查）：`noRollbackFor` 匹配，方法**提交**——
+  抛出 `ValidationException` 的那次写入被静默保留。
+- **6.3.0 之后**（更浅深度胜出）：`rollbackFor` 的深度 0 匹配胜过 `noRollbackFor` 的深度 1
+  匹配，方法**回滚**。
+
+这个修法真正要解决的更朴素的情形——异常两个数组都不匹配：
+
+```java
+@Transactional(rollbackFor = BusinessException.class)
+public void chargeCard(Payment payment) throws BusinessException {
+    // ...
+    throw new NullPointerException(); // 与 BusinessException 无关
+}
+```
+
+- **在 6.2.5 上**：非空的 `rollbackFor` 会把默认规则整个替换掉，所以没列在其中的异常会
+  **提交**而不是回滚——这个注解就是会在一个无关的 `NullPointerException` 上提交。
+- **6.3.0 之后**：两个数组都不匹配，`shouldRollback` 落到未受检的 `RuntimeException`/`Error`
+  默认规则，方法**回滚**——和完全没写 `rollbackFor` 属性时一样。
+
+两个方向都在一个真实的 ByteBuddy 代理、真实 JDBC 连接上，通过外部调用和自调用两种路径证明过，
+JDBC 与 JSON 两个后端皆然。
+
+**如果你曾经因为 6.3.0 之前的那次拒绝而移除了 `@Transactional`，或改用了
+`DataOperator.transaction(Callable)`**，现在可以把注解加回来——但如果你的方法同时用了
+`rollbackFor` 和 `noRollbackFor`，先重读上面的对比实例：回滚方向可能已经在你没注意的情况下
+变了。
+
+`TransactionManager.getConnection()`/`setIsolationLevel(int)`/`setReadOnly(boolean)` 现在是
+`@Deprecated` 的 `default` 方法而不是抽象方法，见下文「实体归属现在会被强制检查，以及 6.3.0
+其他持久化层面的废弃」一条。
 
 ### 已记录的实例：`@ExceptionCatch` 现在可能让模块无法加载（6.3.0）
 
@@ -1319,6 +1540,73 @@ public final class MyService extends GuardedBase { }   // 6.2.5：能加载。6.
 一致。注解在那里不起作用，但模块照常加载。
 
 方法签名没有变化，`japicmp` 抓不到上述任何一条。
+
+### 已记录的实例：实体归属现在会被强制检查，以及 6.3.0 其他持久化层面的废弃（SILENT-04）
+
+**实体归属。** 6.3.0 之前，`getDataOperator(Class)` 从不问你在请求**谁的**实体——第三方模块
+写 `getDataOperator(SomeoneElsesEntity.class)` 会拿到另一个模块真实的 `DataOperator`，能读写
+它的数据行。单独修好本里程碑的缓存分 key 隔离缺陷（见本里程碑其他地方的「一个文件一个连接池 /
+一个作用域一个操作器」修法）反而会让这个问题**更糟而不是更好**：缓存改按请求方身份分 key 之后，
+同样的调用会返回一个针对调用者自己存储的**全新、空**操作器，其上的每一次查询都会静默返回空——
+「不该工作但确实工作」变成了「看起来在工作，但永远是空的」，这正是本里程碑要消灭的那一类缺陷。
+
+6.3.0 改用真正的检查来堵住它。`DataStore.getOperator(DataScope, Class)`——新的、推荐的入口——
+对超出调用者自身作用域的实体直接以 `DataAccessException`/`ErrorCode.ENTITY_NOT_OWNED`（3010）
+拒绝，点名该实体、（在已知的情况下）它所属的模块，并指向该模块自己暴露的服务或 `EventBus`。
+`UltiToolsPlugin.getDataOperator(Class)` 与 `UltiToolsAPI.getDataOperator(JavaPlugin, Class)`
+在委托给旧重载之前会执行同样的检查；本阶段中途披露过的一个缺口也已补上——`SQLiteDataStore`、
+`MysqlDataStore`、`JsonStore` 现在也会在各自 `getOperator(UltiToolsPlugin, Class)`/
+`getOperator(File, Class)` 重载的**第一条语句**里执行同样的检查，所以直接通过
+`UltiTools.getInstance().getDataStore()`（在已发布的 jar 里是 `public` 的）访问持久层
+也不再能绕过它。还留有一个未解决的边界，`DataStore.java` 自己的 javadoc 里明说了，没有藏着：
+没有任何机制能阻止一个**第四方**、假设性的 `DataStore` 实现在自己覆写仍然是抽象方法的
+`getOperator(UltiToolsPlugin, Class)` 时跳过这个检查——框架自己那两个入口点的检查
+（`UltiToolsPlugin.getDataOperator`/`UltiToolsAPI.getDataOperator`）是这种情况下唯一的兜底。
+
+这**不需要迁移期**，理由和上面 AOP 代理类命名、父类 `@CmdMapping` 注册这两条一样：跨模块访问
+实体从来都不是文档承诺的契约。没有任何 javadoc、指南页面或注解曾经说过 `getDataOperator` 可以
+拿到别的模块的实体；此前那种放任行为只是共享缓存 key 造成的意外，不是承诺。实测而非假设：
+17 个内部模块仓库里的 21 个 `@Table` 类，**零**命名冲突——按维护者自己的框定，现实中的风险从来
+不是意外撞名，而是第三方开发者明知某个实体不属于自己，仍然故意去请求它。
+
+**`"unknown"` 插件名回退现在会在加载期直接拒绝，而不是静默共享。** 6.3.0 之前，一个
+`plugin.yml` 没有 `name:` 键的模块 JAR 会解析成字面字符串 `"unknown"`
+（`pluginConfig.getString("name", "unknown")`），和这台服务器上曾经部署过的每一个同样没有
+名字的模块共享同一个 `sqliteDB/unknown.db`。6.3.0 直接拒绝加载这样的模块——`PluginModuleException`
+点名该 JAR，在 `UltiToolsPlugin` 无参构造器的第一条语句就抛出，早于任何资源释放或配置初始化。
+和上面的实体归属检查一样，这**不需要迁移期**：`"unknown"` 回退同样从来不是文档承诺的契约——
+它是一个带有意外跨模块后果的内部默认值，不是一项功能。对 17 个内部模块的 `plugin.yml` 做的
+控制分组调查一个都没找到缺失 `name:` 键的（17/17 命中确认 grep 本身有效），所以这一改动不会
+拒绝任何现网模块加载。
+
+*已有 `sqliteDB/unknown.db` 数据的去向。* 本版本不会迁移它。在一台真实部署机器上实测：96 KB，
+10 张表分属 8 个不同模块，全部零行，只有 `world_settings` 例外（3 行——同样的 3 行也存在于该
+模块自己正确命名的 `UltiWorlds.db` 里，所以这次测量没有在这里找到独占持有的数据）。如果你服务器
+上某个没有名字的模块的数据**只**存在于 `unknown.db`，修好它的 `plugin.yml` 并重载会让它拿到一个
+全新的、正确归属的 `.db` 文件——不会自动找回旧共享文件里的行。升级前如果拿不准哪些模块受影响，
+请自行检查 `sqliteDB/unknown.db`。
+
+**新增废弃、尚未到可移除的时候。** 本版本还带来两处新增的 `@Deprecated(since = "6.3.0",
+forRemoval = true)`，但都没有出现在上面「6.3.0 的移除清单」表里，因为二者都不满足
+[可移除性](#一个公开-api-何时可以被移除)的第 2 条——从**首个**带上该标注的发布起算已跨过一个
+MINOR：6.3.0 正是那个首个发布，所以最早也要到 6.4.0 才有资格被移除。
+
+| 类型 / 成员 | 替代方案 | 下游引用（参考） |
+|---|---|---|
+| `interfaces.TransactionManager.getConnection()` / `setIsolationLevel(int)` / `setReadOnly(boolean)` | `interfaces.JdbcTransactionManager`，把同样这三个方法作为真正的抽象方法保留 | 0——`TransactionManager` 不出现在已发布 jar 里 `DataStore`/`DataOperator`/`UltiToolsPlugin`/`UltiTools` 的任何签名中；今天一个模块只能通过把 `DataOperator` 强转成 `AbstractRelationalDataOperator` 并自带 `DataSource` 才能碰到它 |
+| `interfaces.DataStore.getOperator(UltiToolsPlugin, Class)` 与 `getOperator(File, Class)` | `getOperator(DataScope, Class)` | 未单独实测——模块作者应当使用、也是文档承诺的正确入口是 `getDataOperator(Class)`（按上面的调查，17 个仓库里下游命中 94 次），它仍然会替你调用这两个已废弃的重载，不受这次废弃影响 |
+
+在 `TransactionManager` 上，把三个原本抽象的方法改成会抛 `UnsupportedOperationException` 的
+`@Deprecated` `default` 方法，按 `japicmp` 0.26.1 自己的 `METHOD_ABSTRACT_NOW_DEFAULT` 分类，
+报告结果是 `binaryCompatible="false"`。单看这行字面意思像是破坏性变更；但实践中没有任何已编译的
+6.2.x `TransactionManager` 实现者会在链接期因此崩掉。一个此前已编译的**具体**类，为了能编译通过
+本来就必须实现该接口全部九个抽象方法，所以它自己那三个覆写方法仍然按普通虚方法分派解析——新的
+`default` 方法体对它而言从来不会被走到。一个此前已编译、把三个 JDBC 专属方法留空的**抽象**类
+（当时合法，因为它是抽象类）现在多了一个此前不存在的可用 `default` 兜底，通过接口方法继承解析——
+这正是 `default` 方法存在的意义所在，用来保证这种情况的安全。两种情况都不会产生
+`AbstractMethodError` 或 `NoSuchMethodError`。`japicmp` 这个保守的分类，对这个具体变换（抽象
+变默认、签名不变、返回类型不变）来说，看起来比 JVM 实际的二进制兼容保证更严格——记在这里是为了
+不让只看 `japicmp` 原始报告的读者被误导，同时也不让本文件自己的兼容性承诺说得比实际更满。
 
 ## 移除清单覆盖不到的二进制不兼容
 
