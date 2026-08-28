@@ -272,7 +272,10 @@ public class PluginManager {
                             String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
                     );
                 }
-                pluginContext.refresh();
+                // No second refresh() here (D-14): registerSingleton above now fully assembles the
+                // @ContextEntry bean itself unconditionally, so there is nothing left for a second
+                // refresh() to do -- the first refresh() at the top of this method already
+                // pre-instantiated every non-lazy singleton definition this container knows about.
                 pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
             }
         } catch (Exception | Error e) {

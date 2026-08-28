@@ -150,16 +150,46 @@ public class SimpleContainer {
     }
 
     /**
-     * Register a singleton instance.
-     * <br>
-     * 注册单例实例。
+     * Registers a singleton instance, fully assembling it before storage.
+     * <p>
+     * Runs the same {@code postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
+     * postProcessAfterInitialization} sequence {@link #createBean} runs for a container-constructed
+     * bean, in that order, before storing -- unconditionally, whether or not {@link #refresh()} has
+     * been called. Before 6.3.0 this method was two lines: {@code addSingleton} plus a type-mapping
+     * write, with no autowiring, no {@code @PostConstruct} invocation, and no
+     * {@link BeanPostProcessor} chain -- an object handed in through this method reached the
+     * container half-initialised. {@link #refresh()} only pre-instantiates non-lazy singleton
+     * <em>definitions</em> and never touches a {@code registerSingleton}-path object, so gating
+     * assembly on refresh state (as a narrower, window-guard fix would) would have left the config
+     * entities, the {@code @Configuration} instance, and the {@code @Bean} products -- all
+     * registered <em>before</em> {@code refresh()} runs -- exactly as uninjected as before (D-14).
+     * <p>
+     * The bean actually stored, and returned by a later {@link #getBean(String)}, is whichever
+     * reference {@code postProcessAfterInitialization} last returned -- not necessarily
+     * {@code instance} itself, if a registered {@link BeanPostProcessor} substitutes it.
+     * <p>
+     * 注册单例实例，在存储前完成完整装配。运行与 {@link #createBean} 为容器自行构造的 Bean
+     * 所执行的同一套顺序——postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
+     * postProcessAfterInitialization——且无条件执行，与 {@link #refresh()} 是否已调用无关。
      *
      * @param name instance name <br> 实例名称
      * @param instance instance object <br> 实例对象
+     * @throws com.ultikits.ultitools.exceptions.ContainerException if a required {@code @Autowired}
+     *         dependency on {@code instance} cannot be resolved (D-08)
      */
     public void registerSingleton(String name, Object instance) {
-        addSingleton(name, instance);
-        typeMappings.put(instance.getClass(), instance);
+        Object bean = instance;
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessBeforeInitialization(bean, name);
+        }
+        getAutowireCapableBeanFactory().autowireBean(bean);
+        invokePostConstructMethods(bean);
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessAfterInitialization(bean, name);
+        }
+
+        addSingleton(name, bean);
+        typeMappings.put(bean.getClass(), bean);
         // A newly registered singleton may be a new candidate for some already-resolved
         // interface/superclass type -- invalidate so the next getBean(Class) reconsiders it
         // instead of returning a stale cached resolution (D-12).
