@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -461,7 +462,10 @@ public class SimpleContainer {
         // Collect every assignable candidate in this container and order by @Service(priority)
         // descending, reusing getOrderedBeansOfType -- which had zero production callers before
         // this change (D-11) -- instead of writing a third ordering implementation. It already
-        // dedups a definition-backed singleton that has already been instantiated, and it reads
+        // dedups a definition-backed singleton that has already been instantiated, it
+        // identity-dedups a singleton registered under two names (e.g. DependenceManagers'
+        // TeleportService/NotificationService/EmailService, each aliased under a short name plus
+        // the interface FQN -- regression fixed after PR #352's real-machine UAT), and it reads
         // priority off each candidate's actual resolved instance class, so a proxied bean's
         // priority is read correctly: ProxyFactory copies the target's annotations onto the
         // generated subclass, and getServicePriority relies on that.
@@ -1194,7 +1198,29 @@ public class SimpleContainer {
      */
     public <T> List<T> getOrderedBeansOfType(Class<T> type) {
         Map<String, T> beans = getBeansOfType(type);
-        List<T> result = new ArrayList<>(beans.values());
+
+        // Identity-dedup before ordering: getBeansOfType() is keyed by bean NAME, so the same
+        // singleton instance registered under two names (e.g. DependenceManagers.initCoreServices()
+        // deliberately registers TeleportService/NotificationService/EmailService twice each --
+        // once under a short internal name, once under the interface's FQN, so both getBean(String)
+        // and getBean(Class) resolve it) appears as two separate map entries whose VALUES are the
+        // same object. Without this dedup, getBean(Class)'s ambiguity check below sees that one
+        // object twice and throws a false "ambiguous" error naming the same instance against
+        // itself (regression caught by real-machine UAT on PR #352).
+        //
+        // IdentityHashMap (== semantics), not a HashSet/equals()-based dedup: a bean may override
+        // equals()/hashCode(), and two DISTINCT instances of the same class that happen to be
+        // equal must still be counted as two separate candidates so the ambiguity check below can
+        // still refuse a genuine tie (SILENT-06 / this milestone's own success criterion). Only
+        // reference identity -- the same object reached through two names -- collapses to one.
+        Map<T, Boolean> seenByIdentity = new IdentityHashMap<>();
+        List<T> result = new ArrayList<>();
+        for (T bean : beans.values()) {
+            if (seenByIdentity.put(bean, Boolean.TRUE) == null) {
+                result.add(bean);
+            }
+        }
+
         result.sort((a, b) -> {
             int priorityA = getServicePriority(a.getClass());
             int priorityB = getServicePriority(b.getClass());
