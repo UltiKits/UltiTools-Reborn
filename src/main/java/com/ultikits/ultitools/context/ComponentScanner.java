@@ -119,8 +119,13 @@ public class ComponentScanner {
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
                         processClass(clazz);
-                    } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                        // Ignore and continue
+                    } catch (ClassNotFoundException | LinkageError e) {
+                        // Skip-and-continue: the rest of the package still registers (D-25,
+                        // D-26). LinkageError covers NoClassDefFoundError,
+                        // UnsupportedClassVersionError and ExceptionInInitializerError with one
+                        // clause - the same union scanDirectory uses below, so the same missing
+                        // class behaves identically on both scan modes.
+                        LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }
             }
@@ -146,8 +151,12 @@ public class ComponentScanner {
                     try {
                         Class<?> clazz = classLoader.loadClass(className);
                         processClass(clazz);
-                    } catch (ClassNotFoundException e) {
-                        // Ignore and continue
+                    } catch (ClassNotFoundException | LinkageError e) {
+                        // Skip-and-continue: the rest of the package still registers (D-25,
+                        // D-26). Same union as scanJar's per-class catch above - the same
+                        // missing/unlinkable class must behave identically on both scan modes,
+                        // rather than one skipping a class and the other killing the package.
+                        LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }
             }
@@ -156,8 +165,26 @@ public class ComponentScanner {
 
     /**
      * Process a class for component annotations.
+     * <p>
+     * Propagation rule (D-25), stated once here rather than duplicated at each per-class call
+     * site in {@code scanJar}/{@code scanDirectory}: {@link ContainerException} is the single
+     * type that propagates unconditionally out of this method and aborts the module's scan --
+     * every other exception thrown while registering an individual class is logged and that one
+     * class is skipped, and the rest of the package still registers. One type name is the whole
+     * rule, so no allowlist has to be kept in sync. The two deliberate {@code ContainerException}
+     * throws today are the {@code @Final} contract violation below and a malformed
+     * {@code @AliasFor} declaration surfaced by {@link MergedAnnotationResolver} during the same
+     * scan; neither may ever be caught by a blanket handler.
      * <br>
      * 处理类的组件注解。
+     * <p>
+     * 传播规则（D-25），在此统一声明一次，而不是在 {@code scanJar}/{@code scanDirectory}
+     * 各自的逐类调用点重复：{@link ContainerException} 是唯一会无条件穿透本方法、中止模块扫描的
+     * 类型；注册单个类时抛出的其他任何异常都会被记录，仅跳过该类，包内其余类照常注册。规则就是
+     * 这一个类型名，因此无需维护任何白名单。当前两处刻意抛出 {@code ContainerException}
+     * 的地方分别是下方的 {@code @Final} 契约违规检查，以及同一次扫描中由
+     * {@link MergedAnnotationResolver} 发现的畸形 {@code @AliasFor} 声明；两者都绝不能被任何
+     * 万能捕获吞掉。
      */
     private void processClass(Class<?> clazz) {
         // The @Final contract is checked before anything else, including @ConditionalOnConfig:
