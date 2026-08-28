@@ -2,6 +2,7 @@ package com.ultikits.ultitools.context;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -12,6 +13,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.aop.AopAdvisor;
+import com.ultikits.ultitools.aop.AopProxyResolver;
+import com.ultikits.ultitools.aop.MethodInterceptor;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.ContainerException;
 
 /**
@@ -133,6 +139,32 @@ class SimpleContainerAmbiguityTest {
     }
 
     static class UnrelatedBean {
+    }
+
+    @Service(priority = 10)
+    static class ProxiedHighPriorityGreeter implements Greeter {
+        @Transactional
+        @Override
+        public String greet() {
+            return "proxied-high";
+        }
+    }
+
+    @Service(priority = 5)
+    static class PlainLowPriorityGreeter implements Greeter {
+        @Override
+        public String greet() {
+            return "plain-low";
+        }
+    }
+
+    private static SimpleContainer containerWithAop() {
+        SimpleContainer container = new SimpleContainer();
+        AopProxyResolver resolver = new AopProxyResolver();
+        MethodInterceptor passthrough = invocation -> invocation.proceed();
+        resolver.addAdvisor(AopAdvisor.forAnnotation(Transactional.class, passthrough, 100));
+        container.setAopProxyResolver(resolver);
+        return container;
     }
 
     // === Task 1: priority ordering and the tie refusal ===
@@ -392,6 +424,54 @@ class SimpleContainerAmbiguityTest {
             Greeter second = container.getBean(Greeter.class);
 
             assertSame(first, second);
+        }
+    }
+
+    // === Task 3: the proxy-annotation-copy dependency ===
+
+    @Nested
+    @DisplayName("Priority ordering for a proxied bean (D-11's dependency on ProxyFactory)")
+    class ProxyPriorityTests {
+
+        @Test
+        @DisplayName("A proxied @Service(priority) bean reports its true priority, not 0")
+        void proxiedBeanReportsTruePriority() {
+            SimpleContainer container = containerWithAop();
+            container.registerBean(ProxiedHighPriorityGreeter.class);
+            container.refresh();
+
+            Greeter bean = container.getBean(ProxiedHighPriorityGreeter.class);
+
+            // Ordering matters: assert the bean is genuinely proxied FIRST. Without this guard,
+            // a harness that silently failed to wire AOP would hand back the plain class, and
+            // the remaining assertions would pass without ever exercising the behaviour this
+            // test exists to pin.
+            assertTrue(ProxyFactory.isProxyClass(bean.getClass()),
+                    "the harness must be exercising the proxied path, not a plain instance");
+
+            Service annotation = bean.getClass().getAnnotation(Service.class);
+            assertNotNull(annotation,
+                    "ProxyFactory must copy the target's @Service annotation onto the generated subclass");
+            assertEquals(10, annotation.priority());
+        }
+
+        @Test
+        @DisplayName("A proxied higher-priority bean wins a real getBean(Interface.class) resolution against an unproxied lower-priority one")
+        void proxiedHigherPriorityBeanWinsRealResolution() {
+            SimpleContainer container = containerWithAop();
+            container.registerBean(ProxiedHighPriorityGreeter.class);
+            container.registerBean(PlainLowPriorityGreeter.class);
+            container.refresh();
+
+            Greeter proxiedCandidate = container.getBean(ProxiedHighPriorityGreeter.class);
+            assertTrue(ProxyFactory.isProxyClass(proxiedCandidate.getClass()));
+
+            // The assertion that matters: the proxied bean must win a real interface-typed
+            // resolution, not merely report the right value from an isolated getter call.
+            Greeter resolved = container.getBean(Greeter.class);
+
+            assertEquals("proxied-high", resolved.greet());
+            assertFalse(resolved instanceof PlainLowPriorityGreeter);
         }
     }
 }
