@@ -11,6 +11,7 @@ import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarEntry;
@@ -484,16 +485,8 @@ public class PluginManager {
 
             while (entryEnumeration.hasMoreElements()) {
                 JarEntry entry = entryEnumeration.nextElement();
-                if (!entry.getName().endsWith(".class") || entry.getName().contains("META-INF")) {
-                    continue;
-                }
-
-                String className = entry
-                        .getName()
-                        .replace('/', '.')
-                        .replace(".class", "");
-
-                if (!scannedClasses.add(className)) {
+                String className = classNameForEntityScan(entry);
+                if (className == null || !scannedClasses.add(className)) {
                     continue;
                 }
 
@@ -505,24 +498,64 @@ public class PluginManager {
                             + "not enforced, so no entity is silently dropped).");
                 }
 
-                try {
-                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
-                    if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
-                        entities.add(aClass);
-                    }
-                } catch (ClassNotFoundException | LinkageError e) {
-                    Bukkit.getLogger().log(Level.FINE,
-                        "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
-                } catch (SecurityException e) {
-                    Bukkit.getLogger().log(Level.WARNING,
-                        "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
-                }
+                resolveEntityClass(className).ifPresent(entities::add);
             }
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to scan jar for entities: " + pluginJar.getName(), e);
         }
         return entities;
+    }
+
+    /**
+     * Converts one {@code JarEntry} from {@link #scanEntitiesInJar} into a dotted class name,
+     * or {@code null} when the entry is not a class file the entity scan cares about (a
+     * {@code META-INF} entry, or anything not ending in {@code .class}).
+     * <p>
+     * 把 {@link #scanEntitiesInJar} 中的一个 {@code JarEntry} 转换为点分隔的类名；如果这个条目不是
+     * 实体扫描关心的 class 文件（{@code META-INF} 条目，或任何不以 {@code .class} 结尾的条目），
+     * 返回 {@code null}。
+     *
+     * @param entry the jar entry under inspection <br> 正在检查的 jar 条目
+     * @return the dotted class name, or null to skip the entry <br> 点分隔的类名，或 null 表示跳过该条目
+     */
+    private static String classNameForEntityScan(JarEntry entry) {
+        if (!entry.getName().endsWith(".class") || entry.getName().contains("META-INF")) {
+            return null;
+        }
+        return entry
+                .getName()
+                .replace('/', '.')
+                .replace(".class", "");
+    }
+
+    /**
+     * Loads {@code className} and returns it wrapped in an {@code Optional} when it carries
+     * {@code @Table}, for {@link #scanEntitiesInJar}'s per-entry step. Never throws: a class that
+     * cannot be loaded, or is loaded but is not an entity, both resolve to {@code Optional.empty()}.
+     * <p>
+     * 加载 {@code className}，若其携带 {@code @Table} 注解则以 {@code Optional} 包裹返回，供
+     * {@link #scanEntitiesInJar} 逐条目使用。永不抛出异常：无法加载的类，或加载成功但不是实体的类，
+     * 都会解析为 {@code Optional.empty()}。
+     *
+     * @param className the dotted class name to load <br> 待加载的点分隔类名
+     * @return the loaded class if it is a {@code @Table} entity, otherwise empty <br>
+     *         若加载的类是 {@code @Table} 实体则返回该类，否则为空
+     */
+    private static Optional<Class<?>> resolveEntityClass(String className) {
+        try {
+            Class<?> aClass = ClassLoaderUtils.loadClass(className);
+            if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
+                return Optional.of(aClass);
+            }
+        } catch (ClassNotFoundException | LinkageError e) {
+            Bukkit.getLogger().log(Level.FINE,
+                "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
+        } catch (SecurityException e) {
+            Bukkit.getLogger().log(Level.WARNING,
+                "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
+        }
+        return Optional.empty();
     }
 
     /**
