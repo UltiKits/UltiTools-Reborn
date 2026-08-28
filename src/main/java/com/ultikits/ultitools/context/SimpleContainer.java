@@ -185,11 +185,41 @@ public class SimpleContainer {
      * already a generated proxy ({@link ProxyFactory#isProxyClass}) is exempt -- it already honours
      * its own annotations, copied onto the generated subclass by {@code ProxyFactory} itself.
      * <p>
+     * <b>No circular-dependency support between two {@code registerSingleton}-registered objects
+     * (WR-02).</b> Unlike {@link #createBean}, this method does not add an early reference to
+     * {@link #singletonFactories}/{@link #earlySingletonObjects} before autowiring -- and, unlike
+     * {@code createBean}, it structurally cannot benefit from doing so. {@code createBean}'s early
+     * exposure works because the container itself triggers a dependency's construction lazily,
+     * recursively, inside the same call stack that is still assembling the bean that depends on
+     * it -- so an early, not-yet-autowired self-reference can be handed back partway through. A
+     * {@code registerSingleton} caller, by contrast, hands in an object the caller already fully
+     * constructed <em>outside</em> the container; the container never constructs it and has no
+     * hook to trigger construction of a second, not-yet-registered object on the first one's
+     * behalf. Concretely: if object A and object B are registered via two separate, sequential
+     * {@code registerSingleton} calls and each has an {@code @Autowired} field pointing at the
+     * other, A's autowiring runs while B does not exist in this container in any form yet (no
+     * definition, no factory, nothing) -- there is nothing an early-reference mechanism could
+     * expose. A's field then either throws (if {@code required = true}) or stays {@code null} (if
+     * {@code required = false}); B, registered second, resolves normally since A already exists by
+     * then. This is reachable by an ordinary module author writing two {@code @Bean} methods (or a
+     * {@code @Configuration} class and one of its own {@code @Bean} products) that reference each
+     * other, since both paths register their product via this method. Workarounds: order the two
+     * registrations so the one with the {@code required = true} field is registered second, use
+     * {@code @Autowired(required = false)} plus manual post-registration wiring, or -- where
+     * possible -- register the pair through component scanning instead
+     * ({@code @Service}/{@code @Component}), where {@link #createBean}'s three-level cache does
+     * apply.
+     * <p>
      * 注册单例实例，在存储前完成完整装配。运行与 {@link #createBean} 为容器自行构造的 Bean
      * 所执行的同一套顺序——postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
      * postProcessAfterInitialization——且无条件执行，与 {@link #refresh()} 是否已调用无关。
      * 当 {@code instance} 的类携带其永远无法生效的 {@code @Transactional} 或
      * {@code @ExceptionCatch}（方法级或类级）时直接拒绝注册（D-15）。
+     * 两个通过 registerSingleton 注册的对象之间不支持循环依赖（WR-02）：与 createBean 不同，
+     * 本方法在自动装配前不会向三级缓存暴露早期引用，且结构上也无法从中受益——createBean
+     * 的早期暴露之所以有效，是因为容器自己在同一调用栈内递归地、惰性地触发了依赖对象的构造；
+     * 而 registerSingleton 的调用方传入的是一个已经在容器之外完全构造好的对象，容器从未构造过
+     * 第二个对象，也没有任何钩子能代替它去触发第二个（尚未注册的）对象的构造。
      *
      * @param name instance name <br> 实例名称
      * @param instance instance object <br> 实例对象

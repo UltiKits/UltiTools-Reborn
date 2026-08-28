@@ -378,6 +378,77 @@ class RegisterSingletonAssemblyTest {
         }
     }
 
+    // ===== WR-02: documented mutual-reference limitation =====
+
+    static class MutualA {
+        @Autowired(required = false)
+        MutualB b;
+    }
+
+    static class MutualB {
+        @Autowired(required = false)
+        MutualA a;
+    }
+
+    static class MutualARequired {
+        @Autowired
+        MutualBRequired b;
+    }
+
+    static class MutualBRequired {
+        @Autowired(required = false)
+        MutualARequired a;
+    }
+
+    /**
+     * Pins the documented WR-02 limitation on {@code registerSingleton}'s javadoc: two objects
+     * registered via separate, sequential {@code registerSingleton} calls that mutually
+     * {@code @Autowired} each other cannot both resolve one another, because -- unlike
+     * {@code createBean} -- the container never constructs either object and so has no hook to
+     * trigger the second (not-yet-registered) one's construction on the first's behalf. This is
+     * NOT a bug fix -- registerSingleton's behaviour here is unchanged by 03-fix. The test exists
+     * so a future change that silently breaks (or, more likely, silently "half fixes" only one
+     * side of) this documented constraint is caught.
+     */
+    @Nested
+    @DisplayName("mutual @Autowired between two registerSingleton-registered objects (WR-02, documented limitation)")
+    class MutualReferenceLimitation {
+
+        @Test
+        @DisplayName("the object registered FIRST cannot resolve the object registered SECOND "
+                + "(required = false: field stays null)")
+        void firstRegisteredObjectCannotResolveSecondWhenOptional() {
+            SimpleContainer container = new SimpleContainer();
+            MutualA a = new MutualA();
+            MutualB b = new MutualB();
+
+            container.registerSingleton("mutualA", a);
+            container.registerSingleton("mutualB", b);
+
+            assertEquals(null, a.b,
+                    "inert-case guard: A's field must actually be null here -- if a future change "
+                            + "silently fixed only this direction, this assertion is what would "
+                            + "catch it and the javadoc would need updating, not deleting");
+            assertSame(a, b.a,
+                    "B, registered second, resolves normally since A already exists in the "
+                            + "container by the time B is autowired");
+        }
+
+        @Test
+        @DisplayName("the object registered FIRST throws if its field is required = true")
+        void firstRegisteredObjectThrowsWhenFieldIsRequired() {
+            SimpleContainer container = new SimpleContainer();
+            MutualARequired a = new MutualARequired();
+            MutualBRequired b = new MutualBRequired();
+
+            assertThrows(ContainerException.class,
+                    () -> container.registerSingleton("mutualARequired", a),
+                    "A's required @Autowired field cannot resolve B, which does not exist in the "
+                            + "container in any form yet -- this must fail loudly (D-08), not "
+                            + "silently leave the field null");
+        }
+    }
+
     // ===== Task 2: initializePlugin ordering (T-03-27) =====
 
     @Nested
