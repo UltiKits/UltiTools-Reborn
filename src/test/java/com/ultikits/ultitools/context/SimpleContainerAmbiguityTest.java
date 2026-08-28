@@ -3,6 +3,7 @@ package com.ultikits.ultitools.context;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -110,6 +111,28 @@ class SimpleContainerAmbiguityTest {
         public String id() {
             return "marker";
         }
+    }
+
+    @Service(priority = 20)
+    static class LateHigherPriorityGreeter implements Greeter {
+        @Override
+        public String greet() {
+            return "late-higher";
+        }
+    }
+
+    @Service(priority = 0)
+    static class LateEqualPriorityGreeter implements Greeter {
+        @Override
+        public String greet() {
+            return "late-equal";
+        }
+    }
+
+    static class UnrelatedSingleton {
+    }
+
+    static class UnrelatedBean {
     }
 
     // === Task 1: priority ordering and the tie refusal ===
@@ -291,6 +314,84 @@ class SimpleContainerAmbiguityTest {
             child.refresh();
 
             assertThrows(ContainerException.class, () -> child.getBean(Greeter.class));
+        }
+    }
+
+    // === Task 2: cache invalidation ===
+
+    @Nested
+    @DisplayName("Resolution cache invalidation (D-12)")
+    class CacheInvalidationTests {
+
+        @Test
+        @DisplayName("A late higher-priority implementation is not masked by an earlier resolution")
+        void lateHigherPriorityImplementationParticipatesInNextResolution() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(LowPriorityGreeter.class);
+            container.refresh();
+
+            Greeter firstResolution = container.getBean(Greeter.class);
+            assertEquals("low", firstResolution.greet());
+
+            container.registerBean(LateHigherPriorityGreeter.class);
+            container.refresh();
+
+            Greeter secondResolution = container.getBean(Greeter.class);
+
+            // Inert-case guard: without invalidation the first resolution stays cached
+            // permanently and this would still return "low".
+            assertEquals("late-higher", secondResolution.greet());
+        }
+
+        @Test
+        @DisplayName("A late equal-priority implementation throws on the next resolution")
+        void lateEqualPriorityImplementationThrowsOnNextResolution() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(DefaultPriorityGreeterA.class);
+            container.refresh();
+
+            Greeter firstResolution = container.getBean(Greeter.class);
+            assertEquals("default-a", firstResolution.greet());
+
+            container.registerBean(LateEqualPriorityGreeter.class);
+            container.refresh();
+
+            // Inert-case guard: this is precisely the scenario D-12 exists for. Without
+            // invalidation the cached first resolution is returned and the ambiguity check
+            // never fires here -- indistinguishable from there being no check at all.
+            assertThrows(ContainerException.class, () -> container.getBean(Greeter.class));
+        }
+
+        @Test
+        @DisplayName("An explicit registerType binding survives an unrelated registerSingleton and registerBeanDefinition")
+        void explicitTypeBindingSurvivesUnrelatedRegistrations() {
+            SimpleContainer container = new SimpleContainer();
+            MarkerImpl explicitInstance = new MarkerImpl();
+            container.registerType(Marker.class, explicitInstance);
+
+            container.registerSingleton("unrelatedSingleton", new UnrelatedSingleton());
+            container.registerBean(UnrelatedBean.class);
+            container.refresh();
+
+            Marker resolved = container.getBean(Marker.class);
+
+            // Inert-case guard: a blanket typeMappings.clear() invalidation strategy would
+            // satisfy every other assertion in this class while silently dropping this
+            // author-declared binding.
+            assertSame(explicitInstance, resolved);
+        }
+
+        @Test
+        @DisplayName("Repeated resolution with no intervening registration returns the same cached instance")
+        void repeatedResolutionWithoutRegistrationReturnsCachedInstance() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(HighPriorityGreeter.class);
+            container.refresh();
+
+            Greeter first = container.getBean(Greeter.class);
+            Greeter second = container.getBean(Greeter.class);
+
+            assertSame(first, second);
         }
     }
 }
