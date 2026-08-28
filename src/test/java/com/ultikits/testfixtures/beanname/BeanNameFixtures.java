@@ -68,7 +68,7 @@ public class BeanNameFixtures {
     // NFC (precomposed) name -- U+00E9 LATIN SMALL LETTER E WITH ACUTE, written as an explicit
     // backslash-u escape (not a literal accented character in the source file) so no
     // editor/tool text pipeline can silently re-normalize it before javac ever sees it.
-    @Bean(name = "café")
+    @Bean(name = "caf\u00e9")
     public String nfcName() {
         return "nfc-instance";
     }
@@ -77,7 +77,7 @@ public class BeanNameFixtures {
     // ACCENT, also an explicit backslash-u escape pair. Visually identical to nfcName()'s
     // declared name once rendered, but a different sequence of UTF-16 code units -- exactly
     // the case String.equals (no normalization) must treat as two distinct bean names.
-    @Bean(name = "café")
+    @Bean(name = "cafe\u0301")
     public String nfdName() {
         return "nfd-instance";
     }
