@@ -404,9 +404,9 @@ class SQLiteDataStoreTest {
                     buildScope("Requester", java.util.Collections.emptySet());
 
             assertThatThrownBy(() -> store.getOperator(scope, TestDataEntity.class))
-                    .isInstanceOf(com.ultikits.ultitools.exceptions.DataAccessException.class)
-                    .extracting(e -> ((com.ultikits.ultitools.exceptions.DataAccessException) e).getErrorCode())
-                    .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.ENTITY_NOT_OWNED);
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(e -> ((DataAccessException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.ENTITY_NOT_OWNED);
         }
 
         @Test

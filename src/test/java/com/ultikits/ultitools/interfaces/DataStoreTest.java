@@ -129,7 +129,7 @@ class DataStoreTest {
         @Test
         @DisplayName("Should have checkOwnership(File, Class) as a default method (D-14/D-18, 02-12)")
         void shouldHaveCheckOwnershipFileMethod() throws NoSuchMethodException {
-            Method method = DataStore.class.getMethod("checkOwnership", java.io.File.class, Class.class);
+            Method method = DataStore.class.getMethod("checkOwnership", File.class, Class.class);
             assertThat(method).isNotNull();
             assertThat(method.isDefault()).isTrue();
         }

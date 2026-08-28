@@ -41,7 +41,7 @@ public class ExternalDataStoreTest {
      * introduces. {@code tempDir} matches no registered external plugin scope.
      */
     @Test
-    void defaultMethod_refusesUnregisteredFolder() {
+    void defaultMethodRefusesUnregisteredFolder() {
         PluginManager pluginManager = mock(PluginManager.class);
         when(pluginManager.findScopeForDataFolder(tempDir)).thenReturn(null);
         TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getPluginManager()).thenReturn(pluginManager));
@@ -60,7 +60,7 @@ public class ExternalDataStoreTest {
      * before Task 3, since this default body genuinely has no storage implementation of its own.
      */
     @Test
-    void defaultMethod_throwsUnsupportedOnceOwnershipCheckPasses() throws Exception {
+    void defaultMethodThrowsUnsupportedOnceOwnershipCheckPasses() throws Exception {
         java.lang.reflect.Method forExternal = DataScope.class.getDeclaredMethod(
                 "forExternal", String.class, File.class, java.util.Set.class);
         forExternal.setAccessible(true);

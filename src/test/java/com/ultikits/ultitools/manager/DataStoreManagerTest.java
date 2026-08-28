@@ -1050,7 +1050,7 @@ class DataStoreManagerTest {
             // touching getDataStore(). A real DataStore (default methods live) is needed here so
             // the interface's own getOperator(DataScope, Class) body actually runs the check.
             org.bukkit.plugin.java.JavaPlugin externalPlugin =
-                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("UltiToolsApiLegacyRoutingFixture");
+                    MockBukkit.createMockPlugin("UltiToolsApiLegacyRoutingFixture");
             com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
                     new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
             DataScope scope = scopeFor(adapter.getPluginName(), java.util.Collections.emptySet(),
@@ -1086,7 +1086,7 @@ class DataStoreManagerTest {
             // Counterpart of ultiToolsPluginGetDataOperatorShouldRouteThroughDataScopeOverload for
             // the external-plugin entry point (CR-03, 02-REVIEW.md).
             org.bukkit.plugin.java.JavaPlugin externalPlugin =
-                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("UltiToolsApiDataScopeRoutingFixture");
+                    MockBukkit.createMockPlugin("UltiToolsApiDataScopeRoutingFixture");
             com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
                     new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
             DataScope scope = scopeFor(adapter.getPluginName(),
@@ -1127,7 +1127,7 @@ class DataStoreManagerTest {
             // statement, which is why this test now also stubs findScopeForDataFolder below. The
             // path-resolution and pool-caching logic after that first line remains unchanged.)
             org.bukkit.plugin.java.JavaPlugin externalPlugin =
-                    org.mockbukkit.mockbukkit.MockBukkit.createMockPlugin("SqlitePathPreservationFixture");
+                    MockBukkit.createMockPlugin("SqlitePathPreservationFixture");
             com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
                     new com.ultikits.ultitools.api.ExternalPluginAdapter(externalPlugin);
             DataScope scope = scopeFor(adapter.getPluginName(),
@@ -1231,11 +1231,11 @@ class DataStoreManagerTest {
         }
 
         @SuppressWarnings("unchecked")
-        private java.util.Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>
+        private Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>
                 adaptersField() throws Exception {
             Field field = com.ultikits.ultitools.api.UltiToolsAPI.class.getDeclaredField("adapters");
             field.setAccessible(true);
-            return (java.util.Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>)
+            return (Map<org.bukkit.plugin.java.JavaPlugin, com.ultikits.ultitools.api.ExternalPluginAdapter>)
                     field.get(null);
         }
     }

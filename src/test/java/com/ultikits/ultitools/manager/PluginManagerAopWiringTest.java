@@ -406,7 +406,7 @@ class PluginManagerAopWiringTest {
             }
 
             @Override
-            public <T extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String>> DataOperator<T> getOperator(
+            public <T extends BaseDataEntity<String>> DataOperator<T> getOperator(
                     com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin, Class<T> dataEntity) {
                 throw new UnsupportedOperationException("not needed by this test");
             }
@@ -418,6 +418,7 @@ class PluginManagerAopWiringTest {
 
             @Override
             public void destroyAllOperators() {
+                // intentional no-op: this fake DataStore has no operator pool for this test to tear down
             }
         };
         UltiTools mockUltiTools = mock(UltiTools.class);

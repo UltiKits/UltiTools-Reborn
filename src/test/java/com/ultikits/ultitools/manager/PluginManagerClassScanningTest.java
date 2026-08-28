@@ -223,8 +223,8 @@ class PluginManagerClassScanningTest {
         // PUBLIC UltiToolsAPI.connect(plugin, additionalEntities...) overload D-19 introduced.
         registerOwnership("VictimModule", UnrelatedEntity.class);
 
-        com.ultikits.ultitools.manager.DependenceManagers dependenceManagers =
-                org.mockito.Mockito.mock(com.ultikits.ultitools.manager.DependenceManagers.class);
+        DependenceManagers dependenceManagers =
+                org.mockito.Mockito.mock(DependenceManagers.class);
         org.mockito.Mockito.when(dependenceManagers.getContext())
                 .thenReturn(new com.ultikits.ultitools.context.SimpleContainer());
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
@@ -237,7 +237,7 @@ class PluginManagerClassScanningTest {
         org.mockito.Mockito.when(attacker.getName()).thenReturn("AttackerPlugin");
         org.mockito.Mockito.when(attacker.getDescription()).thenReturn(desc);
         org.mockito.Mockito.when(desc.getVersion()).thenReturn("1.0.0");
-        org.mockito.Mockito.when(desc.getAuthors()).thenReturn(java.util.Collections.emptyList());
+        org.mockito.Mockito.when(desc.getAuthors()).thenReturn(Collections.emptyList());
         // Top-level main class name (no dot) -> ExternalPluginAdapter.getScanPackage() is empty,
         // so registerExternal skips component scanning -- keeps this test focused on the ownership
         // refusal, not on IoC container plumbing.
@@ -374,7 +374,7 @@ class PluginManagerClassScanningTest {
     private void addToPluginClassList(Class<?> standIn) throws Exception {
         Field field = PluginManager.class.getDeclaredField("pluginClassList");
         field.setAccessible(true);
-        ((java.util.List) field.get(pluginManager)).add(standIn);
+        ((List) field.get(pluginManager)).add(standIn);
     }
 
     private static Exception unwrap(java.lang.reflect.InvocationTargetException e) {

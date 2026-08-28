@@ -58,7 +58,6 @@ class TransactionalRollbackEndToEndTest {
 
     private static DataSource h2DataSource;
 
-    private DataStore fakeDataStore;
     private MockedStatic<UltiTools> ultiToolsMock;
     private DataScope scope;
 
@@ -84,7 +83,7 @@ class TransactionalRollbackEndToEndTest {
         // The DataStore extension point this task's D-17 seam exists for: a third-party
         // implementation whose getDataSource(DataScope) hands back a real DataSource, exercised
         // exactly the way SQLiteDataStore's own override will be.
-        fakeDataStore = new DataStore() {
+        DataStore fakeDataStore = new DataStore() {
             @Override
             public String getStoreType() {
                 return "fake-jdbc";
@@ -103,6 +102,7 @@ class TransactionalRollbackEndToEndTest {
 
             @Override
             public void destroyAllOperators() {
+                // intentional no-op: this fake DataStore has no operator pool for this test to tear down
             }
         };
 
