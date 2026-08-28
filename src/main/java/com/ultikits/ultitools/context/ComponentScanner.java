@@ -2,7 +2,6 @@ package com.ultikits.ultitools.context;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.net.JarURLConnection;
 import java.net.URL;
@@ -235,17 +234,54 @@ public class ComponentScanner {
     }
 
     /**
-     * Check if class has meta-component annotation.
+     * Check if class has a meta-component annotation, anywhere on its whole annotation tree.
+     * <p>
+     * Widened from the previous hand-written implementation (D-03, 03-02), which inspected only
+     * the annotations declared directly on the class and only one meta-annotation level deep, so
+     * a stereotype annotation composed two levels above {@code @Component} was not recognised.
+     * {@link MergedAnnotationResolver#isPresent} walks the full annotation tree, so it now is.
+     * This is intentional -- a composed stereotype annotation exists precisely to be recognised --
+     * and is recorded against {@code COMPATIBILITY.md}'s behaviour-change criterion by 03-10.
+     * <p>
+     * <b>Exception: a {@link UltiToolsPlugin} subclass is never treated as a component here</b>,
+     * regardless of what its annotation tree resolves to. {@code @UltiToolsModule} composes
+     * {@code @Configuration}, which is itself meta-annotated {@code @Component} -- so an
+     * unqualified whole-tree walk would also match every module's own main class. That class is
+     * already constructed and registered as a singleton by {@code PluginManager} *before* this
+     * scan ever runs (its `plugin.yml` metadata has to be read first), under its raw
+     * {@code Class.getSimpleName()} as the bean name. {@code ComponentScanner}'s own bean-naming
+     * convention decapitalizes that same name, so the two registrations never collide, and
+     * treating the module main class as a scannable {@code @Component} would register a *second*
+     * bean definition for it under the decapitalized name -- which {@code preInstantiateSingletons}
+     * would then construct via reflection, re-running the module's entire no-arg constructor
+     * (`plugin.yml` re-parse, resource re-copy, a second config-entity registration under an
+     * orphaned plugin instance) a second time. Excluded here rather than in {@link #isComponent},
+     * whose own four-way disjunction stays untouched (D-03 scope).
      * <br>
-     * 检查类是否有元组件注解。
+     * 检查类是否在其整棵注解树上的任意位置携带元组件注解。
+     * <p>
+     * 相较此前手写实现的扩展（D-03，03-02）：旧实现只检查类上直接声明的注解，且只向上遍历一层
+     * 元注解，因此在 {@code @Component} 之上组合了两层的原型注解无法被识别。
+     * {@link MergedAnnotationResolver#isPresent} 会遍历整棵注解树，因此现在可以被识别。这是刻意
+     * 的——组合原型注解存在的意义正是要被识别——并由 03-10 记录进
+     * {@code COMPATIBILITY.md} 的行为变更判定标准。
+     * <p>
+     * <b>例外：{@link UltiToolsPlugin} 子类在此处永远不会被视为组件</b>，无论其注解树解析结果如何。
+     * {@code @UltiToolsModule} 组合了 {@code @Configuration}，而后者本身元注解了
+     * {@code @Component}——因此不加限定的整树遍历也会匹配到每个模块自身的主类。而该类在本次扫描
+     * 运行之前就已经被 {@code PluginManager} 构造并以单例注册（必须先读取其 `plugin.yml`
+     * 元数据），使用它原始的 {@code Class.getSimpleName()} 作为 bean 名称。{@code ComponentScanner}
+     * 自身的 bean 命名约定会把同一个名字首字母小写，因此这两次注册永远不会碰撞；若把模块主类也视为
+     * 可扫描的 {@code @Component}，就会在首字母小写的名字下为它注册*第二个* bean 定义——之后
+     * {@code preInstantiateSingletons} 会通过反射构造它，重新执行一遍整个无参构造函数
+     * （重新解析 `plugin.yml`、重新复制资源、在一个孤儿插件实例下再注册一遍配置实体）。在此处
+     * 排除，而非改动 {@link #isComponent} 自身的四路析取（保持 D-03 的范围不变）。
      */
     private boolean hasComponentAnnotation(Class<?> clazz) {
-        for (Annotation annotation : clazz.getAnnotations()) {
-            if (annotation.annotationType().isAnnotationPresent(Component.class)) {
-                return true;
-            }
+        if (UltiToolsPlugin.class.isAssignableFrom(clazz)) {
+            return false;
         }
-        return false;
+        return MergedAnnotationResolver.isPresent(clazz, Component.class);
     }
 
     /**
