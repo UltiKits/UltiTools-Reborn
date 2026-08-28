@@ -4,7 +4,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
-import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
@@ -95,7 +95,7 @@ public class ListenerManager {
         for (String listenerBean : plugin.getContext().getBeanNamesForType(Listener.class)) {
             Listener listener = plugin.getContext().getBean(listenerBean, Listener.class);
             if (listener == null) continue;
-            EventListener annotation = AnnotationUtils.findAnnotation(listener.getClass(), EventListener.class);
+            EventListener annotation = MergedAnnotationResolver.find(listener.getClass(), EventListener.class);
             if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, listener);
         }
@@ -140,7 +140,7 @@ public class ListenerManager {
         for (String listenerBean : adapter.getContext().getBeanNamesForType(Listener.class)) {
             Listener listener = adapter.getContext().getBean(listenerBean, Listener.class);
             if (listener == null) continue;
-            EventListener annotation = AnnotationUtils.findAnnotation(listener.getClass(), EventListener.class);
+            EventListener annotation = MergedAnnotationResolver.find(listener.getClass(), EventListener.class);
             if (annotation == null || annotation.manualRegister()) continue;
             Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
             externalListenerMap.computeIfAbsent(adapter.getPluginName(), k -> new ArrayList<>()).add(listener);

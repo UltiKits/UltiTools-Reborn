@@ -24,7 +24,7 @@ import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
-import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
@@ -160,7 +160,7 @@ public class CommandManager {
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
             if (commandExecutor == null) continue;
-            CmdExecutor annotation = AnnotationUtils.findAnnotation(commandExecutor.getClass(), CmdExecutor.class);
+            CmdExecutor annotation = MergedAnnotationResolver.find(commandExecutor.getClass(), CmdExecutor.class);
             if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, commandExecutor);
         }
@@ -292,7 +292,7 @@ public class CommandManager {
         for (String cmdBean : adapter.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor executor = adapter.getContext().getBean(cmdBean, CommandExecutor.class);
             if (executor == null) continue;
-            CmdExecutor annotation = AnnotationUtils.findAnnotation(executor.getClass(), CmdExecutor.class);
+            CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
             if (annotation == null || annotation.manualRegister()) continue;
             registerExternalCommand(adapter.getPluginName(), executor, annotation);
         }

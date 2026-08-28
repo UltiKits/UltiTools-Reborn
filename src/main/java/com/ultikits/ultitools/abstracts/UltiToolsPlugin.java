@@ -23,6 +23,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -37,7 +38,6 @@ import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.AnnotationUtils;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
@@ -324,7 +324,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * 初始化配置实体。
      */
     private void initConfig() throws IOException {
-        EnableAutoRegister annotation = AnnotationUtils.findAnnotation(this.getClass(), EnableAutoRegister.class);
+        EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
             for (String packageName : DependencyUtils.getPluginPackages(this)) {
                 UltiTools.getInstance().getConfigManager().registerAll(

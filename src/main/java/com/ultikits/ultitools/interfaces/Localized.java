@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import com.ultikits.ultitools.annotations.I18n;
-import com.ultikits.ultitools.utils.AnnotationUtils;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -26,7 +26,7 @@ public interface Localized {
      * @see <a href="https://dev.ultikits.com/en/guide/essentials/i18n.html">Internationalization</a>
      */
     default List<String> supported() {
-        I18n i18n = AnnotationUtils.findAnnotation(this.getClass(), I18n.class);
+        I18n i18n = MergedAnnotationResolver.find(this.getClass(), I18n.class);
         if (i18n != null) {
             return Arrays.asList(i18n.value());
         } else {
