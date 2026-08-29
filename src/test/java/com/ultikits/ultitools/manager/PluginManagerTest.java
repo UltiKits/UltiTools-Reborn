@@ -37,6 +37,7 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.interfaces.DataStore;
 
 import org.bukkit.Bukkit;
@@ -290,12 +291,58 @@ class PluginManagerTest {
     @DisplayName("unregister 测试")
     class UnregisterTests {
 
+        /**
+         * unregister's own path never calls {@code getListenerManager()}/{@code getEventBus()}
+         * with anything but a real instance in production -- the shared top-level
+         * {@link #setUp()} only stubs {@code getLogger()}, so unregister's unconditional
+         * {@code UltiTools.getInstance().getListenerManager().unregisterAll(plugin)} call would
+         * NPE on a bare mock. Re-mocking here (mirroring {@code CompatibilityGateOrderingTests}'s
+         * own {@code setUpGate()}) supplies both.
+         */
+        @BeforeEach
+        void setUpUnregister() {
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                when(ultiTools.getEventBus()).thenReturn(new EventBus());
+            });
+        }
+
         @Test
         @DisplayName("应该能够调用 unregister 方法")
         void shouldBeAbleToCallUnregister() throws Exception {
             // 由于需要完整的插件实例，这里只测试方法存在
             Method method = PluginManager.class.getDeclaredMethod("unregister", UltiToolsPlugin.class);
             assertThat(method).isNotNull();
+        }
+
+        @Test
+        @DisplayName("从未注册过的实例调用 unregister 不应抛出异常（SILENT-19，#338）")
+        void unregisterNeverRegisteredInstance_doesNotThrow() {
+            // getContext() is unstubbed -> null, mirroring a hand-constructed UltiToolsPlugin
+            // instance that was never registered through PluginManager at all.
+            UltiToolsPlugin neverRegistered = mock(UltiToolsPlugin.class);
+            when(neverRegistered.getPluginName()).thenReturn("NeverRegistered");
+
+            assertDoesNotThrow(() -> pluginManager.unregister(neverRegistered));
+
+            // unregisterSelf() does not dereference the context, so it still runs -- a
+            // never-registered instance still gets its own teardown hook.
+            verify(neverRegistered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("已注册实例调用 unregister 仍会关闭它的 context（正对照，防止 unregister 变成空操作）")
+        void unregisterRegisteredInstance_stillClosesContext() {
+            UltiToolsPlugin registered = mock(UltiToolsPlugin.class);
+            when(registered.getPluginName()).thenReturn("Registered");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(registered.getContext()).thenReturn(context);
+
+            assertDoesNotThrow(() -> pluginManager.unregister(registered));
+
+            verify(context).close();
+            verify(registered).unregisterSelf();
         }
     }
 
@@ -815,6 +862,22 @@ class PluginManagerTest {
             // is ever removed from that path, this container comes back with no resolver attached
             // and @ExceptionCatch/@Transactional silently stop doing anything again. See issue #190.
             assertThat(contextCaptor.getValue().getAopProxyResolver()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("成功注册的模块应该能通过 getPluginList() 取回（#338 第二个断言不成立）")
+        void successfullyRegisteredModuleShouldBeRetrievableViaGetPluginList() throws Exception {
+            // Arrange
+            UltiToolsPlugin plugin = modules("RetrievableModule", "com.example.RetrievableModule",
+                    "1.0.0", CURRENT_API_VERSION);
+            when(plugin.registerSelf()).thenReturn(true);
+
+            // Act
+            boolean result = pluginManager.register(plugin);
+
+            // Assert
+            assertThat(result).isTrue();
+            assertThat(pluginManager.getPluginList()).contains(plugin);
         }
 
         @Test
