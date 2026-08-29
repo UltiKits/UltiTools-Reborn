@@ -191,11 +191,39 @@ public abstract class AbstractConfigEntity {
      * {@link #toJsonObject()} 也按字段名把它发给面板，而这里去 JSON 里找空字符串键，
      * 永远找不到——字段被跳过，随后 {@code config.save} 照常执行，调用方收到成功。
      *
+     * <p>
+     * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
+     * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
+     * #reload()} already use - before either {@code config.set(...)} or {@code config.save(...)}
+     * runs. A violating value refuses with {@link ConfigurationException} instead of being
+     * written: the operator's file is left byte-identical, and every field this call touched is
+     * restored to the value it held before the call, so memory never disagrees with disk (D-01,
+     * D-04). Unlike {@link #reload()}, this entity keeps running after a refusal, so its
+     * in-memory state must not be left holding a rejected value.
+     * <p>
+     * 自 6.3.0 起（SILENT-14，收尾 CR-01）本方法会先校验更新后的完整字段状态——与
+     * {@link #init(UltiToolsPlugin)}/{@link #reload()} 已经在用的同一个 {@link #validateFields()}
+     * ——然后才会执行 {@code config.set(...)} 或 {@code config.save(...)}。违规的值会以
+     * {@link ConfigurationException} 拒绝而不是被写入：操作员的文件保持字节级不变，本次调用
+     * 触碰过的每个字段都会被恢复为调用前的值，内存与磁盘不会产生分歧（D-01、D-04）。与
+     * {@link #reload()} 不同，这个实体在拒绝后仍会继续运行，所以内存状态不能停留在被拒绝的值上。
+     *
      * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException            if an I/O error occurs <br> 如果发生I/O错误
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the post-update field state violates a {@code @Range}/
+     *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
+     *                                 - the file is not written and touched fields are restored
+     *                                 <br> 若更新后的字段状态违反了 {@code @Range}/{@code @NotEmpty}/
+     *                                 {@code @Size}/{@code @Pattern} 约束——文件不会被写入，
+     *                                 被触碰过的字段会被恢复
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         Gson gson = new Gson();
+        // Phase one: apply to fields only. Remember each touched field's pre-call value first
+        // so a refusal in phase two can restore it - nothing reaches `config` or disk here.
+        List<Field> touchedFields = new ArrayList<>();
+        List<Object> previousValues = new ArrayList<>();
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
@@ -207,11 +235,38 @@ public abstract class AbstractConfigEntity {
                 if (jsonObject.has(path)) {
                     Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
                     if (configValue != null) {
+                        touchedFields.add(field);
+                        previousValues.add(ReflectionUtil.getFieldValue(this, field));
                         ReflectionUtil.setFieldValue(this, field, configValue);
-                        config.set(path, configValue);
                     }
                 }
             }
+        }
+
+        // Phase two: validate the full post-update state, restoring on refusal. Must run
+        // before the first field write below, not merely before the final save call -
+        // otherwise a refusal would still leave the in-memory YamlConfiguration holding
+        // rejected values for a later, unrelated save() to flush. The original exception is
+        // rethrown unchanged - never wrapped, never converted to IOException, never swallowed.
+        try {
+            validateFields();
+        } catch (RuntimeException e) {
+            for (int i = 0; i < touchedFields.size(); i++) {
+                ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+            }
+            throw e;
+        }
+
+        // Phase three: persist. Only reached once validation has passed. Writes the same
+        // Gson-deserialized value the method has always written - not the @ConfigEntry.parser()
+        // serialized form save() uses; that asymmetry is pre-existing and out of scope here.
+        for (Field field : touchedFields) {
+            ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+            String path = annotation.path();
+            if (path.isEmpty()) {
+                path = field.getName();
+            }
+            config.set(path, ReflectionUtil.getFieldValue(this, field));
         }
         config.save(ultiToolsPlugin.getConfigFile(configFilePath));
     }
