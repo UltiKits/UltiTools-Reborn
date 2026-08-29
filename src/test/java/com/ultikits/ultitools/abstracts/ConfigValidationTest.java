@@ -305,7 +305,9 @@ class ConfigValidationTest {
         @DisplayName("Should leave the yml file byte-identical across a throwing init()")
         void shouldLeaveFileByteIdenticalAcrossThrowingInit() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
-            Files.write(configFile.toPath(), "interval: 5000".getBytes());
+            // Both fields present and rate valid, so init()'s missing-key auto-add (D-01's one
+            // sanctioned exception) never fires - any diff here can only come from the reset path.
+            Files.write(configFile.toPath(), "interval: 5000\nrate: 0.01".getBytes());
             String shaBefore = sha256(configFile.toPath());
 
             RangeConfig config = new RangeConfig("range.yml");
@@ -368,7 +370,7 @@ class ConfigValidationTest {
         @DisplayName("Should throw the same message and leave the file unchanged across two calls")
         void shouldThrowConsistentlyAcrossRepeatedInit() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
-            Files.write(configFile.toPath(), "interval: 5000".getBytes());
+            Files.write(configFile.toPath(), "interval: 5000\nrate: 0.01".getBytes());
             String shaBefore = sha256(configFile.toPath());
 
             RangeConfig config1 = new RangeConfig("range.yml");

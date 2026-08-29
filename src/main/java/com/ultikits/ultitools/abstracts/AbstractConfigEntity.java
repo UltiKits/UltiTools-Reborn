@@ -3,7 +3,10 @@ package com.ultikits.ultitools.abstracts;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
@@ -18,6 +21,7 @@ import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -207,70 +211,131 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
-     * Invalid values are reset to their Java field initializer defaults and a warning is logged.
+     * A violation refuses this config's module instead of rewriting the value - the operator's
+     * file is never modified (D-01). Every violating field is collected and named in a single
+     * refusal; the module author must fix the value(s) on disk and restart.
      * <p>
-     * 验证所有带验证注解的字段。无效值将重置为Java字段初始化默认值并记录警告。
+     * 验证所有带验证注解的字段。违反约束将拒绝加载该模块，而不是改写字段值——操作员的文件绝不会
+     * 被修改（D-01）。所有违规字段会被收集进同一次拒绝里；需要由服务器操作员修正磁盘上的值后重启。
+     *
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if any field violates its validation constraint, or if this
+     *                                 config class cannot be constructed through either of the
+     *                                 two framework-supported idioms (D-03)
      */
     protected void validateFields() {
-        Object defaultInstance;
-        try {
-            defaultInstance = this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
-        } catch (Exception e) {
-            LOGGER.log(Level.FINE, "Cannot create default instance for validation: " + this.getClass().getSimpleName());
+        List<Field> configFields = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                configFields.add(field);
+            }
+        }
+        if (configFields.isEmpty()) {
             return;
         }
 
-        boolean modified = false;
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (!field.isAnnotationPresent(ConfigEntry.class)) {
-                continue;
-            }
+        // Proves this class still supports one of the two framework idioms (D-02/D-03) - the
+        // constructed instance itself is discarded, only its existence matters here.
+        ensureConstructable();
+
+        List<String> violations = new ArrayList<>();
+        for (Field field : configFields) {
             field.setAccessible(true);
             try {
-                if (validateSingleField(field, defaultInstance)) {
-                    modified = true;
+                String violation = validateSingleField(field);
+                if (violation != null) {
+                    violations.add(violation);
                 }
             } catch (IllegalAccessException e) {
                 LOGGER.log(Level.WARNING, "Failed to validate field: " + field.getName(), e);
             }
         }
 
-        if (modified && ultiToolsPlugin != null) {
-            try {
-                save();
-            } catch (IOException e) {
-                LOGGER.log(Level.WARNING, "Failed to save corrected config: " + configFilePath, e);
-            }
+        if (!violations.isEmpty()) {
+            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
     }
 
-    private boolean validateSingleField(Field field, Object defaultInstance) throws IllegalAccessException {
+    /**
+     * Constructs and discards an instance of this config class through the same two-step
+     * fallback {@code ConfigManager.registerAll} uses at registration time - a {@code (String)}
+     * constructor first, then an accessible no-arg constructor. Existence, not the constructed
+     * value, is what this proves: the framework needs every registered config class to still be
+     * buildable through one of its two documented idioms (D-02). Neither resolving is a genuine
+     * config-class error (D-03).
+     * <p>
+     * 通过与 {@code ConfigManager.registerAll} 注册期完全相同的两步回退方式构造并丢弃本类的一个
+     * 实例——{@code (String)} 构造函数优先，其次是可访问的无参构造函数。这里证明的是"能否构造"
+     * 而非构造出的值：框架需要确认每个已注册的配置类仍然可以通过两种受支持写法之一构建
+     * （D-02）。两者都无法解析属于真正的配置类错误（D-03）。
+     *
+     * @throws ConfigurationException if neither constructor resolves
+     */
+    private void ensureConstructable() {
+        try {
+            try {
+                this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
+            } catch (NoSuchMethodException e) {
+                // Try no-arg constructor (class may hardcode path via super() call)
+                this.getClass().getDeclaredConstructor().newInstance();
+            }
+        } catch (InstantiationException | InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
+            throw ConfigurationException.unconstructable(this.getClass().getName(), e);
+        }
+    }
+
+    /**
+     * Describes the single validation constraint {@code field} violates, if any.
+     * <p>
+     * 描述 {@code field} 违反的单个校验约束（如果有的话）。
+     *
+     * @param field the field to check, already made accessible
+     * @return a violation description naming the field, its actual value (redacted for
+     *         {@code @Pattern} on a secret-shaped field name, T-04-04) and the broken constraint,
+     *         or {@code null} if the field's value satisfies its annotations
+     */
+    private String validateSingleField(Field field) throws IllegalAccessException {
         Object value = field.get(this);
-        Object defaultValue = field.get(defaultInstance);
-        boolean reset = false;
 
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
-            logResetWarning("value %s out of range [%s, %s]", field, value, range.min(), range.max(), defaultValue);
-            reset = true;
-        } else if (isNotEmptyViolation(field, value)) {
-            logResetWarning("is empty", field, null, null, null, defaultValue);
-            reset = true;
-        } else if (isSizeViolation(field, value)) {
+            return String.format("field '%s' value %s is out of range [%s, %s]",
+                    field.getName(), value, range.min(), range.max());
+        }
+        if (isNotEmptyViolation(field, value)) {
+            return String.format("field '%s' must not be empty", field.getName());
+        }
+        if (isSizeViolation(field, value)) {
             Size size = field.getAnnotation(Size.class);
             int len = getValueLength(value);
-            logResetWarning("size %d out of bounds [%d, %d]", field, len, size.min(), size.max(), defaultValue);
-            reset = true;
-        } else if (isPatternViolation(field, value)) {
+            return String.format("field '%s' size %d is out of bounds [%d, %d]",
+                    field.getName(), len, size.min(), size.max());
+        }
+        if (isPatternViolation(field, value)) {
             Pattern pattern = field.getAnnotation(Pattern.class);
-            logResetWarning("value '%s' does not match pattern '%s'", field, value, pattern.regex(), null, defaultValue);
-            reset = true;
+            String displayValue = isSecretShapedFieldName(field.getName()) ? "<redacted>" : "'" + value + "'";
+            return String.format("field '%s' value %s does not match pattern '%s'",
+                    field.getName(), displayValue, pattern.regex());
         }
+        return null;
+    }
 
-        if (reset) {
-            field.set(this, defaultValue);
-        }
-        return reset;
+    /**
+     * Whether a field name looks like it stores a secret. Only {@code @Pattern} violations echo
+     * an arbitrary string value; {@code @Range}/{@code @Size} violations always echo a number or
+     * a length, and {@code @NotEmpty} violations are empty by definition, so neither can leak a
+     * secret verbatim (T-04-04).
+     * <p>
+     * 判断字段名是否形似存放密钥。只有 {@code @Pattern} 违规会回显任意字符串值；
+     * {@code @Range}/{@code @Size} 违规始终只回显数字或长度，{@code @NotEmpty} 违规按定义就是
+     * 空值，两者都不会泄露密钥原文（T-04-04）。
+     */
+    private boolean isSecretShapedFieldName(String fieldName) {
+        String lower = fieldName.toLowerCase(Locale.ROOT);
+        return lower.contains("password") || lower.contains("secret")
+                || lower.contains("token") || lower.contains("credential")
+                || lower.contains("apikey") || lower.contains("api_key");
     }
 
     private boolean isRangeViolation(Field field, Object value) {
@@ -301,14 +366,6 @@ public abstract class AbstractConfigEntity {
         if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
         if (value instanceof String) return ((String) value).length();
         return -1;
-    }
-
-    private void logResetWarning(String reason, Field field, Object val1, Object val2, Object val3, Object defaultValue) {
-        String msg = String.format("[UltiTools-API] Config '%s' field '%s' " + reason + ". Reset to default: %s",
-                configFilePath, field.getName(), val1, val2, val3, defaultValue);
-        // Remove trailing null args from message
-        msg = msg.replace(", null", "").replace("null, ", "");
-        LOGGER.warning(msg);
     }
 
     // ==================== Configuration Change Listener Support ====================
