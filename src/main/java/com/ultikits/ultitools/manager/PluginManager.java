@@ -1378,17 +1378,71 @@ public class PluginManager {
     }
 
     /**
-     * Initialize module.
+     * Initialize module using its default (zero-argument) constructor. This is the live,
+     * undeprecated construction path -- {@link #register(Class)} calls it directly.
      * <br>
-     * 初始化模块。
+     * 使用模块的默认（无参）构造器初始化模块。这是当前有效、未废弃的构造路径 -- {@link
+     * #register(Class)} 直接调用它。
+     *
+     * @param classLoader Class loader <br> 类加载器
+     * @param pluginClass Plugin class <br> 插件类
+     * @return the initialized module, or {@code null} if a compatibility gate rejected it
+     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     */
+    private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+        UltiToolsPlugin plugin;
+        try {
+            // 使用默认构造器
+            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
+            plugin = constructor.newInstance();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+        return finishInitializingPlugin(classLoader, pluginClass, plugin);
+    }
+
+    /**
+     * Initialize module using caller-supplied constructor arguments, resolved reflectively.
+     * A zero-length {@code constructorArgs} carries nothing to validate reflectively, so it is
+     * routed straight through {@link #initializePlugin(ClassLoader, Class)} -- the live,
+     * undeprecated path -- instead of running this method's with-args checks against an empty
+     * array (SILENT-17).
+     * <br>
+     * 使用调用方提供的构造器参数，通过反射初始化模块。若 {@code constructorArgs} 长度为零，
+     * 没有任何东西需要反射校验，因此直接转发给 {@link #initializePlugin(ClassLoader, Class)}
+     * ——当前有效、未废弃的路径——而不是对空数组运行这个方法的带参数校验逻辑（SILENT-17）。
      *
      * @param classLoader     Class loader <br> 类加载器
      * @param pluginClass     Plugin class <br> 插件类
      * @param constructorArgs Constructor arguments <br> 构造器参数
      * @return the initialized module, or {@code null} if a compatibility gate rejected it
      *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     * @deprecated This reflective, with-args construction path has failed on every release
+     *             since 6.2.0 (Phase 1 D-15, measured): {@link SecurityPolicy#isSafeParameterType}
+     *             matches collection arguments by exact runtime-class-name prefix
+     *             ({@code java.util.List}, {@code java.util.ArrayList}, ...), and neither
+     *             {@code Arrays.asList(...)}'s runtime type ({@code java.util.Arrays$ArrayList})
+     *             nor any {@code Collections.*} wrapper type matches any of those prefixes --
+     *             the list-typed arguments a caller actually supplies are rejected before
+     *             construction ever runs. This path is scheduled for removal (issue #332)
+     *             rather than repair; only the seven-argument {@link #register(Class, String,
+     *             String, List, List, int, String)} calls it with a non-empty argument array.
+     *             <p>
+     *             这条带参数的反射构造路径自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
+     *             {@link SecurityPolicy#isSafeParameterType} 按运行期类名的精确前缀（
+     *             {@code java.util.List}、{@code java.util.ArrayList} 等）匹配集合参数，而
+     *             {@code Arrays.asList(...)} 的运行期类型（{@code java.util.Arrays$ArrayList}）
+     *             和任何 {@code Collections.*} 包装类型都不匹配这些前缀——调用方实际能传入的
+     *             List 类型参数因此在构造之前就会被拒绝。这条路径计划移除（issue #332）而非
+     *             修复；只有传入非空参数数组的七参 {@link #register(Class, String, String,
+     *             List, List, int, String)} 会调用它。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        if (constructorArgs.length == 0) {
+            return initializePlugin(classLoader, pluginClass);
+        }
+
         // 验证构造器参数安全性
         if (!validateConstructorArgs(constructorArgs)) {
             throw new SecurityException("Invalid constructor arguments provided");
@@ -1396,32 +1450,45 @@ public class PluginManager {
 
         UltiToolsPlugin plugin;
         try {
-            if (constructorArgs.length == 0) {
-                // 使用默认构造器
-                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
-                plugin = constructor.newInstance();
-            } else {
-                // 验证构造器参数类型安全性
-                Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
-                for (int i = 0; i < constructorArgs.length; i++) {
-                    if (constructorArgs[i] == null) {
-                        throw new SecurityException("Null constructor argument not allowed at index: " + i);
-                    }
-                    paramTypes[i] = constructorArgs[i].getClass();
-
-                    // 验证参数类型是否安全
-                    if (!isSafeParameterType(paramTypes[i])) {
-                        throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
-                    }
+            // 验证构造器参数类型安全性
+            Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
+            for (int i = 0; i < constructorArgs.length; i++) {
+                if (constructorArgs[i] == null) {
+                    throw new SecurityException("Null constructor argument not allowed at index: " + i);
                 }
+                paramTypes[i] = constructorArgs[i].getClass();
 
-                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
-                plugin = constructor.newInstance(constructorArgs);
+                // 验证参数类型是否安全
+                if (!isSafeParameterType(paramTypes[i])) {
+                    throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
+                }
             }
+
+            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
+            plugin = constructor.newInstance(constructorArgs);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
         }
 
+        return finishInitializingPlugin(classLoader, pluginClass, plugin);
+    }
+
+    /**
+     * Run the construction-independent second half shared by both {@code initializePlugin}
+     * overloads: the compatibility gate, then container assembly. Neither overload forks after
+     * construction -- both funnel through this one method.
+     * <br>
+     * 运行两个 {@code initializePlugin} 重载共用的、与构造过程无关的后半段：先跑兼容性门禁，
+     * 再组装容器。两个重载在构造完成之后都不再分叉——都汇入这一个方法。
+     *
+     * @param classLoader Class loader to attach to the assembled container <br> 挂到组装好的
+     *        容器上的类加载器
+     * @param pluginClass Plugin class <br> 插件类
+     * @param plugin      the already-constructed plugin instance <br> 已经构造好的插件实例
+     * @return the initialized module, or {@code null} if a compatibility gate rejected it
+     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     */
+    private UltiToolsPlugin finishInitializingPlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, UltiToolsPlugin plugin) {
         // 门禁跑在建容器之前。它读的元数据在实例构造完就已经就位，而 refresh() 之后才检查
         // 等于先让不兼容的 bean 图跑一遍——那正是它会炸的地方。见 passesCompatibilityGates。
         if (!passesCompatibilityGates(plugin)) {
