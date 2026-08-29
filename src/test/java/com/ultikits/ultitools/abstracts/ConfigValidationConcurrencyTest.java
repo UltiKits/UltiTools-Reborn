@@ -151,10 +151,10 @@ class ConfigValidationConcurrencyTest {
         List<Future<Throwable>> futures = new ArrayList<>();
         CountDownLatch startGate = new CountDownLatch(1);
 
-        for (int round = 0; round < ROUNDS; round++) {
-            writeYaml("AlphaOk", "alpha.yml", "alphaInterval: 5");
-            writeYaml("BetaOk", "beta.yml", "betaTitle: 'ok'");
-        }
+        // Written once: the content is identical every round, and the concurrency under test is
+        // the two per-thread init() loops below, not this setup.
+        writeYaml("AlphaOk", "alpha.yml", "alphaInterval: 5");
+        writeYaml("BetaOk", "beta.yml", "betaTitle: 'ok'");
 
         futures.add(executor.submit(() -> {
             startGate.await();

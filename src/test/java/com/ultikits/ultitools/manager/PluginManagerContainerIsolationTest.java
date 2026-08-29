@@ -204,11 +204,20 @@ class PluginManagerContainerIsolationTest {
             File jar = buildFixtureJar("isolation-alpha-concurrent.jar", "IsolationAlphaModule",
                     Class.forName(ALPHA_PACKAGE + "IsolationAlphaModule"),
                     Class.forName(ALPHA_PACKAGE + "IsolationAlphaService"));
-            FixtureJarClassLoader loader = new FixtureJarClassLoader(
-                    jar.toURI().toURL(), Thread.currentThread().getContextClassLoader(), ALPHA_PACKAGE);
+            try (FixtureJarClassLoader loader = new FixtureJarClassLoader(
+                    jar.toURI().toURL(), Thread.currentThread().getContextClassLoader(), ALPHA_PACKAGE)) {
             Class<?> pluginClass = Class.forName(ALPHA_PACKAGE + "IsolationAlphaModule", true, loader);
 
-            UltiTools mockUltiTools = newMockUltiTools();
+            // WR-01: one mock set PER THREAD, never shared. Mockito records every invocation into
+            // per-mock unsynchronized state, so two threads driving a whole plugin assembly through
+            // the same mock is a latent flake independent of what this test measures. Both sets are
+            // built here on the main thread so mock CREATION is not concurrent either. This matches
+            // ConfigValidationConcurrencyTest, which already gives each thread its own plugin mock.
+            // No assertion below depends on the two threads sharing a parent container:
+            // getBeanDefinitionNames() is local-only, and the parent-chain reachability claim lives
+            // in SequentialAssemblyTests, which is single-threaded and still shares one mock set.
+            UltiTools jarPathUltiTools = newMockUltiTools();
+            UltiTools registerUltiTools = newMockUltiTools();
             PluginManager jarPathManager = newPluginManagerWithLoader(loader);
             PluginManager registerManager = newPluginManagerWithLoader(loader);
 
@@ -219,7 +228,7 @@ class PluginManagerContainerIsolationTest {
             Callable<UltiToolsPlugin> jarPathTask = () -> {
                 startGate.await();
                 try (MockedStatic<UltiTools> statics = mockStatic(UltiTools.class, CALLS_REAL_METHODS)) {
-                    statics.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                    statics.when(UltiTools::getInstance).thenReturn(jarPathUltiTools);
                     statics.when(UltiTools::getPluginVersion).thenReturn(Integer.MAX_VALUE);
                     return (UltiToolsPlugin) invokeInitializePlugin(jarPathManager, loader, pluginClass);
                 }
@@ -227,7 +236,7 @@ class PluginManagerContainerIsolationTest {
             Callable<UltiToolsPlugin> registerTask = () -> {
                 startGate.await();
                 try (MockedStatic<UltiTools> statics = mockStatic(UltiTools.class, CALLS_REAL_METHODS)) {
-                    statics.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                    statics.when(UltiTools::getInstance).thenReturn(registerUltiTools);
                     statics.when(UltiTools::getPluginVersion).thenReturn(Integer.MAX_VALUE);
                     UltiToolsPlugin plugin =
                             (UltiToolsPlugin) pluginClass.getDeclaredConstructor().newInstance();
@@ -287,6 +296,7 @@ class PluginManagerContainerIsolationTest {
                     .as("setPluginStaticInstance writes this field by design; whichever thread ran "
                             + "last wins, and that is the ONLY observable shared write")
                     .isIn(jarPathPlugin, registerPlugin);
+            }
         }
     }
 
@@ -306,10 +316,10 @@ class PluginManagerContainerIsolationTest {
                     Class.forName(BETA_PACKAGE + "IsolationBetaModule"),
                     Class.forName(BETA_PACKAGE + "IsolationBetaService"));
 
-            FixtureJarClassLoader alphaLoader = new FixtureJarClassLoader(
+            try (FixtureJarClassLoader alphaLoader = new FixtureJarClassLoader(
                     alphaJar.toURI().toURL(), Thread.currentThread().getContextClassLoader(), ALPHA_PACKAGE);
-            FixtureJarClassLoader betaLoader = new FixtureJarClassLoader(
-                    betaJar.toURI().toURL(), Thread.currentThread().getContextClassLoader(), BETA_PACKAGE);
+                 FixtureJarClassLoader betaLoader = new FixtureJarClassLoader(
+                    betaJar.toURI().toURL(), Thread.currentThread().getContextClassLoader(), BETA_PACKAGE)) {
 
             Class<?> alphaClass = Class.forName(ALPHA_PACKAGE + "IsolationAlphaModule", true, alphaLoader);
             Class<?> betaClass = Class.forName(BETA_PACKAGE + "IsolationBetaModule", true, betaLoader);
@@ -361,6 +371,7 @@ class PluginManagerContainerIsolationTest {
             assertThat(alphaPlugin.getContext())
                     .as("two modules must never share one container object")
                     .isNotSameAs(betaPlugin.getContext());
+            }
         }
     }
 }
