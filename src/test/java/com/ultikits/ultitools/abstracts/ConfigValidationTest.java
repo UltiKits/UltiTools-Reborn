@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -8,6 +11,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -24,6 +29,8 @@ import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
  * Tests for config validation annotations (@Range, @NotEmpty, @Size, @Pattern).
@@ -39,11 +46,30 @@ class ConfigValidationTest {
     @BeforeEach
     void setUp() throws IOException {
         mockPlugin = Mockito.mock(UltiToolsPlugin.class);
+        lenient().when(mockPlugin.getPluginName()).thenReturn("TestModule");
         lenient().when(mockPlugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(mockPlugin.getConfigFile(anyString())).thenAnswer(invocation -> {
             String path = invocation.getArgument(0);
             return new File(tempDir.toFile(), path);
         });
+    }
+
+    /**
+     * SHA-256 of a file's bytes, used to prove a refused load never rewrites the operator's file
+     * (D-01, D-04).
+     */
+    private static String sha256(Path path) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(Files.readAllBytes(path));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException(e);
+        }
     }
 
     @Nested
@@ -249,6 +275,117 @@ class ConfigValidationTest {
         }
     }
 
+    @Nested
+    @DisplayName("Refusal wiring (D-01/D-02/D-03/D-04/D-05 tracer)")
+    class RefusalWiring {
+
+        @Test
+        @DisplayName("Should throw ConfigurationException naming module, file, field, value and constraint")
+        void shouldThrowNamingModuleFileFieldValueAndConstraint() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 5000".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+
+            ConfigurationException thrown =
+                    catchThrowableOfType(() -> config.init(mockPlugin), ConfigurationException.class);
+
+            assertThat(thrown).isNotNull();
+            assertThat(thrown.getErrorCode()).isEqualTo(ErrorCode.CONFIG_VALIDATION_FAILED);
+            assertThat(thrown.getMessage())
+                    .contains("TestModule")
+                    .contains("range.yml")
+                    .contains("interval")
+                    .contains("5000")
+                    .contains("1")
+                    .contains("1200");
+        }
+
+        @Test
+        @DisplayName("Should leave the yml file byte-identical across a throwing init()")
+        void shouldLeaveFileByteIdenticalAcrossThrowingInit() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 5000".getBytes());
+            String shaBefore = sha256(configFile.toPath());
+
+            RangeConfig config = new RangeConfig("range.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin)).isInstanceOf(ConfigurationException.class);
+
+            assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+        }
+
+        @Test
+        @DisplayName("Should name both fields when two violate at once")
+        void shouldNameBothFieldsWhenTwoViolate() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 5000\nrate: 2.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval")
+                    .hasMessageContaining("rate");
+        }
+
+        @Test
+        @DisplayName("Should activate validation for the no-arg super(path) idiom (D-02)")
+        void shouldActivateValidationForNoArgConstructorIdiom() throws IOException {
+            File configFile = new File(tempDir.toFile(), "noargrange.yml");
+            Files.write(configFile.toPath(), "interval: 9999".getBytes());
+
+            NoArgRangeConfig config = new NoArgRangeConfig();
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval");
+        }
+
+        @Test
+        @DisplayName("Should return normally for a config class with no @ConfigEntry fields")
+        void shouldReturnNormallyWithNoConfigEntryFields() {
+            EmptyConfig config = new EmptyConfig("empty.yml");
+
+            assertThatCode(() -> config.init(mockPlugin)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("Should not throw and should still write the missing key when a field is absent from the yml")
+        void shouldNotThrowAndShouldWriteMissingKey() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "rate: 0.01".getBytes()); // interval absent
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            assertThat(config.interval).isEqualTo(20); // kept its initializer, no throw
+            String written = new String(Files.readAllBytes(configFile.toPath()));
+            assertThat(written).contains("interval");
+        }
+
+        @Test
+        @DisplayName("Should throw the same message and leave the file unchanged across two calls")
+        void shouldThrowConsistentlyAcrossRepeatedInit() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 5000".getBytes());
+            String shaBefore = sha256(configFile.toPath());
+
+            RangeConfig config1 = new RangeConfig("range.yml");
+            ConfigurationException first =
+                    catchThrowableOfType(() -> config1.init(mockPlugin), ConfigurationException.class);
+
+            RangeConfig config2 = new RangeConfig("range.yml");
+            ConfigurationException second =
+                    catchThrowableOfType(() -> config2.init(mockPlugin), ConfigurationException.class);
+
+            assertThat(first).isNotNull();
+            assertThat(second).isNotNull();
+            assertThat(second.getMessage()).isEqualTo(first.getMessage());
+            assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+        }
+    }
+
     // ==================== Test Config Classes ====================
 
     private static class RangeConfig extends AbstractConfigEntity {
@@ -291,6 +428,31 @@ class ConfigValidationTest {
         private String currency = "Coin";
 
         public PatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /**
+     * Only a no-arg constructor, hardcoding its path via {@code super(...)} - the shape of the
+     * 11 production config classes holding 146 constraints that were silently inert before this
+     * plan (D-02). Validation must activate for this idiom, not just the {@code (String)} one.
+     */
+    private static class NoArgRangeConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "interval", comment = "Update interval in ticks")
+        @Range(min = 1, max = 1200)
+        private int interval = 20;
+
+        public NoArgRangeConfig() {
+            super("noargrange.yml");
+        }
+    }
+
+    /**
+     * No {@code @ConfigEntry} field at all - {@code validateFields()} must return normally
+     * rather than requiring constructability for a class with nothing to validate.
+     */
+    private static class EmptyConfig extends AbstractConfigEntity {
+        public EmptyConfig(String configFilePath) {
             super(configFilePath);
         }
     }
