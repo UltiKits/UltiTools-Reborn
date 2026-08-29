@@ -114,9 +114,9 @@ class PluginManagerAutoRegisterAliasTest {
     }
 
     private void invokeRegisterBukkit(UltiToolsPlugin plugin) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("registerBukkit", UltiToolsPlugin.class, boolean.class);
+        Method method = PluginManager.class.getDeclaredMethod("registerBukkit", UltiToolsPlugin.class);
         method.setAccessible(true);
-        method.invoke(pluginManager, plugin, true);
+        method.invoke(pluginManager, plugin);
     }
 
     @Test
@@ -179,23 +179,15 @@ class PluginManagerAutoRegisterAliasTest {
      * throws an uncaught {@code ClassCastException} for any class extending the current {@code
      * BaseCommandExecutor} (issue #272).
      * <p>
-     * These tests invoke {@code registerBukkit(plugin, false)} directly -- the exact call {@code
-     * register(UltiToolsPlugin)} makes today -- over a REAL {@link SimpleContainer} and REAL
-     * {@link ListenerManager}/{@link CommandManager} (not mocks), so the assertions exercise the
-     * actual gating logic rather than a routing stub.
+     * {@code registerBukkit} now has a single one-argument signature reached identically from
+     * both {@code register(Class)} and {@code register(UltiToolsPlugin)} -- these tests reuse the
+     * outer class's {@link #invokeRegisterBukkit(UltiToolsPlugin)} helper over a REAL {@link
+     * SimpleContainer} and REAL {@link ListenerManager}/{@link CommandManager} (not mocks), so the
+     * assertions exercise the actual gating logic rather than a routing stub.
      */
     @Nested
     @DisplayName("registerBukkit's connector path honours manualRegister/@ConditionalOnConfig identically (WIRE-05 differences #6-#9)")
     class ConnectorPathParityTests {
-
-        /** Invokes the CURRENT two-argument {@code registerBukkit(UltiToolsPlugin, boolean)} with
-         * {@code flag = false} -- the exact call {@code register(UltiToolsPlugin)} makes today. */
-        private void invokeConnectorPathRegisterBukkit(UltiToolsPlugin plugin) throws Exception {
-            Method method = PluginManager.class.getDeclaredMethod(
-                    "registerBukkit", UltiToolsPlugin.class, boolean.class);
-            method.setAccessible(true);
-            method.invoke(pluginManager, plugin, false);
-        }
 
         @SuppressWarnings("unchecked")
         private List<Listener> registeredListenersFor(ListenerManager listenerManager, UltiToolsPlugin plugin)
@@ -224,7 +216,7 @@ class PluginManagerAutoRegisterAliasTest {
             });
 
             try {
-                invokeConnectorPathRegisterBukkit(plugin);
+                invokeRegisterBukkit(plugin);
 
                 List<Listener> registered = registeredListenersFor(realListenerManager, plugin);
                 assertThat(registered)
@@ -276,7 +268,7 @@ class PluginManagerAutoRegisterAliasTest {
                             new PluginDescriptionFile("UltiTools", "1.0.0", "com.ultikits.ultitools.UltiTools"));
                 });
 
-                Assertions.assertDoesNotThrow(() -> invokeConnectorPathRegisterBukkit(plugin),
+                Assertions.assertDoesNotThrow(() -> invokeRegisterBukkit(plugin),
                         "a @CmdExecutor extending BaseCommandExecutor must never reach the legacy "
                                 + "AbstractCommandExecutor cast on the connector path (difference #9)");
 

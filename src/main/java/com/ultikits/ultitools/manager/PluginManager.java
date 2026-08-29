@@ -59,7 +59,6 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
-import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
 import lombok.Getter;
@@ -186,7 +185,7 @@ public class PluginManager {
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, true);
+            registerBukkit(plugin);
         }
         return result;
     }
@@ -233,7 +232,7 @@ public class PluginManager {
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, false);
+            registerBukkit(plugin);
         }
         return result;
     }
@@ -252,8 +251,9 @@ public class PluginManager {
             // WIRE-05/WIRE-06: this path now assembles through the exact same method
             // initializePlugin does -- see its javadoc for the full instruction sequence. The
             // only remaining difference between the two entry points is where the plugin
-            // instance comes from (handed in here vs. reflectively constructed there) and the
-            // registerBukkit flag fork, which plan 04-08 removes.
+            // instance comes from (handed in here vs. reflectively constructed there); the
+            // registerBukkit flag fork plan 04-08 removed made registerBukkit itself identical
+            // on both paths too.
             SimpleContainer pluginContext = new SimpleContainer();
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
@@ -266,7 +266,7 @@ public class PluginManager {
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, false);
+            registerBukkit(plugin);
         }
         return result;
     }
@@ -1605,33 +1605,42 @@ public class PluginManager {
 
     /**
      * Register bukkit commands or listeners.
+     * <p>
+     * Both registration entry points ({@link #register(Class)} and {@link
+     * #register(UltiToolsPlugin)}) now resolve commands and listeners as beans from the module's
+     * own container -- there is no longer a package-scanning branch here. {@code manualRegister()}
+     * and {@code @ConditionalOnConfig} are therefore honoured identically no matter which entry
+     * point loaded the module (WIRE-05 differences #6-#9, plan 04-08), and a command class
+     * extending the current {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
+     * can no longer reach {@link CommandManager}'s legacy, casting {@code registerAll(UltiToolsPlugin,
+     * String)} overload on either path (issue #272). The package-scanning overloads on {@link
+     * CommandManager} and {@link ListenerManager} are retained -- both {@code @Deprecated(forRemoval
+     * = true)} -- for downstream callers only.
      * <br>
      * 注册Bukkit命令或监听器。
+     * <p>
+     * 两个注册入口点（{@link #register(Class)} 与 {@link #register(UltiToolsPlugin)}）现在都从
+     * 模块自身的容器中按 bean 解析命令与监听器——这里不再有包扫描分支。因此无论模块通过哪个入口点
+     * 加载，{@code manualRegister()} 与 {@code @ConditionalOnConfig} 都会被同等遵循
+     * （WIRE-05 差异 #6-#9，计划 04-08），命令类只要继承当前的
+     * {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}，
+     * 在任一路径上都不会再触达 {@link CommandManager} 那个做强转的旧版
+     * {@code registerAll(UltiToolsPlugin, String)} 重载（issue #272）。
+     * {@link CommandManager} 与 {@link ListenerManager} 上的包扫描重载被保留——两者都已标注
+     * {@code @Deprecated(forRemoval = true)}——仅供下游调用方使用。
      *
      * @param plugin UltiTools module instance <br> UltiTools模块实例
-     * @param flag   True if register in default package  <br> 如果在默认包中注册则为true
      */
-    private void registerBukkit(UltiToolsPlugin plugin, boolean flag) {
+    private void registerBukkit(UltiToolsPlugin plugin) {
         EnableAutoRegister annotation = MergedAnnotationResolver.find(plugin.getClass(), EnableAutoRegister.class);
         if (annotation == null) {
             return;
         }
-        String[] packages = DependencyUtils.getPluginPackages(plugin);
-        for (String packageName : packages) {
-            if (annotation.cmdExecutor()) {
-                if (flag) {
-                    UltiTools.getInstance().getCommandManager().registerAll(plugin);
-                } else {
-                    UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
-                }
-            }
-            if (annotation.eventListener()) {
-                if (flag) {
-                    UltiTools.getInstance().getListenerManager().registerAll(plugin);
-                } else {
-                    UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
-                }
-            }
+        if (annotation.cmdExecutor()) {
+            UltiTools.getInstance().getCommandManager().registerAll(plugin);
+        }
+        if (annotation.eventListener()) {
+            UltiTools.getInstance().getListenerManager().registerAll(plugin);
         }
     }
     
