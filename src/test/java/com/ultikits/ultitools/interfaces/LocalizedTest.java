@@ -8,7 +8,6 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
@@ -43,23 +42,11 @@ class LocalizedTest {
     }
 
     /**
-     * 只支持一种语言的 Localized 实现
-     */
-    @I18n({"en_US"})
-    static class SingleLanguageLocalized implements Localized {
-        // 使用默认实现
-    }
-
-    /**
-     * 没有 @I18n 注解的 Localized 实现 - 供 SupportedEndToEndTests 控制其代码源目录的 lang/ 内容。
+     * 类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果必须以实际资源为准，而不是这个声明。
      * <p>
      * static 嵌套类不能声明在非 static 的 {@code @Nested} 内部类里面（Java 8 语言规则），
      * 所以这些端到端测试用的实现类必须放在顶层。
      */
-    static class DirectoryBackedLocalized implements Localized {
-    }
-
-    /** @I18n 声明了 "fr"，但实际只打包了 en.json -- 派生结果必须以实际资源为准，而不是注解。 */
     @I18n({"fr"})
     static class AnnotatedButOnlyShipsEnglish implements Localized {
     }
@@ -86,66 +73,20 @@ class LocalizedTest {
     }
 
     @Nested
-    @DisplayName("supported 测试")
+    @DisplayName("supported 测试 -- 派生自 lang/*.json 资源 (D-20)")
     class SupportedTests {
 
-        // NOTE (04-04 Task 1): supported() no longer reads @I18n at all (D-20) - it is derived
-        // from the lang/*.json resources the implementor's own code source actually ships. None
-        // of these three fixtures has a real lang/ directory backing their code source
-        // (target/test-classes), so all three now correctly return an empty list regardless of
-        // their @I18n annotation. Task 3 owns the full rewrite of this nested class (better
-        // fixtures, names reflecting the new contract) - this is the minimal fix needed to keep
-        // this test class green after Task 1's behavior change.
-
-        @Test
-        @DisplayName("没有 @I18n 注解应该返回空列表")
-        void shouldReturnEmptyListWithoutAnnotation() {
-            // Arrange
-            Localized localized = new NoAnnotationLocalized();
-
-            // Act
-            List<String> supported = localized.supported();
-
-            // Assert
-            assertThat(supported).isEmpty();
-        }
-
-        @Test
-        @DisplayName("有 @I18n 注解但未打包任何 lang/*.json 时应该返回空列表 (D-20: 注解不再驱动派生结果)")
-        void shouldReturnEmptyListWhenAnnotatedButNoLangResourcesShipped() {
-            // Arrange
-            Localized localized = new AnnotatedLocalized();
-
-            // Act
-            List<String> supported = localized.supported();
-
-            // Assert
-            assertThat(supported).isEmpty();
-        }
-
-        @Test
-        @DisplayName("单语言注解但未打包 lang/*.json 时应该返回空列表 (D-20: 注解不再驱动派生结果)")
-        void shouldReturnEmptyListForSingleAnnotationWithoutShippedResources() {
-            // Arrange
-            Localized localized = new SingleLanguageLocalized();
-
-            // Act
-            List<String> supported = localized.supported();
-
-            // Assert
-            assertThat(supported).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("supported() 端到端 - 真实实现类的目录代码源测试 (04-04 Task 1, D-20)")
-    class SupportedEndToEndTests {
+        // Rewritten for D-20 (04-04 Task 3): supported() is derived from the lang/*.json
+        // resources an implementor's own code source actually ships, not from any type-level
+        // annotation. These tests exercise the real default method end-to-end against a real
+        // directory code source (target/test-classes, the shape Surefire runs test classes
+        // from) rather than the old contract where an annotation alone drove the result.
 
         private File langDir;
 
         @BeforeEach
         void setUp() throws URISyntaxException {
-            URL codeSourceUrl = DirectoryBackedLocalized.class.getProtectionDomain().getCodeSource().getLocation();
+            URL codeSourceUrl = NoAnnotationLocalized.class.getProtectionDomain().getCodeSource().getLocation();
             File testClassesRoot = new File(codeSourceUrl.toURI());
             langDir = new File(testClassesRoot, "lang");
             // Defensive: a previous run's cleanup failing should be loud, not silently overwritten.
@@ -160,28 +101,28 @@ class LocalizedTest {
         }
 
         @Test
+        @DisplayName("没有 lang/ 目录时返回空列表，不抛出异常")
+        void noLangDirectoryReturnsEmptyList() {
+            assertThat(new NoAnnotationLocalized().supported()).isEmpty();
+        }
+
+        @Test
         @DisplayName("目录代码源下 lang/en.json 与 lang/zh.json 被正确枚举")
         void directoryCodeSourceEnumeratesShippedLanguages() throws IOException {
             langDir.mkdirs();
             Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
             Files.write(new File(langDir, "zh.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
 
-            assertThat(new DirectoryBackedLocalized().supported()).containsExactlyInAnyOrder("en", "zh");
+            assertThat(new NoAnnotationLocalized().supported()).containsExactlyInAnyOrder("en", "zh");
         }
 
         @Test
-        @DisplayName("@I18n 声明了 fr，但实际只打包了 en.json -- 派生结果以实际资源为准，不是注解")
-        void annotationDoesNotOverrideActualResources() throws IOException {
+        @DisplayName("类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果以实际资源为准")
+        void typeLevelDeclarationDoesNotOverrideActualResources() throws IOException {
             langDir.mkdirs();
             Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
 
             assertThat(new AnnotatedButOnlyShipsEnglish().supported()).containsExactly("en");
-        }
-
-        @Test
-        @DisplayName("没有 lang/ 目录时返回空列表，不抛出异常")
-        void noLangDirectoryReturnsEmptyList() {
-            assertThat(new DirectoryBackedLocalized().supported()).isEmpty();
         }
 
         private void deleteRecursively(File file) throws IOException {
