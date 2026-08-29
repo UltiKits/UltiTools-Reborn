@@ -128,11 +128,12 @@ class PluginDependencyResolverTest {
                 new URL[]{jar.toURI().toURL()},
                 Thread.currentThread().getContextClassLoader(),
                 fixtureClass.getName());
-        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         // The class name is not attacker-controllable: every one of this helper's nine call
         // sites passes a compile-time class literal (JarModuleTarget.class and friends), so
         // fixtureClass.getName() is resolved by javac, never from input. The loader is the
         // test's own jar-backed ChildFirstClassLoader built two lines above.
+        // The suppression must sit on the line immediately above the finding to take effect.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         return (Class<? extends UltiToolsPlugin>) Class.forName(fixtureClass.getName(), true, loader);
     }
 

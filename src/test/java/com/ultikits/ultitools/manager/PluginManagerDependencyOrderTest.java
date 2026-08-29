@@ -113,19 +113,19 @@ class PluginManagerDependencyOrderTest {
     @PluginDependency(depends = {"OrderCircularB"})
     public static class OrderCircularA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override public void unregisterSelf() { /* nothing to release: this fixture owns no state */ }
     }
 
     @PluginDependency(depends = {"OrderCircularA"})
     public static class OrderCircularB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override public void unregisterSelf() { /* nothing to release: this fixture owns no state */ }
     }
 
     @PluginDependency(depends = {"OrderMissingModule"})
     public static class OrderModuleWithMissingDep extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override public void unregisterSelf() { /* nothing to release: this fixture owns no state */ }
     }
 
     @Test

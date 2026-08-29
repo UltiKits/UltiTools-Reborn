@@ -71,6 +71,23 @@ import lombok.Getter;
  * UltiTools模块管理器
  */
 public class PluginManager {
+    /**
+     * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
+     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
+     * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
+     * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
+     * only through this constant) at every call site below, so the property is legible directly
+     * in the operator-facing message that names it, not only in code that reads it.
+     * <br>
+     * 退回 6.3.0 之前退化加载顺序（D-10）的 JVM 系统属性名：所有模块按文件系统/类路径顺序加载，
+     * 完全不做依赖解析。参照 Paper 自身的 {@code -Dpaper.useLegacyPluginLoading=true} 先例——
+     * 这是一个一次性的、在启动时就被消费掉的决定，因此用系统属性而非可热重载的
+     * {@code config.yml} 键。下方每个调用点都重复写出字面量名称（而非只通过这个常量引用），
+     * 使这个属性名在命名它的运维提示信息里本身就清晰可读，而不仅仅存在于读取它的代码中。
+     */
+    private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
+
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
@@ -1847,22 +1864,6 @@ public class PluginManager {
         return scanPackages.toArray(new String[0]);
     }
 
-    /**
-     * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
-     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
-     * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
-     * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
-     * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
-     * only through this constant) at every call site below, so the property is legible directly
-     * in the operator-facing message that names it, not only in code that reads it.
-     * <br>
-     * 退回 6.3.0 之前退化加载顺序（D-10）的 JVM 系统属性名：所有模块按文件系统/类路径顺序加载，
-     * 完全不做依赖解析。参照 Paper 自身的 {@code -Dpaper.useLegacyPluginLoading=true} 先例——
-     * 这是一个一次性的、在启动时就被消费掉的决定，因此用系统属性而非可热重载的
-     * {@code config.yml} 键。下方每个调用点都重复写出字面量名称（而非只通过这个常量引用），
-     * 使这个属性名在命名它的运维提示信息里本身就清晰可读，而不仅仅存在于读取它的代码中。
-     */
-    private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
     /**
      * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
