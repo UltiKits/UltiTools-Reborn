@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -8,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -92,6 +94,33 @@ class PluginDependencyResolverTest {
 
     @PluginDependency(depends = {"CircularA"})
     public static class CircularB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    // A second, independent circular pair - proves two cycles in one input are each reported.
+    @PluginDependency(depends = {"CircularD"})
+    public static class CircularC extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    @PluginDependency(depends = {"CircularC"})
+    public static class CircularD extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    // Depends on a cycle member without being part of the cycle itself.
+    @PluginDependency(depends = {"CircularA"})
+    public static class PluginDependsOnCircularA extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    // Depends on a plugin that itself has a missing hard dependency.
+    @PluginDependency(depends = {"PluginWithMissingDep"})
+    public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
         @Override public void unregisterSelf() { }
     }
@@ -256,6 +285,121 @@ class PluginDependencyResolverTest {
             );
             
             assertThrows(CircularDependencyException.class, () -> resolver.resolve(plugins));
+        }
+    }
+
+    @Nested
+    @DisplayName("Partition and Cycle Path Tests")
+    class PartitionAndCyclePathTests {
+
+        @Test
+        @DisplayName("a cycle refuses only its members while an unrelated plugin stays sortable")
+        void cycleRefusesOnlyItsMembersWhileUnrelatedStaysSortable() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, PluginC.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            // Positive and negative asserted together so neither can pass vacuously.
+            assertTrue(ex.getSortedPrefix().contains(PluginC.class));
+            assertFalse(ex.getRefusedPlugins().contains("PluginC"));
+            assertEquals(new HashSet<>(Arrays.asList("CircularA", "CircularB")), ex.getRefusedPlugins());
+        }
+
+        @Test
+        @DisplayName("a returned cycle path's first element equals its last element")
+        void cyclePathFirstAndLastElementsAreEqual() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertFalse(ex.getCyclePaths().isEmpty());
+            List<String> path = ex.getCyclePaths().get(0);
+            assertTrue(path.size() >= 2);
+            assertEquals(path.get(0), path.get(path.size() - 1));
+        }
+
+        @Test
+        @DisplayName("a module depending on a cycle member is refused although it is not itself in the cycle")
+        void dependentOfCycleMemberIsRefused() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, PluginDependsOnCircularA.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getRefusedPlugins().contains("PluginDependsOnCircularA"));
+            boolean inAnyCyclePath = ex.getCyclePaths().stream()
+                .anyMatch(path -> path.contains("PluginDependsOnCircularA"));
+            assertFalse(inAnyCyclePath);
+        }
+
+        @Test
+        @DisplayName("two independent cycles in one input are both reported as separate paths and fully refused")
+        void twoIndependentCyclesAreBothReported() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                CircularA.class, CircularB.class, CircularC.class, CircularD.class
+            );
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertEquals(2, ex.getCyclePaths().size());
+            assertEquals(
+                new HashSet<>(Arrays.asList("CircularA", "CircularB", "CircularC", "CircularD")),
+                ex.getRefusedPlugins()
+            );
+        }
+
+        @Test
+        @DisplayName("a missing hard dependency yields a sortable prefix and an exact refused set")
+        void missingHardDependencyPartition() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, PluginA.class, PluginB.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getSortedPrefix().contains(PluginA.class));
+            assertTrue(ex.getSortedPrefix().contains(PluginB.class));
+            assertEquals(Collections.singleton("PluginWithMissingDep"), ex.getRefusedPlugins());
+        }
+
+        @Test
+        @DisplayName("a module depending on a missing-dependency module is refused alongside it; unrelated modules survive")
+        void dependentOfMissingDependencyModuleIsRefused() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, PluginDependsOnMissingDepPlugin.class, PluginA.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getSortedPrefix().contains(PluginA.class));
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "PluginDependsOnMissingDepPlugin")),
+                ex.getRefusedPlugins()
+            );
+        }
+
+        @Test
+        @DisplayName("no cycle and no missing dependency: neither exception is constructed")
+        void noFailureMeansUnchangedBehaviour() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginA.class, PluginB.class, PluginC.class
+            );
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(3, result.size());
+            assertTrue(result.containsAll(plugins));
         }
     }
 
