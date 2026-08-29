@@ -251,6 +251,57 @@ class PluginManagerTest {
         }
     }
 
+    // SILENT-17 (#332, Phase 4 D-19): initializePlugin is split into a live, undeprecated
+    // zero-args overload and a deprecated with-args overload so that marking the dead
+    // reflective-construction path @Deprecated(forRemoval = true) does not also warn the
+    // live call site (register(Class) -> initializePlugin(ClassLoader, Class)).
+    @Nested
+    @DisplayName("initializePlugin 拆分与废弃标记测试 (SILENT-17)")
+    class InitializePluginDeprecationTests {
+
+        @Test
+        @DisplayName("initializePlugin(ClassLoader, Class) 是活跃路径，不带 @Deprecated")
+        void liveZeroArgOverloadIsNotDeprecated() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "initializePlugin", ClassLoader.class, Class.class);
+
+            // Assert
+            assertThat(method.isAnnotationPresent(Deprecated.class)).isFalse();
+        }
+
+        @Test
+        @DisplayName("initializePlugin(ClassLoader, Class, Object...) 带 "
+                + "@Deprecated(forRemoval = true, since = \"6.3.0\")")
+        void withArgsOverloadIsDeprecatedForRemoval() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "initializePlugin", ClassLoader.class, Class.class, Object[].class);
+
+            // Act
+            Deprecated annotation = method.getAnnotation(Deprecated.class);
+
+            // Assert
+            assertThat(annotation).isNotNull();
+            assertThat(annotation.forRemoval()).isTrue();
+            assertThat(annotation.since()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("恰好两个重载共享 initializePlugin 这个名字")
+        void exactlyTwoOverloadsShareTheName() {
+            // Arrange
+            long count = java.util.Arrays.stream(PluginManager.class.getDeclaredMethods())
+                    .filter(m -> m.getName().equals("initializePlugin"))
+                    .count();
+
+            // Assert -- one live (ClassLoader, Class), one deprecated (ClassLoader, Class,
+            // Object...); a third would mean the split introduced an unexpected extra entry
+            // point instead of isolating the dead branch.
+            assertThat(count).isEqualTo(2);
+        }
+    }
+
     @Nested
     @DisplayName("pluginClassList 字段测试")
     class PluginClassListFieldTests {
