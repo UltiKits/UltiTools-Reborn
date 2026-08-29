@@ -3,25 +3,42 @@ package com.ultikits.ultitools.manager;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
+import com.ultikits.ultitools.utils.PluginYmlReader;
 
 /**
  * Unit tests for {@link PluginDependencyResolver}.
@@ -30,6 +47,9 @@ import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependency
 @DisplayName("PluginDependencyResolver Tests")
 class PluginDependencyResolverTest {
 
+    @TempDir
+    File tempDir;
+
     private PluginDependencyResolver resolver;
     private Logger testLogger;
 
@@ -37,6 +57,80 @@ class PluginDependencyResolverTest {
     void setUp() {
         testLogger = Logger.getLogger(PluginDependencyResolverTest.class.getName());
         resolver = new PluginDependencyResolver(testLogger);
+    }
+
+    /**
+     * A URLClassLoader that forces one specific class name to be defined fresh from this
+     * loader's own JAR, bypassing normal parent-first delegation. Without this, loading a class
+     * that is also present on the surrounding test's own classpath (as every static nested
+     * fixture class here is, since Maven compiles the whole test tree) would resolve back to the
+     * parent's copy - whose code source is {@code target/test-classes}, not the temp JAR built
+     * for the test. Everything except the named class still delegates to the parent normally
+     * (UltiToolsPlugin, PluginDependency, the JDK, etc.).
+     */
+    private static final class ChildFirstClassLoader extends URLClassLoader {
+        private final String childFirstName;
+
+        ChildFirstClassLoader(URL[] urls, ClassLoader parent, String childFirstName) {
+            super(urls, parent);
+            this.childFirstName = childFirstName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null && childFirstName.equals(name)) {
+                    loaded = findClass(name);
+                }
+                if (loaded == null) {
+                    loaded = super.loadClass(name, false);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+    }
+
+    /**
+     * Builds a single-entry-plus-plugin.yml JAR for {@code fixtureClass} and loads it back
+     * through a {@link ChildFirstClassLoader}, so the returned {@code Class}'s
+     * {@code getProtectionDomain().getCodeSource()} is genuinely that JAR - a mock cannot
+     * exercise this code path.
+     */
+    @SuppressWarnings("unchecked")
+    private Class<? extends UltiToolsPlugin> loadJarBackedFixture(
+            String jarName, Class<?> fixtureClass, String pluginYmlContent) throws Exception {
+        File jar = new File(tempDir, jarName);
+        String resourceName = fixtureClass.getName().replace('.', '/') + ".class";
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+            output.putNextEntry(new JarEntry(resourceName));
+            try (InputStream input = fixtureClass.getResourceAsStream("/" + resourceName)) {
+                assertNotNull(input, "compiled class resource for " + fixtureClass.getName());
+                copy(input, output);
+            }
+            output.closeEntry();
+
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write(pluginYmlContent.getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+
+        ChildFirstClassLoader loader = new ChildFirstClassLoader(
+                new URL[]{jar.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(),
+                fixtureClass.getName());
+        return (Class<? extends UltiToolsPlugin>) Class.forName(fixtureClass.getName(), true, loader);
+    }
+
+    private static void copy(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
     }
 
     // Test plugin classes with various dependency configurations
@@ -121,6 +215,48 @@ class PluginDependencyResolverTest {
     // Depends on a plugin that itself has a missing hard dependency.
     @PluginDependency(depends = {"PluginWithMissingDep"})
     public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    // JAR-backed fixtures for plugin.yml loadAfter merging (D-12). Never instantiated - only
+    // .class references are used, so UltiToolsPlugin's own plugin.yml-reading constructor never
+    // runs. Each is loaded fresh from a synthetic single-entry JAR via loadJarBackedFixture(),
+    // so getProtectionDomain().getCodeSource() is genuinely a JAR.
+    public static class JarModuleTarget extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    public static class JarModuleWithLoadAfter extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    public static class JarModuleWithUnresolvableLoadAfter extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    public static class JarModuleLoadAfterBySimpleName extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    public static class JarModuleMutualLoadAfterX extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    public static class JarModuleMutualLoadAfterY extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override public void unregisterSelf() { }
+    }
+
+    // Not JAR-backed itself - only its @PluginDependency entry needs to resolve against the
+    // OTHER node's plugin.yml-derived alias ("TargetModule" -> JarModuleTarget).
+    @PluginDependency(depends = {"TargetModule"})
+    public static class DependsOnYmlNamedTarget extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
         @Override public void unregisterSelf() { }
     }
@@ -400,6 +536,137 @@ class PluginDependencyResolverTest {
 
             assertEquals(3, result.size());
             assertTrue(result.containsAll(plugins));
+        }
+    }
+
+    @Nested
+    @DisplayName("plugin.yml loadAfter Merge Tests")
+    class LoadAfterMergeTests {
+
+        @Test
+        @DisplayName("PluginYmlReader returns empty for a directory code source with no plugin.yml")
+        void pluginYmlReaderIsEmptyForDirectoryCodeSourceWithoutPluginYml() {
+            PluginYmlReader.PluginYmlInfo info = PluginYmlReader.read(PluginA.class);
+
+            assertNull(info.getName());
+            assertTrue(info.getLoadAfter().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a real JAR-backed module's plugin.yml loadAfter changes the resolved order")
+        void jarBackedLoadAfterChangesOrder() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target.jar", JarModuleTarget.class, "name: TargetModule\n");
+            Class<? extends UltiToolsPlugin> withLoadAfter = loadJarBackedFixture(
+                "loadafter.jar", JarModuleWithLoadAfter.class,
+                "name: LoadAfterModule\nloadAfter:\n  - TargetModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(withLoadAfter, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(withLoadAfter));
+        }
+
+        @Test
+        @DisplayName("a loadAfter entry naming a module not installed is inert - no exception")
+        void unresolvableLoadAfterIsInert() throws Exception {
+            Class<? extends UltiToolsPlugin> withUnresolvable = loadJarBackedFixture(
+                "unresolvable.jar", JarModuleWithUnresolvableLoadAfter.class,
+                "name: UnresolvableLoadAfterModule\nloadAfter:\n  - NoSuchModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Collections.singletonList(withUnresolvable));
+
+            assertEquals(1, result.size());
+            assertEquals(withUnresolvable, result.get(0));
+        }
+
+        @Test
+        @DisplayName("a loadAfter entry naming a module by its simple class name also resolves")
+        void loadAfterBySimpleClassNameResolves() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target2.jar", JarModuleTarget.class, "name: TargetModule\n");
+            Class<? extends UltiToolsPlugin> withLoadAfter = loadJarBackedFixture(
+                "bysimplename.jar", JarModuleLoadAfterBySimpleName.class,
+                "name: LoadAfterBySimpleNameModule\nloadAfter:\n  - JarModuleTarget\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(withLoadAfter, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(withLoadAfter));
+        }
+
+        @Test
+        @DisplayName("a depends entry naming a module by its plugin.yml name resolves via the alias map")
+        void dependsEntryResolvesViaYmlNameAlias() throws Exception {
+            Class<? extends UltiToolsPlugin> target = loadJarBackedFixture(
+                "target3.jar", JarModuleTarget.class, "name: TargetModule\n");
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(
+                Arrays.asList(DependsOnYmlNamedTarget.class, target));
+
+            assertEquals(2, result.size());
+            assertTrue(result.indexOf(target) < result.indexOf(DependsOnYmlNamedTarget.class));
+        }
+
+        @Test
+        @DisplayName("mutual loadAfter between two modules is reported as a cycle, both refused")
+        void mutualLoadAfterIsReportedAsCycle() throws Exception {
+            Class<? extends UltiToolsPlugin> x = loadJarBackedFixture(
+                "mutualx.jar", JarModuleMutualLoadAfterX.class,
+                "name: MutualX\nloadAfter:\n  - MutualY\n");
+            Class<? extends UltiToolsPlugin> y = loadJarBackedFixture(
+                "mutualy.jar", JarModuleMutualLoadAfterY.class,
+                "name: MutualY\nloadAfter:\n  - MutualX\n");
+
+            List<Class<? extends UltiToolsPlugin>> input = Arrays.asList(x, y);
+
+            CircularDependencyException ex = assertThrows(CircularDependencyException.class,
+                () -> resolver.resolve(input));
+
+            assertTrue(ex.getRefusedPlugins().contains("JarModuleMutualLoadAfterX"));
+            assertTrue(ex.getRefusedPlugins().contains("JarModuleMutualLoadAfterY"));
+        }
+
+        @Test
+        @DisplayName("a malformed plugin.yml logs one warning and returns empty, never throwing")
+        void malformedPluginYmlReturnsEmptyAndWarns() throws Exception {
+            Class<? extends UltiToolsPlugin> malformed = loadJarBackedFixture(
+                "malformed.jar", JarModuleWithUnresolvableLoadAfter.class,
+                "name: [this is not closed\n");
+
+            Logger readerLogger = Logger.getLogger(PluginYmlReader.class.getName());
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            readerLogger.addHandler(handler);
+            try {
+                PluginYmlReader.PluginYmlInfo info = PluginYmlReader.read(malformed);
+
+                assertTrue(info.getLoadAfter().isEmpty());
+                long warnings = captured.stream()
+                    .filter(record -> Level.WARNING.equals(record.getLevel()))
+                    .count();
+                assertEquals(1, warnings);
+            } finally {
+                readerLogger.removeHandler(handler);
+            }
         }
     }
 
