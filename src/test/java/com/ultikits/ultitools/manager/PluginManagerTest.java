@@ -13,8 +13,10 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -38,6 +40,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.DataStore;
 
 import org.bukkit.Bukkit;
@@ -536,6 +539,101 @@ class PluginManagerTest {
 
             // Assert
             assertThat(result).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("拒绝日志路径应展示最内层 UltiToolsException 的消息 (WR-02)")
+    class RefusalLoggingTests {
+
+        private final List<LogRecord> bukkitLogs = new ArrayList<>();
+        private Handler captureHandler;
+
+        @BeforeEach
+        void captureBukkitLog() {
+            bukkitLogs.clear();
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    bukkitLogs.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            Bukkit.getLogger().addHandler(captureHandler);
+        }
+
+        @AfterEach
+        void releaseBukkitLog() {
+            Bukkit.getLogger().removeHandler(captureHandler);
+        }
+
+        private LogRecord lastWarning() {
+            for (int i = bukkitLogs.size() - 1; i >= 0; i--) {
+                if (Level.WARNING.equals(bukkitLogs.get(i).getLevel())) {
+                    return bukkitLogs.get(i);
+                }
+            }
+            return null;
+        }
+
+        @Test
+        @DisplayName("应从三层异常链中提取字段/值/约束，而不是外层包装消息")
+        void shouldSurfaceInnermostMessageFromThreeDeepChain() {
+            ConfigurationException innermost = ConfigurationException.validationFailed(
+                    "TestModule", "range.yml",
+                    Collections.singletonList("field 'interval' value 9999 is out of range [1, 1200]"));
+            InvocationTargetException middle = new InvocationTargetException(innermost);
+            IllegalStateException outer =
+                    new IllegalStateException("Failed to initialize plugin: com.example.MyPlugin", middle);
+
+            // Package-private, called directly - PluginManagerTest lives in the same package, so
+            // this needs no reflection and no setAccessible(true).
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage())
+                    .contains("interval")
+                    .contains("9999")
+                    .contains("1200");
+            assertThat(record.getThrown()).isSameAs(outer);
+        }
+
+        @Test
+        @DisplayName("异常链中没有 UltiToolsException 时应回退到外层异常自身的消息")
+        void shouldFallBackWhenNoUltiToolsExceptionInChain() {
+            RuntimeException outer = new RuntimeException("plain failure", new IllegalArgumentException("bad arg"));
+
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).contains("plain failure");
+            assertThat(record.getThrown()).isSameAs(outer);
+        }
+
+        @Test
+        @Timeout(value = 5, unit = TimeUnit.SECONDS)
+        @DisplayName("自引用的异常链应终止而不是卡死")
+        void shouldTerminateOnCyclicCauseChain() {
+            RuntimeException first = new RuntimeException("first");
+            RuntimeException second = new RuntimeException("second", first);
+            first.initCause(second); // deliberately cyclic: first -> second -> first
+
+            assertDoesNotThrow(() -> PluginManager.logPluginInitializationFailure("com.example.MyPlugin", first));
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).isNotBlank();
         }
     }
 

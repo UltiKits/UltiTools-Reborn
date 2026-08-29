@@ -631,6 +631,112 @@ class ConfigValidationTest {
         }
     }
 
+    @Nested
+    @DisplayName("Secret-shaped field-name redaction (WR-03, widened for the new panel write egress)")
+    class SecretShapedFieldRedaction {
+
+        @Test
+        @DisplayName("Should redact a @Pattern violation on a 'privateKey'-named field")
+        void shouldRedactPrivateKeyNamedField() throws IOException {
+            File configFile = new File(tempDir.toFile(), "privatekey.yml");
+            Files.write(configFile.toPath(), "privateKey: \"sekrit!!!\"".getBytes());
+
+            PrivateKeyPatternConfig config = new PrivateKeyPatternConfig("privatekey.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("privateKey")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+        }
+
+        @Test
+        @DisplayName("Should redact a @Pattern violation on an 'authHeader'-named field")
+        void shouldRedactAuthHeaderNamedField() throws IOException {
+            File configFile = new File(tempDir.toFile(), "authheader.yml");
+            Files.write(configFile.toPath(), "authHeader: \"sekrit!!!\"".getBytes());
+
+            AuthHeaderPatternConfig config = new AuthHeaderPatternConfig("authheader.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("authHeader")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+        }
+
+        @Test
+        @DisplayName("Should redact a @Pattern violation on a 'webhookKey'-named field")
+        void shouldRedactWebhookKeyNamedField() throws IOException {
+            File configFile = new File(tempDir.toFile(), "webhookkey.yml");
+            Files.write(configFile.toPath(), "webhookKey: \"sekrit!!!\"".getBytes());
+
+            WebhookKeyPatternConfig config = new WebhookKeyPatternConfig("webhookkey.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("webhookKey")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+        }
+
+        @Test
+        @DisplayName("Should redact a @Pattern violation on a 'clientCert'-named field")
+        void shouldRedactClientCertNamedField() throws IOException {
+            File configFile = new File(tempDir.toFile(), "clientcert.yml");
+            Files.write(configFile.toPath(), "clientCert: \"sekrit!!!\"".getBytes());
+
+            ClientCertPatternConfig config = new ClientCertPatternConfig("clientcert.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("clientCert")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+        }
+
+        @Test
+        @DisplayName("Should still redact the six pre-existing substrings (apiKey, dbPassword) - no regression")
+        void shouldStillRedactPreExistingSubstrings() throws IOException {
+            File configFile = new File(tempDir.toFile(), "apikey.yml");
+            Files.write(configFile.toPath(), "apiKey: \"sekrit!!!\"".getBytes());
+
+            ApiKeyPatternConfig apiKeyConfig = new ApiKeyPatternConfig("apikey.yml");
+            assertThatThrownBy(() -> apiKeyConfig.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("apiKey")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+
+            File configFile2 = new File(tempDir.toFile(), "dbpassword.yml");
+            Files.write(configFile2.toPath(), "dbPassword: \"sekrit!!!\"".getBytes());
+
+            DbPasswordPatternConfig dbPasswordConfig = new DbPasswordPatternConfig("dbpassword.yml");
+            assertThatThrownBy(() -> dbPasswordConfig.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("dbPassword")
+                    .hasMessageContaining("<redacted>")
+                    .hasMessageNotContaining("sekrit!!!");
+        }
+
+        @Test
+        @DisplayName("Should still echo the value for a non-secret-shaped field name - the widening is not blanket redaction")
+        void shouldStillEchoNonSecretShapedFieldName() throws IOException {
+            // Companion to the redaction tests above (mirrors PatternValidation's existing
+            // shouldRefuseNonMatchingPattern on the same 'currency' fixture): one without the
+            // other proves nothing about whether the widening became blanket redaction.
+            File configFile = new File(tempDir.toFile(), "pattern.yml");
+            Files.write(configFile.toPath(), "currency: \"$$$invalid!!!\"".getBytes());
+
+            PatternConfig config = new PatternConfig("pattern.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("currency")
+                    .hasMessageContaining("$$$invalid!!!");
+        }
+    }
+
     // ==================== Test Config Classes ====================
 
     private static class RangeConfig extends AbstractConfigEntity {
@@ -673,6 +779,72 @@ class ConfigValidationTest {
         private String currency = "Coin";
 
         public PatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like WR-03's widened substring "private" - should redact. */
+    private static class PrivateKeyPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "privateKey", comment = "Should be redacted (WR-03)")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String privateKey = "valid";
+
+        public PrivateKeyPatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like WR-03's widened substring "auth" - should redact. */
+    private static class AuthHeaderPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "authHeader", comment = "Should be redacted (WR-03)")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String authHeader = "valid";
+
+        public AuthHeaderPatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like WR-03's widened substring "key" - should redact. */
+    private static class WebhookKeyPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "webhookKey", comment = "Should be redacted (WR-03)")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String webhookKey = "valid";
+
+        public WebhookKeyPatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like WR-03's widened substring "cert" - should redact. */
+    private static class ClientCertPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "clientCert", comment = "Should be redacted (WR-03)")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String clientCert = "valid";
+
+        public ClientCertPatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like one of the six substrings already redacted before this plan. */
+    private static class ApiKeyPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "apiKey", comment = "Already redacted before this plan")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String apiKey = "valid";
+
+        public ApiKeyPatternConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** Field name shaped like one of the six substrings already redacted before this plan. */
+    private static class DbPasswordPatternConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "dbPassword", comment = "Already redacted before this plan")
+        @Pattern(regex = "^[\\w]{1,16}$")
+        private String dbPassword = "valid";
+
+        public DbPasswordPatternConfig(String configFilePath) {
             super(configFilePath);
         }
     }
