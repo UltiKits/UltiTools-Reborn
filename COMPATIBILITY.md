@@ -172,12 +172,14 @@ superset of it.
 | `interfaces.TempListener.player(Class)` and `TempListener.PlayerTempListenerBuilder` | 6.2.5 | `TempListener.common(Class)`, narrowed to player events with `filter(Function)` | 0 |
 | `interfaces.impl.PlayerTempListener` | 6.2.5 | same as above | 0 |
 | `manager.ListenerManager.register(UltiToolsPlugin, Listener)` | 6.2.5 | `register(UltiToolsPlugin, Class)` — the old overload takes an already-constructed instance and therefore performs no dependency injection | 0 |
+| `manager.ListenerManager.registerAll(UltiToolsPlugin, String)` | 6.3.0 | `registerAll(UltiToolsPlugin)` — resolves listeners as beans from the module's own container instead of package-scanning, and honours `manualRegister()` where the package-scan overload does not (GEN-05, #337) | 0 |
 
 ### Plugin base class
 
 | Type / member | Removal announced in | Replacement | Downstream references (informational) |
 |---|---|---|---|
 | The six-argument `abstracts.UltiToolsPlugin(String, String, List, List, int, String)` constructor | 6.2.5 | The seven-argument constructor, passing `resourceFolderPath` explicitly (the six-argument overload hard-codes it to `<dataFolder>/pluginConfig/<pluginName>`) | 0 |
+| `manager.PluginManager.register(Class, String, String, List, List, int, String)` (seven-argument overload) | 6.3.0 | `register(UltiToolsPlugin)` — construct the plugin instance yourself; this overload has failed on every release since 6.2.0 (Phase 1 D-15). Measured at HEAD: `SecurityPolicy#isSafeParameterType` rejects the two `List`-typed constructor arguments (`authors`, `loadAfter`) by exact runtime-class-name prefix before construction is ever attempted — `Arrays.asList(...)`'s runtime type never matches `java.util.List`/`ArrayList`/`HashMap`/`HashSet` literally (#332) | 0 |
 
 How the reference counts were measured: on 2026-08-14, across 17 module repositories, 4 tooling
 projects and Libraries under the UltiKits organization, covering 310 Java files, excluding test
@@ -1018,6 +1020,140 @@ auto-registration across the modules surveyed, so no in-house module is refused 
 documentation": `getAllConfigs()` is documented as the extension point for declaring a module's
 config entities, and silently ignoring it while auto-registration is on (its own default)
 contradicts that contract regardless of whether any override exists today to be affected by it.
+
+### Recorded instance: `supported()` is derived from shipped language files, and now participates in resolution (WIRE-10, 6.3.0)
+
+Before 6.3.0, `Localized#supported()` derived its return value from `@I18n.value()` — a
+hand-maintained annotation attribute nobody consulted. Language resolution never called
+`supported()` at all: an operator who configured a language code with no matching
+`lang/<code>.json` file on disk got `createLanguageFromPath` returning `new Language("{}")`, an
+empty dictionary, silently — so a server configured `language: en` for a module whose
+default-catalogue text is Chinese source (`i18n()` is routinely called with the Chinese string
+itself as the lookup key) displayed Chinese regardless of the operator's setting.
+
+6.3.0 derives `supported()` from the module's own code source instead — the `lang/*.json` files
+actually shipped in its JAR or exploded directory, enumerated the same way `saveResources()`
+already enumerates embedded resources, correct even on a module's first cold start before
+`saveResources()` has extracted anything to disk. `UltiToolsPlugin` now consults it, once, before
+constructing `Language`: a configured code present in a non-empty `supported()` is used unchanged;
+an absent one falls back — `en` if `supported()` contains it, otherwise `supported()`'s first
+entry — with one `WARNING` naming the module, the requested code, and what actually exists. An
+empty `supported()` (today's default for 14 modules that never override it) is read as "no
+information," not "supports nothing," and produces neither warning nor behaviour change.
+`Localized`'s javadoc, which previously claimed `i18n(code, str)` uses its `code` parameter and
+that `supported()` gates it per call — neither is true; `UltiToolsPlugin.i18n` is `final` and
+discards `code` entirely — is corrected in the same change.
+
+**Measured blast radius: all 8 downstream `supported()` overrides return
+`Arrays.asList("zh", "en")` on modules shipping exactly `en.json` and `zh.json`**, so all 8 are
+unaffected by the derivation change; the 14 modules with no override are read as "no information,"
+also unaffected. The behaviour change reaches only a server operator who configures a language
+code for which the module ships no matching file — previously silent (empty dictionary), now a
+named `WARNING` plus a fallback to a language that actually loads content.
+
+**Bucket.** No migration period — "correcting behaviour that plainly contradicts the
+documentation" for the fallback fix (an operator's configured `language: en` silently rendering
+Chinese contradicts the setting's own documented purpose), and "tightening the handling of
+previously undefined input" for the derivation change (an unsupported code was previously
+undefined — an empty dictionary with no diagnostic — and now produces a named warning and a
+working fallback).
+
+### Recorded instance: both registration entry points now produce identical containers (WIRE-05 / WIRE-06, 6.3.0)
+
+Before 6.3.0, `register(UltiToolsPlugin)` (the connector entry point) and `initializePlugin` (the
+standard module-JAR load path) built two independently-maintained container-assembly sequences
+that had drifted apart by nine measured capabilities. 6.3.0 closes all nine by extracting one
+shared `PluginManager.assemblePluginContainer(...)` both entry points now call, plus deleting the
+boolean fork inside `registerBukkit` that caused four of the nine:
+
+| # | Difference | Closed by |
+|---|---|---|
+| 1 | `@ContextEntry` not honoured on the JAR-load path | 04-07 |
+| 2 | config entities not registered as beans on the connector path | 04-07 |
+| 3 | the static `instance` field not populated on the connector path | 04-07 |
+| 4 | `autowireBean(plugin)` only inside the `@ContextEntry` block | 04-07 |
+| 5 | `setContext` timing (before vs. after `refresh()`) | 04-07 |
+| 6 | command/listener registration mode (package scan vs. bean resolution) | 04-08 |
+| 7 | `manualRegister()` not honoured on the listener side (GEN-05) | 04-08 |
+| 8 | `@ConditionalOnConfig` not honoured on `@CmdExecutor` | 04-08 |
+| 9 | `BaseCommandExecutor` triggering an uncaught `ClassCastException` (issue #272) | 04-08 |
+
+**The two consequences with downstream-visible behaviour**, called out because `japicmp` cannot
+see either: `register(UltiToolsPlugin)` now resolves commands and listeners as **beans** from the
+module's own container rather than package-scanning them — so `manualRegister()` and
+`@ConditionalOnConfig` now take effect on the connector path exactly as they already did on the
+JAR-load path; and `plugin.setContext(...)` now runs before `refresh()` on the JAR-load path too,
+so a `@PostConstruct` method that calls `plugin.getContext()` no longer observes `null`.
+
+**Measured blast radius: `register(UltiToolsPlugin)` has 0 downstream callers** (control:
+`getPluginManager()`, 49 hits in framework `src/main`) — it is a public API path with no known
+users today, but one that must nevertheless behave correctly.
+
+**Bucket.** No migration period — "correcting behaviour that plainly contradicts the
+documentation": both entry points are documented as producing a working, container-managed
+`UltiToolsPlugin`, and a capability silently present on one path and absent on the other
+contradicts that shared contract regardless of which path a given behaviour happened to be missing
+from.
+
+### Recorded instance: an external connector's beans receive the connector's own `JavaPlugin` (SILENT-16, 6.3.0)
+
+Before 6.3.0, `PluginManager.registerExternal` created the connector's child container, set its
+parent to the core `UltiTools` context, and scanned components — but never registered the
+connector's own `JavaPlugin` instance into that child container. A `@Service` bean
+constructor-injecting `JavaPlugin` (or the connector's own concrete plugin class) therefore missed
+the child container entirely, fell through to the parent, and matched the parent's registered
+singleton `"ultiTools"` via `isInstance` — silently receiving the framework core's `UltiTools`
+instance instead of the connector's own.
+
+6.3.0 registers `adapter.getJavaPlugin()` into the child container — by both its declared
+`JavaPlugin` type and its own concrete runtime class — before `scanComponents` runs. A
+child-container hit stops the search (the same rule Phase 3 established for the framework's own
+container hierarchy), so the parent fallback is blocked with no new lookup mechanism required.
+
+**Measured blast radius: `UltiToolsAPI` has 0 hits across `Modules/` and `Plugins/`** — no
+external connector exists in-house today to be affected, but the corrected identity now applies to
+any that adopt the External Plugin API.
+
+**Bucket.** No migration period — "correcting behaviour that plainly contradicts the
+documentation": the External Plugin API's own contract is that a connector receives its own
+plugin instance through dependency injection, not the framework's; silently substituting the wrong
+instance is the exact defect being corrected, with a measured 0 in-house callers depending on the
+substitution.
+
+### Recorded instance: three previously-inert declarations now take effect (WIRE-18 / WIRE-19 / SILENT-22, 6.3.0)
+
+Three unrelated declarations shared the same defect shape — accepted by the framework, read by
+nobody — and are closed together because each follows the identical "a previously-inert
+declaration cannot regress by starting to work" reasoning this document's `GEN-06` entry above
+already established:
+
+- **`@ConfigEntry(comment)` now reaches the generated yml.** Before 6.3.0, `comment()` had exactly
+  one reader — `AbstractConfigEntity:200`, feeding the UltiPanel editor — and never reached the
+  file `init()` writes. 6.3.0 follows a newly-added key's `config.set(path, default)` with
+  `config.setComments(path, ...)`, in the one branch D-01 already permits the framework to write
+  silently (a key the operator never had). A key the operator already has, and any comment they
+  wrote themselves, is untouched byte-for-byte.
+- **`plugin.yml`'s `loadAfter` now participates in load ordering.** Before 6.3.0, the framework
+  read `@PluginDependency`'s `depends`/`softDepends`/`loadBefore` but never `plugin.yml`'s
+  `loadAfter`. 6.3.0 merges both into one graph through a plugin.yml-name/simple-class-name alias
+  map, via the new `PluginYmlReader`. No new attribute was added to `@PluginDependency`.
+- **`DependencyUtils.getPluginPackages` now sees meta-annotated scan declarations.** Before 6.3.0,
+  it resolved `@ComponentScan`/`@EnableAutoRegister` via `Class#isAnnotationPresent`, which returns
+  `false` when the annotation is present only as a meta-annotation — exactly `@UltiToolsModule`'s
+  shape. 6.3.0 resolves both through the same `MergedAnnotationResolver` the rest of this phase's
+  work uses, and accumulates every declared source (`value()`, `basePackages()`,
+  `basePackageClasses()`, `scanPackage()`) additively rather than first-match-wins.
+
+**Measured blast radius, all three: 0.** 11 modules declare `plugin.yml`'s `loadAfter:`, **all
+empty arrays**. 12 modules declare `scanBasePackages`, all with exactly one entry equal to the
+module's own package — the shape the additive-union resolver reproduces identically. No module
+today writes a `@ConfigEntry(comment())` whose written comment this change changes, since the
+change only ever adds a comment to a key that did not previously exist in the operator's file.
+
+**Bucket.** No migration period for all three — each is "correcting behaviour that plainly
+contradicts the documentation": a declared attribute that the framework accepts, documents, and
+silently never reads is a self-contradicting contract regardless of whether it happens to have
+zero current users.
 
 ## Binary incompatibilities the removal list cannot cover
 
