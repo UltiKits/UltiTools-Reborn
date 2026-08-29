@@ -1,10 +1,13 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -12,6 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import com.google.gson.Gson;
@@ -91,7 +95,25 @@ public abstract class AbstractConfigEntity {
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
         this.ultiToolsPlugin = ultiToolsPlugin;
-        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
+        File file = ultiToolsPlugin.getConfigFile(configFilePath);
+        config = new YamlConfiguration();
+        // D-08: options().parseComments(true) must be set on THIS instance before load() runs -
+        // load() reads the option itself (verified via javap against paper-api), so setting it
+        // afterward only affects a later save(), not this read. Under
+        // -DPaper.parseYamlCommentsByDefault=false an operator's existing comments would
+        // otherwise be dropped right here at parse time, and the missing-key branch below would
+        // then write them out of their own file - the exact D-01 violation this lane exists to
+        // prevent. Explicit, not inherited from the system-property default.
+        config.options().parseComments(true);
+        try {
+            config.load(file);
+        } catch (FileNotFoundException ignored) {
+            // Mirrors YamlConfiguration.loadConfiguration(File)'s own behaviour: a missing file
+            // is the normal "first run" case, not an error - config stays empty and every field
+            // below takes the missing-key branch.
+        } catch (InvalidConfigurationException e) {
+            LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+        }
         boolean upToDate = true;
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
@@ -108,11 +130,21 @@ public abstract class AbstractConfigEntity {
                 } else {
                     upToDate = false;
                     config.set(path, ReflectionUtil.getFieldValue(this, field));
+                    // D-07/D-09: the key never existed in the operator's file, so writing its
+                    // @ConfigEntry comment alongside the value discloses nothing of theirs - this
+                    // is D-01's sole sanctioned exception, widened from "silently add a value" to
+                    // "silently add a value and its explanation". Never reached on the
+                    // already-has-the-key path above, and this is the only comment write in the
+                    // whole class.
+                    List<String> commentLines = splitComment(annotation.comment());
+                    if (!commentLines.isEmpty()) {
+                        config.setComments(path, commentLines);
+                    }
                 }
             }
         }
         if (!upToDate) {
-            config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+            config.save(file);
         }
 
         // Validate fields and reset invalid values to defaults
@@ -120,6 +152,28 @@ public abstract class AbstractConfigEntity {
 
         // Notify listeners after initialization
         notifyChangeListeners();
+    }
+
+    /**
+     * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
+     * declaration order, ready for {@link org.bukkit.configuration.ConfigurationSection}'s
+     * comment-writing API. No blank leading element is added (Claude's Discretion, D-07) - it
+     * would produce a diff on every regenerated file for a purely cosmetic gain, contrary to
+     * D-01's touch-as-little-as-possible posture.
+     * <p>
+     * 把 {@code @ConfigEntry.comment()} 的值按行拆分成一个 {@link List}，每行一个元素，顺序不变，
+     * 供 {@link org.bukkit.configuration.ConfigurationSection} 的注释写入 API 使用。不添加空白的
+     * 首行元素（Claude 自行裁量，D-07）——那样会让每次重新生成的文件都产生一次纯粹为了排版的 diff，
+     * 与 D-01"尽量少碰操作员文件"的立场相悖。
+     *
+     * @param comment the raw {@code comment()} attribute value, possibly empty
+     * @return one element per line, or an empty list if {@code comment} is blank
+     */
+    private static List<String> splitComment(String comment) {
+        if (comment == null || comment.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Arrays.asList(comment.split("\n"));
     }
 
     /**
