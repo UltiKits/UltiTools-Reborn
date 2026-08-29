@@ -935,6 +935,46 @@ this document's own criterion:
   operator never chose while reporting success. There is no migration period under which
   continuing to silently rewrite the operator's file is the safer default. **No migration period.**
 
+#### The write path also validates now (CR-01, closing SILENT-14's remaining gap, 6.3.0)
+
+The recorded instance above covers `init()`/`reload()` — the load path. It left one path
+unvalidated: `AbstractConfigEntity.updateProperties(JsonObject)`, the method that applies a config
+change submitted from outside the process. Before this gap closure, `updateProperties` set every
+`@ConfigEntry` field the JSON named by reflection and called `config.save(...)` unconditionally,
+with no call to `validateFields()` anywhere in the method — a `@Range(min = 1, max = 1200)` field
+could be set to `9999` through this path with no refusal, no warning, and the out-of-range value
+written straight to the operator's yml.
+
+**Who reaches it:** both `ConfigManager.loadFromJson(String)` (the whole-map form) and
+`ConfigManager.loadFromJson(String, String)` (the single-file form, issue #236's shape) call
+`updateProperties` to apply the entries they parse. Both are called only from
+`utils/ConfigEditorUtils`, which in turn is reached from `utils/PluginInitiationUtils`'s
+`update_config` and `upload_config` WebSocket message handlers — the panel's two config-editing
+entry points. There is no other production caller.
+
+**What a panel operator now sees:** a submission that violates its own `@Range`/`@NotEmpty`/
+`@Size`/`@Pattern` declaration is rejected. The panel receives an error naming the module, the
+config file, the field, the actual value, and the violated constraint — the same five-part shape
+the load path has produced since the recorded instance above, from the identical
+`validateFields()` implementation. The yml file is not written, the entity's in-memory fields are
+restored to the values they held before the call, and the module keeps running on that
+pre-call state rather than on the rejected one.
+
+**Bucket.** Same classification and the same reasoning as the 47-constraint case above, and it
+takes the same case-specific override for the same D-01 reason: on its face this is "moving from
+silent degradation to failure," but the previous behaviour did not degrade quietly — it reported
+success while writing a value the module's own declaration rejects. D-01 grants the framework
+permission to refuse; it grants no permission to persist a value the module's declarations reject,
+and the panel being the caller rather than a hand-edited file does not change who owns the file.
+There is no migration period under which continuing to accept and write such a submission is the
+safer default. **No migration period.**
+
+**Measured blast radius: all 193 constraints across the 18 production config classes named in the
+recorded instance above — the 146 newly activated plus the 47 already working — are now enforced
+on the write path too, not only the 47 that were already enforced on load.** Before this change, a
+panel submission violating any of those 193 constraints was accepted and written; now it is
+rejected, the file is unchanged, and the panel is told what to fix.
+
 ### Recorded instance: a dependency cycle or missing dependency refuses the affected modules (SILENT-08, 6.3.0)
 
 Before 6.3.0, `PluginManager.sortPluginsByDependencies` caught `PluginDependencyResolver`'s
