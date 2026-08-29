@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
-import com.ultikits.testfixtures.externalplugininjection.ConcretePluginInjectingService;
 import com.ultikits.testfixtures.externalplugininjection.ConnectorPluginFixture;
 import com.ultikits.testfixtures.externalplugininjection.JavaPluginInjectingService;
 import com.ultikits.testfixtures.externalplugininjection.UltiToolsPluginInjectingService;
@@ -237,8 +236,8 @@ public class ExternalPluginAdapterTest {
         }
 
         @Test
-        @DisplayName("a @Service constructor-injecting the connector's own concrete plugin class also receives that instance")
-        void concreteClassConstructorInjection_receivesConnectorsOwnInstance() throws Exception {
+        @DisplayName("the connector's own concrete plugin class also resolves to that instance")
+        void concreteClassRegistration_resolvesToConnectorsOwnInstance() throws Exception {
             JavaPlugin coreDecoy = mock(JavaPlugin.class);
             PluginManager pm = newPluginManagerWithParent(newParentContextWithCoreDecoy(coreDecoy));
 
@@ -247,11 +246,17 @@ public class ExternalPluginAdapterTest {
 
             pm.registerExternal(adapter);
 
-            ConcretePluginInjectingService service =
-                    adapter.getContext().getBean(ConcretePluginInjectingService.class);
+            // registerType keys by exact Class, so a constructor parameter declared as the
+            // connector's own concrete runtime class (not the general JavaPlugin type
+            // JavaPluginInjectingService exercises) needs to resolve too. Queried directly on the
+            // container -- not through a scanned @Service -- because MockBukkit's own plugin
+            // loader (PluginManagerMock.loadPlugin -> loadProxyClass) instantiates a dynamically
+            // generated proxy subclass of ConnectorPluginFixture, not ConnectorPluginFixture
+            // itself, so no compile-time-fixed fixture could declare a constructor parameter of
+            // that exact, only-known-at-test-runtime type.
+            Object resolved = adapter.getContext().getBean(connectorPlugin.getClass());
 
-            assertThat(service).isNotNull();
-            assertThat(service.getInjectedPlugin()).isSameAs(connectorPlugin);
+            assertThat(resolved).isSameAs(connectorPlugin);
         }
 
         @Test

@@ -1793,6 +1793,22 @@ public class PluginManager {
         context.registerShutdownHook();
         context.setClassLoader(adapter.getPluginClassLoader());
 
+        // Register the connector's own JavaPlugin so services can inject it via constructor.
+        // Must run BEFORE scanComponents, mirroring initializePlugin's own T-03-27 fix
+        // (:1524): registerType writes the type registry directly and never goes through
+        // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+        // move.
+        //
+        // The parent container holds the CORE UltiTools instance under "ultiTools"
+        // (DependenceManagers:34), and UltiTools extends JavaPlugin -- without this
+        // registration a constructor parameter of type JavaPlugin would miss this (empty)
+        // child, walk up, and isInstance-match that core instance instead (SILENT-16, #331).
+        // registerType keys by exact Class, so a constructor parameter declared as the
+        // connector's own concrete class needs a second registration under that class too.
+        JavaPlugin javaPlugin = adapter.getJavaPlugin();
+        context.registerType(JavaPlugin.class, javaPlugin);
+        registerOwnType(context, javaPlugin);
+
         // 2. Scan components in the external plugin's package
         if (!adapter.getScanPackage().isEmpty()) {
             context.scanComponents(new String[]{adapter.getScanPackage()});
@@ -1841,6 +1857,36 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * Register an object into {@code context} keyed by its own concrete runtime class, in
+     * addition to whatever declared-type registration the caller has already done. Needed
+     * because {@code SimpleContainer.registerType(Class, T)} keys by exact {@code Class}: a
+     * constructor parameter declared as the connector's own concrete plugin class (rather than
+     * the general {@code JavaPlugin} type) would otherwise never resolve (SILENT-16, #331).
+     * <p>
+     * The unchecked cast is safe: {@code instance.getClass()} is always assignable to itself, so
+     * capturing it as {@code Class<T>} for the same {@code instance} of static type {@code T}
+     * never mismatches at runtime.
+     * <br>
+     * 把对象以它自己的具体运行时类为键注册进 {@code context}，作为调用方已经完成的声明类型注册
+     * 之外的补充。之所以需要这一步，是因为 {@code SimpleContainer.registerType(Class, T)}
+     * 按精确的 {@code Class} 作为键：如果构造函数参数声明的是连接器自己的具体插件类
+     * （而不是通用的 {@code JavaPlugin} 类型），否则永远无法解析（SILENT-16，#331）。
+     * <p>
+     * 这里的非受检转换是安全的：{@code instance.getClass()} 总能赋值给它自身，所以对静态类型为
+     * {@code T} 的同一个 {@code instance}，把它捕获为 {@code Class<T>} 在运行时永远不会不匹配。
+     *
+     * @param context  the container to register into <br> 要注册进去的容器
+     * @param instance the object to register under its own concrete class <br>
+     *                 要按自身具体类注册的对象
+     * @param <T> the object's static type <br> 该对象的静态类型
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> void registerOwnType(SimpleContainer context, T instance) {
+        Class<T> ownType = (Class<T>) instance.getClass();
+        context.registerType(ownType, instance);
     }
 
     /**
