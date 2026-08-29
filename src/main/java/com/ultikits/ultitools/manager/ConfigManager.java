@@ -7,6 +7,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -102,7 +103,11 @@ public class ConfigManager {
             } catch (InstantiationException |
                      InvocationTargetException |
                      IllegalAccessException |
-                     NoSuchMethodException ignored) {
+                     NoSuchMethodException e) {
+                // Neither the (String) nor the no-arg idiom resolved - refuse by name instead of
+                // vanishing silently (D-03). The no-arg-only idiom itself is untouched: it still
+                // succeeds on the first catch-free path above and never reaches this branch.
+                throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
