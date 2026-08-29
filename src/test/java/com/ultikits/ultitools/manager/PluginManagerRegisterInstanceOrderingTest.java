@@ -35,20 +35,34 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataStore;
 
 /**
- * WR-03: {@code PluginManager.register(UltiToolsPlugin)} -- a second, public overload distinct
- * from {@code initializePlugin}/{@code loadPluginMainClass} -- repeats the exact ordering bug
- * T-03-27 already fixed in that sibling method: it called {@code registerSingleton} on the plugin
- * instance before any component scan, so an {@code @Autowired} field on the plugin's own class
- * could never resolve against its own scanned {@code @Service} beans.
+ * WR-03: {@code PluginManager.register(UltiToolsPlugin)} -- at the time this test was written, a
+ * second, public overload distinct from {@code initializePlugin}/{@code loadPluginMainClass} --
+ * repeated the exact ordering bug T-03-27 already fixed in that sibling method: it called
+ * {@code registerSingleton} on the plugin instance before any component scan, so an
+ * {@code @Autowired} field on the plugin's own class could never resolve against its own scanned
+ * {@code @Service} beans.
+ * <p>
+ * <b>Since 04-07 (WIRE-05), this is no longer two independently-maintained call sites.</b> Both
+ * {@code register(UltiToolsPlugin)} and {@code initializePlugin} now assemble through the single
+ * shared {@code PluginManager.assemblePluginContainer} method, so the scan-before-registerSingleton
+ * ordering this test pins is a property of that ONE method, not of two separately-fixable ones.
+ * This test (driving through {@code register(UltiToolsPlugin)}) and
+ * {@code RegisterSingletonAssemblyTest.InitializePluginOrdering} (driving through
+ * {@code initializePlugin}) together exercise the shared method from both entry points; a
+ * regression here would also reproduce there, and {@code
+ * PluginManagerRegistrationParityTest.CapabilityParityTests#bothEntryPoints_produceContainersWithEqualBeanNameSets}
+ * separately guards against the two entry points diverging again in what they call.
  * <p>
  * Reuses the {@link OrderingFixtureModule}/{@link OrderingFixtureService} fixture pair
  * {@code RegisterSingletonAssemblyTest.InitializePluginOrdering} already established for the
  * sibling method's own T-03-27 regression, and the same jar-backed-{@code CodeSource} loading
  * trick {@code UltiToolsPlugin}'s no-arg constructor requires -- but drives it through
- * {@code register(UltiToolsPlugin)} instead of {@code initializePlugin}, since that is the second,
- * independently-broken call site.
+ * {@code register(UltiToolsPlugin)} instead of {@code initializePlugin}, since the compatibility
+ * gate's timing relative to construction and the plugin-instance source (handed in here vs.
+ * reflectively constructed there) remain genuinely entry-point-specific.
  */
-@DisplayName("PluginManager.register(UltiToolsPlugin): scan-before-registerSingleton ordering (WR-03)")
+@DisplayName("PluginManager.register(UltiToolsPlugin): scan-before-registerSingleton ordering, "
+        + "now enforced by the shared assemblePluginContainer method (WR-03/WIRE-05)")
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerRegisterInstanceOrderingTest {
 
