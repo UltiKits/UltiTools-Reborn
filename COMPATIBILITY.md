@@ -889,6 +889,136 @@ binary-compatibility guarantee for this specific transformation (abstract → de
 signature, same return type) — recorded here so a reader trusting the raw `japicmp` report is not
 misled, without this document's own compatibility promise overstating it either.
 
+### Recorded instance: config validation goes live, and a violating value refuses the module (SILENT-14, 6.3.0)
+
+Before 6.3.0, `AbstractConfigEntity.validateFields()` obtained the default instance it diffs
+against directly via `(String)` constructor reflection and returned at `Level.FINE` — with no
+enforcement at all — for any config class that does not declare that constructor. Eleven
+production config classes across nine modules use only the no-arg `super(path)` idiom (the same
+idiom `ConfigManager.registerAll`'s own construction fallback already supports), so
+`@Range`/`@NotEmpty`/`@Size`/`@Pattern` never executed on them: **146 constraints had never fired
+on a single one of them**, across every release, worst individually `UltiLogin/LoginConfig` 37,
+`UltiCleaner/CleanerConfig` 26, `UltiTrade/TradeConfig` 22. On the seven classes that do carry a
+`(String)` constructor, validation did already run, but a violation was handled by resetting the
+field to its initializer value and calling `config.save()` — silently discarding the operator's
+edit and overwriting their file.
+
+6.3.0 makes `validateFields()` obtain its default instance through the identical two-step
+constructor fallback `ConfigManager.registerAll` already uses — `(String)` first, no-arg second —
+so validation now runs on every config class that registers successfully, dormant or not. A
+violation on any of those classes now throws, naming module, file, field, actual value, and the
+violated constraint; the operator's yml file is never touched, on either path. A config class that
+resolves through *neither* constructor idiom is refused by name instead of silently vanishing from
+registration.
+
+**Measured blast radius: 146 previously-dormant constraints across 11 production config classes in
+9 modules begin enforcing for the first time.** A live server holding an out-of-range value in one
+of those 11 files' fields will see that module refuse to load on its next start. The fix is the
+operator's edit — the framework will not rewrite the file for them, on either the dormant-class
+path or the previously-working path.
+
+**Bucket.** Two distinct changes are folded into one fix, and they land in different buckets of
+this document's own criterion:
+
+- The 146 dormant constraints activating is "correcting behaviour that plainly contradicts the
+  documentation" — the annotations' own javadoc has always promised validation, and for these 11
+  classes it silently never ran. **No migration period.**
+- The 47 constraints on the 7 already-working classes moving from reset-and-save to refuse is, on
+  its face, "moving from silent degradation to failure" — the bucket that normally requires the
+  two-step warn-then-switch process below. It instead takes the same case-specific override the
+  `del()` recorded instance above took, for the reason the maintainer stated directly (D-01,
+  `04-CONTEXT.md`): *"we may refuse to load and we may error out. We may NEVER silently modify
+  \[the operator's\] file."* Reset-and-save is not a softer failure mode than refusal here — it is
+  the exact defect class D-01 was written to delete, because it silently substitutes a value the
+  operator never chose while reporting success. There is no migration period under which
+  continuing to silently rewrite the operator's file is the safer default. **No migration period.**
+
+### Recorded instance: a dependency cycle or missing dependency refuses the affected modules (SILENT-08, 6.3.0)
+
+Before 6.3.0, `PluginManager.sortPluginsByDependencies` caught `PluginDependencyResolver`'s
+`CircularDependencyException`/`MissingDependencyException`, logged two `SEVERE` lines, and
+returned `new ArrayList<>(plugins)` — every module, including ones with no involvement in the
+cycle, loaded in raw filesystem order with no dependency ordering applied at all.
+
+6.3.0 partitions instead of degrading wholesale: both exceptions now expose a structured
+`getSortedPrefix()`/`getRefusedPlugins()` (and, for cycles, `getCyclePaths()`), and
+`sortPluginsByDependencies` returns only the sortable prefix — the cycle (or the module missing a
+hard dependency) and everything transitively depending on it are refused; every unrelated module
+still loads, still ordered. The console names a cycle as an edge path (`A -> B -> C -> A`), not an
+unordered set. The pre-6.3.0 all-unsorted behaviour survives only behind an explicit,
+cost-stating opt-in, `-Dultitools.useLegacyPluginLoading=true` — mirroring Paper's own
+`-Dpaper.useLegacyPluginLoading=true` precedent (measured against `SimpleProviderStorage.handleCycle`
+in a live `paper-1.21.4.jar`) rather than inventing a new switch shape.
+
+**Measured blast radius: `@PluginDependency` has 0 downstream users across `Modules/` and
+`Plugins/`** (control: `@Service`, 39 files), so no in-house module is affected today. A
+third-party module whose declared dependency graph is currently broken — a cycle, or a hard
+dependency on a module that is not installed — will see its module (and anything depending on it)
+refuse to load where it previously loaded anyway, unordered.
+
+**Bucket.** "Moving from silent degradation to failure," verbatim — the criterion's own worked
+example is "a missing optional dependency was previously skipped and is now rejected at load
+time." The migration period for this release is not the generic two-step warn-then-switch process;
+it is the standing, Paper-precedented opt-in switch above, which — unlike a two-release window —
+remains available indefinitely, so an operator running third-party modules with a genuinely broken
+graph can keep the old behaviour while they get it fixed, rather than being forced onto a fixed
+timetable.
+
+### Recorded instance: a module JAR failing validation never reaches the classpath (WIRE-11, 6.3.0)
+
+Before 6.3.0, `UltiTools.getModuleUrls()` added every `.jar` under `plugins/` to the URL array
+handed to the module `URLClassLoader` unconditionally; `SecurityPolicy`'s size/entry-count/
+structure checks ran only afterward, defensively, inside `PluginManager.loadPluginMainClass`
+during class scanning. A JAR that ultimately failed that later check had, for the interval between
+classloader construction and that check, already had its URL present in a live `URLClassLoader` —
+reachable by anything holding a reference to that loader, not only by the specific class-scan call
+site that eventually rejected it.
+
+6.3.0 moves the identical check earlier: the new `SecurityPolicy.isValidModuleJar(File)` — static,
+Bukkit-free, callable before any Bukkit server exists — runs inside the new
+`UltiTools.collectModuleJarUrls` for every candidate JAR, and only a JAR that passes has its URL
+added to the array at all. A failing JAR is named in a `WARNING` and skipped; the bootstrap
+continues, every other module still loads (module-granularity skip, not a bootstrap abort).
+`PluginManager`'s own former private copy of this same rule (`validateJarFile`) is deleted — there
+is exactly one implementation now, called from both the pre-classpath scan and the defensive
+class-scan check.
+
+**This changes *when* the check runs, not *what* it checks** — the 100 MB size limit and the
+10,000-entry limit are still enforced, unmodified, by `SecurityPolicy.isSafeFileStructure`.
+
+**Bucket.** No migration period — this is a security fix: it closes the interval during which a
+JAR that will ultimately be rejected is nonetheless present in a live `URLClassLoader`'s URL
+array, reachable by anything else running in the same JVM before the deferred check runs. Per this
+document's own "no migration period" list, "security fixes... may land in a PATCH without prior
+notice," and this narrows an existing exposure rather than introducing a new restriction on
+previously-valid input.
+
+### Recorded instance: a `getAllConfigs()` override under auto-registration is diffed against what actually registered (SILENT-18, 6.3.0)
+
+Before 6.3.0, a module's `getAllConfigs()` override was consulted only when
+`@UltiToolsModule(config = false)` opted the module out of auto-registration — which is not the
+default. `@EnableAutoRegister.config()` defaults `true`, and `@UltiToolsModule` carries
+`@EnableAutoRegister` as a meta-annotation, so every module has auto-registration on unless its
+author explicitly turns it off. A module author who overrode `getAllConfigs()` while leaving
+auto-registration on had that override silently ignored — package-scan auto-registration ran
+instead, with no signal that the override existed or that it did nothing.
+
+6.3.0 calls `getAllConfigs()` once after auto-registration completes and diffs its declared
+`configFilePath` set against what auto-registration actually registered. An empty diff (every path
+the override names was also auto-registered) is pure redundancy and logs one `Level.FINE` line. A
+non-empty diff — the override names a `configFilePath` auto-registration never registered — is
+real capability loss: the module is refused, and every missing entity is named. `config = false`
+modules are structurally untouched; `getAllConfigs()` remains their sole registration path and no
+diff runs.
+
+**Measured blast radius: 0 downstream `getAllConfigs()` overrides exist today** under
+auto-registration across the modules surveyed, so no in-house module is refused by this change.
+
+**Bucket.** No migration period — "correcting behaviour that plainly contradicts the
+documentation": `getAllConfigs()` is documented as the extension point for declaring a module's
+config entities, and silently ignoring it while auto-registration is on (its own default)
+contradicts that contract regardless of whether any override exists today to be affected by it.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
