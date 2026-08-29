@@ -1477,56 +1477,114 @@ public class PluginManager {
         }
 
         SimpleContainer pluginContext = new SimpleContainer();
-        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
-        pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(classLoader);
         try {
-            // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
-            // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
-            // (03-04) resolves the plugin via getBean(UltiToolsPlugin.class) during the scan.
-            // registerType writes the type registry directly and never goes through
-            // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
-            // move.
-            pluginContext.registerType(UltiToolsPlugin.class, plugin);
-
-            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
-            String[] scanPackages = getPluginScanPackages(pluginClass);
-            if (scanPackages.length > 0) {
-                pluginContext.scanComponents(scanPackages);
-            }
-
-            // Register the plugin instance itself by name AFTER scanComponents, not before:
-            // registerSingleton now fully assembles its argument unconditionally (D-14), so
-            // registering the plugin instance before any @Service bean exists would attempt to
-            // autowire it against an empty bean graph -- after 03-03, an unresolvable
-            // @Autowired(required = true) field on the plugin's own main class would then throw,
-            // turning a working module into one that cannot load (T-03-27).
-            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
-
-            // Register config entities as beans for @Autowired injection
-            java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
-                UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
-            if (configMap != null) {
-                for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
-                    String beanName = config.getClass().getSimpleName();
-                    beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
-                    pluginContext.registerSingleton(beanName, config);
-                }
-            }
-
-            // Set the static instance field before refresh() so @PostConstruct methods
-            // can call Xxx.getInstance().getDataOperator() etc.
-            setPluginStaticInstance(pluginClass, plugin);
-
-            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
-            registerEntityOwnership(scope);
-            plugin.setDataScope(scope);
-            wireAop(pluginContext, scope);
-            pluginContext.refresh();
-            plugin.setContext(pluginContext);
+            // WIRE-05: both entry points build their container through this one shared
+            // assembly method now -- see its own javadoc for the full instruction sequence and
+            // why setContext() runs first.
+            assemblePluginContainer(pluginContext, plugin, pluginClass);
             return plugin;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+    }
+
+    /**
+     * Assemble a plugin's container: type registration, component scan, the plugin's own
+     * singleton registration, config-entity beans, the static instance field, {@link DataScope}
+     * minting plus entity ownership, AOP wiring, {@code refresh()}, and (after {@code refresh()})
+     * {@code @ContextEntry} bean registration with {@code autowireBean}. Both {@link
+     * #register(UltiToolsPlugin)} and {@link #initializePlugin} route through this one method now,
+     * so a capability added to either path is never silently missing from the other (WIRE-05,
+     * WIRE-06, #203/#326).
+     * <br>
+     * 组装一个插件的容器：类型注册、组件扫描、插件自身的单例注册、配置实体 bean、静态 instance
+     * 字段、{@link DataScope} 铸造与实体所有权、AOP 装配、{@code refresh()}，以及（在
+     * {@code refresh()} 之后）{@code @ContextEntry} bean 注册与 {@code autowireBean}。
+     * {@link #register(UltiToolsPlugin)} 与 {@link #initializePlugin} 现在都经过这唯一一个方法，
+     * 使添加到某一条路径上的能力不会再悄悄漏掉另一条路径（WIRE-05、WIRE-06，#203/#326）。
+     *
+     * @param pluginContext a freshly created, not-yet-refreshed container <br> 新建、尚未
+     *        {@code refresh()} 的容器
+     * @param plugin        the plugin instance <br> 插件实例
+     * @param pluginClass   the plugin's class <br> 插件类
+     */
+    private void assemblePluginContainer(SimpleContainer pluginContext, UltiToolsPlugin plugin,
+            Class<? extends UltiToolsPlugin> pluginClass) {
+        // setContext runs BEFORE refresh() -- and before every other step below -- matching
+        // register(UltiToolsPlugin)'s pre-existing behaviour (WIRE-05 Task 1 decision). A
+        // @PostConstruct method invoked below (registerSingleton assembles unconditionally,
+        // D-14) that calls plugin.getContext() must see a valid container, not null.
+        // initializePlugin previously set this AFTER refresh(), so every @PostConstruct method
+        // on that path silently observed a null context.
+        plugin.setContext(pluginContext);
+
+        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        pluginContext.registerShutdownHook();
+        pluginContext.setClassLoader(classLoader);
+
+        // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
+        // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
+        // (03-04) resolves the plugin via getBean(UltiToolsPlugin.class) during the scan.
+        // registerType writes the type registry directly and never goes through
+        // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+        // move.
+        pluginContext.registerType(UltiToolsPlugin.class, plugin);
+
+        // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+        String[] scanPackages = getPluginScanPackages(pluginClass);
+        if (scanPackages.length > 0) {
+            pluginContext.scanComponents(scanPackages);
+        }
+
+        // Register the plugin instance itself by name AFTER scanComponents, not before:
+        // registerSingleton now fully assembles its argument unconditionally (D-14), so
+        // registering the plugin instance before any @Service bean exists would attempt to
+        // autowire it against an empty bean graph -- an unresolvable
+        // @Autowired(required = true) field on the plugin's own class would then throw, turning a
+        // working module into one that cannot load. This is the exact ordering bug T-03-27 fixed
+        // in initializePlugin and WR-03 fixed in register(UltiToolsPlugin) -- now a single call
+        // site fixes both.
+        pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+
+        // Register config entities as beans for @Autowired injection
+        java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
+            UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
+        if (configMap != null) {
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
+                String beanName = config.getClass().getSimpleName();
+                beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                pluginContext.registerSingleton(beanName, config);
+            }
+        }
+
+        // Set the static instance field before refresh() so @PostConstruct methods
+        // can call Xxx.getInstance().getDataOperator() etc.
+        setPluginStaticInstance(pluginClass, plugin);
+
+        DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
+        registerEntityOwnership(scope);
+        plugin.setDataScope(scope);
+        wireAop(pluginContext, scope);
+        pluginContext.refresh();
+
+        // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
+        // already fully assembles its argument unconditionally (D-14), so there is nothing left
+        // for a second refresh() to do; the refresh() just above already pre-instantiated every
+        // non-lazy singleton definition this container knows about.
+        if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
+            ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
+            Class<?> clazz = contextEntry.value();
+            // Register the context entry class as a bean
+            try {
+                Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+            } catch (Exception e) {
+                Bukkit.getLogger().log(
+                        Level.WARNING,
+                        String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                );
+            }
+            pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
     }
     
