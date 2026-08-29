@@ -54,6 +54,10 @@ class UltiToolsPluginConfigDiffTest {
     // Mockito bypasses the constructor entirely (Objenesis), and with the inline mock maker,
     // mock.getClass() returns the real fixture class, so its annotations are read correctly.
 
+    // Declared before the nested fixture classes below: PMD's
+    // FieldDeclarationsShouldBeAtStartOfClass requires fields to precede any inner class.
+    private ConfigManager mockConfigManager;
+
     @UltiToolsModule
     abstract static class AutoRegisterFixture extends UltiToolsPlugin {
     }
@@ -63,13 +67,12 @@ class UltiToolsPluginConfigDiffTest {
     }
 
     /** Minimal concrete AbstractConfigEntity - only configFilePath matters to the diff. */
+
     private static class FixtureConfigEntity extends AbstractConfigEntity {
         FixtureConfigEntity(String configFilePath) {
             super(configFilePath);
         }
     }
-
-    private ConfigManager mockConfigManager;
 
     @BeforeEach
     void setUp() {

@@ -200,6 +200,10 @@ class PluginManagerContainerIsolationTest {
 
         @RepeatedTest(8)
         @DisplayName("register(UltiToolsPlugin) and the JAR-load path on two threads at once")
+        // PMD's MethodNamingConventions only treats @Test as a JUnit 5 test method, so a
+        // @RepeatedTest method is checked against methodPattern (instance methods) instead of
+        // junit5TestPattern. The name follows this suite's scenario_expectation convention.
+        @SuppressWarnings("PMD.MethodNamingConventions")
         void concurrentAssembly_producesIndependentContainers() throws Exception {
             File jar = buildFixtureJar("isolation-alpha-concurrent.jar", "IsolationAlphaModule",
                     Class.forName(ALPHA_PACKAGE + "IsolationAlphaModule"),

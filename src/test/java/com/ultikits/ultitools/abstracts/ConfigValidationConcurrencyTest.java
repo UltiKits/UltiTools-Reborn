@@ -85,6 +85,9 @@ class ConfigValidationConcurrencyTest {
 
     @RepeatedTest(ROUNDS)
     @DisplayName("two violating configs on two threads produce two uncontaminated refusals")
+    // See the note in PluginManagerContainerIsolationTest: PMD checks a @RepeatedTest method
+    // against methodPattern, not junit5TestPattern, because only @Test is recognised as a test.
+    @SuppressWarnings("PMD.MethodNamingConventions")
     void concurrentValidation_refusalsNeverCrossContaminate() throws Exception {
         UltiToolsPlugin alphaPlugin = newPluginMock("AlphaModule");
         UltiToolsPlugin betaPlugin = newPluginMock("BetaModule");

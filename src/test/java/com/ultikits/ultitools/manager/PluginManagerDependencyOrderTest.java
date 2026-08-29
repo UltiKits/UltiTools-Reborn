@@ -107,7 +107,7 @@ class PluginManagerDependencyOrderTest {
     // has no coupling to that class's test data.
     public static class OrderPluginA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override public void unregisterSelf() { /* nothing to release: this fixture owns no state */ }
     }
 
     @PluginDependency(depends = {"OrderCircularB"})

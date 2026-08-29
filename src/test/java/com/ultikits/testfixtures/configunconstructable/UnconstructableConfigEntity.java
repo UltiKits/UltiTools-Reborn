@@ -15,6 +15,9 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 @ConfigEntity("config/unconstructable.yml")
 public class UnconstructableConfigEntity extends AbstractConfigEntity {
 
+    // The parameter is deliberately unused: this class exists to have a constructor that is
+    // neither (String) nor no-arg, so registerAll must refuse it by name (D-03).
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public UnconstructableConfigEntity(int notAStringOrNoArgConstructor) {
         super("config/unconstructable.yml");
     }

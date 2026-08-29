@@ -883,6 +883,9 @@ class ConfigValidationTest {
         @ConfigEntry(path = "value", comment = "A value")
         private String value = "x";
 
+        // Deliberately unused - see UnconstructableConfigEntity: the point is a constructor
+        // matching neither framework idiom, so validateFields() must refuse this class.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
         UnconstructableConfig(int notAStringOrNoArgConstructor) {
             super("unconstructable.yml");
         }

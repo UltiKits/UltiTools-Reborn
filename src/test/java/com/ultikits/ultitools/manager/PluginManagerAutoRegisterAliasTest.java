@@ -69,6 +69,13 @@ class PluginManagerAutoRegisterAliasTest {
     // mock.getClass() returns the real fixture class, so its annotations are read correctly.
     // Following the same idiom already established in DependencyUtilsTest.
 
+    // Declared before the nested fixture classes below: PMD's
+    // FieldDeclarationsShouldBeAtStartOfClass requires fields to precede any inner class.
+    private PluginManager pluginManager;
+    private CommandManager mockCommandManager;
+    private ListenerManager mockListenerManager;
+    private ServerMock server;
+
     @UltiToolsModule
     abstract static class DefaultModuleFixture extends UltiToolsPlugin {
     }
@@ -86,11 +93,6 @@ class PluginManagerAutoRegisterAliasTest {
     @EnableAutoRegister
     abstract static class ConditionalCommandModuleFixture extends UltiToolsPlugin {
     }
-
-    private PluginManager pluginManager;
-    private CommandManager mockCommandManager;
-    private ListenerManager mockListenerManager;
-    private ServerMock server;
 
     @BeforeEach
     void setUp() {

@@ -50,13 +50,15 @@ import com.ultikits.ultitools.utils.TestHelper;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflective invocation of private resolution methods
 class UltiToolsPluginLanguageFallbackTest {
 
-    abstract static class FixturePlugin extends UltiToolsPlugin {
-    }
-
+    // Declared before the nested fixture classes below: PMD's
+    // FieldDeclarationsShouldBeAtStartOfClass requires fields to precede any inner class.
     @TempDir
     File tempDir;
 
     private ConfigManager mockConfigManager;
+
+    abstract static class FixturePlugin extends UltiToolsPlugin {
+    }
 
     @BeforeEach
     void setUp() {

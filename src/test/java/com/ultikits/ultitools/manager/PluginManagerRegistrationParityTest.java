@@ -152,7 +152,7 @@ class PluginManagerRegistrationParityTest {
     private UltiTools newMockUltiTools(ConfigManager configManager) {
         DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
         when(mockDependenceManagers.getContext()).thenReturn(
-                new com.ultikits.ultitools.context.SimpleContainer());
+                new SimpleContainer());
 
         // wireAop (called by the shared assembly before refresh()) resolves a DataSource through
         // UltiTools.getInstance().getDataStore() for the @Transactional advisor --
