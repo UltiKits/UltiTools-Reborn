@@ -203,7 +203,26 @@ public class PluginManager {
      * @param minUltiToolsVersion Min UltiTools version <br> 最低UltiTools版本
      * @param mainClass           Main class <br> 主类
      * @return Register result <br> 注册结果
+     * @deprecated This overload's reflective, with-args construction has failed on every
+     *             release since 6.2.0 (Phase 1 D-15, measured): {@link
+     *             SecurityPolicy#isSafeParameterType} rejects the runtime types
+     *             {@code authors} and {@code loadAfter} actually are ({@code
+     *             Arrays.asList(...)}'s {@code java.util.Arrays$ArrayList}, or any {@code
+     *             Collections.*} wrapper) before the module's constructor ever runs. This
+     *             overload existed to bypass {@code plugin.yml}-based metadata for connector
+     *             callers; use {@link #register(UltiToolsPlugin)} instead, which takes an
+     *             already-constructed plugin instance and has no reflective construction path
+     *             of its own. See issue #332.
+     *             <p>
+     *             这个重载的带参数反射构造自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
+     *             {@link SecurityPolicy#isSafeParameterType} 会在模块构造函数运行之前，就
+     *             拒绝 {@code authors} 与 {@code loadAfter} 实际的运行期类型（{@code
+     *             Arrays.asList(...)} 的 {@code java.util.Arrays$ArrayList}，或任何 {@code
+     *             Collections.*} 包装类型）。这个重载原本是为了绕开 {@code plugin.yml} 元数据，
+     *             供连接器调用方使用；请改用 {@link #register(UltiToolsPlugin)} —— 它接收一个
+     *             已经构造好的插件实例，自身不涉及任何反射构造路径。见 issue #332。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public boolean register(
             Class<? extends UltiToolsPlugin> pluginClass,
             String pluginName,
@@ -1694,7 +1713,7 @@ public class PluginManager {
      * 在任一路径上都不会再触达 {@link CommandManager} 那个做强转的旧版
      * {@code registerAll(UltiToolsPlugin, String)} 重载（issue #272）。
      * {@link CommandManager} 与 {@link ListenerManager} 上的包扫描重载被保留——两者都已标注
-     * {@code @Deprecated(forRemoval = true)}——仅供下游调用方使用。
+     * {@code @Deprecated}（{@code forRemoval} 为 true）——仅供下游调用方使用。
      *
      * @param plugin UltiTools module instance <br> UltiTools模块实例
      */

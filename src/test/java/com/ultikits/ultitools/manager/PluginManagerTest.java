@@ -302,6 +302,54 @@ class PluginManagerTest {
         }
     }
 
+    // SILENT-17 (#332, Phase 4 D-19): the seven-argument register(...) overload is marked for
+    // removal alongside the with-args initializePlugin overload it exclusively calls -- all
+    // three of D-19's symbols (this overload, the with-args initializePlugin overload from
+    // InitializePluginDeprecationTests above, and UltiToolsPlugin's six-argument constructor,
+    // covered separately) must carry @Deprecated(forRemoval = true).
+    @Nested
+    @DisplayName("七参 register(...) 废弃标记测试 (SILENT-17)")
+    class SevenArgRegisterDeprecationTests {
+
+        @Test
+        @DisplayName("七参 register(...) 带 @Deprecated(forRemoval = true, since = \"6.3.0\")")
+        void sevenArgOverloadIsDeprecatedForRemoval() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "register",
+                    Class.class,
+                    String.class,
+                    String.class,
+                    List.class,
+                    List.class,
+                    int.class,
+                    String.class);
+
+            // Act
+            Deprecated annotation = method.getAnnotation(Deprecated.class);
+
+            // Assert
+            assertThat(annotation).isNotNull();
+            assertThat(annotation.forRemoval()).isTrue();
+            assertThat(annotation.since()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("PluginManager 上恰好两个成员带 @Deprecated(forRemoval = true)")
+        void exactlyTwoMembersAreDeprecatedForRemoval() {
+            // Arrange -- the seven-argument register(...) and the with-args initializePlugin
+            // overload; a third would mean an unexpected symbol was marked (or one of these
+            // two lost its marking).
+            long count = java.util.Arrays.stream(PluginManager.class.getDeclaredMethods())
+                    .filter(m -> m.isAnnotationPresent(Deprecated.class))
+                    .filter(m -> m.getAnnotation(Deprecated.class).forRemoval())
+                    .count();
+
+            // Assert
+            assertThat(count).isEqualTo(2);
+        }
+    }
+
     @Nested
     @DisplayName("pluginClassList 字段测试")
     class PluginClassListFieldTests {
