@@ -255,7 +255,7 @@ public class PluginManager {
             // instance comes from (handed in here vs. reflectively constructed there) and the
             // registerBukkit flag fork, which plan 04-08 removes.
             SimpleContainer pluginContext = new SimpleContainer();
-            assemblePluginContainer(pluginContext, plugin, plugin.getClass());
+            assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(
                     Level.WARNING,
@@ -1432,8 +1432,14 @@ public class PluginManager {
         try {
             // WIRE-05: both entry points build their container through this one shared
             // assembly method now -- see its own javadoc for the full instruction sequence and
-            // why setContext() runs first.
-            assemblePluginContainer(pluginContext, plugin, pluginClass);
+            // why setContext() runs first. Pass THIS method's own `classLoader` PARAMETER, not
+            // the PluginManager field of the same name -- initializePlugin's parameter shadows
+            // the field precisely so a caller (register(Class, ...), or a test invoking this
+            // method reflectively with its own loader) can hand in a different loader than
+            // whatever the field currently holds; losing that distinction during the WIRE-05
+            // extraction silently dropped every reflectively-injected test loader back to the
+            // field's default null.
+            assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
@@ -1459,9 +1465,17 @@ public class PluginManager {
      *        {@code refresh()} 的容器
      * @param plugin        the plugin instance <br> 插件实例
      * @param pluginClass   the plugin's class <br> 插件类
+     * @param loader        the classloader to attach to {@code pluginContext} -- deliberately a
+     *        parameter rather than reading the {@code PluginManager.classLoader} field directly,
+     *        so {@code initializePlugin} can pass ITS OWN {@code classLoader} parameter (which
+     *        may differ from the field, e.g. under test) exactly as it did before this method
+     *        was extracted <br> 挂到 {@code pluginContext} 上的类加载器——刻意做成参数而不是直接
+     *        读 {@code PluginManager.classLoader} 字段，这样 {@code initializePlugin} 才能传入它
+     *        自己的 {@code classLoader} 参数（可能与字段不同，例如在测试中）——与这个方法被抽出来
+     *        之前完全一致
      */
     private void assemblePluginContainer(SimpleContainer pluginContext, UltiToolsPlugin plugin,
-            Class<? extends UltiToolsPlugin> pluginClass) {
+            Class<? extends UltiToolsPlugin> pluginClass, ClassLoader loader) {
         // setContext runs BEFORE refresh() -- and before every other step below -- matching
         // register(UltiToolsPlugin)'s pre-existing behaviour (WIRE-05 Task 1 decision). A
         // @PostConstruct method invoked below (registerSingleton assembles unconditionally,
@@ -1472,7 +1486,7 @@ public class PluginManager {
 
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(classLoader);
+        pluginContext.setClassLoader(loader);
 
         // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
         // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
