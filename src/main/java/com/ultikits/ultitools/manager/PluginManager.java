@@ -422,7 +422,7 @@ public class PluginManager {
      */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
         // 验证jar文件安全性
-        if (!validateJarFile(pluginJar)) {
+        if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
             Bukkit.getLogger().log(Level.SEVERE, 
                 "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
             return null;
@@ -979,46 +979,6 @@ public class PluginManager {
             return folder.getAbsolutePath();
         }
     }
-
-    /**
-     * Validate jar file security.
-     * <br>
-     * 验证jar文件安全性。
-     *
-     * @param jarFile jar file to validate <br> 要验证的jar文件
-     * @return true if valid, false otherwise <br> 如果有效则为true，否则为false
-     */
-    private boolean validateJarFile(File jarFile) {
-        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
-            return false;
-        }
-        
-        // 检查文件扩展名
-        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
-            return false;
-        }
-        
-        // 验证jar文件结构
-        try (JarFile jar = new JarFile(jarFile)) {
-            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
-
-            // 统计条目数量
-            Enumeration<JarEntry> entries = jar.entries();
-            int entryCount = 0;
-            while (entries.hasMoreElements()) {
-                entries.nextElement();
-                entryCount++;
-            }
-            
-            // 使用 SecurityPolicy 验证文件结构
-            return SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount);
-        } catch (IOException e) {
-            Bukkit.getLogger().log(Level.WARNING, 
-                "[UltiTools-API] Failed to validate jar file: " + jarFile.getName(), e);
-            return false;
-        }
-    }
-
 
     /**
      * Compatibility gates that must run before the module's bean graph is built.

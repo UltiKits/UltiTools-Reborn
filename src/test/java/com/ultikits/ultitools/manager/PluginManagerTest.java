@@ -145,72 +145,11 @@ class PluginManagerTest {
         }
     }
 
-    @Nested
-    @DisplayName("validateJarFile 测试")
-    class ValidateJarFileTests {
-
-        @Test
-        @DisplayName("null 文件应该返回 false")
-        void nullFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (File) null);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("不存在的文件应该返回 false")
-        void nonExistentFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File nonExistent = new File(tempDir, "nonexistent.jar");
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, nonExistent);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("非 jar 扩展名应该返回 false")
-        void nonJarExtensionShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File txtFile = new File(tempDir, "test.txt");
-            txtFile.createNewFile();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, txtFile);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("目录应该返回 false")
-        void directoryShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File dir = new File(tempDir, "testdir");
-            dir.mkdirs();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, dir);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-    }
-
+    // validateJarFile's own reflective test coverage moved with the implementation
+    // (04-03, WIRE-11): PluginManager.validateJarFile(File) was deleted and its call
+    // site now calls SecurityPolicy.isValidModuleJar(File) directly. See
+    // SecurityPolicyJarValidationTest for the equivalent (and superset) coverage:
+    // null/non-existent/directory/non-.jar-suffix/unreadable-archive/entry-count-boundary.
 
     @Nested
     @DisplayName("validateConstructorArgs 测试")
