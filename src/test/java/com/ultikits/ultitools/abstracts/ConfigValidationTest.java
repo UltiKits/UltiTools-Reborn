@@ -90,27 +90,35 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should reset value below minimum to default")
-        void shouldResetBelowMinToDefault() throws IOException {
+        @DisplayName("Should refuse a value below minimum instead of resetting it")
+        void shouldRefuseValueBelowMin() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
-            Files.write(configFile.toPath(), "interval: 0".getBytes());
+            Files.write(configFile.toPath(), "interval: 0\nrate: 0.01".getBytes());
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
             RangeConfig config = new RangeConfig("range.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.interval).isEqualTo(20); // reset to default
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval")
+                    .hasMessageContaining("0");
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
 
         @Test
-        @DisplayName("Should reset value above maximum to default")
-        void shouldResetAboveMaxToDefault() throws IOException {
+        @DisplayName("Should refuse a value above maximum instead of resetting it")
+        void shouldRefuseValueAboveMax() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
-            Files.write(configFile.toPath(), "interval: 9999".getBytes());
+            Files.write(configFile.toPath(), "interval: 9999\nrate: 0.01".getBytes());
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
             RangeConfig config = new RangeConfig("range.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.interval).isEqualTo(20); // reset to default
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval")
+                    .hasMessageContaining("9999");
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
 
         @Test
@@ -138,15 +146,17 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should validate double fields")
-        void shouldValidateDoubleFields() throws IOException {
+        @DisplayName("Should refuse an out-of-range double field")
+        void shouldRefuseOutOfRangeDoubleField() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
             Files.write(configFile.toPath(), "interval: 20\nrate: -0.5".getBytes());
 
             RangeConfig config = new RangeConfig("range.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.rate).isEqualTo(0.01); // reset to default
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("rate")
+                    .hasMessageContaining("-0.5");
         }
     }
 
@@ -167,27 +177,33 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should reset empty string to default")
-        void shouldResetEmptyStringToDefault() throws IOException {
+        @DisplayName("Should refuse an empty string instead of resetting it")
+        void shouldRefuseEmptyString() throws IOException {
             File configFile = new File(tempDir.toFile(), "notempty.yml");
             Files.write(configFile.toPath(), "title: \"\"".getBytes());
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
             NotEmptyConfig config = new NotEmptyConfig("notempty.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.title).isEqualTo("Welcome");
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("title");
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
 
         @Test
-        @DisplayName("Should reset whitespace-only string to default")
-        void shouldResetWhitespaceOnlyToDefault() throws IOException {
+        @DisplayName("Should refuse a whitespace-only string instead of resetting it")
+        void shouldRefuseWhitespaceOnlyString() throws IOException {
             File configFile = new File(tempDir.toFile(), "notempty.yml");
             Files.write(configFile.toPath(), "title: \"   \"".getBytes());
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
             NotEmptyConfig config = new NotEmptyConfig("notempty.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.title).isEqualTo("Welcome");
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("title");
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
     }
 
@@ -208,8 +224,8 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should reset oversized list to default")
-        void shouldResetOversizedListToDefault() throws IOException {
+        @DisplayName("Should refuse an oversized list instead of resetting it")
+        void shouldRefuseOversizedList() throws IOException {
             File configFile = new File(tempDir.toFile(), "size.yml");
             StringBuilder sb = new StringBuilder("lines:\n");
             for (int i = 0; i < 20; i++) {
@@ -218,9 +234,11 @@ class ConfigValidationTest {
             Files.write(configFile.toPath(), sb.toString().getBytes());
 
             SizeConfig config = new SizeConfig("size.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.lines).hasSize(3); // reset to 3 defaults
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("lines")
+                    .hasMessageContaining("20");
         }
     }
 
@@ -241,15 +259,19 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should reset non-matching string to default")
-        void shouldResetNonMatchingToDefault() throws IOException {
+        @DisplayName("Should refuse a non-matching string instead of resetting it")
+        void shouldRefuseNonMatchingPattern() throws IOException {
             File configFile = new File(tempDir.toFile(), "pattern.yml");
             Files.write(configFile.toPath(), "currency: \"$$$invalid!!!\"".getBytes());
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
             PatternConfig config = new PatternConfig("pattern.yml");
-            config.init(mockPlugin);
 
-            assertThat(config.currency).isEqualTo("Coin");
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("currency")
+                    .hasMessageContaining("$$$invalid!!!");
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
     }
 
@@ -258,8 +280,8 @@ class ConfigValidationTest {
     class ReloadValidation {
 
         @Test
-        @DisplayName("Should validate fields on reload")
-        void shouldValidateOnReload() throws IOException {
+        @DisplayName("Should refuse an invalid value on reload instead of resetting it")
+        void shouldRefuseOnReload() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
             Files.write(configFile.toPath(), "interval: 20\nrate: 0.01".getBytes());
 
@@ -269,9 +291,14 @@ class ConfigValidationTest {
 
             // Modify file to invalid value and reload
             Files.write(configFile.toPath(), "interval: -5\nrate: 0.01".getBytes());
-            config.reload();
+            byte[] before = Files.readAllBytes(configFile.toPath());
 
-            assertThat(config.interval).isEqualTo(20); // reset to default
+            assertThatThrownBy(config::reload)
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval")
+                    .hasMessageContaining("-5");
+            // The file itself is what D-01 protects - never rewritten by a refused reload.
+            assertThat(Files.readAllBytes(configFile.toPath())).isEqualTo(before);
         }
     }
 
@@ -350,6 +377,30 @@ class ConfigValidationTest {
             EmptyConfig config = new EmptyConfig("empty.yml");
 
             assertThatCode(() -> config.init(mockPlugin)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("Should refuse by name a config class with neither a (String) nor a no-arg constructor (D-03)")
+        void shouldRefuseUnconstructableClassByName() {
+            UnconstructableConfig config = new UnconstructableConfig(1);
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining(UnconstructableConfig.class.getName());
+        }
+
+        @Test
+        @DisplayName("Should count String.length() UTF-16 code units for @Size on a String field")
+        void shouldCountStringLengthForSizeOnString() throws IOException {
+            File configFile = new File(tempDir.toFile(), "sizestring.yml");
+            Files.write(configFile.toPath(), "code: \"toolong\"".getBytes());
+
+            SizeStringConfig config = new SizeStringConfig("sizestring.yml");
+
+            assertThatThrownBy(() -> config.init(mockPlugin))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("code")
+                    .hasMessageContaining("7"); // "toolong".length() == 7
         }
 
         @Test
@@ -455,6 +506,30 @@ class ConfigValidationTest {
      */
     private static class EmptyConfig extends AbstractConfigEntity {
         public EmptyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /**
+     * Neither a {@code (String)} constructor nor an accessible no-arg constructor - the genuine
+     * refusal D-03 keeps: this idiom is not the framework-documented one and must be refused by
+     * name rather than silently skipped.
+     */
+    private static class UnconstructableConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", comment = "A value")
+        private String value = "x";
+
+        UnconstructableConfig(int notAStringOrNoArgConstructor) {
+            super("unconstructable.yml");
+        }
+    }
+
+    private static class SizeStringConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "code", comment = "Short code (max 5 chars)")
+        @Size(max = 5)
+        private String code = "abc";
+
+        public SizeStringConfig(String configFilePath) {
             super(configFilePath);
         }
     }
