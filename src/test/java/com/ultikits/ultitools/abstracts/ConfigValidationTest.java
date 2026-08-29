@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
@@ -436,6 +438,196 @@ class ConfigValidationTest {
             assertThat(second).isNotNull();
             assertThat(second.getMessage()).isEqualTo(first.getMessage());
             assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+        }
+    }
+
+    @Nested
+    @DisplayName("Write-path refusal (updateProperties, closing SILENT-14's write half - CR-01)")
+    class WritePathRefusal {
+
+        @Test
+        @DisplayName("Should throw ConfigurationException naming module, file, field, value and both bounds")
+        void shouldThrowNamingModuleFileFieldValueAndBothBounds() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 9999);
+
+            ConfigurationException thrown =
+                    catchThrowableOfType(() -> config.updateProperties(json), ConfigurationException.class);
+
+            assertThat(thrown).isNotNull();
+            assertThat(thrown.getErrorCode()).isEqualTo(ErrorCode.CONFIG_VALIDATION_FAILED);
+            assertThat(thrown.getMessage())
+                    .contains("TestModule")
+                    .contains("range.yml")
+                    .contains("interval")
+                    .contains("9999")
+                    .contains("1")
+                    .contains("1200");
+        }
+
+        @Test
+        @DisplayName("Should leave the yml file byte-identical across a throwing updateProperties")
+        void shouldLeaveFileByteIdenticalAcrossThrowingUpdateProperties() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+            String shaBefore = sha256(configFile.toPath());
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 9999);
+
+            assertThatThrownBy(() -> config.updateProperties(json)).isInstanceOf(ConfigurationException.class);
+
+            assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+        }
+
+        @Test
+        @DisplayName("Should restore the in-memory field to its pre-call value after a refused updateProperties")
+        void shouldRestoreFieldToPreCallValueAfterRefusal() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+            assertThat(config.interval).isEqualTo(100);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 9999);
+
+            assertThatThrownBy(() -> config.updateProperties(json)).isInstanceOf(ConfigurationException.class);
+
+            assertThat(config.interval).isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("Should name both fields when two violate at once, leaving neither mutated")
+        void shouldNameBothFieldsAndLeaveNeitherMutated() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 9999);
+            json.addProperty("rate", 2.5);
+
+            assertThatThrownBy(() -> config.updateProperties(json))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("interval")
+                    .hasMessageContaining("rate");
+
+            assertThat(config.interval).isEqualTo(100);
+            assertThat(config.rate).isEqualTo(0.5);
+        }
+
+        @Test
+        @DisplayName("Should throw the same message and leave the file unchanged across two identical refused writes")
+        void shouldRefuseIdempotently() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+            String shaBefore = sha256(configFile.toPath());
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 9999);
+
+            ConfigurationException first =
+                    catchThrowableOfType(() -> config.updateProperties(json), ConfigurationException.class);
+            assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+
+            ConfigurationException second =
+                    catchThrowableOfType(() -> config.updateProperties(json), ConfigurationException.class);
+            assertThat(sha256(configFile.toPath())).isEqualTo(shaBefore);
+
+            assertThat(first).isNotNull();
+            assertThat(second).isNotNull();
+            assertThat(second.getMessage()).isEqualTo(first.getMessage());
+        }
+
+        @Test
+        @DisplayName("Should accept values at the exact range boundaries")
+        void shouldAcceptExactBoundaryValues() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            JsonObject lowJson = new JsonObject();
+            lowJson.addProperty("interval", 1);
+            assertThatCode(() -> config.updateProperties(lowJson)).doesNotThrowAnyException();
+            assertThat(config.interval).isEqualTo(1);
+            assertThat(YamlConfiguration.loadConfiguration(configFile).getInt("interval")).isEqualTo(1);
+
+            JsonObject highJson = new JsonObject();
+            highJson.addProperty("interval", 1200);
+            assertThatCode(() -> config.updateProperties(highJson)).doesNotThrowAnyException();
+            assertThat(config.interval).isEqualTo(1200);
+            assertThat(YamlConfiguration.loadConfiguration(configFile).getInt("interval")).isEqualTo(1200);
+        }
+
+        @Test
+        @DisplayName("Should apply a valid write to both the field and the file")
+        void shouldApplyValidWriteToFieldAndFile() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("interval", 600);
+
+            config.updateProperties(json);
+
+            assertThat(config.interval).isEqualTo(600);
+            assertThat(YamlConfiguration.loadConfiguration(configFile).getInt("interval")).isEqualTo(600);
+        }
+
+        @Test
+        @DisplayName("Should apply a valid write for a @Pattern-constrained field")
+        void shouldApplyValidWriteForPatternConstraint() throws IOException {
+            File configFile = new File(tempDir.toFile(), "pattern.yml");
+            Files.write(configFile.toPath(), "currency: Gold".getBytes());
+
+            PatternConfig config = new PatternConfig("pattern.yml");
+            config.init(mockPlugin);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("currency", "Silver");
+
+            config.updateProperties(json);
+
+            assertThat(config.currency).isEqualTo("Silver");
+            assertThat(YamlConfiguration.loadConfiguration(configFile).getString("currency")).isEqualTo("Silver");
+        }
+
+        @Test
+        @DisplayName("Should not throw and not change the field when the JSON names no known @ConfigEntry path")
+        void shouldNoOpForUnknownPath() throws IOException {
+            File configFile = new File(tempDir.toFile(), "range.yml");
+            Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
+
+            RangeConfig config = new RangeConfig("range.yml");
+            config.init(mockPlugin);
+
+            JsonObject json = new JsonObject();
+            json.addProperty("notARealField", "whatever");
+
+            assertThatCode(() -> config.updateProperties(json)).doesNotThrowAnyException();
+
+            assertThat(config.interval).isEqualTo(100);
         }
     }
 
