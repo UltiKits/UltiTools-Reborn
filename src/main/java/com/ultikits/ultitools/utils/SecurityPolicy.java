@@ -1,8 +1,13 @@
 package com.ultikits.ultitools.utils;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.logging.Logger;
 import java.util.logging.Level;
 
@@ -204,7 +209,56 @@ public class SecurityPolicy {
         
         return true;
     }
-    
+
+    /**
+     * Validate that a module JAR is safe to hand to a classloader: it must exist, be a regular
+     * file, have a {@code .jar} suffix (case-insensitive), open as a readable archive, and pass
+     * the size/entry-count limits enforced by {@link #isSafeFileStructure(long, int)}.
+     * <br>
+     * 校验一个模块 JAR 是否可以安全地交给类加载器：文件必须存在、是常规文件、
+     * 文件名以 {@code .jar} 结尾（大小写不敏感）、能作为可读归档打开，并通过
+     * {@link #isSafeFileStructure(long, int)} 的大小/条目数限制。
+     *
+     * <p>This is a static, instance-free rule with no dependency on Bukkit — it must be callable
+     * before the plugin's {@code onEnable()} has built any manager, and from a plain JUnit test
+     * with no server running. Callers are responsible for skipping (not adding) a JAR this method
+     * rejects; this method never throws for a JAR it judges unsafe, it only returns {@code false}.</p>
+     *
+     * @param jarFile candidate module jar file <br> 候选模块 jar 文件
+     * @return true if the jar may be handed to a classloader, false otherwise
+     *         <br> 如果该 jar 可以交给类加载器则为 true，否则为 false
+     * @since 6.3.0
+     */
+    public static boolean isValidModuleJar(File jarFile) {
+        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
+            return false;
+        }
+
+        // 检查文件扩展名
+        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
+            return false;
+        }
+
+        // 验证jar文件结构
+        try (JarFile jar = new JarFile(jarFile)) {
+            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
+
+            // 统计条目数量
+            Enumeration<JarEntry> entries = jar.entries();
+            int entryCount = 0;
+            while (entries.hasMoreElements()) {
+                entries.nextElement();
+                entryCount++;
+            }
+
+            // 使用 SecurityPolicy 验证文件结构
+            return isSafeFileStructure(jarFile.length(), entryCount);
+        } catch (IOException e) {
+            logSecurityViolation("Failed to validate jar file", jarFile.getName());
+            return false;
+        }
+    }
+
     /**
      * Add a trusted package prefix at runtime.
      * <br>
