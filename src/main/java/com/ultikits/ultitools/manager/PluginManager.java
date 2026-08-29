@@ -340,7 +340,12 @@ public class PluginManager {
         }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
-        plugin.getContext().close();
+        // unregister() is reachable with an instance the caller constructed directly, which never
+        // went through PluginManager.register(...) and so never received a container (SILENT-19,
+        // #338). Guard the close the same way the @PlayerCache block above already does.
+        if (plugin.getContext() != null) {
+            plugin.getContext().close();
+        }
     }
 
     /**
