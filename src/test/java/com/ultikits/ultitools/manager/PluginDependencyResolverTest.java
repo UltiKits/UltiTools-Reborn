@@ -34,6 +34,12 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.testfixtures.pluginloadafter.JarModuleLoadAfterBySimpleName;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterX;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterY;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleTarget;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleWithLoadAfter;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleWithUnresolvableLoadAfter;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
@@ -219,42 +225,14 @@ class PluginDependencyResolverTest {
         @Override public void unregisterSelf() { }
     }
 
-    // JAR-backed fixtures for plugin.yml loadAfter merging (D-12). Never instantiated - only
-    // .class references are used, so UltiToolsPlugin's own plugin.yml-reading constructor never
-    // runs. Each is loaded fresh from a synthetic single-entry JAR via loadJarBackedFixture(),
-    // so getProtectionDomain().getCodeSource() is genuinely a JAR.
-    public static class JarModuleTarget extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
-
-    public static class JarModuleWithLoadAfter extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
-
-    public static class JarModuleWithUnresolvableLoadAfter extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
-
-    public static class JarModuleLoadAfterBySimpleName extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
-
-    public static class JarModuleMutualLoadAfterX extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
-
-    public static class JarModuleMutualLoadAfterY extends UltiToolsPlugin {
-        @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
-    }
+    // JAR-backed fixtures for plugin.yml loadAfter merging (D-12) live as top-level classes in
+    // com.ultikits.testfixtures.pluginloadafter - see that package's package-info.java for why a
+    // static nested class here would throw IllegalAccessError once reloaded through a
+    // child-first URLClassLoader (a JVM nest-membership conflict, not a test defect).
 
     // Not JAR-backed itself - only its @PluginDependency entry needs to resolve against the
-    // OTHER node's plugin.yml-derived alias ("TargetModule" -> JarModuleTarget).
+    // OTHER node's plugin.yml-derived alias ("TargetModule" -> JarModuleTarget). Safe to keep as
+    // a nested class since it is never reloaded through a different class loader.
     @PluginDependency(depends = {"TargetModule"})
     public static class DependsOnYmlNamedTarget extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }

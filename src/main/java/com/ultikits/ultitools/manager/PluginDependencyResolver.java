@@ -16,6 +16,7 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
+import com.ultikits.ultitools.utils.PluginYmlReader;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -59,6 +60,8 @@ public class PluginDependencyResolver {
         private final Set<String> hardDependencies;
         private final Set<String> softDependencies;
         private final Set<String> loadBefore;
+        private final Set<String> loadAfter;
+        private final String pluginYmlName;
 
         public PluginNode(Class<? extends UltiToolsPlugin> pluginClass) {
             this.pluginClass = pluginClass;
@@ -74,6 +77,15 @@ public class PluginDependencyResolver {
                 Collections.addAll(softDependencies, dep.softDepends());
                 Collections.addAll(loadBefore, dep.loadBefore());
             }
+
+            // D-12: plugin.yml's loadAfter is a second, complementary ordering mechanism -
+            // @PluginDependency has no loadAfter attribute and never will (D-11), and plugin.yml
+            // has nothing else. Both this and the plugin.yml-declared name: (used to build the
+            // alias map in resolve()) are read from the class's own JAR, before any instance
+            // exists.
+            PluginYmlReader.PluginYmlInfo ymlInfo = PluginYmlReader.read(pluginClass);
+            this.loadAfter = new HashSet<>(ymlInfo.getLoadAfter());
+            this.pluginYmlName = ymlInfo.getName();
         }
 
         public Class<? extends UltiToolsPlugin> getPluginClass() {
@@ -97,12 +109,57 @@ public class PluginDependencyResolver {
         }
 
         /**
-         * Gets all dependencies (hard + soft) that exist in the available plugins.
+         * The plugins this one should load after, as declared in its own {@code plugin.yml}
+         * {@code loadAfter:} list. An entry naming a module that is not installed is inert
+         * (Paper parity) - only {@code depends} treats an absent target as an error.
+         *
+         * @return the declared loadAfter targets, by raw declared name (not yet alias-resolved)
+         * @since 6.3.0
          */
+        public Set<String> getLoadAfter() {
+            return loadAfter;
+        }
+
+        /**
+         * This module's {@code plugin.yml} {@code name:} value, or {@code null} if its code
+         * source has no readable {@code plugin.yml}. Used to build the alias map in
+         * {@link #resolve(List)} so a dependency entry can name a module by either its simple
+         * class name or its {@code plugin.yml} name.
+         *
+         * @return the declared plugin.yml name, or null
+         * @since 6.3.0
+         */
+        public String getPluginYmlName() {
+            return pluginYmlName;
+        }
+
+        /**
+         * Gets all dependencies (hard + soft) that exist in the available plugins.
+         *
+         * @deprecated use {@link #getAllDependencies(Set, Map)}, which resolves each entry
+         *             through the plugin.yml-name alias map (D-12) before checking availability
+         */
+        @Deprecated
         public Set<String> getAllDependencies(Set<String> availablePlugins) {
+            return getAllDependencies(availablePlugins, Collections.emptyMap());
+        }
+
+        /**
+         * Gets all dependencies (hard + soft) that exist in the available plugins, resolving each
+         * soft-dependency entry through {@code aliasMap} before checking availability so it may
+         * name either a simple class name or a {@code plugin.yml} name (D-12).
+         *
+         * @param availablePlugins the plugin names present in this resolve
+         * @param aliasMap         maps a declared name (simple class name or plugin.yml name) to
+         *                         the canonical node name (always a simple class name)
+         * @return the combined hard + resolvable-soft dependency set, by raw declared name
+         * @since 6.3.0
+         */
+        public Set<String> getAllDependencies(Set<String> availablePlugins, Map<String, String> aliasMap) {
             Set<String> allDeps = new HashSet<>(hardDependencies);
             for (String softDep : softDependencies) {
-                if (availablePlugins.contains(softDep)) {
+                String resolved = aliasMap.getOrDefault(softDep, softDep);
+                if (availablePlugins.contains(resolved)) {
                     allDeps.add(softDep);
                 }
             }
@@ -140,15 +197,21 @@ public class PluginDependencyResolver {
             availablePlugins.add(node.getPluginName());
         }
 
+        // D-12: build the alias map before touching the adjacency list, so every depends/
+        // softDepends/loadBefore/loadAfter entry resolves against both a node's simple class name
+        // and its plugin.yml name: - the two naming conventions this framework already mixes.
+        Map<String, String> aliasMap = buildAliasMap(nodes);
+
         // Build the adjacency list once, over the full node set. A missing hard dependency simply
         // produces no edge (its target is not a node), so this can run before the missing-dependency
         // check below and that check can then use the same edges to find every transitive dependent.
-        Map<String, Set<String>> adjacencyList = buildAdjacencyList(nodes, availablePlugins);
+        Map<String, Set<String>> adjacencyList = buildAdjacencyList(nodes, availablePlugins, aliasMap);
 
         // Missing hard dependencies: collect-all instead of throw-on-first (D-10). A node whose hard
         // dependency does not exist as a node is unloadable; everything that transitively depends on
         // it (forward along the same edges Kahn's sort would use) is unloadable with it.
-        Map<String, String> missingDependencyByNode = collectMissingHardDependencies(nodes, availablePlugins);
+        Map<String, String> missingDependencyByNode =
+            collectMissingHardDependencies(nodes, availablePlugins, aliasMap);
         if (!missingDependencyByNode.isEmpty()) {
             Set<String> refused = expandForward(missingDependencyByNode.keySet(), adjacencyList);
             Set<String> survivorNames = new LinkedHashSet<>(nodes.keySet());
@@ -200,15 +263,43 @@ public class PluginDependencyResolver {
     }
 
     /**
+     * Builds the alias map every dependency-graph edge resolves through (D-12): each node's own
+     * simple class name maps to itself first (guaranteed unique, so it always takes priority),
+     * then each node's {@code plugin.yml} {@code name:} - when present and not already claimed by
+     * some other node's simple class name - also maps to that node's canonical (simple class)
+     * name. A dependency entry that does not appear in this map at all resolves to itself
+     * unchanged, exactly as it did before this map existed.
+     */
+    private Map<String, String> buildAliasMap(Map<String, PluginNode> nodes) {
+        Map<String, String> aliasMap = new HashMap<>();
+        for (String simpleName : nodes.keySet()) {
+            aliasMap.put(simpleName, simpleName);
+        }
+        for (PluginNode node : nodes.values()) {
+            String ymlName = node.getPluginYmlName();
+            if (ymlName != null && !ymlName.isEmpty() && !aliasMap.containsKey(ymlName)) {
+                aliasMap.put(ymlName, node.getPluginName());
+            }
+        }
+        return aliasMap;
+    }
+
+    private String resolveAlias(String rawName, Map<String, String> aliasMap) {
+        return aliasMap.getOrDefault(rawName, rawName);
+    }
+
+    /**
      * Collects every node that declares at least one hard dependency not present among the
      * available plugins, mapped to the first such dependency it names (for the refusal message).
+     * Each declared dependency is resolved through {@code aliasMap} before the availability
+     * check; the message itself still names the raw declared value.
      */
     private Map<String, String> collectMissingHardDependencies(
-            Map<String, PluginNode> nodes, Set<String> availablePlugins) {
+            Map<String, PluginNode> nodes, Set<String> availablePlugins, Map<String, String> aliasMap) {
         Map<String, String> missing = new LinkedHashMap<>();
         for (PluginNode node : nodes.values()) {
             for (String hardDep : node.getHardDependencies()) {
-                if (!availablePlugins.contains(hardDep)) {
+                if (!availablePlugins.contains(resolveAlias(hardDep, aliasMap))) {
                     missing.put(node.getPluginName(), hardDep);
                     break;
                 }
@@ -335,7 +426,7 @@ public class PluginDependencyResolver {
      * An edge from A to B means B depends on A (so A must load before B).
      */
     private Map<String, Set<String>> buildAdjacencyList(
-            Map<String, PluginNode> nodes, Set<String> availablePlugins) {
+            Map<String, PluginNode> nodes, Set<String> availablePlugins, Map<String, String> aliasMap) {
 
         Map<String, Set<String>> adjacencyList = new HashMap<>();
 
@@ -347,17 +438,32 @@ public class PluginDependencyResolver {
         for (PluginNode node : nodes.values()) {
             String pluginName = node.getPluginName();
 
-            // For each dependency, add edge: dependency -> this plugin
-            for (String dep : node.getAllDependencies(availablePlugins)) {
-                if (adjacencyList.containsKey(dep)) {
-                    adjacencyList.get(dep).add(pluginName);
+            // For each dependency, add edge: dependency -> this plugin. Each raw declared name is
+            // resolved through the alias map first (D-12), so it may name either a simple class
+            // name or a plugin.yml name.
+            for (String dep : node.getAllDependencies(availablePlugins, aliasMap)) {
+                String resolvedDep = resolveAlias(dep, aliasMap);
+                if (adjacencyList.containsKey(resolvedDep)) {
+                    adjacencyList.get(resolvedDep).add(pluginName);
                 }
             }
 
-            // For loadBefore, add edge: this plugin -> target
+            // For loadBefore, add edge: this plugin -> target.
             for (String target : node.getLoadBefore()) {
-                if (availablePlugins.contains(target)) {
-                    adjacencyList.get(pluginName).add(target);
+                String resolvedTarget = resolveAlias(target, aliasMap);
+                if (availablePlugins.contains(resolvedTarget)) {
+                    adjacencyList.get(pluginName).add(resolvedTarget);
+                }
+            }
+
+            // For loadAfter (D-12, plugin.yml-only): this plugin loads after the named target, so
+            // the edge direction matches depends: target -> this plugin. An entry naming a module
+            // that is not installed is inert (Paper parity) - skip it silently rather than
+            // treating it as an error the way an unresolved hard `depends` is.
+            for (String after : node.getLoadAfter()) {
+                String resolvedAfter = resolveAlias(after, aliasMap);
+                if (availablePlugins.contains(resolvedAfter)) {
+                    adjacencyList.get(resolvedAfter).add(pluginName);
                 }
             }
         }
