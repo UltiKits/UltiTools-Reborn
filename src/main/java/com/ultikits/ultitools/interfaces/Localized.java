@@ -38,6 +38,7 @@ public interface Localized {
      *
      * @return 支持的语言代码 Supported language codes
      * @see <a href="https://dev.ultikits.com/en/guide/essentials/i18n.html">Internationalization</a>
+     * @since 6.3.0 derived from lang/*.json resources rather than {@code @I18n} (D-20)
      */
     default List<String> supported() {
         CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
@@ -141,14 +142,26 @@ public interface Localized {
     }
 
     /**
-     * Returns a localized string that indicated by user. If the chosen language code is not
-     * presented in {@link #supported}, this method will return the text by default.
+     * Returns a localized string for the given default text. The {@code code} parameter is not
+     * honoured by the framework's own implementation -- {@code UltiToolsPlugin} overrides this
+     * method {@code final} and resolves directly against the module's already-loaded {@code
+     * Language}, discarding {@code code} entirely. Language selection happens once at load time,
+     * via {@link #supported()}, not per call. {@code str} is returned unchanged when it is absent
+     * as a key from that already-loaded dictionary.
      * <br><br>
-     * 通过指定的语言代码返回一个本地化的字符串。如果语言代码没有出现在{@link #supported}里面，则返回传入的原文。
+     * 返回给定默认文本对应的本地化字符串。框架自身的实现不会使用 {@code code} 参数——
+     * {@code UltiToolsPlugin} 把本方法重写为 {@code final} 并直接基于模块已加载的
+     * {@code Language} 解析，完全丢弃 {@code code}。语言的选择只在加载时通过
+     * {@link #supported()} 发生一次，不是每次调用都发生。当 {@code str} 作为 key 不存在于那份
+     * 已加载的字典中时，原样返回。
      *
-     * @param code language code <br> 语言代码
-     * @param str  default display text <br> 默认的显示文本
-     * @return A localized string, or the default text if the localization is not supported<br>一个本地化的字符串，如果语言代码不被支持则返回原文
+     * @param code language code -- not honoured by the framework's own {@code i18n(String,
+     *             String)} override <br> 语言代码——框架自身的 {@code i18n(String, String)}
+     *             重写不会使用它
+     * @param str  default display text, also the dictionary lookup key <br> 默认显示文本，同时也是字典查找的 key
+     * @return a localized string, or {@code str} unchanged if the key is absent from the loaded
+     *         dictionary <br> 本地化后的字符串，如果 key 不在已加载的字典中则原样返回 {@code str}
+     * @since 6.3.0 corrected wording -- see D-22 (#315)
      */
     default String i18n(String code, String str) {
         return str;
