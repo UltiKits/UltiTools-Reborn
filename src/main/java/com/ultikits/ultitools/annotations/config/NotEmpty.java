@@ -7,9 +7,11 @@ import java.lang.annotation.Target;
 
 /**
  * Validates that a String config value is not null or empty (after trimming).
- * If the value is empty, it is reset to the field's default value and a warning is logged.
+ * If the value is empty, the module refuses to load naming the field - the config file is never
+ * rewritten (D-01).
  * <p>
- * 验证字符串配置值不为null或空（去除首尾空格后）。如果值为空，将重置为字段默认值并记录警告。
+ * 验证字符串配置值不为null或空（去除首尾空格后）。如果值为空，模块将拒绝加载并指出字段名
+ * ——配置文件绝不会被改写（D-01）。
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */

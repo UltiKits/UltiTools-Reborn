@@ -13,8 +13,10 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -37,6 +39,8 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.DataStore;
 
 import org.bukkit.Bukkit;
@@ -145,72 +149,11 @@ class PluginManagerTest {
         }
     }
 
-    @Nested
-    @DisplayName("validateJarFile 测试")
-    class ValidateJarFileTests {
-
-        @Test
-        @DisplayName("null 文件应该返回 false")
-        void nullFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, (File) null);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("不存在的文件应该返回 false")
-        void nonExistentFileShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File nonExistent = new File(tempDir, "nonexistent.jar");
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, nonExistent);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("非 jar 扩展名应该返回 false")
-        void nonJarExtensionShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File txtFile = new File(tempDir, "test.txt");
-            txtFile.createNewFile();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, txtFile);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("目录应该返回 false")
-        void directoryShouldReturnFalse() throws Exception {
-            // Arrange
-            Method method = PluginManager.class.getDeclaredMethod("validateJarFile", File.class);
-            method.setAccessible(true);
-            File dir = new File(tempDir, "testdir");
-            dir.mkdirs();
-
-            // Act
-            boolean result = (boolean) method.invoke(pluginManager, dir);
-
-            // Assert
-            assertThat(result).isFalse();
-        }
-    }
-
+    // validateJarFile's own reflective test coverage moved with the implementation
+    // (04-03, WIRE-11): PluginManager.validateJarFile(File) was deleted and its call
+    // site now calls SecurityPolicy.isValidModuleJar(File) directly. See
+    // SecurityPolicyJarValidationTest for the equivalent (and superset) coverage:
+    // null/non-existent/directory/non-.jar-suffix/unreadable-archive/entry-count-boundary.
 
     @Nested
     @DisplayName("validateConstructorArgs 测试")
@@ -311,6 +254,105 @@ class PluginManagerTest {
         }
     }
 
+    // SILENT-17 (#332, Phase 4 D-19): initializePlugin is split into a live, undeprecated
+    // zero-args overload and a deprecated with-args overload so that marking the dead
+    // reflective-construction path @Deprecated(forRemoval = true) does not also warn the
+    // live call site (register(Class) -> initializePlugin(ClassLoader, Class)).
+    @Nested
+    @DisplayName("initializePlugin 拆分与废弃标记测试 (SILENT-17)")
+    class InitializePluginDeprecationTests {
+
+        @Test
+        @DisplayName("initializePlugin(ClassLoader, Class) 是活跃路径，不带 @Deprecated")
+        void liveZeroArgOverloadIsNotDeprecated() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "initializePlugin", ClassLoader.class, Class.class);
+
+            // Assert
+            assertThat(method.isAnnotationPresent(Deprecated.class)).isFalse();
+        }
+
+        @Test
+        @DisplayName("initializePlugin(ClassLoader, Class, Object...) 带 "
+                + "@Deprecated(forRemoval = true, since = \"6.3.0\")")
+        void withArgsOverloadIsDeprecatedForRemoval() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "initializePlugin", ClassLoader.class, Class.class, Object[].class);
+
+            // Act
+            Deprecated annotation = method.getAnnotation(Deprecated.class);
+
+            // Assert
+            assertThat(annotation).isNotNull();
+            assertThat(annotation.forRemoval()).isTrue();
+            assertThat(annotation.since()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("恰好两个重载共享 initializePlugin 这个名字")
+        void exactlyTwoOverloadsShareTheName() {
+            // Arrange
+            long count = java.util.Arrays.stream(PluginManager.class.getDeclaredMethods())
+                    .filter(m -> m.getName().equals("initializePlugin"))
+                    .count();
+
+            // Assert -- one live (ClassLoader, Class), one deprecated (ClassLoader, Class,
+            // Object...); a third would mean the split introduced an unexpected extra entry
+            // point instead of isolating the dead branch.
+            assertThat(count).isEqualTo(2);
+        }
+    }
+
+    // SILENT-17 (#332, Phase 4 D-19): the seven-argument register(...) overload is marked for
+    // removal alongside the with-args initializePlugin overload it exclusively calls -- all
+    // three of D-19's symbols (this overload, the with-args initializePlugin overload from
+    // InitializePluginDeprecationTests above, and UltiToolsPlugin's six-argument constructor,
+    // covered separately) must carry @Deprecated(forRemoval = true).
+    @Nested
+    @DisplayName("七参 register(...) 废弃标记测试 (SILENT-17)")
+    class SevenArgRegisterDeprecationTests {
+
+        @Test
+        @DisplayName("七参 register(...) 带 @Deprecated(forRemoval = true, since = \"6.3.0\")")
+        void sevenArgOverloadIsDeprecatedForRemoval() throws Exception {
+            // Arrange
+            Method method = PluginManager.class.getDeclaredMethod(
+                    "register",
+                    Class.class,
+                    String.class,
+                    String.class,
+                    List.class,
+                    List.class,
+                    int.class,
+                    String.class);
+
+            // Act
+            Deprecated annotation = method.getAnnotation(Deprecated.class);
+
+            // Assert
+            assertThat(annotation).isNotNull();
+            assertThat(annotation.forRemoval()).isTrue();
+            assertThat(annotation.since()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("PluginManager 上恰好两个成员带 @Deprecated(forRemoval = true)")
+        void exactlyTwoMembersAreDeprecatedForRemoval() {
+            // Arrange -- the seven-argument register(...) and the with-args initializePlugin
+            // overload; a third would mean an unexpected symbol was marked (or one of these
+            // two lost its marking).
+            long count = java.util.Arrays.stream(PluginManager.class.getDeclaredMethods())
+                    .filter(m -> m.isAnnotationPresent(Deprecated.class))
+                    .filter(m -> m.getAnnotation(Deprecated.class).forRemoval())
+                    .count();
+
+            // Assert
+            assertThat(count).isEqualTo(2);
+        }
+    }
+
     @Nested
     @DisplayName("pluginClassList 字段测试")
     class PluginClassListFieldTests {
@@ -351,12 +393,58 @@ class PluginManagerTest {
     @DisplayName("unregister 测试")
     class UnregisterTests {
 
+        /**
+         * unregister's own path never calls {@code getListenerManager()}/{@code getEventBus()}
+         * with anything but a real instance in production -- the shared top-level
+         * {@link #setUp()} only stubs {@code getLogger()}, so unregister's unconditional
+         * {@code UltiTools.getInstance().getListenerManager().unregisterAll(plugin)} call would
+         * NPE on a bare mock. Re-mocking here (mirroring {@code CompatibilityGateOrderingTests}'s
+         * own {@code setUpGate()}) supplies both.
+         */
+        @BeforeEach
+        void setUpUnregister() {
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                when(ultiTools.getEventBus()).thenReturn(new EventBus());
+            });
+        }
+
         @Test
         @DisplayName("应该能够调用 unregister 方法")
         void shouldBeAbleToCallUnregister() throws Exception {
             // 由于需要完整的插件实例，这里只测试方法存在
             Method method = PluginManager.class.getDeclaredMethod("unregister", UltiToolsPlugin.class);
             assertThat(method).isNotNull();
+        }
+
+        @Test
+        @DisplayName("从未注册过的实例调用 unregister 不应抛出异常（SILENT-19，#338）")
+        void unregisterNeverRegisteredInstance_doesNotThrow() {
+            // getContext() is unstubbed -> null, mirroring a hand-constructed UltiToolsPlugin
+            // instance that was never registered through PluginManager at all.
+            UltiToolsPlugin neverRegistered = mock(UltiToolsPlugin.class);
+            when(neverRegistered.getPluginName()).thenReturn("NeverRegistered");
+
+            assertDoesNotThrow(() -> pluginManager.unregister(neverRegistered));
+
+            // unregisterSelf() does not dereference the context, so it still runs -- a
+            // never-registered instance still gets its own teardown hook.
+            verify(neverRegistered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("已注册实例调用 unregister 仍会关闭它的 context（正对照，防止 unregister 变成空操作）")
+        void unregisterRegisteredInstance_stillClosesContext() {
+            UltiToolsPlugin registered = mock(UltiToolsPlugin.class);
+            when(registered.getPluginName()).thenReturn("Registered");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(registered.getContext()).thenReturn(context);
+
+            assertDoesNotThrow(() -> pluginManager.unregister(registered));
+
+            verify(context).close();
+            verify(registered).unregisterSelf();
         }
     }
 
@@ -451,6 +539,101 @@ class PluginManagerTest {
 
             // Assert
             assertThat(result).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("拒绝日志路径应展示最内层 UltiToolsException 的消息 (WR-02)")
+    class RefusalLoggingTests {
+
+        private final List<LogRecord> bukkitLogs = new ArrayList<>();
+        private Handler captureHandler;
+
+        @BeforeEach
+        void captureBukkitLog() {
+            bukkitLogs.clear();
+            captureHandler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    bukkitLogs.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            Bukkit.getLogger().addHandler(captureHandler);
+        }
+
+        @AfterEach
+        void releaseBukkitLog() {
+            Bukkit.getLogger().removeHandler(captureHandler);
+        }
+
+        private LogRecord lastWarning() {
+            for (int i = bukkitLogs.size() - 1; i >= 0; i--) {
+                if (Level.WARNING.equals(bukkitLogs.get(i).getLevel())) {
+                    return bukkitLogs.get(i);
+                }
+            }
+            return null;
+        }
+
+        @Test
+        @DisplayName("应从三层异常链中提取字段/值/约束，而不是外层包装消息")
+        void shouldSurfaceInnermostMessageFromThreeDeepChain() {
+            ConfigurationException innermost = ConfigurationException.validationFailed(
+                    "TestModule", "range.yml",
+                    Collections.singletonList("field 'interval' value 9999 is out of range [1, 1200]"));
+            InvocationTargetException middle = new InvocationTargetException(innermost);
+            IllegalStateException outer =
+                    new IllegalStateException("Failed to initialize plugin: com.example.MyPlugin", middle);
+
+            // Package-private, called directly - PluginManagerTest lives in the same package, so
+            // this needs no reflection and no setAccessible(true).
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage())
+                    .contains("interval")
+                    .contains("9999")
+                    .contains("1200");
+            assertThat(record.getThrown()).isSameAs(outer);
+        }
+
+        @Test
+        @DisplayName("异常链中没有 UltiToolsException 时应回退到外层异常自身的消息")
+        void shouldFallBackWhenNoUltiToolsExceptionInChain() {
+            RuntimeException outer = new RuntimeException("plain failure", new IllegalArgumentException("bad arg"));
+
+            PluginManager.logPluginInitializationFailure("com.example.MyPlugin", outer);
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).contains("plain failure");
+            assertThat(record.getThrown()).isSameAs(outer);
+        }
+
+        @Test
+        @Timeout(value = 5, unit = TimeUnit.SECONDS)
+        @DisplayName("自引用的异常链应终止而不是卡死")
+        void shouldTerminateOnCyclicCauseChain() {
+            RuntimeException first = new RuntimeException("first");
+            RuntimeException second = new RuntimeException("second", first);
+            first.initCause(second); // deliberately cyclic: first -> second -> first
+
+            assertDoesNotThrow(() -> PluginManager.logPluginInitializationFailure("com.example.MyPlugin", first));
+
+            LogRecord record = lastWarning();
+            assertThat(record).isNotNull();
+            assertThat(record.getMessage()).isNotBlank();
         }
     }
 
@@ -787,6 +970,15 @@ class PluginManagerTest {
             DataStore dataStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
             lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
 
+            // register(UltiToolsPlugin) now assembles through the shared assemblePluginContainer
+            // method (WIRE-05, 04-07), which reads UltiTools.getInstance().getConfigManager() for
+            // config-entity beans -- a bare mock's unstubbed getConfigManager() returns null,
+            // which would NPE on .getAllConfigEntities(plugin). None of these tests care about
+            // config entities, so an empty ConfigManager mock (unstubbed
+            // getAllConfigEntities(...) returns null, which the production code already
+            // null-checks) is enough.
+            lenient().when(ultiTools.getConfigManager()).thenReturn(mock(ConfigManager.class));
+
             // getPluginVersion() 走 getEnv() → getInstance().getTextResource("env.yml")，
             // 而那个方法在 JavaPlugin 里是 protected，测试包里打不了桩，所以直接桩静态方法。
             ultiToolsStatic = mockStatic(UltiTools.class);
@@ -876,6 +1068,22 @@ class PluginManagerTest {
             // is ever removed from that path, this container comes back with no resolver attached
             // and @ExceptionCatch/@Transactional silently stop doing anything again. See issue #190.
             assertThat(contextCaptor.getValue().getAopProxyResolver()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("成功注册的模块应该能通过 getPluginList() 取回（#338 第二个断言不成立）")
+        void successfullyRegisteredModuleShouldBeRetrievableViaGetPluginList() throws Exception {
+            // Arrange
+            UltiToolsPlugin plugin = modules("RetrievableModule", "com.example.RetrievableModule",
+                    "1.0.0", CURRENT_API_VERSION);
+            when(plugin.registerSelf()).thenReturn(true);
+
+            // Act
+            boolean result = pluginManager.register(plugin);
+
+            // Assert
+            assertThat(result).isTrue();
+            assertThat(pluginManager.getPluginList()).contains(plugin);
         }
 
         @Test

@@ -27,9 +27,11 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -165,6 +167,48 @@ class ConfigManagerTest {
             // Assert
             AbstractConfigEntity result = configManager.getConfigEntity(mockPlugin, EmptyPathConfigEntity.class);
             assertThat(result).isNull();
+        }
+    }
+
+    /**
+     * D-03: the two-step constructor fallback {@code registerAll} already had - {@code (String)}
+     * first, then no-arg - stays exactly as-is. Only the silent {@code ignored} catch that used to
+     * follow it changes: a class matching neither idiom is now refused by name instead of vanishing.
+     */
+    @Nested
+    @DisplayName("registerAll(plugin, packageName, classLoader) 测试")
+    class RegisterAllTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @Test
+        @DisplayName("既无 (String) 也无无参构造函数的类应按名字被拒绝 (D-03)")
+        void shouldThrowNamingClassWhenNeitherConstructorResolves() {
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configunconstructable", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining(
+                            "com.ultikits.testfixtures.configunconstructable.UnconstructableConfigEntity");
+        }
+
+        @Test
+        @DisplayName("只有无参构造函数的写法仍然能成功注册 (D-03 不破坏受支持写法)")
+        void shouldRegisterNoArgOnlyConfigEntity() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.confignoarg", getClass().getClassLoader()));
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs).isNotNull().containsKey("config/noarg.yml");
+        }
+
+        @Test
+        @DisplayName("空包应该正常返回")
+        void shouldReturnNormallyForEmptyPackage() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configempty", getClass().getClassLoader()));
         }
     }
 

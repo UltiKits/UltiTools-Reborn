@@ -50,6 +50,13 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+// Every test below calls PluginManager.wireAop(SimpleContainer, DataScope) directly rather than
+// through either registration entry point -- it is a unit-level test of wireAop's own resolver
+// assembly, not of assembly ordering. Since 04-07 (WIRE-05), register(UltiToolsPlugin) and
+// initializePlugin both call wireAop identically, from the single shared
+// PluginManager.assemblePluginContainer method, so there is no entry-point-specific wireAop
+// behaviour left to double this file's coverage against; a wireAop regression here would surface
+// on both entry points equally without needing a second copy of these tests per entry point.
 @DisplayName("PluginManager AOP wiring")
 class PluginManagerAopWiringTest {
 

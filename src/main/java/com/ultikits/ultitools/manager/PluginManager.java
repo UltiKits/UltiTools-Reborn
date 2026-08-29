@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
@@ -59,7 +61,6 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
-import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
 import lombok.Getter;
@@ -70,6 +71,23 @@ import lombok.Getter;
  * UltiTools模块管理器
  */
 public class PluginManager {
+    /**
+     * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
+     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
+     * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
+     * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
+     * only through this constant) at every call site below, so the property is legible directly
+     * in the operator-facing message that names it, not only in code that reads it.
+     * <br>
+     * 退回 6.3.0 之前退化加载顺序（D-10）的 JVM 系统属性名：所有模块按文件系统/类路径顺序加载，
+     * 完全不做依赖解析。参照 Paper 自身的 {@code -Dpaper.useLegacyPluginLoading=true} 先例——
+     * 这是一个一次性的、在启动时就被消费掉的决定，因此用系统属性而非可热重载的
+     * {@code config.yml} 键。下方每个调用点都重复写出字面量名称（而非只通过这个常量引用），
+     * 使这个属性名在命名它的运维提示信息里本身就清晰可读，而不仅仅存在于读取它的代码中。
+     */
+    private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
+
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
@@ -173,11 +191,7 @@ public class PluginManager {
         try {
             plugin = initializePlugin(classLoader, pluginClass);
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(pluginClass.getName(), e);
             return false;
         }
         // null 表示兼容性门禁拒了它，拒绝理由已经打过日志，这里不要再包一层通用错误。
@@ -186,7 +200,7 @@ public class PluginManager {
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, true);
+            registerBukkit(plugin);
         }
         return result;
     }
@@ -204,7 +218,26 @@ public class PluginManager {
      * @param minUltiToolsVersion Min UltiTools version <br> 最低UltiTools版本
      * @param mainClass           Main class <br> 主类
      * @return Register result <br> 注册结果
+     * @deprecated This overload's reflective, with-args construction has failed on every
+     *             release since 6.2.0 (Phase 1 D-15, measured): {@link
+     *             SecurityPolicy#isSafeParameterType} rejects the runtime types
+     *             {@code authors} and {@code loadAfter} actually are ({@code
+     *             Arrays.asList(...)}'s {@code java.util.Arrays$ArrayList}, or any {@code
+     *             Collections.*} wrapper) before the module's constructor ever runs. This
+     *             overload existed to bypass {@code plugin.yml}-based metadata for connector
+     *             callers; use {@link #register(UltiToolsPlugin)} instead, which takes an
+     *             already-constructed plugin instance and has no reflective construction path
+     *             of its own. See issue #332.
+     *             <p>
+     *             这个重载的带参数反射构造自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
+     *             {@link SecurityPolicy#isSafeParameterType} 会在模块构造函数运行之前，就
+     *             拒绝 {@code authors} 与 {@code loadAfter} 实际的运行期类型（{@code
+     *             Arrays.asList(...)} 的 {@code java.util.Arrays$ArrayList}，或任何 {@code
+     *             Collections.*} 包装类型）。这个重载原本是为了绕开 {@code plugin.yml} 元数据，
+     *             供连接器调用方使用；请改用 {@link #register(UltiToolsPlugin)} —— 它接收一个
+     *             已经构造好的插件实例，自身不涉及任何反射构造路径。见 issue #332。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public boolean register(
             Class<? extends UltiToolsPlugin> pluginClass,
             String pluginName,
@@ -220,11 +253,7 @@ public class PluginManager {
                     classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(pluginClass.getName(), e);
             return false;
         }
         // 同上：null 是门禁拒绝，不是初始化失败。
@@ -233,7 +262,7 @@ public class PluginManager {
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, false);
+            registerBukkit(plugin);
         }
         return result;
     }
@@ -249,74 +278,82 @@ public class PluginManager {
             return false;
         }
         try {
+            // WIRE-05/WIRE-06: this path now assembles through the exact same method
+            // initializePlugin does -- see its javadoc for the full instruction sequence. The
+            // only remaining difference between the two entry points is where the plugin
+            // instance comes from (handed in here vs. reflectively constructed there); the
+            // registerBukkit flag fork plan 04-08 removed made registerBukkit itself identical
+            // on both paths too.
             SimpleContainer pluginContext = new SimpleContainer();
-            plugin.setContext(pluginContext);
-            pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
-            pluginContext.registerShutdownHook();
-            pluginContext.setClassLoader(classLoader);
-
-            // Register the plugin as UltiToolsPlugin type so services can inject it via
-            // constructor. Must run BEFORE scanComponents, mirroring initializePlugin's own
-            // T-03-27 fix: registerType writes the type registry directly and never goes through
-            // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
-            // move.
-            pluginContext.registerType(UltiToolsPlugin.class, plugin);
-
-            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
-            // BEFORE the plugin instance itself is registered as a singleton below (WR-03). This
-            // overload had no scanComponents call at all until this fix -- unlike initializePlugin,
-            // it was never given the T-03-27 reordering, even though it registers the same kind of
-            // object through the same registerSingleton call two lines below.
-            String[] scanPackages = getPluginScanPackages(plugin.getClass());
-            if (scanPackages.length > 0) {
-                pluginContext.scanComponents(scanPackages);
-            }
-
-            // Register the plugin instance itself by name AFTER scanComponents, not before:
-            // registerSingleton now fully assembles its argument unconditionally (D-14), so
-            // registering the plugin instance before any @Service bean exists would attempt to
-            // autowire it against an empty bean graph -- an unresolvable
-            // @Autowired(required = true) field on the plugin's own class would then throw,
-            // turning a working module into one that cannot load. This is the exact ordering bug
-            // T-03-27 already fixed in initializePlugin; this overload had it too (WR-03).
-            pluginContext.getBeanFactory().registerSingleton(plugin.getClass().getSimpleName(), plugin);
-            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
-            registerEntityOwnership(scope);
-            plugin.setDataScope(scope);
-            wireAop(pluginContext, scope);
-            pluginContext.refresh();
-            if (plugin.getClass().isAnnotationPresent(ContextEntry.class)) {
-                ContextEntry contextEntry = plugin.getClass().getAnnotation(ContextEntry.class);
-                Class<?> clazz = contextEntry.value();
-                // Register the context entry class as a bean
-                try {
-                    Object contextBean = clazz.getDeclaredConstructor().newInstance();
-                    pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
-                } catch (Exception e) {
-                    Bukkit.getLogger().log(
-                            Level.WARNING,
-                            String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
-                    );
-                }
-                // No second refresh() here (D-14): registerSingleton above now fully assembles the
-                // @ContextEntry bean itself unconditionally, so there is nothing left for a second
-                // refresh() to do -- the first refresh() at the top of this method already
-                // pre-instantiated every non-lazy singleton definition this container knows about.
-                pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
-            }
+            assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", plugin.getPluginName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(plugin.getPluginName(), e);
             return false;
         }
         boolean result = attemptPluginRegistration(plugin);
         if (result) {
-            registerBukkit(plugin, false);
+            registerBukkit(plugin);
         }
         return result;
+    }
+
+    /**
+     * Logs one refusal WARNING for a module that failed to initialize, surfacing the innermost
+     * {@link UltiToolsException}'s message (module/file/field/value/constraint, per e.g.
+     * {@code ConfigurationException.validationFailed(...)}) instead of an outer wrapper's
+     * generic text (04-REVIEW.md WR-02). All three refusal-log sites in this class route
+     * through here so the message shape has exactly one place it is built.
+     * <p>
+     * Package-private, not private: {@code PluginManagerTest} lives in this same package and
+     * drives this method directly with a real multi-level chain, without reflection or
+     * {@code setAccessible(true)}. This is a test-seam choice, not an API widening - it is not
+     * {@code public}, so it never enters the published surface.
+     * <p>
+     * 为初始化失败的模块记录一条拒绝 WARNING，展示最内层 {@link UltiToolsException} 的消息
+     * （模块/文件/字段/值/约束，例如来自 {@code ConfigurationException.validationFailed(...)}），
+     * 而不是外层包装异常的通用文本（04-REVIEW.md WR-02）。本类中全部三处拒绝日志调用点都经过
+     * 这里，消息的组装逻辑只有一处。
+     * <p>
+     * 包级私有而非 private：{@code PluginManagerTest} 与本类同包，可以直接调用本方法驱动一条
+     * 真实的多层异常链，无需反射或 {@code setAccessible(true)}。这是测试接缝的选择，不是 API
+     * 扩张——它不是 {@code public}，不会进入已发布的对外接口。
+     *
+     * @param moduleName the module refusing to load, however the caller identifies it
+     *                   <br> 拒绝加载的模块，调用方按自己的方式命名它
+     * @param thrown     the throwable caught at the registration boundary <br> 在注册边界捕获到的异常
+     */
+    static void logPluginInitializationFailure(String moduleName, Throwable thrown) {
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", moduleName, rootCauseMessage(thrown)),
+                thrown
+        );
+    }
+
+    /**
+     * Walks {@code thrown}'s cause chain for the deepest {@link UltiToolsException}, returning
+     * its message - or {@code thrown.getMessage()} if the chain holds none. Bounded via
+     * identity-based cycle detection ({@link IdentityHashMap}) so a self-referential or cyclic
+     * cause chain terminates instead of spinning.
+     * <p>
+     * 沿 {@code thrown} 的异常链向下找最深层的 {@link UltiToolsException}，返回它的消息——
+     * 若链上没有则返回 {@code thrown.getMessage()}。通过基于身份的环检测（{@link
+     * IdentityHashMap}）设置边界，自引用或循环的异常链会终止而不是卡死。
+     *
+     * @param thrown the throwable whose cause chain is walked
+     * @return the deepest {@link UltiToolsException}'s message, or {@code thrown}'s own message
+     */
+    static String rootCauseMessage(Throwable thrown) {
+        Throwable deepest = null;
+        Throwable current = thrown;
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        while (current != null && visited.add(current)) {
+            if (current instanceof UltiToolsException) {
+                deepest = current;
+            }
+            current = current.getCause();
+        }
+        return deepest != null ? deepest.getMessage() : thrown.getMessage();
     }
 
     /**
@@ -340,7 +377,12 @@ public class PluginManager {
         }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
-        plugin.getContext().close();
+        // unregister() is reachable with an instance the caller constructed directly, which never
+        // went through PluginManager.register(...) and so never received a container (SILENT-19,
+        // #338). Guard the close the same way the @PlayerCache block above already does.
+        if (plugin.getContext() != null) {
+            plugin.getContext().close();
+        }
     }
 
     /**
@@ -422,7 +464,7 @@ public class PluginManager {
      */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
         // 验证jar文件安全性
-        if (!validateJarFile(pluginJar)) {
+        if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
             Bukkit.getLogger().log(Level.SEVERE, 
                 "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
             return null;
@@ -981,46 +1023,6 @@ public class PluginManager {
     }
 
     /**
-     * Validate jar file security.
-     * <br>
-     * 验证jar文件安全性。
-     *
-     * @param jarFile jar file to validate <br> 要验证的jar文件
-     * @return true if valid, false otherwise <br> 如果有效则为true，否则为false
-     */
-    private boolean validateJarFile(File jarFile) {
-        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
-            return false;
-        }
-        
-        // 检查文件扩展名
-        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
-            return false;
-        }
-        
-        // 验证jar文件结构
-        try (JarFile jar = new JarFile(jarFile)) {
-            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
-
-            // 统计条目数量
-            Enumeration<JarEntry> entries = jar.entries();
-            int entryCount = 0;
-            while (entries.hasMoreElements()) {
-                entries.nextElement();
-                entryCount++;
-            }
-            
-            // 使用 SecurityPolicy 验证文件结构
-            return SecurityPolicy.isSafeFileStructure(jarFile.length(), entryCount);
-        } catch (IOException e) {
-            Bukkit.getLogger().log(Level.WARNING, 
-                "[UltiTools-API] Failed to validate jar file: " + jarFile.getName(), e);
-            return false;
-        }
-    }
-
-
-    /**
      * Compatibility gates that must run before the module's bean graph is built.
      * <br>
      * 必须跑在模块 bean 图构建之前的兼容性门禁。
@@ -1461,17 +1463,71 @@ public class PluginManager {
     }
 
     /**
-     * Initialize module.
+     * Initialize module using its default (zero-argument) constructor. This is the live,
+     * undeprecated construction path -- {@link #register(Class)} calls it directly.
      * <br>
-     * 初始化模块。
+     * 使用模块的默认（无参）构造器初始化模块。这是当前有效、未废弃的构造路径 -- {@link
+     * #register(Class)} 直接调用它。
+     *
+     * @param classLoader Class loader <br> 类加载器
+     * @param pluginClass Plugin class <br> 插件类
+     * @return the initialized module, or {@code null} if a compatibility gate rejected it
+     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     */
+    private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+        UltiToolsPlugin plugin;
+        try {
+            // 使用默认构造器
+            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
+            plugin = constructor.newInstance();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+        return finishInitializingPlugin(classLoader, pluginClass, plugin);
+    }
+
+    /**
+     * Initialize module using caller-supplied constructor arguments, resolved reflectively.
+     * A zero-length {@code constructorArgs} carries nothing to validate reflectively, so it is
+     * routed straight through {@link #initializePlugin(ClassLoader, Class)} -- the live,
+     * undeprecated path -- instead of running this method's with-args checks against an empty
+     * array (SILENT-17).
+     * <br>
+     * 使用调用方提供的构造器参数，通过反射初始化模块。若 {@code constructorArgs} 长度为零，
+     * 没有任何东西需要反射校验，因此直接转发给 {@link #initializePlugin(ClassLoader, Class)}
+     * ——当前有效、未废弃的路径——而不是对空数组运行这个方法的带参数校验逻辑（SILENT-17）。
      *
      * @param classLoader     Class loader <br> 类加载器
      * @param pluginClass     Plugin class <br> 插件类
      * @param constructorArgs Constructor arguments <br> 构造器参数
      * @return the initialized module, or {@code null} if a compatibility gate rejected it
      *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     * @deprecated This reflective, with-args construction path has failed on every release
+     *             since 6.2.0 (Phase 1 D-15, measured): {@link SecurityPolicy#isSafeParameterType}
+     *             matches collection arguments by exact runtime-class-name prefix
+     *             ({@code java.util.List}, {@code java.util.ArrayList}, ...), and neither
+     *             {@code Arrays.asList(...)}'s runtime type ({@code java.util.Arrays$ArrayList})
+     *             nor any {@code Collections.*} wrapper type matches any of those prefixes --
+     *             the list-typed arguments a caller actually supplies are rejected before
+     *             construction ever runs. This path is scheduled for removal (issue #332)
+     *             rather than repair; only the seven-argument {@link #register(Class, String,
+     *             String, List, List, int, String)} calls it with a non-empty argument array.
+     *             <p>
+     *             这条带参数的反射构造路径自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
+     *             {@link SecurityPolicy#isSafeParameterType} 按运行期类名的精确前缀（
+     *             {@code java.util.List}、{@code java.util.ArrayList} 等）匹配集合参数，而
+     *             {@code Arrays.asList(...)} 的运行期类型（{@code java.util.Arrays$ArrayList}）
+     *             和任何 {@code Collections.*} 包装类型都不匹配这些前缀——调用方实际能传入的
+     *             List 类型参数因此在构造之前就会被拒绝。这条路径计划移除（issue #332）而非
+     *             修复；只有传入非空参数数组的七参 {@link #register(Class, String, String,
+     *             List, List, int, String)} 会调用它。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
+        if (constructorArgs.length == 0) {
+            return initializePlugin(classLoader, pluginClass);
+        }
+
         // 验证构造器参数安全性
         if (!validateConstructorArgs(constructorArgs)) {
             throw new SecurityException("Invalid constructor arguments provided");
@@ -1479,32 +1535,45 @@ public class PluginManager {
 
         UltiToolsPlugin plugin;
         try {
-            if (constructorArgs.length == 0) {
-                // 使用默认构造器
-                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
-                plugin = constructor.newInstance();
-            } else {
-                // 验证构造器参数类型安全性
-                Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
-                for (int i = 0; i < constructorArgs.length; i++) {
-                    if (constructorArgs[i] == null) {
-                        throw new SecurityException("Null constructor argument not allowed at index: " + i);
-                    }
-                    paramTypes[i] = constructorArgs[i].getClass();
-
-                    // 验证参数类型是否安全
-                    if (!isSafeParameterType(paramTypes[i])) {
-                        throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
-                    }
+            // 验证构造器参数类型安全性
+            Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
+            for (int i = 0; i < constructorArgs.length; i++) {
+                if (constructorArgs[i] == null) {
+                    throw new SecurityException("Null constructor argument not allowed at index: " + i);
                 }
+                paramTypes[i] = constructorArgs[i].getClass();
 
-                Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
-                plugin = constructor.newInstance(constructorArgs);
+                // 验证参数类型是否安全
+                if (!isSafeParameterType(paramTypes[i])) {
+                    throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
+                }
             }
+
+            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
+            plugin = constructor.newInstance(constructorArgs);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
         }
 
+        return finishInitializingPlugin(classLoader, pluginClass, plugin);
+    }
+
+    /**
+     * Run the construction-independent second half shared by both {@code initializePlugin}
+     * overloads: the compatibility gate, then container assembly. Neither overload forks after
+     * construction -- both funnel through this one method.
+     * <br>
+     * 运行两个 {@code initializePlugin} 重载共用的、与构造过程无关的后半段：先跑兼容性门禁，
+     * 再组装容器。两个重载在构造完成之后都不再分叉——都汇入这一个方法。
+     *
+     * @param classLoader Class loader to attach to the assembled container <br> 挂到组装好的
+     *        容器上的类加载器
+     * @param pluginClass Plugin class <br> 插件类
+     * @param plugin      the already-constructed plugin instance <br> 已经构造好的插件实例
+     * @return the initialized module, or {@code null} if a compatibility gate rejected it
+     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
+     */
+    private UltiToolsPlugin finishInitializingPlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, UltiToolsPlugin plugin) {
         // 门禁跑在建容器之前。它读的元数据在实例构造完就已经就位，而 refresh() 之后才检查
         // 等于先让不兼容的 bean 图跑一遍——那正是它会炸的地方。见 passesCompatibilityGates。
         if (!passesCompatibilityGates(plugin)) {
@@ -1512,56 +1581,128 @@ public class PluginManager {
         }
 
         SimpleContainer pluginContext = new SimpleContainer();
-        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
-        pluginContext.registerShutdownHook();
-        pluginContext.setClassLoader(classLoader);
         try {
-            // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
-            // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
-            // (03-04) resolves the plugin via getBean(UltiToolsPlugin.class) during the scan.
-            // registerType writes the type registry directly and never goes through
-            // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
-            // move.
-            pluginContext.registerType(UltiToolsPlugin.class, plugin);
-
-            // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
-            String[] scanPackages = getPluginScanPackages(pluginClass);
-            if (scanPackages.length > 0) {
-                pluginContext.scanComponents(scanPackages);
-            }
-
-            // Register the plugin instance itself by name AFTER scanComponents, not before:
-            // registerSingleton now fully assembles its argument unconditionally (D-14), so
-            // registering the plugin instance before any @Service bean exists would attempt to
-            // autowire it against an empty bean graph -- after 03-03, an unresolvable
-            // @Autowired(required = true) field on the plugin's own main class would then throw,
-            // turning a working module into one that cannot load (T-03-27).
-            pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
-
-            // Register config entities as beans for @Autowired injection
-            java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
-                UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
-            if (configMap != null) {
-                for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
-                    String beanName = config.getClass().getSimpleName();
-                    beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
-                    pluginContext.registerSingleton(beanName, config);
-                }
-            }
-
-            // Set the static instance field before refresh() so @PostConstruct methods
-            // can call Xxx.getInstance().getDataOperator() etc.
-            setPluginStaticInstance(pluginClass, plugin);
-
-            DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
-            registerEntityOwnership(scope);
-            plugin.setDataScope(scope);
-            wireAop(pluginContext, scope);
-            pluginContext.refresh();
-            plugin.setContext(pluginContext);
+            // WIRE-05: both entry points build their container through this one shared
+            // assembly method now -- see its own javadoc for the full instruction sequence and
+            // why setContext() runs first. Pass THIS method's own `classLoader` PARAMETER, not
+            // the PluginManager field of the same name -- initializePlugin's parameter shadows
+            // the field precisely so a caller (register(Class, ...), or a test invoking this
+            // method reflectively with its own loader) can hand in a different loader than
+            // whatever the field currently holds; losing that distinction during the WIRE-05
+            // extraction silently dropped every reflectively-injected test loader back to the
+            // field's default null.
+            assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        }
+    }
+
+    /**
+     * Assemble a plugin's container: type registration, component scan, the plugin's own
+     * singleton registration, config-entity beans, the static instance field, {@link DataScope}
+     * minting plus entity ownership, AOP wiring, {@code refresh()}, and (after {@code refresh()})
+     * {@code @ContextEntry} bean registration with {@code autowireBean}. Both {@link
+     * #register(UltiToolsPlugin)} and {@link #initializePlugin} route through this one method now,
+     * so a capability added to either path is never silently missing from the other (WIRE-05,
+     * WIRE-06, #203/#326).
+     * <br>
+     * 组装一个插件的容器：类型注册、组件扫描、插件自身的单例注册、配置实体 bean、静态 instance
+     * 字段、{@link DataScope} 铸造与实体所有权、AOP 装配、{@code refresh()}，以及（在
+     * {@code refresh()} 之后）{@code @ContextEntry} bean 注册与 {@code autowireBean}。
+     * {@link #register(UltiToolsPlugin)} 与 {@link #initializePlugin} 现在都经过这唯一一个方法，
+     * 使添加到某一条路径上的能力不会再悄悄漏掉另一条路径（WIRE-05、WIRE-06，#203/#326）。
+     *
+     * @param pluginContext a freshly created, not-yet-refreshed container <br> 新建、尚未
+     *        {@code refresh()} 的容器
+     * @param plugin        the plugin instance <br> 插件实例
+     * @param pluginClass   the plugin's class <br> 插件类
+     * @param loader        the classloader to attach to {@code pluginContext} -- deliberately a
+     *        parameter rather than reading the {@code PluginManager.classLoader} field directly,
+     *        so {@code initializePlugin} can pass ITS OWN {@code classLoader} parameter (which
+     *        may differ from the field, e.g. under test) exactly as it did before this method
+     *        was extracted <br> 挂到 {@code pluginContext} 上的类加载器——刻意做成参数而不是直接
+     *        读 {@code PluginManager.classLoader} 字段，这样 {@code initializePlugin} 才能传入它
+     *        自己的 {@code classLoader} 参数（可能与字段不同，例如在测试中）——与这个方法被抽出来
+     *        之前完全一致
+     */
+    private void assemblePluginContainer(SimpleContainer pluginContext, UltiToolsPlugin plugin,
+            Class<? extends UltiToolsPlugin> pluginClass, ClassLoader loader) {
+        // setContext runs BEFORE refresh() -- and before every other step below -- matching
+        // register(UltiToolsPlugin)'s pre-existing behaviour (WIRE-05 Task 1 decision). A
+        // @PostConstruct method invoked below (registerSingleton assembles unconditionally,
+        // D-14) that calls plugin.getContext() must see a valid container, not null.
+        // initializePlugin previously set this AFTER refresh(), so every @PostConstruct method
+        // on that path silently observed a null context.
+        plugin.setContext(pluginContext);
+
+        pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        pluginContext.registerShutdownHook();
+        pluginContext.setClassLoader(loader);
+
+        // Register plugin as UltiToolsPlugin type so services can inject it via constructor.
+        // This registerType call must run BEFORE scanComponents: ConditionalRegistrationEvaluator
+        // (03-04) resolves the plugin via getBean(UltiToolsPlugin.class) during the scan.
+        // registerType writes the type registry directly and never goes through
+        // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+        // move.
+        pluginContext.registerType(UltiToolsPlugin.class, plugin);
+
+        // Trigger component scanning to discover @CmdExecutor, @EventListener, @Service beans
+        String[] scanPackages = getPluginScanPackages(pluginClass);
+        if (scanPackages.length > 0) {
+            pluginContext.scanComponents(scanPackages);
+        }
+
+        // Register the plugin instance itself by name AFTER scanComponents, not before:
+        // registerSingleton now fully assembles its argument unconditionally (D-14), so
+        // registering the plugin instance before any @Service bean exists would attempt to
+        // autowire it against an empty bean graph -- an unresolvable
+        // @Autowired(required = true) field on the plugin's own class would then throw, turning a
+        // working module into one that cannot load. This is the exact ordering bug T-03-27 fixed
+        // in initializePlugin and WR-03 fixed in register(UltiToolsPlugin) -- now a single call
+        // site fixes both.
+        pluginContext.getBeanFactory().registerSingleton(pluginClass.getSimpleName(), plugin);
+
+        // Register config entities as beans for @Autowired injection
+        java.util.Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configMap =
+            UltiTools.getInstance().getConfigManager().getAllConfigEntities(plugin);
+        if (configMap != null) {
+            for (com.ultikits.ultitools.abstracts.AbstractConfigEntity config : configMap.values()) {
+                String beanName = config.getClass().getSimpleName();
+                beanName = Character.toLowerCase(beanName.charAt(0)) + beanName.substring(1);
+                pluginContext.registerSingleton(beanName, config);
+            }
+        }
+
+        // Set the static instance field before refresh() so @PostConstruct methods
+        // can call Xxx.getInstance().getDataOperator() etc.
+        setPluginStaticInstance(pluginClass, plugin);
+
+        DataScope scope = DataScope.forPlugin(plugin, scanPluginEntities(plugin.getPluginName(), plugin.getClass()));
+        registerEntityOwnership(scope);
+        plugin.setDataScope(scope);
+        wireAop(pluginContext, scope);
+        pluginContext.refresh();
+
+        // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
+        // already fully assembles its argument unconditionally (D-14), so there is nothing left
+        // for a second refresh() to do; the refresh() just above already pre-instantiated every
+        // non-lazy singleton definition this container knows about.
+        if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
+            ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
+            Class<?> clazz = contextEntry.value();
+            // Register the context entry class as a bean
+            try {
+                Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+            } catch (Exception e) {
+                Bukkit.getLogger().log(
+                        Level.WARNING,
+                        String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                );
+            }
+            pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
     }
     
@@ -1616,33 +1757,42 @@ public class PluginManager {
 
     /**
      * Register bukkit commands or listeners.
+     * <p>
+     * Both registration entry points ({@link #register(Class)} and {@link
+     * #register(UltiToolsPlugin)}) now resolve commands and listeners as beans from the module's
+     * own container -- there is no longer a package-scanning branch here. {@code manualRegister()}
+     * and {@code @ConditionalOnConfig} are therefore honoured identically no matter which entry
+     * point loaded the module (WIRE-05 differences #6-#9, plan 04-08), and a command class
+     * extending the current {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
+     * can no longer reach {@link CommandManager}'s legacy, casting {@code registerAll(UltiToolsPlugin,
+     * String)} overload on either path (issue #272). The package-scanning overloads on {@link
+     * CommandManager} and {@link ListenerManager} are retained -- both {@code @Deprecated(forRemoval
+     * = true)} -- for downstream callers only.
      * <br>
      * 注册Bukkit命令或监听器。
+     * <p>
+     * 两个注册入口点（{@link #register(Class)} 与 {@link #register(UltiToolsPlugin)}）现在都从
+     * 模块自身的容器中按 bean 解析命令与监听器——这里不再有包扫描分支。因此无论模块通过哪个入口点
+     * 加载，{@code manualRegister()} 与 {@code @ConditionalOnConfig} 都会被同等遵循
+     * （WIRE-05 差异 #6-#9，计划 04-08），命令类只要继承当前的
+     * {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}，
+     * 在任一路径上都不会再触达 {@link CommandManager} 那个做强转的旧版
+     * {@code registerAll(UltiToolsPlugin, String)} 重载（issue #272）。
+     * {@link CommandManager} 与 {@link ListenerManager} 上的包扫描重载被保留——两者都已标注
+     * {@code @Deprecated}（{@code forRemoval} 为 true）——仅供下游调用方使用。
      *
      * @param plugin UltiTools module instance <br> UltiTools模块实例
-     * @param flag   True if register in default package  <br> 如果在默认包中注册则为true
      */
-    private void registerBukkit(UltiToolsPlugin plugin, boolean flag) {
+    private void registerBukkit(UltiToolsPlugin plugin) {
         EnableAutoRegister annotation = MergedAnnotationResolver.find(plugin.getClass(), EnableAutoRegister.class);
         if (annotation == null) {
             return;
         }
-        String[] packages = DependencyUtils.getPluginPackages(plugin);
-        for (String packageName : packages) {
-            if (annotation.cmdExecutor()) {
-                if (flag) {
-                    UltiTools.getInstance().getCommandManager().registerAll(plugin);
-                } else {
-                    UltiTools.getInstance().getCommandManager().registerAll(plugin, packageName);
-                }
-            }
-            if (annotation.eventListener()) {
-                if (flag) {
-                    UltiTools.getInstance().getListenerManager().registerAll(plugin);
-                } else {
-                    UltiTools.getInstance().getListenerManager().registerAll(plugin, packageName);
-                }
-            }
+        if (annotation.cmdExecutor()) {
+            UltiTools.getInstance().getCommandManager().registerAll(plugin);
+        }
+        if (annotation.eventListener()) {
+            UltiTools.getInstance().getListenerManager().registerAll(plugin);
         }
     }
     
@@ -1714,16 +1864,37 @@ public class PluginManager {
         return scanPackages.toArray(new String[0]);
     }
 
+
     /**
      * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
+     * <p>
+     * A dependency cycle or a missing hard dependency no longer degrades every module to
+     * filesystem order (SILENT-08/D-10): only the affected module(s) - the cycle/missing
+     * declaration plus everything transitively depending on it - are absent from the returned
+     * list; every unrelated module still loads. The pre-6.3.0 all-unsorted behaviour survives
+     * only as an explicit, cost-stating opt-in via {@code ultitools.useLegacyPluginLoading}.
      * <br>
      * 使用 Kahn 算法（拓扑排序）按依赖关系对插件进行排序。
+     * <p>
+     * 一个依赖环或一个缺失的硬依赖不再让所有模块退化为文件系统顺序（SILENT-08/D-10）：
+     * 只有受影响的模块——环成员/缺失声明本身及所有传递依赖它们的模块——会从返回列表中
+     * 缺席；其余每个模块仍然加载。6.3.0 之前"全部退化"的行为只能通过
+     * {@code ultitools.useLegacyPluginLoading} 这个显式的、会说明代价的开关继续存在。
      *
      * @param plugins list of plugin classes to sort <br> 要排序的插件类列表
      * @return sorted list of plugin classes <br> 排序后的插件类列表
      */
     private List<Class<? extends UltiToolsPlugin>> sortPluginsByDependencies(
             List<Class<? extends UltiToolsPlugin>> plugins) {
+
+        if (Boolean.getBoolean(LEGACY_PLUGIN_LOADING_PROPERTY)) {
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
+                    + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
+                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "order and may fail to initialize if they rely on load order.");
+            return new ArrayList<>(plugins);
+        }
 
         PluginDependencyResolver resolver = new PluginDependencyResolver(Bukkit.getLogger());
 
@@ -1733,16 +1904,32 @@ public class PluginManager {
             return sorted;
         } catch (CircularDependencyException e) {
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] " + e.getMessage());
+                "[UltiTools-API] Circular dependency detected among plugins.");
+            for (List<String> cyclePath : e.getCyclePaths()) {
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API]   Loop: " + String.join(" -> ", cyclePath));
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API]   Please have the author of '" + cyclePath.get(0)
+                        + "' fix the circular dependency.");
+            }
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
-            return new ArrayList<>(plugins);
+                "[UltiTools-API] The cycle members and their dependents are excluded from this "
+                    + "load; every other module still loads. Set "
+                    + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                    + "order instead (not recommended: modules may fail to initialize in an "
+                    + "unpredictable order).");
+            return new ArrayList<>(e.getSortedPrefix());
         } catch (MissingDependencyException e) {
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] " + e.getMessage());
+                "[UltiTools-API] A required plugin dependency is missing.");
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + e.getMessage());
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
-            return new ArrayList<>(plugins);
+                "[UltiTools-API] The declaring module and its dependents are excluded from this "
+                    + "load; every other module still loads. Set "
+                    + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                    + "order instead (not recommended: modules may fail to initialize in an "
+                    + "unpredictable order).");
+            return new ArrayList<>(e.getSortedPrefix());
         }
     }
 
@@ -1779,6 +1966,22 @@ public class PluginManager {
         context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         context.registerShutdownHook();
         context.setClassLoader(adapter.getPluginClassLoader());
+
+        // Register the connector's own JavaPlugin so services can inject it via constructor.
+        // Must run BEFORE scanComponents, mirroring initializePlugin's own T-03-27 fix
+        // (:1524): registerType writes the type registry directly and never goes through
+        // registerSingleton, so it is unaffected by full assembly (D-14) and does not need to
+        // move.
+        //
+        // The parent container holds the CORE UltiTools instance under "ultiTools"
+        // (DependenceManagers:34), and UltiTools extends JavaPlugin -- without this
+        // registration a constructor parameter of type JavaPlugin would miss this (empty)
+        // child, walk up, and isInstance-match that core instance instead (SILENT-16, #331).
+        // registerType keys by exact Class, so a constructor parameter declared as the
+        // connector's own concrete class needs a second registration under that class too.
+        JavaPlugin javaPlugin = adapter.getJavaPlugin();
+        context.registerType(JavaPlugin.class, javaPlugin);
+        registerOwnType(context, javaPlugin);
 
         // 2. Scan components in the external plugin's package
         if (!adapter.getScanPackage().isEmpty()) {
@@ -1828,6 +2031,36 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * Register an object into {@code context} keyed by its own concrete runtime class, in
+     * addition to whatever declared-type registration the caller has already done. Needed
+     * because {@code SimpleContainer.registerType(Class, T)} keys by exact {@code Class}: a
+     * constructor parameter declared as the connector's own concrete plugin class (rather than
+     * the general {@code JavaPlugin} type) would otherwise never resolve (SILENT-16, #331).
+     * <p>
+     * The unchecked cast is safe: {@code instance.getClass()} is always assignable to itself, so
+     * capturing it as {@code Class<T>} for the same {@code instance} of static type {@code T}
+     * never mismatches at runtime.
+     * <br>
+     * 把对象以它自己的具体运行时类为键注册进 {@code context}，作为调用方已经完成的声明类型注册
+     * 之外的补充。之所以需要这一步，是因为 {@code SimpleContainer.registerType(Class, T)}
+     * 按精确的 {@code Class} 作为键：如果构造函数参数声明的是连接器自己的具体插件类
+     * （而不是通用的 {@code JavaPlugin} 类型），否则永远无法解析（SILENT-16，#331）。
+     * <p>
+     * 这里的非受检转换是安全的：{@code instance.getClass()} 总能赋值给它自身，所以对静态类型为
+     * {@code T} 的同一个 {@code instance}，把它捕获为 {@code Class<T>} 在运行时永远不会不匹配。
+     *
+     * @param context  the container to register into <br> 要注册进去的容器
+     * @param instance the object to register under its own concrete class <br>
+     *                 要按自身具体类注册的对象
+     * @param <T> the object's static type <br> 该对象的静态类型
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> void registerOwnType(SimpleContainer context, T instance) {
+        Class<T> ownType = (Class<T>) instance.getClass();
+        context.registerType(ownType, instance);
     }
 
     /**

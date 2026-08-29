@@ -10,8 +10,13 @@ import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
 import java.security.CodeSource;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -26,6 +31,7 @@ import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.Configurable;
@@ -124,14 +130,46 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Resolves which language code to actually load, consulting {@link Localized#supported()}
+     * before {@link #createLanguageFromPath(String)} picks a file (D-20/D-21/WIRE-10). Prefers
+     * the configured code; if it is absent from a non-empty {@code supported()}, prefers
+     * {@code "en"} when {@code supported()} contains it, otherwise the first entry in
+     * {@code supported()}'s iteration order. An empty {@code supported()} is "no information" -
+     * the configured code is returned unchanged and nothing is logged.
+     * <p>
+     * 解析实际应该加载的语言代码，在 {@link #createLanguageFromPath(String)} 选择文件之前先
+     * 参考 {@link Localized#supported()}（D-20/D-21/WIRE-10）。优先使用已配置的代码；如果它不在
+     * 非空的 {@code supported()} 里，且 {@code supported()} 包含 {@code "en"} 则优先回退到
+     * {@code "en"}，否则回退到 {@code supported()} 迭代顺序里的第一个条目。空的
+     * {@code supported()} 代表“没有信息”——已配置的代码原样返回，不记录任何日志。
+     *
+     * @return the language code to actually load
+     */
+    private String resolveLanguageCode() {
+        String configured = getLanguageCode();
+        List<String> supportedCodes = this.supported();
+        if (supportedCodes == null || supportedCodes.isEmpty()) {
+            return configured;
+        }
+        if (configured != null && supportedCodes.contains(configured)) {
+            return configured;
+        }
+        String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
+        getLogger().warn("Module '" + getPluginName() + "' is configured for language '" + configured
+                + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'.");
+        return fallback;
+    }
+
+    /**
      * Creates a Language object from the given resource folder path
      * @param folderPath the resource folder path
      * @return Language object
      */
     private Language createLanguageFromPath(String folderPath) {
-        File file = new File(folderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
+        String resolvedCode = resolveLanguageCode();
+        File file = new File(folderPath + File.separator + "lang" + File.separator + resolvedCode + ".json");
         if (!file.exists()) {
-            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
+            String lanPath = "lang" + File.separator + resolvedCode + ".json";
             InputStream in = getResource(lanPath);
             if (in != null) {
                 try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(in))) {
@@ -331,12 +369,75 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         this, packageName, UltiTools.getJavaPluginClassLoader()
                 );
             }
+            // D-06: diff getAllConfigs() against what package-scan auto-registration actually
+            // registered. Runs only on this branch - on the config = false branch below,
+            // getAllConfigs() is the sole registration path and there is nothing to diff against.
+            diffGetAllConfigsOverride();
             return;
         }
         List<AbstractConfigEntity> allConfigs = this.getAllConfigs();
         for (AbstractConfigEntity configEntity : allConfigs) {
             UltiToolsPlugin.getConfigManager().register(this, configEntity);
         }
+    }
+
+    /**
+     * Diffs a {@link #getAllConfigs()} override against what auto-registration already
+     * registered for this module (D-06 / SILENT-18 / #336), called once right after
+     * package-scan auto-registration finishes.
+     * <p>
+     * An empty override (the interface default - the module never wrote {@link #getAllConfigs()})
+     * has nothing to compare and nothing to log. A non-empty override whose every {@code
+     * configFilePath} was already registered by the package scan is pure redundancy, logged at
+     * {@link Level#FINE} only. A non-empty override naming a {@code configFilePath} the scan
+     * never registered is real capability loss - #336's warning-only ask cannot tell these two
+     * cases apart, so this refuses the module and names every missing entity instead of guessing.
+     * <p>
+     * 将模块的 {@link #getAllConfigs()} 覆盖与自动注册实际已注册的内容做差集比对
+     * （D-06 / SILENT-18 / #336），在包扫描自动注册结束后调用一次。
+     * <p>
+     * 空覆盖（接口默认值——模块根本没有重写 {@link #getAllConfigs()}）没有可比对的对象，也不记录
+     * 任何日志。非空覆盖但其中每一个 {@code configFilePath} 都已被包扫描注册，纯属冗余，仅以
+     * {@link Level#FINE} 级别记录一行。非空覆盖里出现了包扫描从未注册过的 {@code configFilePath}，
+     * 说明真的丢失了能力——#336 仅要求警告，但警告无法区分这两种情况，因此这里拒绝加载该模块，
+     * 并点名每一个丢失的实体，而不是靠猜。
+     *
+     * @throws ConfigurationException if the override names a {@code configFilePath} auto-registration
+     *                                 never registered
+     */
+    private void diffGetAllConfigsOverride() {
+        List<AbstractConfigEntity> override = this.getAllConfigs();
+        if (override.isEmpty()) {
+            return;
+        }
+        Set<String> overridePaths = new LinkedHashSet<>();
+        for (AbstractConfigEntity entity : override) {
+            overridePaths.add(entity.getConfigFilePath());
+        }
+
+        Map<String, AbstractConfigEntity> registered = UltiToolsPlugin.getConfigManager().getAllConfigEntities(this);
+        Set<String> registeredPaths = registered != null ? registered.keySet() : Collections.<String>emptySet();
+
+        List<String> missing = new ArrayList<>();
+        for (String path : overridePaths) {
+            if (!registeredPaths.contains(path)) {
+                missing.add(path);
+            }
+        }
+
+        if (missing.isEmpty()) {
+            getLogger().debug("getAllConfigs() override registers " + overridePaths.size()
+                    + " entit" + (overridePaths.size() == 1 ? "y" : "ies")
+                    + " already found by package-scan auto-registration - the override adds nothing.");
+            return;
+        }
+
+        List<String> violations = new ArrayList<>();
+        for (String path : missing) {
+            violations.add("getAllConfigs() registers '" + path
+                    + "' but package-scan auto-registration never found it - the entity is lost");
+        }
+        throw ConfigurationException.validationFailed(getPluginName(), "getAllConfigs() override", violations);
     }
 
     private InputStream getInputStream() throws IOException {

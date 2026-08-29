@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -61,6 +62,7 @@ import com.ultikits.ultitools.utils.ApiRateLimiter;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.utils.SecurityPolicy;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -76,6 +78,13 @@ import net.milkbowl.vault.economy.Economy;
  */
 public final class UltiTools extends JavaPlugin implements Localized {
     private static final Pattern VERSION_PATTERN = Pattern.compile("^([0-9]+\\.[0-9]+\\.[0-9]+)(?:-[0-9A-Za-z]+)*$");
+    // Deliberately java.util.logging, not Bukkit.getLogger() — this backs a static, test-seam
+    // method (collectModuleJarUrls) that must be callable from a plain JUnit test with no live
+    // Bukkit server (see the WIRE-11 test-seam decision recorded in 04-03-PLAN.md).
+    // 刻意使用 java.util.logging 而非 Bukkit.getLogger() —— 这是静态测试缝合方法
+    // （collectModuleJarUrls）的日志通道，该方法必须能在没有真实 Bukkit 服务器的纯 JUnit
+    // 测试中直接调用（参见 04-03-PLAN.md 记录的 WIRE-11 测试缝合决策）。
+    private static final Logger MODULE_SCAN_LOGGER = Logger.getLogger(UltiTools.class.getName());
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
@@ -560,20 +569,52 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         // Add module plugin JARs from UltiTools/plugins/
         File pluginDir = new File(getDataFolder(), "plugins");
-        if (pluginDir.exists()) {
-            File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
-            if (pluginFiles != null) {
-                for (File f : pluginFiles) {
-                    try {
-                        urls.add(f.toURI().toURL());
-                    } catch (MalformedURLException e) {
-                        getLogger().log(Level.WARNING, "Failed to add module JAR to classpath: " + f.getName(), e);
-                    }
-                }
-            }
-        }
+        urls.addAll(collectModuleJarUrls(pluginDir));
 
         return urls.toArray(new URL[0]);
+    }
+
+    /**
+     * Scan a directory for module plugin JARs and collect the URLs of the ones that pass
+     * {@link SecurityPolicy#isValidModuleJar(File)} — a JAR is validated <b>before</b> its URL is
+     * added, never after. A failing JAR is skipped and named in a WARNING; the scan continues and
+     * never throws (D-05: module-granularity skip, not a bootstrap abort).
+     * <br>
+     * 扫描目录下的模块插件 JAR，收集通过 {@link SecurityPolicy#isValidModuleJar(File)} 校验的
+     * URL —— 校验发生在 URL 被添加<b>之前</b>，而不是之后。未通过校验的 JAR 会被跳过并在
+     * WARNING 中命名；扫描继续进行，不会抛出异常（D-05：模块级别跳过，而非中止整个启动）。
+     *
+     * <p>Package-private and static so it can be exercised directly by a test against a
+     * {@code @TempDir}, without standing up the whole plugin.</p>
+     *
+     * @param pluginDir directory to scan for module JARs <br> 待扫描的模块 JAR 目录
+     * @return collected URLs of the JARs that passed validation, empty if {@code pluginDir} is
+     *         {@code null} or does not exist <br> 通过校验的 JAR 的 URL 集合；
+     *         若 {@code pluginDir} 为 {@code null} 或不存在则为空集合
+     */
+    static List<URL> collectModuleJarUrls(File pluginDir) {
+        List<URL> urls = new ArrayList<>();
+        if (pluginDir == null || !pluginDir.exists()) {
+            return urls;
+        }
+        File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
+        if (pluginFiles == null) {
+            return urls;
+        }
+        for (File f : pluginFiles) {
+            if (!SecurityPolicy.isValidModuleJar(f)) {
+                MODULE_SCAN_LOGGER.log(Level.WARNING,
+                        "[UltiTools-API] Skipped module JAR (failed security validation), not added "
+                                + "to module classpath: " + f.getName());
+                continue;
+            }
+            try {
+                urls.add(f.toURI().toURL());
+            } catch (MalformedURLException e) {
+                MODULE_SCAN_LOGGER.log(Level.WARNING, "Failed to add module JAR to classpath: " + f.getName(), e);
+            }
+        }
+        return urls;
     }
 
     /**

@@ -1,14 +1,21 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import com.google.gson.Gson;
@@ -18,6 +25,7 @@ import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -87,7 +95,25 @@ public abstract class AbstractConfigEntity {
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
         this.ultiToolsPlugin = ultiToolsPlugin;
-        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
+        File file = ultiToolsPlugin.getConfigFile(configFilePath);
+        config = new YamlConfiguration();
+        // D-08: options().parseComments(true) must be set on THIS instance before load() runs -
+        // load() reads the option itself (verified via javap against paper-api), so setting it
+        // afterward only affects a later save(), not this read. Under
+        // -DPaper.parseYamlCommentsByDefault=false an operator's existing comments would
+        // otherwise be dropped right here at parse time, and the missing-key branch below would
+        // then write them out of their own file - the exact D-01 violation this lane exists to
+        // prevent. Explicit, not inherited from the system-property default.
+        config.options().parseComments(true);
+        try {
+            config.load(file);
+        } catch (FileNotFoundException ignored) {
+            // Mirrors YamlConfiguration.loadConfiguration(File)'s own behaviour: a missing file
+            // is the normal "first run" case, not an error - config stays empty and every field
+            // below takes the missing-key branch.
+        } catch (InvalidConfigurationException e) {
+            LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+        }
         boolean upToDate = true;
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
@@ -104,11 +130,21 @@ public abstract class AbstractConfigEntity {
                 } else {
                     upToDate = false;
                     config.set(path, ReflectionUtil.getFieldValue(this, field));
+                    // D-07/D-09: the key never existed in the operator's file, so writing its
+                    // @ConfigEntry comment alongside the value discloses nothing of theirs - this
+                    // is D-01's sole sanctioned exception, widened from "silently add a value" to
+                    // "silently add a value and its explanation". Never reached on the
+                    // already-has-the-key path above, and this is the only comment write in the
+                    // whole class.
+                    List<String> commentLines = splitComment(annotation.comment());
+                    if (!commentLines.isEmpty()) {
+                        config.setComments(path, commentLines);
+                    }
                 }
             }
         }
         if (!upToDate) {
-            config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+            config.save(file);
         }
 
         // Validate fields and reset invalid values to defaults
@@ -116,6 +152,28 @@ public abstract class AbstractConfigEntity {
 
         // Notify listeners after initialization
         notifyChangeListeners();
+    }
+
+    /**
+     * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
+     * declaration order, ready for {@link org.bukkit.configuration.ConfigurationSection}'s
+     * comment-writing API. No blank leading element is added (Claude's Discretion, D-07) - it
+     * would produce a diff on every regenerated file for a purely cosmetic gain, contrary to
+     * D-01's touch-as-little-as-possible posture.
+     * <p>
+     * 把 {@code @ConfigEntry.comment()} 的值按行拆分成一个 {@link List}，每行一个元素，顺序不变，
+     * 供 {@link org.bukkit.configuration.ConfigurationSection} 的注释写入 API 使用。不添加空白的
+     * 首行元素（Claude 自行裁量，D-07）——那样会让每次重新生成的文件都产生一次纯粹为了排版的 diff，
+     * 与 D-01"尽量少碰操作员文件"的立场相悖。
+     *
+     * @param comment the raw {@code comment()} attribute value, possibly empty
+     * @return one element per line, or an empty list if {@code comment} is blank
+     */
+    private static List<String> splitComment(String comment) {
+        if (comment == null || comment.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Arrays.asList(comment.split("\n"));
     }
 
     /**
@@ -133,11 +191,39 @@ public abstract class AbstractConfigEntity {
      * {@link #toJsonObject()} 也按字段名把它发给面板，而这里去 JSON 里找空字符串键，
      * 永远找不到——字段被跳过，随后 {@code config.save} 照常执行，调用方收到成功。
      *
+     * <p>
+     * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
+     * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
+     * #reload()} already use - before either {@code config.set(...)} or {@code config.save(...)}
+     * runs. A violating value refuses with {@link ConfigurationException} instead of being
+     * written: the operator's file is left byte-identical, and every field this call touched is
+     * restored to the value it held before the call, so memory never disagrees with disk (D-01,
+     * D-04). Unlike {@link #reload()}, this entity keeps running after a refusal, so its
+     * in-memory state must not be left holding a rejected value.
+     * <p>
+     * 自 6.3.0 起（SILENT-14，收尾 CR-01）本方法会先校验更新后的完整字段状态——与
+     * {@link #init(UltiToolsPlugin)}/{@link #reload()} 已经在用的同一个 {@link #validateFields()}
+     * ——然后才会执行 {@code config.set(...)} 或 {@code config.save(...)}。违规的值会以
+     * {@link ConfigurationException} 拒绝而不是被写入：操作员的文件保持字节级不变，本次调用
+     * 触碰过的每个字段都会被恢复为调用前的值，内存与磁盘不会产生分歧（D-01、D-04）。与
+     * {@link #reload()} 不同，这个实体在拒绝后仍会继续运行，所以内存状态不能停留在被拒绝的值上。
+     *
      * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException            if an I/O error occurs <br> 如果发生I/O错误
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the post-update field state violates a {@code @Range}/
+     *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
+     *                                 - the file is not written and touched fields are restored
+     *                                 <br> 若更新后的字段状态违反了 {@code @Range}/{@code @NotEmpty}/
+     *                                 {@code @Size}/{@code @Pattern} 约束——文件不会被写入，
+     *                                 被触碰过的字段会被恢复
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         Gson gson = new Gson();
+        // Phase one: apply to fields only. Remember each touched field's pre-call value first
+        // so a refusal in phase two can restore it - nothing reaches `config` or disk here.
+        List<Field> touchedFields = new ArrayList<>();
+        List<Object> previousValues = new ArrayList<>();
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 field.setAccessible(true);
@@ -149,11 +235,38 @@ public abstract class AbstractConfigEntity {
                 if (jsonObject.has(path)) {
                     Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
                     if (configValue != null) {
+                        touchedFields.add(field);
+                        previousValues.add(ReflectionUtil.getFieldValue(this, field));
                         ReflectionUtil.setFieldValue(this, field, configValue);
-                        config.set(path, configValue);
                     }
                 }
             }
+        }
+
+        // Phase two: validate the full post-update state, restoring on refusal. Must run
+        // before the first field write below, not merely before the final save call -
+        // otherwise a refusal would still leave the in-memory YamlConfiguration holding
+        // rejected values for a later, unrelated save() to flush. The original exception is
+        // rethrown unchanged - never wrapped, never converted to IOException, never swallowed.
+        try {
+            validateFields();
+        } catch (RuntimeException e) {
+            for (int i = 0; i < touchedFields.size(); i++) {
+                ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+            }
+            throw e;
+        }
+
+        // Phase three: persist. Only reached once validation has passed. Writes the same
+        // Gson-deserialized value the method has always written - not the @ConfigEntry.parser()
+        // serialized form save() uses; that asymmetry is pre-existing and out of scope here.
+        for (Field field : touchedFields) {
+            ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+            String path = annotation.path();
+            if (path.isEmpty()) {
+                path = field.getName();
+            }
+            config.set(path, ReflectionUtil.getFieldValue(this, field));
         }
         config.save(ultiToolsPlugin.getConfigFile(configFilePath));
     }
@@ -207,70 +320,149 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
-     * Invalid values are reset to their Java field initializer defaults and a warning is logged.
+     * A violation refuses this config's module instead of rewriting the value - the operator's
+     * file is never modified (D-01). Every violating field is collected and named in a single
+     * refusal; the module author must fix the value(s) on disk and restart.
      * <p>
-     * 验证所有带验证注解的字段。无效值将重置为Java字段初始化默认值并记录警告。
+     * 验证所有带验证注解的字段。违反约束将拒绝加载该模块，而不是改写字段值——操作员的文件绝不会
+     * 被修改（D-01）。所有违规字段会被收集进同一次拒绝里；需要由服务器操作员修正磁盘上的值后重启。
+     *
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if any field violates its validation constraint, or if this
+     *                                 config class cannot be constructed through either of the
+     *                                 two framework-supported idioms (D-03)
      */
     protected void validateFields() {
-        Object defaultInstance;
-        try {
-            defaultInstance = this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
-        } catch (Exception e) {
-            LOGGER.log(Level.FINE, "Cannot create default instance for validation: " + this.getClass().getSimpleName());
+        List<Field> configFields = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                configFields.add(field);
+            }
+        }
+        if (configFields.isEmpty()) {
             return;
         }
 
-        boolean modified = false;
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (!field.isAnnotationPresent(ConfigEntry.class)) {
-                continue;
-            }
+        // Proves this class still supports one of the two framework idioms (D-02/D-03) - the
+        // constructed instance itself is discarded, only its existence matters here.
+        ensureConstructable();
+
+        List<String> violations = new ArrayList<>();
+        for (Field field : configFields) {
             field.setAccessible(true);
             try {
-                if (validateSingleField(field, defaultInstance)) {
-                    modified = true;
+                String violation = validateSingleField(field);
+                if (violation != null) {
+                    violations.add(violation);
                 }
             } catch (IllegalAccessException e) {
                 LOGGER.log(Level.WARNING, "Failed to validate field: " + field.getName(), e);
             }
         }
 
-        if (modified && ultiToolsPlugin != null) {
-            try {
-                save();
-            } catch (IOException e) {
-                LOGGER.log(Level.WARNING, "Failed to save corrected config: " + configFilePath, e);
-            }
+        if (!violations.isEmpty()) {
+            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
     }
 
-    private boolean validateSingleField(Field field, Object defaultInstance) throws IllegalAccessException {
+    /**
+     * Constructs and discards an instance of this config class through the same two-step
+     * fallback {@code ConfigManager.registerAll} uses at registration time - a {@code (String)}
+     * constructor first, then an accessible no-arg constructor. Existence, not the constructed
+     * value, is what this proves: the framework needs every registered config class to still be
+     * buildable through one of its two documented idioms (D-02). Neither resolving is a genuine
+     * config-class error (D-03).
+     * <p>
+     * 通过与 {@code ConfigManager.registerAll} 注册期完全相同的两步回退方式构造并丢弃本类的一个
+     * 实例——{@code (String)} 构造函数优先，其次是可访问的无参构造函数。这里证明的是"能否构造"
+     * 而非构造出的值：框架需要确认每个已注册的配置类仍然可以通过两种受支持写法之一构建
+     * （D-02）。两者都无法解析属于真正的配置类错误（D-03）。
+     *
+     * @throws ConfigurationException if neither constructor resolves
+     */
+    private void ensureConstructable() {
+        try {
+            try {
+                this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
+            } catch (NoSuchMethodException e) {
+                // Try no-arg constructor (class may hardcode path via super() call)
+                this.getClass().getDeclaredConstructor().newInstance();
+            }
+        } catch (InstantiationException | InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
+            throw ConfigurationException.unconstructable(this.getClass().getName(), e);
+        }
+    }
+
+    /**
+     * Describes the single validation constraint {@code field} violates, if any.
+     * <p>
+     * 描述 {@code field} 违反的单个校验约束（如果有的话）。
+     *
+     * @param field the field to check, already made accessible
+     * @return a violation description naming the field, its actual value (redacted for
+     *         {@code @Pattern} on a secret-shaped field name, T-04-04) and the broken constraint,
+     *         or {@code null} if the field's value satisfies its annotations
+     */
+    private String validateSingleField(Field field) throws IllegalAccessException {
         Object value = field.get(this);
-        Object defaultValue = field.get(defaultInstance);
-        boolean reset = false;
 
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
-            logResetWarning("value %s out of range [%s, %s]", field, value, range.min(), range.max(), defaultValue);
-            reset = true;
-        } else if (isNotEmptyViolation(field, value)) {
-            logResetWarning("is empty", field, null, null, null, defaultValue);
-            reset = true;
-        } else if (isSizeViolation(field, value)) {
+            return String.format("field '%s' value %s is out of range [%s, %s]",
+                    field.getName(), value, range.min(), range.max());
+        }
+        if (isNotEmptyViolation(field, value)) {
+            return String.format("field '%s' must not be empty", field.getName());
+        }
+        if (isSizeViolation(field, value)) {
             Size size = field.getAnnotation(Size.class);
             int len = getValueLength(value);
-            logResetWarning("size %d out of bounds [%d, %d]", field, len, size.min(), size.max(), defaultValue);
-            reset = true;
-        } else if (isPatternViolation(field, value)) {
+            return String.format("field '%s' size %d is out of bounds [%d, %d]",
+                    field.getName(), len, size.min(), size.max());
+        }
+        if (isPatternViolation(field, value)) {
             Pattern pattern = field.getAnnotation(Pattern.class);
-            logResetWarning("value '%s' does not match pattern '%s'", field, value, pattern.regex(), null, defaultValue);
-            reset = true;
+            String displayValue = isSecretShapedFieldName(field.getName()) ? "<redacted>" : "'" + value + "'";
+            return String.format("field '%s' value %s does not match pattern '%s'",
+                    field.getName(), displayValue, pattern.regex());
         }
+        return null;
+    }
 
-        if (reset) {
-            field.set(this, defaultValue);
-        }
-        return reset;
+    /**
+     * Whether a field name looks like it stores a secret. Only {@code @Pattern} violations echo
+     * an arbitrary string value; {@code @Range}/{@code @Size} violations always echo a number or
+     * a length, and {@code @NotEmpty} violations are empty by definition, so neither can leak a
+     * secret verbatim (T-04-04).
+     * <p>
+     * Widened in 6.3.0 (04-REVIEW.md WR-03) to also cover {@code key}/{@code auth}/
+     * {@code private}/{@code cert}, accepting the resulting false positives (a field merely
+     * named e.g. {@code publicKey} is redacted too) as the safer default, per Phase 2 D-15's
+     * fail-closed preference. The reason for the widening is new, not cosmetic: before the
+     * write-path refusal added by this same 6.3.0 change, a {@code @Pattern} refusal message
+     * went only to the local console; now both remote config-write handlers forward it
+     * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaves
+     * the server, not just the console.
+     * <p>
+     * 判断字段名是否形似存放密钥。只有 {@code @Pattern} 违规会回显任意字符串值；
+     * {@code @Range}/{@code @Size} 违规始终只回显数字或长度，{@code @NotEmpty} 违规按定义就是
+     * 空值，两者都不会泄露密钥原文（T-04-04）。
+     * <p>
+     * 6.3.0 起（04-REVIEW.md WR-03）扩展覆盖 {@code key}/{@code auth}/{@code private}/
+     * {@code cert}，接受由此产生的误判（例如仅仅叫 {@code publicKey} 的字段也会被打码）作为
+     * 更安全的默认行为，遵循 Phase 2 D-15 的失败即拒绝取向。这次扩展的原因是新出现的，
+     * 不是装饰性的：在本次 6.3.0 变更新增写路径拒绝之前，{@code @Pattern} 拒绝消息只会留在
+     * 本地控制台；现在两个远程配置写入处理器都会把它原样通过 WebSocket 转发给 UltiPanel
+     * （T-04-56），命名启发式的遗漏泄露的就不只是控制台，而是服务器本身。
+     */
+    private boolean isSecretShapedFieldName(String fieldName) {
+        String lower = fieldName.toLowerCase(Locale.ROOT);
+        return lower.contains("password") || lower.contains("secret")
+                || lower.contains("token") || lower.contains("credential")
+                || lower.contains("apikey") || lower.contains("api_key")
+                || lower.contains("key") || lower.contains("auth")
+                || lower.contains("private") || lower.contains("cert");
     }
 
     private boolean isRangeViolation(Field field, Object value) {
@@ -301,14 +493,6 @@ public abstract class AbstractConfigEntity {
         if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
         if (value instanceof String) return ((String) value).length();
         return -1;
-    }
-
-    private void logResetWarning(String reason, Field field, Object val1, Object val2, Object val3, Object defaultValue) {
-        String msg = String.format("[UltiTools-API] Config '%s' field '%s' " + reason + ". Reset to default: %s",
-                configFilePath, field.getName(), val1, val2, val3, defaultValue);
-        // Remove trailing null args from message
-        msg = msg.replace(", null", "").replace("null, ", "");
-        LOGGER.warning(msg);
     }
 
     // ==================== Configuration Change Listener Support ====================

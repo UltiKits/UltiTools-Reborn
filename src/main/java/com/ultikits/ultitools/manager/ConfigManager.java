@@ -7,6 +7,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -102,7 +103,11 @@ public class ConfigManager {
             } catch (InstantiationException |
                      InvocationTargetException |
                      IllegalAccessException |
-                     NoSuchMethodException ignored) {
+                     NoSuchMethodException e) {
+                // Neither the (String) nor the no-arg idiom resolved - refuse by name instead of
+                // vanishing silently (D-03). The no-arg-only idiom itself is untouched: it still
+                // succeeds on the first catch-free path above and never reaches this branch.
+                throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -280,8 +285,20 @@ public class ConfigManager {
      * <br>
      * 从JSON字符串加载配置
      *
+     * <p>
+     * Since 6.3.0, a value violating its {@code @Range}/{@code @NotEmpty}/{@code @Size}/
+     * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
+     * instead of being written - the operator's file is not modified for that config entity
+     * (SILENT-14).
+     * <p>
+     * 自 6.3.0 起，违反 {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} 约束的值
+     * 会以 {@link com.ultikits.ultitools.exceptions.ConfigurationException} 拒绝而不是被写入——
+     * 该配置实体对应的操作员文件不会被修改（SILENT-14）。
+     *
      * @param json JSON string <br> JSON字符串
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException              if an I/O error occurs <br> 如果发生I/O错误
+     * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
+     *                                 validation constraint <br> 若某个值违反了校验约束
      */
     public final void loadFromJson(String json) throws IOException {
         Gson gson = new Gson();
@@ -320,11 +337,22 @@ public class ConfigManager {
      * 跨插件则可能重名。找不到和命中多个都抛异常而不是静默跳过：
      * 「调用方以为写了、实际什么也没发生」正是这条链路上原来的毛病。
      *
+     * <p>
+     * Since 6.3.0, a value violating its {@code @Range}/{@code @NotEmpty}/{@code @Size}/
+     * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
+     * instead of being written - the operator's file is not modified (SILENT-14).
+     * <p>
+     * 自 6.3.0 起，违反 {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} 约束的值
+     * 会以 {@link com.ultikits.ultitools.exceptions.ConfigurationException} 拒绝而不是被写入——
+     * 操作员的文件不会被修改（SILENT-14）。
+     *
      * @param configFilePath config file path as registered, e.g. {@code config/lang.yml}
      *                       <br> 注册时使用的配置文件路径
      * @param json           JSON object of that file's entries <br> 该文件配置项的JSON对象
      * @throws IOException if the path is blank, unknown, ambiguous, or the JSON is not an object,
      *                     or if saving fails <br> 路径为空、找不到、跨插件重名、JSON不是对象或保存失败
+     * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
+     *                                 validation constraint <br> 若某个值违反了校验约束
      * @since 6.2.5
      */
     public final void loadFromJson(String configFilePath, String json) throws IOException {

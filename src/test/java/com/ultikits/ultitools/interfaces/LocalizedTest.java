@@ -2,11 +2,21 @@ package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
+import java.io.File;
+import java.io.IOException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.annotations.I18n;
 
@@ -32,11 +42,13 @@ class LocalizedTest {
     }
 
     /**
-     * 只支持一种语言的 Localized 实现
+     * 类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果必须以实际资源为准，而不是这个声明。
+     * <p>
+     * static 嵌套类不能声明在非 static 的 {@code @Nested} 内部类里面（Java 8 语言规则），
+     * 所以这些端到端测试用的实现类必须放在顶层。
      */
-    @I18n({"en_US"})
-    static class SingleLanguageLocalized implements Localized {
-        // 使用默认实现
+    @I18n({"fr"})
+    static class AnnotatedButOnlyShipsEnglish implements Localized {
     }
 
     /**
@@ -61,48 +73,141 @@ class LocalizedTest {
     }
 
     @Nested
-    @DisplayName("supported 测试")
+    @DisplayName("supported 测试 -- 派生自 lang/*.json 资源 (D-20)")
     class SupportedTests {
 
-        @Test
-        @DisplayName("没有 @I18n 注解应该返回空列表")
-        void shouldReturnEmptyListWithoutAnnotation() {
-            // Arrange
-            Localized localized = new NoAnnotationLocalized();
+        // Rewritten for D-20 (04-04 Task 3): supported() is derived from the lang/*.json
+        // resources an implementor's own code source actually ships, not from any type-level
+        // annotation. These tests exercise the real default method end-to-end against a real
+        // directory code source (target/test-classes, the shape Surefire runs test classes
+        // from) rather than the old contract where an annotation alone drove the result.
 
-            // Act
-            List<String> supported = localized.supported();
+        private File langDir;
 
-            // Assert
-            assertThat(supported).isEmpty();
+        @BeforeEach
+        void setUp() throws URISyntaxException {
+            URL codeSourceUrl = NoAnnotationLocalized.class.getProtectionDomain().getCodeSource().getLocation();
+            File testClassesRoot = new File(codeSourceUrl.toURI());
+            langDir = new File(testClassesRoot, "lang");
+            // Defensive: a previous run's cleanup failing should be loud, not silently overwritten.
+            assertThat(langDir).doesNotExist();
+        }
+
+        @AfterEach
+        void tearDown() throws IOException {
+            if (langDir.exists()) {
+                deleteRecursively(langDir);
+            }
         }
 
         @Test
-        @DisplayName("有 @I18n 注解应该返回支持的语言列表")
-        void shouldReturnSupportedLanguages() {
-            // Arrange
-            Localized localized = new AnnotatedLocalized();
-
-            // Act
-            List<String> supported = localized.supported();
-
-            // Assert
-            assertThat(supported).hasSize(3);
-            assertThat(supported).containsExactly("en_US", "zh_CN", "ja_JP");
+        @DisplayName("没有 lang/ 目录时返回空列表，不抛出异常")
+        void noLangDirectoryReturnsEmptyList() {
+            assertThat(new NoAnnotationLocalized().supported()).isEmpty();
         }
 
         @Test
-        @DisplayName("单语言支持")
-        void shouldReturnSingleLanguage() {
-            // Arrange
-            Localized localized = new SingleLanguageLocalized();
+        @DisplayName("目录代码源下 lang/en.json 与 lang/zh.json 被正确枚举")
+        void directoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            langDir.mkdirs();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
 
-            // Act
-            List<String> supported = localized.supported();
+            assertThat(new NoAnnotationLocalized().supported()).containsExactlyInAnyOrder("en", "zh");
+        }
 
-            // Assert
-            assertThat(supported).hasSize(1);
-            assertThat(supported).containsExactly("en_US");
+        @Test
+        @DisplayName("类型上标注了额外语言声明，但实际只打包了 en.json -- 派生结果以实际资源为准")
+        void typeLevelDeclarationDoesNotOverrideActualResources() throws IOException {
+            langDir.mkdirs();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(new AnnotatedButOnlyShipsEnglish().supported()).containsExactly("en");
+        }
+
+        private void deleteRecursively(File file) throws IOException {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+            Files.delete(file.toPath());
+        }
+    }
+
+    @Nested
+    @DisplayName("scanLangJar / scanLangDirectory 派生辅助方法测试 (04-04 Task 1, D-20)")
+    class LangResourceDerivationHelperTests {
+
+        @TempDir
+        File tempDir;
+
+        @Test
+        @DisplayName("JAR 中 lang/ 直接子级的 .json 条目被枚举，非 .json 条目被忽略")
+        void jarEntriesAreFilteredToJsonUnderLang() throws IOException {
+            File jar = new File(tempDir, "module.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/zh.json", "{}");
+                writeEntry(out, "lang/README.txt", "notes");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactlyInAnyOrder("en", "zh");
+        }
+
+        @Test
+        @DisplayName("JAR 中嵌套的 lang/extra/en.json 被忽略，只统计 lang/ 直接子级")
+        void nestedJarEntriesAreIgnored() throws IOException {
+            File jar = new File(tempDir, "nested.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/extra/en.json", "{}");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("无法作为 JAR 打开的文件（随机字节）返回空列表，不抛出异常")
+        void unreadableJarReturnsEmptyList() throws IOException {
+            File garbage = new File(tempDir, "garbage.jar");
+            Files.write(garbage.toPath(), new byte[]{1, 2, 3, 4});
+
+            assertThat(Localized.scanLangJar(garbage)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("目录中没有 .json 文件时返回空列表")
+        void directoryWithNoJsonFilesReturnsEmptyList() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            langDir.mkdirs();
+            Files.write(new File(langDir, "README.txt").toPath(), "notes".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("目录中嵌套的 lang/extra/en.json 被忽略")
+        void nestedDirectoryEntriesAreIgnored() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            File extra = new File(langDir, "extra");
+            extra.mkdirs();
+            Files.write(new File(extra, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("不存在的 lang 目录返回空列表")
+        void missingLangDirectoryReturnsEmptyList() {
+            File missing = new File(tempDir, "does-not-exist");
+            assertThat(Localized.scanLangDirectory(missing)).isEmpty();
+        }
+
+        private void writeEntry(JarOutputStream out, String name, String content) throws IOException {
+            out.putNextEntry(new JarEntry(name));
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
         }
     }
 
