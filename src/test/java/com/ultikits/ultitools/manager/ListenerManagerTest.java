@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -386,6 +387,78 @@ class ListenerManagerTest {
             } finally {
                 realContainer.close();
             }
+        }
+    }
+
+    /**
+     * GEN-05 (04-08 Task 3): {@code registerAll(UltiToolsPlugin, String)} is deprecated in step
+     * with {@code CommandManager}'s symmetric {@code registerAll(UltiToolsPlugin, String)} -- both
+     * package-scanning overloads now have zero in-framework callers (04-08 Task 1) and both carry
+     * {@code @Deprecated(since = "6.3.0", forRemoval = true)}.
+     */
+    @Nested
+    @DisplayName("registerAll(plugin, packageName) 弃用标注测试 (GEN-05)")
+    class RegisterAllWithPackageDeprecationTests {
+
+        @Test
+        @DisplayName("registerAll(plugin, packageName) 应该带着 forRemoval 标注，registerAll(plugin) 不应该")
+        void packageScanOverloadShouldBeMarkedForRemoval() throws Exception {
+            Method deprecatedMethod = ListenerManager.class.getDeclaredMethod(
+                    "registerAll", UltiToolsPlugin.class, String.class);
+            Deprecated deprecated = deprecatedMethod.getAnnotation(Deprecated.class);
+
+            assertThat(deprecated)
+                    .as("registerAll(UltiToolsPlugin, String) 的 @Deprecated 标注不见了")
+                    .isNotNull();
+            assertThat(deprecated.forRemoval())
+                    .as("forRemoval 被改成了 false，下游将只收到不含 API 名的笼统提示")
+                    .isTrue();
+
+            Method currentMethod = ListenerManager.class.getDeclaredMethod("registerAll", UltiToolsPlugin.class);
+            assertThat(currentMethod.getAnnotation(Deprecated.class))
+                    .as("registerAll(UltiToolsPlugin) 是当前推荐的重载，不应该被标注为弃用")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("registerAll(plugin, \"\") 不应该抛出异常，也不应该注册任何监听器")
+        void emptyPackageNameShouldNotThrowAndRegisterNothing() throws Exception {
+            SimpleContainer mockContext = mock(SimpleContainer.class);
+            AutowireFactory mockFactory = mock(AutowireFactory.class);
+            when(mockPlugin.getContext()).thenReturn(mockContext);
+            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
+
+            assertDoesNotThrow(() -> listenerManager.registerAll(mockPlugin, ""));
+
+            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, List<Listener>> map =
+                    (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
+
+            assertThat(map.get(mockPlugin)).isNull();
+        }
+
+        @Test
+        @DisplayName("扫描一个不含 @EventListener 类的真实包不应该抛出异常，也不应该注册任何监听器")
+        void packageWithZeroEventListenerClassesShouldNotThrowAndRegisterNothing() throws Exception {
+            SimpleContainer mockContext = mock(SimpleContainer.class);
+            AutowireFactory mockFactory = mock(AutowireFactory.class);
+            when(mockPlugin.getContext()).thenReturn(mockContext);
+            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
+
+            // com.ultikits.ultitools.exceptions holds exception types, none of which is
+            // annotated @EventListener -- a real, non-empty package with a zero-class result set.
+            assertDoesNotThrow(() ->
+                    listenerManager.registerAll(mockPlugin, "com.ultikits.ultitools.exceptions"));
+
+            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, List<Listener>> map =
+                    (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
+
+            assertThat(map.get(mockPlugin)).isNull();
         }
     }
 

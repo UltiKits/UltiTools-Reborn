@@ -60,12 +60,30 @@ public class ListenerManager {
 
     /**
      * Register all listeners in the package.
-     * <br>
+     * <p>
      * 注册包中的所有监听器。
      *
      * @param plugin      UltiTools plugin instance <br> UltiTools模块实例
      * @param packageName Package name <br> 包名
+     * @deprecated This overload reflectively scans and instantiates every {@code @EventListener}
+     *             class in {@code packageName} without ever consulting {@link
+     *             EventListener#manualRegister()} -- a listener its author deliberately withheld
+     *             from auto-registration is registered anyway. After plan 04-08, {@link
+     *             PluginManager#registerBukkit} no longer has an in-framework caller for this
+     *             overload either; both registration entry points resolve listeners as beans from
+     *             the module's own container instead. Use {@link #registerAll(UltiToolsPlugin)},
+     *             which does honour {@code manualRegister()}.
+     *             See issue #337.
+     *             <p>
+     *             这个重载对 {@code packageName} 下每一个 {@code @EventListener} 类做反射式扫描
+     *             并实例化，从不查询 {@link EventListener#manualRegister()}——一个作者刻意不让其
+     *             自动注册的监听器仍然会被注册。计划 04-08 之后，{@link
+     *             PluginManager#registerBukkit} 在框架内也不再有这个重载的调用方；两个注册入口点
+     *             都改为从模块自身的容器中按 bean 解析监听器。请改用
+     *             {@link #registerAll(UltiToolsPlugin)}——它确实遵循 {@code manualRegister()}。
+     *             见 issue #337。
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public void registerAll(UltiToolsPlugin plugin, String packageName) {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 EventListener.class,
