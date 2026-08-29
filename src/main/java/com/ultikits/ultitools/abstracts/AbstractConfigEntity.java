@@ -436,15 +436,33 @@ public abstract class AbstractConfigEntity {
      * a length, and {@code @NotEmpty} violations are empty by definition, so neither can leak a
      * secret verbatim (T-04-04).
      * <p>
+     * Widened in 6.3.0 (04-REVIEW.md WR-03) to also cover {@code key}/{@code auth}/
+     * {@code private}/{@code cert}, accepting the resulting false positives (a field merely
+     * named e.g. {@code publicKey} is redacted too) as the safer default, per Phase 2 D-15's
+     * fail-closed preference. The reason for the widening is new, not cosmetic: before the
+     * write-path refusal added by this same 6.3.0 change, a {@code @Pattern} refusal message
+     * went only to the local console; now both remote config-write handlers forward it
+     * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaves
+     * the server, not just the console.
+     * <p>
      * 判断字段名是否形似存放密钥。只有 {@code @Pattern} 违规会回显任意字符串值；
      * {@code @Range}/{@code @Size} 违规始终只回显数字或长度，{@code @NotEmpty} 违规按定义就是
      * 空值，两者都不会泄露密钥原文（T-04-04）。
+     * <p>
+     * 6.3.0 起（04-REVIEW.md WR-03）扩展覆盖 {@code key}/{@code auth}/{@code private}/
+     * {@code cert}，接受由此产生的误判（例如仅仅叫 {@code publicKey} 的字段也会被打码）作为
+     * 更安全的默认行为，遵循 Phase 2 D-15 的失败即拒绝取向。这次扩展的原因是新出现的，
+     * 不是装饰性的：在本次 6.3.0 变更新增写路径拒绝之前，{@code @Pattern} 拒绝消息只会留在
+     * 本地控制台；现在两个远程配置写入处理器都会把它原样通过 WebSocket 转发给 UltiPanel
+     * （T-04-56），命名启发式的遗漏泄露的就不只是控制台，而是服务器本身。
      */
     private boolean isSecretShapedFieldName(String fieldName) {
         String lower = fieldName.toLowerCase(Locale.ROOT);
         return lower.contains("password") || lower.contains("secret")
                 || lower.contains("token") || lower.contains("credential")
-                || lower.contains("apikey") || lower.contains("api_key");
+                || lower.contains("apikey") || lower.contains("api_key")
+                || lower.contains("key") || lower.contains("auth")
+                || lower.contains("private") || lower.contains("cert");
     }
 
     private boolean isRangeViolation(Field field, Object value) {

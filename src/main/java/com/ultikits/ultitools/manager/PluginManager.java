@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
@@ -172,11 +174,7 @@ public class PluginManager {
         try {
             plugin = initializePlugin(classLoader, pluginClass);
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(pluginClass.getName(), e);
             return false;
         }
         // null 表示兼容性门禁拒了它，拒绝理由已经打过日志，这里不要再包一层通用错误。
@@ -238,11 +236,7 @@ public class PluginManager {
                     classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
             );
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", pluginClass.getName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(pluginClass.getName(), e);
             return false;
         }
         // 同上：null 是门禁拒绝，不是初始化失败。
@@ -276,11 +270,7 @@ public class PluginManager {
             SimpleContainer pluginContext = new SimpleContainer();
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
-            Bukkit.getLogger().log(
-                    Level.WARNING,
-                    String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", plugin.getPluginName(), e.getMessage()),
-                    e
-            );
+            logPluginInitializationFailure(plugin.getPluginName(), e);
             return false;
         }
         boolean result = attemptPluginRegistration(plugin);
@@ -288,6 +278,65 @@ public class PluginManager {
             registerBukkit(plugin);
         }
         return result;
+    }
+
+    /**
+     * Logs one refusal WARNING for a module that failed to initialize, surfacing the innermost
+     * {@link UltiToolsException}'s message (module/file/field/value/constraint, per e.g.
+     * {@code ConfigurationException.validationFailed(...)}) instead of an outer wrapper's
+     * generic text (04-REVIEW.md WR-02). All three refusal-log sites in this class route
+     * through here so the message shape has exactly one place it is built.
+     * <p>
+     * Package-private, not private: {@code PluginManagerTest} lives in this same package and
+     * drives this method directly with a real multi-level chain, without reflection or
+     * {@code setAccessible(true)}. This is a test-seam choice, not an API widening - it is not
+     * {@code public}, so it never enters the published surface.
+     * <p>
+     * 为初始化失败的模块记录一条拒绝 WARNING，展示最内层 {@link UltiToolsException} 的消息
+     * （模块/文件/字段/值/约束，例如来自 {@code ConfigurationException.validationFailed(...)}），
+     * 而不是外层包装异常的通用文本（04-REVIEW.md WR-02）。本类中全部三处拒绝日志调用点都经过
+     * 这里，消息的组装逻辑只有一处。
+     * <p>
+     * 包级私有而非 private：{@code PluginManagerTest} 与本类同包，可以直接调用本方法驱动一条
+     * 真实的多层异常链，无需反射或 {@code setAccessible(true)}。这是测试接缝的选择，不是 API
+     * 扩张——它不是 {@code public}，不会进入已发布的对外接口。
+     *
+     * @param moduleName the module refusing to load, however the caller identifies it
+     *                   <br> 拒绝加载的模块，调用方按自己的方式命名它
+     * @param thrown     the throwable caught at the registration boundary <br> 在注册边界捕获到的异常
+     */
+    static void logPluginInitializationFailure(String moduleName, Throwable thrown) {
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                String.format("[UltiTools-API] Cannot initialize plugin for %s: %s", moduleName, rootCauseMessage(thrown)),
+                thrown
+        );
+    }
+
+    /**
+     * Walks {@code thrown}'s cause chain for the deepest {@link UltiToolsException}, returning
+     * its message - or {@code thrown.getMessage()} if the chain holds none. Bounded via
+     * identity-based cycle detection ({@link IdentityHashMap}) so a self-referential or cyclic
+     * cause chain terminates instead of spinning.
+     * <p>
+     * 沿 {@code thrown} 的异常链向下找最深层的 {@link UltiToolsException}，返回它的消息——
+     * 若链上没有则返回 {@code thrown.getMessage()}。通过基于身份的环检测（{@link
+     * IdentityHashMap}）设置边界，自引用或循环的异常链会终止而不是卡死。
+     *
+     * @param thrown the throwable whose cause chain is walked
+     * @return the deepest {@link UltiToolsException}'s message, or {@code thrown}'s own message
+     */
+    static String rootCauseMessage(Throwable thrown) {
+        Throwable deepest = null;
+        Throwable current = thrown;
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        while (current != null && visited.add(current)) {
+            if (current instanceof UltiToolsException) {
+                deepest = current;
+            }
+            current = current.getCause();
+        }
+        return deepest != null ? deepest.getMessage() : thrown.getMessage();
     }
 
     /**
