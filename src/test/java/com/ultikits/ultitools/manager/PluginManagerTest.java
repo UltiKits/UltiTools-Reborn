@@ -773,6 +773,15 @@ class PluginManagerTest {
             DataStore dataStore = mock(DataStore.class, Answers.CALLS_REAL_METHODS);
             lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
 
+            // register(UltiToolsPlugin) now assembles through the shared assemblePluginContainer
+            // method (WIRE-05, 04-07), which reads UltiTools.getInstance().getConfigManager() for
+            // config-entity beans -- a bare mock's unstubbed getConfigManager() returns null,
+            // which would NPE on .getAllConfigEntities(plugin). None of these tests care about
+            // config entities, so an empty ConfigManager mock (unstubbed
+            // getAllConfigEntities(...) returns null, which the production code already
+            // null-checks) is enough.
+            lenient().when(ultiTools.getConfigManager()).thenReturn(mock(ConfigManager.class));
+
             // getPluginVersion() 走 getEnv() → getInstance().getTextResource("env.yml")，
             // 而那个方法在 JavaPlugin 里是 protected，测试包里打不了桩，所以直接桩静态方法。
             ultiToolsStatic = mockStatic(UltiTools.class);
