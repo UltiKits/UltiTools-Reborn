@@ -130,14 +130,46 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Resolves which language code to actually load, consulting {@link Localized#supported()}
+     * before {@link #createLanguageFromPath(String)} picks a file (D-20/D-21/WIRE-10). Prefers
+     * the configured code; if it is absent from a non-empty {@code supported()}, prefers
+     * {@code "en"} when {@code supported()} contains it, otherwise the first entry in
+     * {@code supported()}'s iteration order. An empty {@code supported()} is "no information" -
+     * the configured code is returned unchanged and nothing is logged.
+     * <p>
+     * 解析实际应该加载的语言代码，在 {@link #createLanguageFromPath(String)} 选择文件之前先
+     * 参考 {@link Localized#supported()}（D-20/D-21/WIRE-10）。优先使用已配置的代码；如果它不在
+     * 非空的 {@code supported()} 里，且 {@code supported()} 包含 {@code "en"} 则优先回退到
+     * {@code "en"}，否则回退到 {@code supported()} 迭代顺序里的第一个条目。空的
+     * {@code supported()} 代表“没有信息”——已配置的代码原样返回，不记录任何日志。
+     *
+     * @return the language code to actually load
+     */
+    private String resolveLanguageCode() {
+        String configured = getLanguageCode();
+        List<String> supportedCodes = this.supported();
+        if (supportedCodes == null || supportedCodes.isEmpty()) {
+            return configured;
+        }
+        if (configured != null && supportedCodes.contains(configured)) {
+            return configured;
+        }
+        String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
+        getLogger().warn("Module '" + getPluginName() + "' is configured for language '" + configured
+                + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'.");
+        return fallback;
+    }
+
+    /**
      * Creates a Language object from the given resource folder path
      * @param folderPath the resource folder path
      * @return Language object
      */
     private Language createLanguageFromPath(String folderPath) {
-        File file = new File(folderPath + File.separator + "lang" + File.separator + this.getLanguageCode() + ".json");
+        String resolvedCode = resolveLanguageCode();
+        File file = new File(folderPath + File.separator + "lang" + File.separator + resolvedCode + ".json");
         if (!file.exists()) {
-            String lanPath = "lang" + File.separator + this.getLanguageCode() + ".json";
+            String lanPath = "lang" + File.separator + resolvedCode + ".json";
             InputStream in = getResource(lanPath);
             if (in != null) {
                 try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(in))) {
