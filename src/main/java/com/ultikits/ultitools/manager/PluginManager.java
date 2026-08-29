@@ -1675,15 +1675,52 @@ public class PluginManager {
     }
 
     /**
+     * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
+     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
+     * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
+     * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
+     * only through this constant) at every call site below, so the property is legible directly
+     * in the operator-facing message that names it, not only in code that reads it.
+     * <br>
+     * 退回 6.3.0 之前退化加载顺序（D-10）的 JVM 系统属性名：所有模块按文件系统/类路径顺序加载，
+     * 完全不做依赖解析。参照 Paper 自身的 {@code -Dpaper.useLegacyPluginLoading=true} 先例——
+     * 这是一个一次性的、在启动时就被消费掉的决定，因此用系统属性而非可热重载的
+     * {@code config.yml} 键。下方每个调用点都重复写出字面量名称（而非只通过这个常量引用），
+     * 使这个属性名在命名它的运维提示信息里本身就清晰可读，而不仅仅存在于读取它的代码中。
+     */
+    private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
+
+    /**
      * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
+     * <p>
+     * A dependency cycle or a missing hard dependency no longer degrades every module to
+     * filesystem order (SILENT-08/D-10): only the affected module(s) - the cycle/missing
+     * declaration plus everything transitively depending on it - are absent from the returned
+     * list; every unrelated module still loads. The pre-6.3.0 all-unsorted behaviour survives
+     * only as an explicit, cost-stating opt-in via {@code ultitools.useLegacyPluginLoading}.
      * <br>
      * 使用 Kahn 算法（拓扑排序）按依赖关系对插件进行排序。
+     * <p>
+     * 一个依赖环或一个缺失的硬依赖不再让所有模块退化为文件系统顺序（SILENT-08/D-10）：
+     * 只有受影响的模块——环成员/缺失声明本身及所有传递依赖它们的模块——会从返回列表中
+     * 缺席；其余每个模块仍然加载。6.3.0 之前"全部退化"的行为只能通过
+     * {@code ultitools.useLegacyPluginLoading} 这个显式的、会说明代价的开关继续存在。
      *
      * @param plugins list of plugin classes to sort <br> 要排序的插件类列表
      * @return sorted list of plugin classes <br> 排序后的插件类列表
      */
     private List<Class<? extends UltiToolsPlugin>> sortPluginsByDependencies(
             List<Class<? extends UltiToolsPlugin>> plugins) {
+
+        if (Boolean.getBoolean(LEGACY_PLUGIN_LOADING_PROPERTY)) {
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
+                    + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
+                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "order and may fail to initialize if they rely on load order.");
+            return new ArrayList<>(plugins);
+        }
 
         PluginDependencyResolver resolver = new PluginDependencyResolver(Bukkit.getLogger());
 
@@ -1693,16 +1730,32 @@ public class PluginManager {
             return sorted;
         } catch (CircularDependencyException e) {
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] " + e.getMessage());
+                "[UltiTools-API] Circular dependency detected among plugins.");
+            for (List<String> cyclePath : e.getCyclePaths()) {
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API]   Loop: " + String.join(" -> ", cyclePath));
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API]   Please have the author of '" + cyclePath.get(0)
+                        + "' fix the circular dependency.");
+            }
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
-            return new ArrayList<>(plugins);
+                "[UltiTools-API] The cycle members and their dependents are excluded from this "
+                    + "load; every other module still loads. Set "
+                    + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                    + "order instead (not recommended: modules may fail to initialize in an "
+                    + "unpredictable order).");
+            return new ArrayList<>(e.getSortedPrefix());
         } catch (MissingDependencyException e) {
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] " + e.getMessage());
+                "[UltiTools-API] A required plugin dependency is missing.");
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + e.getMessage());
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Falling back to unsorted load order. Some plugins may fail to initialize!");
-            return new ArrayList<>(plugins);
+                "[UltiTools-API] The declaring module and its dependents are excluded from this "
+                    + "load; every other module still loads. Set "
+                    + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                    + "order instead (not recommended: modules may fail to initialize in an "
+                    + "unpredictable order).");
+            return new ArrayList<>(e.getSortedPrefix());
         }
     }
 
