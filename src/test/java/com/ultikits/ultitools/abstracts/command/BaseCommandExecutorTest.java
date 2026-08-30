@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -1339,7 +1340,10 @@ class BaseCommandExecutorTest {
                 delayedDispatches.get(0).run();
             }
 
-            verify(mockPlayer, times(1)).sendMessage(anyString());
+            // Match on the timeout-specific message content rather than "any string" -- the
+            // default @AsyncCommand also sends a "processing" message before dispatch, which is
+            // expected and orthogonal to the timeout report being asserted here.
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
 
             // Release the body and confirm it is NOT interrupted and runs to completion.
             executor.bodyContinue.countDown();
@@ -1350,8 +1354,9 @@ class BaseCommandExecutorTest {
             assertFalse(executor.bodyInterrupted.get(),
                     "the body must NOT be interrupted when the timeout fires");
 
-            // Test 5 (first half): completing after the timeout must not produce a second report.
-            verify(mockPlayer, times(1)).sendMessage(anyString());
+            // Test 5 (first half): completing after the timeout must not produce a SECOND
+            // timeout report.
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
         }
 
         @Test
@@ -1377,7 +1382,9 @@ class BaseCommandExecutorTest {
             }
 
             assertEquals(1, executor.fastInvocations.get());
-            verify(mockPlayer, never()).sendMessage(anyString());
+            // The default @AsyncCommand still sends its "processing" message; only the
+            // TIMEOUT-specific report must be absent.
+            verify(mockPlayer, never()).sendMessage(contains("命令执行超时"));
         }
 
         @Test
@@ -1410,7 +1417,7 @@ class BaseCommandExecutorTest {
                 delayedDispatches.get(0).run();
             }
 
-            verify(mockPlayer, times(1)).sendMessage(anyString());
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
 
             executor.bodyContinue.countDown();
             bodyThread.join(5000);
@@ -1422,8 +1429,7 @@ class BaseCommandExecutorTest {
             // "command execution failed" handler (unrelated to this task) may additionally
             // message the sender for the thrown exception itself, so this asserts no SECOND
             // timeout-shaped report rather than a total message count.
-            verify(mockPlayer, times(1)).sendMessage(
-                    org.mockito.ArgumentMatchers.contains("命令执行超时"));
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
         }
 
         @Test
