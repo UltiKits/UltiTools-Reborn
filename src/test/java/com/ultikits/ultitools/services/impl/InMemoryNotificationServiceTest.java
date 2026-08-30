@@ -1,12 +1,14 @@
 package com.ultikits.ultitools.services.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -25,6 +27,8 @@ import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.VersionWrapper;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.widgets.Toast;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -776,6 +780,128 @@ class InMemoryNotificationServiceTest {
             // Assert
             assertThat(InMemoryNotificationService.getCachedBossBar(playerUUID1)).isNull();
             assertThat(InMemoryNotificationService.getCachedBossBar(playerUUID2)).isNull();
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@code atedPlayer} is now a {@code ConcurrentHashMap} (a live race with the
+     * async BossBar-tick {@code runTaskTimerAsynchronously} loop at :88, T-05-16) registered with
+     * the live {@link PlayerCacheManager}, so a quitting player's entry is pruned through the
+     * real quit path -- {@link PlayerCacheManager#onPlayerQuit(UUID)} -- rather than never at
+     * all. These assertions fail on the pre-migration build.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager quit-based sweep and concurrency (GEN-08, D-03, T-05-16)")
+    class PlayerCacheSweepAndConcurrencyTests {
+
+        private PlayerCacheManager liveManager;
+
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        @BeforeEach
+        void wireLiveManager() throws Exception {
+            // playerCacheRegistered is a STATIC flag (one InMemoryNotificationService "registers"
+            // on behalf of every instance -- see that field's javadoc), so a PRIOR test method in
+            // this nested class latching it true would otherwise make every later test's
+            // ensurePlayerCacheRegistered() a permanent no-op against a DIFFERENT liveManager
+            // than the one this test wired. Reset it so each test starts from a clean slate.
+            Field registeredField = InMemoryNotificationService.class.getDeclaredField("playerCacheRegistered");
+            registeredField.setAccessible(true);
+            registeredField.setBoolean(null, false);
+
+            liveManager = new PlayerCacheManager();
+            UltiTools currentInstance = UltiTools.getInstance();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            when(currentInstance.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @Test
+        @DisplayName("A player's BossBar entry is gone after they quit; another player's entry survives")
+        void bossBarEntryGoneAfterRealQuitPathOtherPlayerUntouched() {
+            PlayerMock quittingPlayer = server.addPlayer();
+            PlayerMock otherPlayer = server.addPlayer();
+
+            // sendBossBarNotification() both records the entry and triggers lazy first-use
+            // registration with the live manager wired above.
+            notificationService.sendBossBarNotification(quittingPlayer, "quitting");
+            notificationService.sendBossBarNotification(otherPlayer, "staying");
+            assertThat(InMemoryNotificationService.getCachedBossBar(quittingPlayer.getUniqueId())).isNotNull();
+            assertThat(InMemoryNotificationService.getCachedBossBar(otherPlayer.getUniqueId())).isNotNull();
+
+            liveManager.onPlayerQuit(quittingPlayer.getUniqueId());
+
+            assertThat(InMemoryNotificationService.getCachedBossBar(quittingPlayer.getUniqueId())).isNull();
+            assertThat(InMemoryNotificationService.getCachedBossBar(otherPlayer.getUniqueId()))
+                    .withFailMessage("a sweep triggered by one player's quit must not touch another player's entry")
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("Sweeping the same quitting player twice removes nothing further and throws nothing")
+        void sweepingSamePlayerTwiceIsIdempotent() {
+            PlayerMock player = server.addPlayer();
+            notificationService.sendBossBarNotification(player, "hello");
+
+            liveManager.onPlayerQuit(player.getUniqueId());
+            assertThatCode(() -> liveManager.onPlayerQuit(player.getUniqueId())).doesNotThrowAnyException();
+
+            assertThat(InMemoryNotificationService.getCachedBossBar(player.getUniqueId())).isNull();
+        }
+
+        @Test
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        @DisplayName("Concurrent writes to atedPlayer from two threads complete without exception or lost updates")
+        void concurrentWritesCompleteWithoutExceptionOrLostUpdates() throws Exception {
+            int keysPerThread = 50;
+            UUID[] threadAKeys = new UUID[keysPerThread];
+            UUID[] threadBKeys = new UUID[keysPerThread];
+            for (int i = 0; i < keysPerThread; i++) {
+                threadAKeys[i] = UUID.randomUUID();
+                threadBKeys[i] = UUID.randomUUID();
+            }
+
+            Field field = InMemoryNotificationService.class.getDeclaredField("atedPlayer");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UUID, BossBar> atedPlayer = (Map<UUID, BossBar>) field.get(null);
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch go = new CountDownLatch(1);
+            Runnable writerA = deterministicWriter(atedPlayer, threadAKeys, ready, go);
+            Runnable writerB = deterministicWriter(atedPlayer, threadBKeys, ready, go);
+            Thread threadA = new Thread(writerA);
+            Thread threadB = new Thread(writerB);
+
+            threadA.start();
+            threadB.start();
+            ready.await();
+            go.countDown();
+            threadA.join(TimeUnit.SECONDS.toMillis(10));
+            threadB.join(TimeUnit.SECONDS.toMillis(10));
+
+            assertThat(atedPlayer).hasSize(keysPerThread * 2);
+            for (UUID key : threadAKeys) {
+                assertThat(atedPlayer).containsKey(key);
+            }
+            for (UUID key : threadBKeys) {
+                assertThat(atedPlayer).containsKey(key);
+            }
+        }
+
+        private Runnable deterministicWriter(Map<UUID, BossBar> map, UUID[] keys,
+                                              CountDownLatch ready, CountDownLatch go) {
+            return () -> {
+                ready.countDown();
+                try {
+                    go.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (UUID key : keys) {
+                    map.put(key, Bukkit.createBossBar(key.toString(), BarColor.GREEN, BarStyle.SOLID));
+                }
+            };
         }
     }
 }
