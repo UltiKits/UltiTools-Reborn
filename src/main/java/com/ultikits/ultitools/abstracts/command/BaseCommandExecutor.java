@@ -99,8 +99,21 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Creates the default validator chain with standard validators.
      * Override this method to customize the validation pipeline.
+     * <p>
+     * An override that drops {@code CooldownValidator} or {@code UsageLockValidator} from the
+     * chain while a mapping on this class declares {@code @CmdCD} or {@code @UsageLimit}
+     * respectively must be refused at load, naming the offending class -- not a silent
+     * degradation to an unenforced annotation (SILENT-11 / D-01, D-04). As of this plan, that
+     * load-time refusal is not yet implemented; this javadoc states the contract the framework
+     * is committed to, and a later phase plan enforces it.
+     * <p>
      * 创建具有标准验证器的默认验证器链。
      * 重写此方法以自定义验证管道。
+     * <p>
+     * 若某次重写在本类的某映射声明了 {@code @CmdCD} 或 {@code @UsageLimit} 的同时，从链中省略了对应的
+     * {@code CooldownValidator} 或 {@code UsageLockValidator}，必须在加载时被拒绝并指出问题类，而不是
+     * 静默降级为注解不生效（SILENT-11 / D-01, D-04）。截至本计划，该加载时拒绝机制尚未实现；本 javadoc
+     * 陈述框架所承诺的契约，由后续阶段计划实现。
      *
      * @return the validator chain
      */
