@@ -8,6 +8,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventPriority;
 
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.function.Function;
 
 /**
@@ -45,12 +48,38 @@ public class SimpleTempListener<E extends Event> implements TempListener {
         this.eventHandler = eventHandler;
     }
 
+    /**
+     * Tracks which listener instances are currently registered, so a second {@link #register()}
+     * call on the same instance is a no-op instead of a silent duplicate Bukkit registration.
+     * Static (not an instance field) so it does not change {@code @AllArgsConstructor}'s generated
+     * signature. Weak keys so a listener that is simply dropped (never unregistered) does not leak.
+     * <br>
+     * 追踪哪些监听器实例当前已注册，使得同一实例第二次调用 {@link #register()}
+     * 是无操作，而不是静默在 Bukkit 层面重复注册。使用静态字段（而非实例字段）
+     * 才不会改变 {@code @AllArgsConstructor} 生成的构造器签名。使用弱引用键，
+     * 这样一个被直接丢弃（从未注销）的监听器不会泄露。
+     */
+    private static final Set<SimpleTempListener<?>> REGISTERED =
+            Collections.newSetFromMap(new WeakHashMap<>());
+
     public void register() {
+        if (!REGISTERED.add(this)) {
+            // Already registered - a second register() call on the same instance is a no-op
+            // rather than a silent duplicate Bukkit registration.
+            return;
+        }
         Bukkit.getServer().getPluginManager().registerEvent(eventClass, this, priority,
                 (ignored, event) -> {
                     try {
-                        if (filter != null && !filter.apply((E) event)) {
-                            return;
+                        if (filter != null) {
+                            // filter.apply() may return a boxed null - Function<E, Boolean> permits
+                            // it. Treat a null result as non-matching rather than letting the
+                            // implicit unboxing throw an NPE out of Bukkit's event dispatch on
+                            // every event of this class.
+                            Boolean matches = filter.apply((E) event);
+                            if (matches == null || !matches) {
+                                return;
+                            }
                         }
                         //noinspection unchecked
                         if (eventHandler.handle((E) event)) {
@@ -62,5 +91,18 @@ public class SimpleTempListener<E extends Event> implements TempListener {
                 },
                 UltiTools.getInstance()
         );
+    }
+
+    /**
+     * Unregister the listener and clear its registration tracking so a later {@link #register()}
+     * call on the same instance actually re-registers.
+     * <br>
+     * 注销监听器并清除其注册追踪状态，使得同一实例之后再次调用
+     * {@link #register()} 能真正重新注册。
+     */
+    @Override
+    public void unregister() {
+        REGISTERED.remove(this);
+        TempListener.super.unregister();
     }
 }
