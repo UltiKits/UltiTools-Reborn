@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -15,6 +17,9 @@ import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("PlayerCacheManager Tests")
 class PlayerCacheManagerTest {
@@ -64,6 +69,30 @@ class PlayerCacheManagerTest {
     static class ShadowChild extends ShadowBase {
         @PlayerCache
         protected final Map<UUID, String> cache = new HashMap<>();
+    }
+
+    static class SetCacheService {
+        @PlayerCache
+        final Set<UUID> notifiedPlayers = new HashSet<>();
+
+        final Set<UUID> notAnnotatedSet = new HashSet<>();
+    }
+
+    static class ValueMapService {
+        @PlayerCache
+        final Map<String, UUID> serverLocks = new HashMap<>();
+
+        final Map<String, UUID> notAnnotatedValueMap = new HashMap<>();
+    }
+
+    static class NestedKeyMapService {
+        @PlayerCache
+        final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
+    }
+
+    static class UnsupportedShapeService {
+        @PlayerCache
+        final Map<String, String> badShape = new HashMap<>();
     }
 
     @Nested
@@ -210,6 +239,106 @@ class PlayerCacheManagerTest {
             // would not be cleaned
             assertThat(parentCache).withFailMessage("parent cache (from ShadowBase) must be cleaned").isEmpty();
             assertThat(childCache).withFailMessage("child cache (from ShadowChild) must be cleaned").isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("Field shape support (D-03)")
+    class FieldShapeSupport {
+
+        @Test
+        @DisplayName("Sweeps a @PlayerCache Set<UUID> field on quit")
+        void sweepsSetOfUuid() {
+            SetCacheService service = new SetCacheService();
+            UUID playerUuid = UUID.randomUUID();
+            UUID otherUuid = UUID.randomUUID();
+            service.notifiedPlayers.add(playerUuid);
+            service.notifiedPlayers.add(otherUuid);
+            service.notAnnotatedSet.add(playerUuid);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.notifiedPlayers).doesNotContain(playerUuid).contains(otherUuid);
+            assertThat(service.notAnnotatedSet).contains(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Sweeps a @PlayerCache value-side Map<String, UUID> field on quit, leaving other players' entries")
+        void sweepsValueSideUuidMap() {
+            ValueMapService service = new ValueMapService();
+            UUID playerUuid = UUID.randomUUID();
+            UUID otherUuid = UUID.randomUUID();
+            service.serverLocks.put("cmd.teleport", playerUuid);
+            service.serverLocks.put("cmd.home", otherUuid);
+            service.notAnnotatedValueMap.put("cmd.teleport", playerUuid);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.serverLocks).doesNotContainValue(playerUuid);
+            assertThat(service.serverLocks).containsValue(otherUuid);
+            assertThat(service.notAnnotatedValueMap).containsValue(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Existing key-side Map<UUID, ?> sweep still removes the quitting player's entry (no regression)")
+        void keepsKeySideMapBehavior() {
+            TestService service = new TestService();
+            UUID playerUuid = UUID.randomUUID();
+            service.nameCache.put(playerUuid, "Alice");
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.nameCache).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Sweeps a nested Map<UUID, Map<String, Long>> field's outer entry wholesale")
+        void sweepsNestedKeySideMap() {
+            NestedKeyMapService service = new NestedKeyMapService();
+            UUID playerUuid = UUID.randomUUID();
+            Map<String, Long> inner = new HashMap<>();
+            inner.put("cmd.home", System.currentTimeMillis() + 60_000L);
+            service.cooldowns.put(playerUuid, inner);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.cooldowns).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Refuses registration of an unsupported @PlayerCache field shape, naming class/field/supported shapes")
+        void refusesUnsupportedFieldShape() {
+            UnsupportedShapeService service = new UnsupportedShapeService();
+
+            assertThatThrownBy(() -> manager.registerBean(service))
+                    .isInstanceOf(PluginModuleException.class)
+                    .hasMessageContaining(UnsupportedShapeService.class.getName())
+                    .hasMessageContaining("badShape")
+                    .hasMessageContaining("Map<UUID")
+                    .hasMessageContaining("Set<UUID");
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("Leaves an unannotated field untouched on quit regardless of its shape")
+        void leavesUnannotatedFieldsUntouched() {
+            SetCacheService setService = new SetCacheService();
+            ValueMapService valueMapService = new ValueMapService();
+            UUID playerUuid = UUID.randomUUID();
+            setService.notAnnotatedSet.add(playerUuid);
+            valueMapService.notAnnotatedValueMap.put("cmd.teleport", playerUuid);
+
+            manager.registerBean(setService);
+            manager.registerBean(valueMapService);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(setService.notAnnotatedSet).contains(playerUuid);
+            assertThat(valueMapService.notAnnotatedValueMap).containsValue(playerUuid);
         }
     }
 }
