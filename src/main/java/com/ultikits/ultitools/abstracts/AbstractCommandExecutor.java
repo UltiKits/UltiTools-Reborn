@@ -1,12 +1,10 @@
 package com.ultikits.ultitools.abstracts;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -39,7 +37,6 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
-import com.ultikits.ultitools.annotations.command.CmdSuggest;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
@@ -655,6 +652,15 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
      * Tab complete method. Returns a list of possible completions for the specified command string.
      * By rewriting this method, you can customize the tab completion of the command.
      * <p>
+     * Reduces to a one-line delegation into {@link CommandTabCompletionDispatch#suggest(BiMap,
+     * Player, Command, String[], Object)} -- the single tab-completion dispatch implementation
+     * both base-class generations now share (WIRE-01 / D-06). This class's eight former private
+     * reflection helpers (argument-position resolution, the reflective suggestion-method
+     * invocation half) are gone; the latter is now reached through {@code
+     * commands/tabcomplete/MethodInvocationCompleter}, which walks the class hierarchy (issue
+     * #190) so an AOP-proxied executor's suggestion method resolves correctly, which this class's
+     * own helpers did not do.
+     * <p>
      * 补全方法。返回指定命令字符串的可能补全列表。
      * 通过重写此方法，您可以自定义命令的补全。
      *
@@ -664,281 +670,7 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
      * @return The suggestions. <br> 补全的建议
      */
     protected List<String> suggest(Player player, Command command, String[] strings) {
-        List<String> completions = new ArrayList<>();
-        if (strings.length == 1) {
-            for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-                Method method = entry.getValue();
-                String format = entry.getKey();
-                if (!CommandTabCompletionDispatch.checkPermission(player, method)
-                        || !CommandTabCompletionDispatch.checkOp(player, method)) {
-                    continue;
-                }
-                String arg = format.split(" ")[0];
-                if (arg.startsWith("<") && arg.endsWith(">")) {
-                    getArgSuggestion(player, command, strings, method, arg, completions);
-                    continue;
-                }
-                completions.add(arg);
-            }
-            return completions;
-        } else {
-            List<Method> methodsByArg = getMethodsByArg(player, String.join(" ", strings));
-            for (Method method : methodsByArg) {
-                String formatByMethod = getFormatByMethod(method);
-                String arg = getArgAt(formatByMethod, strings.length - 1);
-                if (arg.startsWith("<") && arg.endsWith(">")) {
-                    getArgSuggestion(player, command, strings, method, arg, completions);
-                } else {
-                    for (String format : mappings.keySet()) {
-                        String[] args = format.split(" ");
-                        if (args.length < strings.length) {
-                            continue;
-                        }
-                        String sug = args[strings.length - 1];
-                        if (sug.startsWith("<") && sug.endsWith(">")) {
-                            continue;
-                        }
-                        completions.add(sug);
-                    }
-                }
-            }
-        }
-        return completions;
-    }
-
-    /**
-     * Adds suggestion to the list of suggestions. This method is called by the suggest method.
-     * Fetch the suggestions by invoking the given method.
-     * <p>
-     * 将建议添加到建议列表中。此方法由suggest方法调用。
-     * 通过调用给定的方法获取建议。
-     *
-     * @param player      The player who will see the suggestions. <br> 看到补全的玩家
-     * @param command     The command that was typed in. <br> 需要补全的命令
-     * @param strings     The arguments of the command that was typed in. <br> 目前输入的命令参数
-     * @param method      The method that matches the command. <br> 匹配命令的方法。
-     * @param arg         The argument that needs to be completed. <br> 需要补全的参数。
-     * @param completions The suggestions. <br> 补全的建议
-     */
-    private void getArgSuggestion(Player player, Command command, String[] strings, Method method, String arg, List<String> completions) {
-        String suggestName = getSuggestName(method, arg.substring(1, arg.length() - 1));
-        if (suggestName == null) {
-            return;
-        }
-        Method[] suggestMethod = getSuggestMethodByName(suggestName);
-        UltiToolsPlugin pluginByCommand = UltiTools.getInstance().getCommandManager().getPluginByCommand(command);
-        if (suggestMethod == null || suggestMethod.length == 0) {
-            completions.add(pluginByCommand.i18n(suggestName));
-            return;
-        }
-        Class<?> declaringClass = suggestMethod[0].getDeclaringClass();
-        Collection<?> suggestObject;
-        if (this.getClass() != declaringClass) {
-            Object bean = pluginByCommand.getContext().getBean(declaringClass);
-            suggestObject = invokeSuggestMethod(bean, suggestMethod[0], player, command, strings);
-        } else {
-            suggestObject = invokeSuggestMethod(this, suggestMethod[0], player, command, strings);
-        }
-        if (suggestObject != null) {
-            for (Object o : suggestObject) {
-                completions.add(o.toString());
-            }
-        }
-    }
-
-    /**
-     * Gets the format of the command.
-     * <p>
-     * 获取命令的格式。
-     *
-     * @param method The method that matches the command. <br> 匹配命令的方法。
-     * @return The format of the command. <br> 命令的格式。
-     */
-    private String getFormatByMethod(Method method) {
-        return mappings.inverse().get(method);
-    }
-
-    /**
-     * Gets the argument at the specified index.
-     * <p>
-     * 获取指定索引处的参数。
-     *
-     * @param format The format of the command. <br> 命令的格式。
-     * @param index  The index of the argument. <br> 参数的索引。
-     * @return The argument at the specified index. <br> 指定索引处的参数。
-     */
-    private String getArgAt(String format, int index) {
-        String[] args = format.split(" ");
-        if (args.length <= index) {
-            return "";
-        }
-        return args[index];
-    }
-
-    /**
-     * Gets the suggest method name of the parameter.
-     * <p>
-     * 获取参数的建议方法名称。
-     *
-     * @param method    The method that matches the command. <br> 匹配命令的方法。
-     * @param paramName The name of the parameter. <br> 参数的名称。
-     * @return The suggest method name of the parameter. <br> 参数的建议方法名称。
-     */
-    private String getSuggestName(Method method, String paramName) {
-        Annotation[][] parameterAnnotations = method.getParameterAnnotations();
-        for (Annotation[] annotations : parameterAnnotations) {
-            for (Annotation annotation : annotations) {
-                if (annotation instanceof CmdParam) {
-                    CmdParam cmdParam = (CmdParam) annotation;
-                    if (!paramName.equals(cmdParam.value())) {
-                        continue;
-                    }
-                    return cmdParam.suggest();
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Gets the suggest method array by the suggest method name.
-     * If the suggest method name ends with (), remove ().
-     * Get the suggest method array from the current class first.
-     * If the current class has the CmdSuggest annotation,
-     * get the suggest method array from the CmdSuggest annotation.
-     * <p>
-     * 通过建议方法名称获取建议方法数组。
-     * 如果建议方法名称以()结尾，则去掉()。
-     * 优先从当前类中获取建议方法集合。
-     * 如果当前类上有CmdSuggest注解，则从CmdSuggest注解中获取建议方法集合。
-     *
-     * @param suggestName The name of the suggest method. <br> 建议方法的名称
-     * @return The suggest method array. <br> 建议方法数组
-     */
-    private Method[] getSuggestMethodByName(String suggestName) {
-        if (suggestName.endsWith("()")) {
-            suggestName = suggestName.substring(0, suggestName.length() - 2);
-        }
-        Method[] localSuggestMethod = getMethod(suggestName);
-        if (localSuggestMethod != null && localSuggestMethod.length > 0) return localSuggestMethod;
-        if (this.getClass().isAnnotationPresent(CmdSuggest.class)) {
-            Class<?>[] value = this.getClass().getAnnotation(CmdSuggest.class).value();
-            for (Class<?> clazz : value) {
-                Method[] method = getMethod(clazz, suggestName);
-                if (method != null) {
-                    return method;
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Gets the suggest method array by the suggest method name.
-     * <p>
-     * 通过建议方法名称获取建议方法数组。
-     *
-     * @param suggestName The name of the suggest method. <br> 建议方法的名称
-     * @return The suggest method array. <br> 建议方法数组
-     */
-    @Nullable
-    private Method[] getMethod(String suggestName) {
-        return getMethod(this.getClass(), suggestName);
-    }
-
-    /**
-     * Gets the suggest method array by the suggest method name from another class.
-     * <p>
-     * 从另一个类中通过方法名称获取方法数组。
-     *
-     * @param clazz       The class of the suggest method. <br> 建议方法的类
-     * @param suggestName The name of the suggest method. <br> 建议方法的名称
-     * @return The suggest method array. <br> 建议方法数组
-     */
-    @Nullable
-    private Method[] getMethod(Class<?> clazz, String suggestName) {
-        return ReflectionUtil.getMethods(clazz, method -> method.getName().equals(suggestName));
-    }
-
-    /**
-     * Invokes the suggest method. Inject parameters by parameter type.
-     * <p>
-     * 调用建议方法。按照参数类型注入参数。
-     *
-     * @param object  The object that the method is invoked from. <br> 方法所在的对象。
-     * @param method  The method that is invoked. <br> 被调用的方法。
-     * @param player  The player who will see the suggestions. <br> 看到补全的玩家
-     * @param command The command that was typed in. <br> 需要补全的命令
-     * @param strings The arguments of the command that was typed in. <br> 目前输入的命令参数
-     * @return The return string list of suggestions of the method. <br> 方法的返回字符串列表。
-     */
-    private Collection<?> invokeSuggestMethod(Object object, Method method, Player player, Command command, String[] strings) {
-        Parameter[] parameters = method.getParameters();
-        Object[] params = new Object[parameters.length];
-        for (int i = 0; i < parameters.length; i++) {
-            Parameter parameter = parameters[i];
-            Class<?> type = parameter.getType();
-            if (type.equals(Player.class)) {
-                params[i] = player;
-            } else if (type.equals(Command.class)) {
-                params[i] = command;
-            } else if (type.equals(String[].class)) {
-                params[i] = strings;
-            }
-        }
-        return ReflectionUtil.invoke(object, method, params);
-    }
-
-    /**
-     * Gets the methods that match the command.
-     * Get the perfect match method first.
-     * If there is no perfect match method, get the partial match method.
-     * If there is no perfect match method and partial match method, return an empty list.
-     * If there is a perfect match method, only return the perfect match method.
-     * <p>
-     * 获取匹配命令的方法。
-     * 优先获取完全匹配的方法，如果没有完全匹配的方法，则获取部分匹配的方法。
-     * 如果没有完全匹配的方法和部分匹配的方法，则返回空列表。
-     * 如果有完全匹配的方法，则只返回完全匹配的方法。
-     *
-     * @param player  The player who will see the suggestions. <br> 看到补全的玩家
-     * @param command The command that was typed in. <br> 需要补全的命令
-     * @return The suggestions. <br> 补全的建议
-     */
-    private List<Method> getMethodsByArg(Player player, String command) {
-        List<Method> perfectMatch = new ArrayList<>();
-        List<Method> methods = new ArrayList<>();
-        for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-            Method method = entry.getValue();
-            String format = entry.getKey();
-            if (format.startsWith(command.substring(0, command.lastIndexOf(" ")))) {
-                if (CommandTabCompletionDispatch.checkPermission(player, method)
-                            && CommandTabCompletionDispatch.checkOp(player, method)) {
-                    perfectMatch.add(method);
-                }
-            } else {
-                String[] formatArgs = format.split(" ");
-                String[] commandArgs = command.split(" ");
-                boolean match = true;
-                for (int i = 0; i < Math.min(commandArgs.length, formatArgs.length); i++) {
-                    if (!matchesArgument(formatArgs[i], commandArgs[i])) {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match) {
-                    if (CommandTabCompletionDispatch.checkPermission(player, method)
-                                && CommandTabCompletionDispatch.checkOp(player, method)) {
-                        methods.add(method);
-                    }
-                }
-            }
-        }
-        if (!perfectMatch.isEmpty()) {
-            return perfectMatch;
-        } else {
-            return methods;
-        }
+        return CommandTabCompletionDispatch.suggest(mappings, player, command, strings, this);
     }
 
     /**
