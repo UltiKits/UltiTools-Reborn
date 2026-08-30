@@ -20,6 +20,7 @@
   "请先等待上一条命令执行完毕！": "Please wait for last Command Processing!",
   "请先等待其他玩家发送的命令执行完毕！": "Please wait for last Command Processing which sent by other players!",
   "操作频繁，请稍后再试": "Frequent operations, please try again later",
+  "操作频繁，请 %d 秒后再试": "Frequent operations, please try again in %d seconds",
   "参数 '%s' 格式错误：'%s' 不是一个有效的 %s 类型": "Parameter '%s' has a formatting error: '%s' is not a valid %s type.",
   "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n/ul list 查看已加载的模块列表\n================": "=== UltiTools Commands ===\n/ul reload Reload all modules\n/ul reload <name> Reload a specific module\n/ul list Check loaded module list\n================",
   "模块 %s 已重载": "§aModule %s has been reloaded",
