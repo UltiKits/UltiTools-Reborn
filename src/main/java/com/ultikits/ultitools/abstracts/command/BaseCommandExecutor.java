@@ -717,30 +717,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @return list of suggestions
      */
     protected List<String> suggest(Player player, Command command, String[] args) {
-        List<String> suggestions = new ArrayList<>();
-
-        if (args.length == 1) {
-            // First argument - suggest command formats. Gated BEFORE a mapping's first token can
-            // enter the list -- a mapping the player lacks permission for (or that requires OP)
-            // contributes nothing at all, not an empty entry (T-05-20 / D-06 Task 1). Relocated
-            // from the deprecated AbstractCommandExecutor.suggest, not reimplemented.
-            for (Map.Entry<String, Method> entry : mappings.entrySet()) {
-                Method method = entry.getValue();
-                if (!CommandTabCompletionDispatch.checkPermission(player, method)
-                        || !CommandTabCompletionDispatch.checkOp(player, method)) {
-                    continue;
-                }
-                String[] formatArgs = entry.getKey().split(" ");
-                if (formatArgs.length > 0) {
-                    String firstArg = formatArgs[0];
-                    if (!isParameter(firstArg) && firstArg.toLowerCase().startsWith(args[0].toLowerCase())) {
-                        suggestions.add(firstArg);
-                    }
-                }
-            }
-        }
-
-        return suggestions;
+        return CommandTabCompletionDispatch.suggest(mappings, player, command, args, this);
     }
     
     /**
