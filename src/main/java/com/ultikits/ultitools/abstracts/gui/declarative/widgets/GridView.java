@@ -147,40 +147,19 @@ public class GridView<T> extends Widget {
         /**
          * 设置数据列表和构建器函数。
          * <p>
-         * 会自动将数据转换为 Widget，并计算位置。
+         * 数据被转换为 Widget 后原样加入子列表；位置不再在这里计算 -- 从 6.3.0 起，位置由
+         * {@link GridViewElement} 在渲染时作为 parent data 写入（D-11），对任何 Widget 类型
+         * 一视同仁，不再只为 {@link ItemDisplay} 特殊处理。
          *
          * @param items       数据列表
          * @param itemBuilder 构建器函数
          * @return Builder
          */
         public Builder<T> items(@NotNull List<T> items, @NotNull Function<T, Widget> itemBuilder) {
-            for (int i = 0; i < items.size(); i++) {
-                T item = items.get(i);
-                Widget widget = itemBuilder.apply(item);
-                
-                // 如果是 ItemDisplay，自动设置槽位
-                if (widget instanceof ItemDisplay) {
-                    ItemDisplay display = (ItemDisplay) widget;
-                    int slot = calculateSlot(i);
-                    // 重建 ItemDisplay 并设置槽位
-                    widget = ItemDisplay.builder(display.getItemStack())
-                            .slot(slot)
-                            .name(display.getDisplayName())
-                            .lore(display.getLore())
-                            .onClick(display.getClickHandler())
-                            .key(display.getKey() != null ? display.getKey() : SlotKey.of("item-" + i))
-                            .build();
-                }
-                
-                this.children.add(widget);
+            for (T item : items) {
+                this.children.add(itemBuilder.apply(item));
             }
             return this;
-        }
-
-        private int calculateSlot(int index) {
-            int row = index / columns;
-            int col = index % columns;
-            return SlotUtils.toSlotIndex(startSlot, row, col);
         }
 
         public Builder<T> key(@Nullable SlotKey key) {
