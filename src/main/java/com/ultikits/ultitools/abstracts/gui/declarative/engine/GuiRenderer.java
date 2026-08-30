@@ -51,7 +51,9 @@ public class GuiRenderer {
     @Nullable
     private BuildContext rootContext;
 
-    // 槽位到点击处理器的映射
+    // 槽位到点击处理器的映射——键是"顶部 GUI 内的槽位索引"，与 handleClick() 里
+    // event.getRawSlot() 越界检查通过后使用的键是同一个空间（D-09 item 4）。这是槽位归属的
+    // 唯一记录：不存在第二份用 event.getSlot() 直接查、可能与这里漂移的映射。
     private final Map<Integer, Consumer<InventoryClickEvent>> clickHandlers = new HashMap<>();
 
     /**
@@ -282,12 +284,36 @@ public class GuiRenderer {
 
     /**
      * 处理点击事件。
+     * <p>
+     * D-09 item 4：obliviate-invs 的 {@code InvListener.onClick} 在应用它自己的
+     * {@code getRawSlot()} 判断之前，就无条件调用了 {@code Gui.onClick(event)}（即
+     * {@link DeclarativeGui#onClick}，它转发到这里）——这是从 jar 的字节码里确认的，不是推测。
+     * 也就是说这个方法会看到<b>每一次</b>点击，包括玩家点击自己背包的情形，不能假设库已经
+     * 帮忙过滤过了。
+     * <p>
+     * 这里使用 {@link InventoryClickEvent#getRawSlot()} 而不是 {@link InventoryClickEvent#getSlot()}
+     * 做越界检查：{@code getRawSlot()} 是相对于整个组合视图（顶部 GUI + 玩家背包）的绝对索引，
+     * 顶部 GUI 占据 {@code [0, gui.getSize())}，玩家自己的背包则从 {@code gui.getSize()} 开始；
+     * 而 {@code getSlot()} 是相对于"被点击的那个 Inventory"各自独立编号的——顶部 GUI 和玩家背包
+     * 会各自从 0 开始计数，于是同一个数值（比如 4）可能同时是 GUI 的第 4 格、也是玩家背包的第 4
+     * 格。点击窗口外部（比如把物品丢在窗口外）时，Bukkit 报告的 rawSlot 是 -999，同样会被这里
+     * 的越界检查拒绝，不会抛异常。
+     * <p>
+     * {@link #clickHandlers} 是这次点击路由的唯一记录——它由 {@link #updateClickHandlers} 用
+     * {@code RenderNode.getSlotIndex()}（同一个"顶部 GUI 内的槽位"编号空间）填充，这里用同一个
+     * 空间去查，不存在第二份可能漂移的记录。
      *
      * @param event 点击事件
      */
     public void handleClick(@NotNull InventoryClickEvent event) {
-        int slot = event.getSlot();
-        Consumer<InventoryClickEvent> handler = clickHandlers.get(slot);
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= gui.getSize()) {
+            // 越界：玩家点击了自己的背包，或者点在了整个窗口外面（rawSlot == -999）。
+            // 两种情况都不派发，也不抛异常。
+            return;
+        }
+
+        Consumer<InventoryClickEvent> handler = clickHandlers.get(rawSlot);
         if (handler != null) {
             handler.accept(event);
         }
