@@ -3,7 +3,10 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.annotations.PlayerCache;
+import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
@@ -25,15 +28,37 @@ import java.util.concurrent.TimeUnit;
  * @version 2.0.0
  * @since 6.2.0
  */
-public class CooldownValidator implements CommandValidator {
-    
+public class CooldownValidator implements CommandValidator, PlayerCacheManager.ExpiringPlayerCache,
+        PlayerCacheSaver {
+
     private static final int ORDER = 300;
-    
+
     /**
      * Map of player UUID -> (method name -> cooldown end timestamp)
+     * <p>
+     * {@code saveBeforeRemove = true} so {@link #savePlayerData(UUID)} -- which delegates to
+     * the pre-existing {@link #clearCooldowns(UUID)} -- fires on quit; see that method's
+     * javadoc for why (GEN-08, D-03).
      */
+    @PlayerCache(saveBeforeRemove = true)
     private final Map<UUID, Map<String, Long>> cooldowns = new ConcurrentHashMap<>();
-    
+
+    /**
+     * True once this instance has registered {@link #cooldowns} with the live {@link
+     * PlayerCacheManager} for quit-based and time-based sweeping (GEN-08, D-03).
+     * <p>
+     * Set from {@link #validate(CommandContext)} -- the first production call this validator
+     * receives after construction -- rather than from the constructor: a bare {@code new
+     * CooldownValidator()} (the shape a unit test, or {@code BaseCommandExecutor}'s own
+     * constructor, uses) must never even attempt contact with a core plugin that may not exist
+     * yet. Guarding on a live {@link UltiTools#getInstance()} rather than an unconditional
+     * "did I try" flag means a first attempt made before the core plugin is up is retried on
+     * the next call instead of being permanently abandoned -- {@link PlayerCacheManager#tryRegister}
+     * is itself idempotent per instance, so a redundant retry after the flag is already true is
+     * simply never made.
+     */
+    private volatile boolean playerCacheRegistered = false;
+
     private final int defaultCooldownSeconds;
     
     /**
@@ -56,6 +81,8 @@ public class CooldownValidator implements CommandValidator {
     
     @Override
     public ValidationResult validate(CommandContext context) {
+        ensurePlayerCacheRegistered();
+
         if (!context.isPlayer()) {
             return ValidationResult.success();
         }
@@ -143,6 +170,53 @@ public class CooldownValidator implements CommandValidator {
     @Override
     public void onComplete(CommandContext context, boolean commandSucceeded) {
         applyCooldown(context);
+    }
+
+    /**
+     * Attempts lazy first-use registration of this instance with the live {@link
+     * PlayerCacheManager} singleton. Safe to call unconditionally on every {@link
+     * #validate(CommandContext)} invocation: a no-op once {@link #playerCacheRegistered} is
+     * true, and a cheap, safely-no-op-on-failure retry otherwise (see that field's javadoc).
+     */
+    private void ensurePlayerCacheRegistered() {
+        if (playerCacheRegistered || UltiTools.getInstance() == null) {
+            return;
+        }
+        PlayerCacheManager.tryRegister(this);
+        playerCacheRegistered = true;
+    }
+
+    /**
+     * {@link PlayerCacheManager.ExpiringPlayerCache} opt-in: delegates to the pre-existing
+     * {@link #cleanupExpired()} time-based half. Invoked once per {@link
+     * PlayerCacheManager#sweepExpiredEntries()} pass -- the periodic sweep this instance only
+     * receives once registered (see {@link #ensurePlayerCacheRegistered()}) -- independently of
+     * whether any player has quit (GEN-08, D-03).
+     *
+     * @since 6.3.0
+     */
+    @Override
+    public void sweepExpired() {
+        cleanupExpired();
+    }
+
+    /**
+     * {@link PlayerCacheSaver} hook: fired by {@link PlayerCacheManager#onPlayerQuit(UUID)}
+     * ("the quit sweep") for the quitting player -- before the generic {@code @PlayerCache}
+     * field sweep removes the (by then already-empty) {@link #cooldowns} entry. Delegates to
+     * the pre-existing {@link #clearCooldowns(UUID)} rather than re-deriving its predicate,
+     * giving that previously zero-caller method a real, quit-path-reached production call site
+     * (GEN-08). The interface is named for persistence, but its contract is simply "run this
+     * before the generic removal" -- there is nothing here to persist, and reusing the hook for
+     * an idempotent, already-correct cleanup method is the same predicate the generic sweep
+     * would otherwise perform standalone.
+     *
+     * @param playerId the UUID of the player quitting
+     * @since 6.3.0
+     */
+    @Override
+    public void savePlayerData(UUID playerId) {
+        clearCooldowns(playerId);
     }
 
     /**

@@ -31,6 +31,7 @@ import com.ultikits.ultitools.abstracts.command.validation.validators.Permission
 import com.ultikits.ultitools.abstracts.command.validation.validators.SenderTypeValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
 import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
+import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -39,6 +40,7 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -157,10 +159,40 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         // Add cooldown and lock validators
         builder.add(cooldownValidator);
         builder.add(lockValidator);
-        
+
         return builder.build();
     }
-    
+
+    /**
+     * Releases {@link #cooldownValidator}/{@link #lockValidator} from {@link
+     * PlayerCacheManager} tracking and bulk-clears {@link UsageLockValidator}'s locks when this
+     * executor is torn down (module unload).
+     * <p>
+     * Reached through the framework's EXISTING {@code @PreDestroy} container lifecycle --
+     * {@code PluginManager.unregister(plugin)} already calls {@code plugin.getContext().close()},
+     * which invokes every singleton bean's {@code @PreDestroy} methods -- rather than a second,
+     * purpose-built unload hook (GEN-08, D-03). {@link #cooldownValidator}/{@link #lockValidator}
+     * are registered with {@link PlayerCacheManager} SEPARATELY from this executor bean itself
+     * (their sweepable state lives on them, not on this class), so the pre-existing per-bean
+     * {@code playerCacheManager.unregisterBean(bean)} loop already in {@code
+     * PluginManager.unregister(...)} -- which only ever sees the beans a plugin's own container
+     * constructed -- never reaches them on its own; this hook is what does.
+     * <p>
+     * {@link UsageLockValidator#clearAllLocks()} has no per-player analogue and, unlike {@link
+     * UsageLockValidator#clearPlayerLocks(java.util.UUID)}/{@link
+     * CooldownValidator#clearCooldowns(java.util.UUID)}, no quit-path call site either (GEN-08)
+     * -- module unload is the correct point to bulk-release whatever this specific executor
+     * instance's locks still held at teardown.
+     *
+     * @since 6.3.0
+     */
+    @PreDestroy
+    private void unregisterValidatorsFromPlayerCache() {
+        PlayerCacheManager.tryUnregister(cooldownValidator);
+        PlayerCacheManager.tryUnregister(lockValidator);
+        lockValidator.clearAllLocks();
+    }
+
     /**
      * Scans methods for command mappings.
      * 扫描方法以获取命令映射。

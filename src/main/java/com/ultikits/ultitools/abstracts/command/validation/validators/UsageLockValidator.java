@@ -3,7 +3,10 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.annotations.PlayerCache;
+import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 
@@ -41,20 +44,38 @@ import java.util.concurrent.ConcurrentHashMap;
  * @version 2.0.0
  * @since 6.2.0
  */
-public class UsageLockValidator implements CommandValidator {
-    
+public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
+
     private static final int ORDER = 250;
-    
+
     /**
      * Locks per sender: player UUID -> set of locked method keys
+     * <p>
+     * {@code saveBeforeRemove = true} so {@link #savePlayerData(UUID)} -- which delegates to
+     * the pre-existing {@link #clearPlayerLocks(UUID)}, clearing BOTH this field and {@link
+     * #serverLocks} in one call -- fires exactly once per quit (GEN-08, D-03). {@link
+     * #serverLocks} deliberately does NOT also carry {@code saveBeforeRemove = true}: doing so
+     * would fire {@link #savePlayerData(UUID)} a second, redundant time per quit.
      */
+    @PlayerCache(saveBeforeRemove = true)
     private final Map<UUID, Set<String>> senderLocks = new ConcurrentHashMap<>();
-    
+
     /**
      * Server-wide locks: method key -> locking player UUID
      */
+    @PlayerCache
     private final Map<String, UUID> serverLocks = new ConcurrentHashMap<>();
-    
+
+    /**
+     * True once this instance has registered {@link #senderLocks}/{@link #serverLocks} with the
+     * live {@link PlayerCacheManager} for quit-based sweeping (GEN-08, D-03). Set lazily from
+     * {@link #validate(CommandContext)} rather than the constructor, mirroring {@code
+     * CooldownValidator}'s identical field of the same name and rationale: a bare {@code new
+     * UsageLockValidator()} must never attempt contact with a core plugin that may not exist
+     * yet, and a failed attempt is retried on the next call rather than permanently abandoned.
+     */
+    private volatile boolean playerCacheRegistered = false;
+
     /**
      * Validates -- and, per the acquire-then-execute contract on this class, ATTEMPTS TO
      * ACQUIRE -- the lock for this invocation. Delegates entirely to {@link #acquireLock(CommandContext)}:
@@ -70,6 +91,8 @@ public class UsageLockValidator implements CommandValidator {
      */
     @Override
     public ValidationResult validate(CommandContext context) {
+        ensurePlayerCacheRegistered();
+
         if (acquireLock(context)) {
             return ValidationResult.success();
         }
@@ -112,6 +135,39 @@ public class UsageLockValidator implements CommandValidator {
     @Override
     public void onComplete(CommandContext context, boolean commandSucceeded) {
         releaseLock(context);
+    }
+
+    /**
+     * Attempts lazy first-use registration of this instance with the live {@link
+     * PlayerCacheManager} singleton. Safe to call unconditionally on every {@link
+     * #validate(CommandContext)} invocation: a no-op once {@link #playerCacheRegistered} is
+     * true, and a cheap, safely-no-op-on-failure retry otherwise (see that field's javadoc).
+     */
+    private void ensurePlayerCacheRegistered() {
+        if (playerCacheRegistered || UltiTools.getInstance() == null) {
+            return;
+        }
+        PlayerCacheManager.tryRegister(this);
+        playerCacheRegistered = true;
+    }
+
+    /**
+     * {@link PlayerCacheSaver} hook: fired by {@link PlayerCacheManager#onPlayerQuit(UUID)}
+     * ("the quit sweep") for the quitting player -- before the generic {@code @PlayerCache}
+     * field sweep removes the (by then already-empty) {@link #senderLocks}/{@link #serverLocks}
+     * entries. Delegates to the pre-existing {@link #clearPlayerLocks(UUID)} rather than
+     * re-deriving its predicate -- the SAME predicate {@code PlayerCacheManager}'s own
+     * value-side sweep branch was built from -- giving that previously zero-caller method a
+     * real, quit-path-reached production call site (GEN-08). Only {@link #senderLocks} carries
+     * {@code saveBeforeRemove = true}, so this fires exactly once per quit despite clearing both
+     * maps.
+     *
+     * @param playerId the UUID of the player quitting
+     * @since 6.3.0
+     */
+    @Override
+    public void savePlayerData(UUID playerId) {
+        clearPlayerLocks(playerId);
     }
 
     /**
