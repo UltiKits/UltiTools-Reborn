@@ -6,6 +6,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -46,6 +47,7 @@ import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
@@ -54,6 +56,7 @@ import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -1821,6 +1824,10 @@ public class PluginManager {
                 throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
                         unenforceableCommandAnnotationMessage(executorClass, method, UsageLimit.class, UsageLockValidator.class));
             }
+            // D-07 / 05-06 Task 2: same walk, same method -- checked alongside the two rules
+            // above rather than in a second pass over ReflectionUtil.getAllMethods, so the two
+            // rules' ordering stays in one place.
+            validateSuggestKeysForMethod(executorClass, method);
         }
     }
 
@@ -1847,6 +1854,71 @@ public class PluginManager {
                 + requiredValidatorType.getSimpleName() + " -- the annotation would be silently unenforced. "
                 + "Add " + requiredValidatorType.getSimpleName()
                 + " to createDefaultValidatorChain() or the ValidatorChain passed to the constructor.";
+    }
+
+    /**
+     * Validate constructor arguments for security.
+    /**
+     * D-07's load-time half of {@code @CmdParam.suggest} (05-06 Task 2) -- for {@code method}'s
+     * {@code @CmdParam} parameters, a {@code suggest()} value beginning with {@code @} must name a
+     * key already registered in {@link TabCompletionManager} at the moment this check runs, i.e.
+     * AFTER the module's own {@code pluginContext.refresh()} (and therefore after any completer the
+     * module registers during its own {@code @PostConstruct}). Called from inside {@link
+     * #validateCommandExecutorContract(BaseCommandExecutor)}'s existing {@code @CmdMapping} method
+     * walk -- not a second pass -- so the two checks' ordering stays in one place (D-01, D-04, D-07).
+     * <p>
+     * A {@code suggest()} value that does NOT start with {@code @} is out of scope here entirely --
+     * including one naming a method that does not exist -- because that case keeps the published
+     * i18n hint-text fallback ({@code CmdParam.java}'s javadoc), which D-07 leaves deliberately
+     * unchanged. No opt-out (D-04): an unknown {@code @key} is always a module-author bug, and
+     * module-granularity isolation -- this refusal alone fails the offending module, every other
+     * module in the same load pass still completes -- is the accepted escape hatch.
+     * <p>
+     * D-07 拒绝加载：
+     * 对 {@code method} 的每个 {@code @CmdParam} 参数，如果 {@code suggest()} 以 {@code @} 开头，
+     * 就要求该键此刻已在 {@link TabCompletionManager} 中注册——即在模块自身的
+     * {@code pluginContext.refresh()} 之后（因此也在模块自己 {@code @PostConstruct} 期间注册的任何
+     * 补全器之后）。
+     *
+     * @param executorClass the executor class {@code method} belongs to, for the refusal message
+     *                      <br> {@code method} 所属的执行器类，用于构造拒绝信息
+     * @param method        the {@code @CmdMapping} method whose parameters are checked
+     *                      <br> 要检查其参数的 {@code @CmdMapping} 方法
+     * @throws PluginModuleException fail-closed (D-07), naming the class, the method and the key
+     */
+    private static void validateSuggestKeysForMethod(Class<?> executorClass, Method method) {
+        for (Parameter parameter : method.getParameters()) {
+            CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+            if (cmdParam == null) {
+                continue;
+            }
+            String suggest = cmdParam.suggest();
+            if (suggest.isEmpty() || suggest.charAt(0) != '@') {
+                continue;
+            }
+            if (TabCompletionManager.getInstance().getCompleter(suggest) == null) {
+                throw new PluginModuleException(ErrorCode.COMMAND_SUGGEST_KEY_UNKNOWN,
+                        unknownSuggestKeyMessage(executorClass, method, suggest));
+            }
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateSuggestKeysForMethod(Class, Method)}, naming
+     * the offending class, method and key -- mirroring {@link
+     * #unenforceableCommandAnnotationMessage(Class, Method, Class, Class)}'s message-builder shape.
+     *
+     * @param executorClass the offending executor class <br> 问题执行器类
+     * @param method        the offending mapping method <br> 问题映射方法
+     * @param key           the unknown {@code @key} <br> 未知的 {@code @key}
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String unknownSuggestKeyMessage(Class<?> executorClass, Method method, String key) {
+        return "Command executor '" + executorClass.getName() + "' declares @CmdParam(suggest = \""
+                + key + "\") on method '" + method.getName() + "', but no completer is registered "
+                + "under that key. Register a completer for '" + key + "' via "
+                + "TabCompletionManager.getInstance().register(...) before this module loads, or fix "
+                + "the typo -- an unknown @key does not fall back to the i18n hint text (D-07).";
     }
 
     /**

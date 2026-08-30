@@ -47,6 +47,7 @@ public enum ErrorCode {
     COMMAND_PARSE_ERROR(4004, "Command parse error"),
     COMMAND_EXECUTION_FAILED(4005, "Command execution failed"),
     COMMAND_ANNOTATION_UNENFORCEABLE(4006, "Command annotation cannot be enforced by the validator chain"),
+    COMMAND_SUGGEST_KEY_UNKNOWN(4007, "@CmdParam.suggest() references an unknown completer key"),
 
     // ===== Configuration Errors (5000-5999) =====
     CONFIG_ERROR(5000, "Configuration error"),
