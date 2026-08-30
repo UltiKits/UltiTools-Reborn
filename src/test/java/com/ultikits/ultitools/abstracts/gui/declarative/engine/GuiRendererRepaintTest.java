@@ -1,17 +1,23 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.State;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.StatefulWidget;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplay;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplayElement;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.TestHelper;
 
 import mc.obliviate.inventory.Gui;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
@@ -24,6 +30,7 @@ import org.mockbukkit.mockbukkit.ServerMock;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -33,6 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -77,6 +87,11 @@ class GuiRendererRepaintTest {
         server = MockBukkit.mock();
         mockPlugin = MockBukkit.createMockPlugin();
         player = server.addPlayer();
+        // Task 2's tests construct real DeclarativeGui subclasses, whose constructor uses
+        // the default GuiRenderer(gui, player) overload -> new GuiScheduler() ->
+        // UltiTools.getInstance(). Task 1's tests never touch this (they always pass an
+        // explicit GuiScheduler), so this mock is additive and does not affect them.
+        TestHelper.mockUltiToolsInstance();
     }
 
     @AfterEach
@@ -392,4 +407,283 @@ class GuiRendererRepaintTest {
             super(player, id, title, rows);
         }
     }
+
+    // ==================================================================
+    // Task 2: the public entry points (DeclarativeGui / StatefulWidget.State)
+    // carry the supplier all the way through.
+    // ==================================================================
+
+    // ------------------------------------------------------------------
+    // Test 1: the documented ShopPage shape — a DeclarativeGui subclass
+    // deriving its tree from a mutable field repaints when the field
+    // changes and a frame is scheduled.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A DeclarativeGui subclass deriving its tree from a mutable field repaints "
+            + "when the field changes and a frame is scheduled")
+    void declarativeGuiSubclassRepaintsFromMutableField() {
+        FieldDrivenPage page = new FieldDrivenPage(player, 1);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertEquals(Material.DIAMOND, page.getInventory().getItem(0).getType());
+
+        page.material = Material.GOLD_INGOT;
+        page.markNeedsBuild();
+
+        assertEquals(Material.GOLD_INGOT, page.getInventory().getItem(0).getType(),
+                "RED at the start of Task 2: DeclarativeGui.onOpen() used to call "
+                        + "renderer.initialize(build(context), context) with a one-shot Widget, "
+                        + "so a later field mutation was never re-read.");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 2 (the CounterButton example, root cause of the wiring gap Task 2 closes):
+    // setState inside a StatefulWidget's State produces a repaint reflecting the
+    // new state, with no extra manual scheduleBuild() call from the caller.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("setState inside a StatefulWidget's State produces a repaint reflecting the "
+            + "new state — the CounterButton example, end to end")
+    void setStateInStatefulWidgetProducesRepaint() {
+        CounterPage page = new CounterPage(player, 1);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertEquals("n=0", displayNameAt(page, 0));
+
+        InventoryClickEvent event = mock(InventoryClickEvent.class);
+        when(event.getSlot()).thenReturn(0);
+        page.onClick(event); // fires the button's onClick -> setState(() -> count++)
+
+        assertEquals("n=1", displayNameAt(page, 0),
+                "RED before the fix: State.setState() only bubbles Element.markNeedsBuild() / "
+                        + "markChildNeedsBuild() up to the mounted root, whose default "
+                        + "markChildNeedsBuild() is a no-op when _parent == null (confirmed "
+                        + "empirically: clicking mutated the State's field but the inventory "
+                        + "stayed at 'n=0' with no further scheduleBuild() call from the "
+                        + "caller). GuiRenderer must register itself as the root's build "
+                        + "scheduler so this bubbling actually reaches performBuild().");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 3: build(BuildContext) is invoked again on each frame, not once at open.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("build(BuildContext) is invoked again on each frame, not once at open")
+    void buildIsInvokedOnEachFrameNotJustOnce() throws InterruptedException {
+        AtomicInteger buildCount = new AtomicInteger(0);
+        CountingPage page = new CountingPage(player, 1, buildCount);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertEquals(1, buildCount.get(), "opening the page must call build() exactly once");
+
+        // GuiScheduler's real 16ms frame-coalescing window applies here — DeclarativeGui
+        // always builds its own GuiRenderer with the default scheduler, so give the next
+        // frame room to be treated as a new frame rather than merged into the last one.
+        Thread.sleep(20);
+        page.markNeedsBuild();
+
+        assertEquals(2, buildCount.get(),
+                "a second scheduled frame must call build() again, not reuse the first result");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 4: the supplier runs on the main thread even when setState is called off-thread.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("The supplier is invoked on the main thread even when setState is called off-thread")
+    void supplierRunsOnMainThreadEvenWhenSetStateCalledOffThread() throws InterruptedException {
+        AtomicBoolean sawBuildOnPrimaryThread = new AtomicBoolean(false);
+        ThreadRecordingPage page = new ThreadRecordingPage(player, 1, sawBuildOnPrimaryThread);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertTrue(sawBuildOnPrimaryThread.get(), "the initial build must run on the main thread");
+        sawBuildOnPrimaryThread.set(false);
+
+        Thread worker = new Thread(() -> page.setStateForTest(() -> page.counter++));
+        worker.start();
+        worker.join();
+
+        // setState() off-thread only offers a task to GuiScheduler's queue (it does not, and
+        // must not, run the rebuild on the caller's thread) — advance MockBukkit's scheduler
+        // from the main (test) thread to flush it, mirroring what a real server tick does.
+        server.getScheduler().performTicks(4);
+
+        assertTrue(sawBuildOnPrimaryThread.get(),
+                "the queued rebuild triggered by an off-thread setState() must still execute "
+                        + "on the main thread, never on the caller's thread");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 5: closing and reopening a page produces a correctly-populated inventory.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Closing and reopening a page produces a correctly-populated inventory")
+    void closingAndReopeningProducesCorrectlyPopulatedInventory() {
+        FieldDrivenPage page = new FieldDrivenPage(player, 1);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+        assertEquals(Material.DIAMOND, page.getInventory().getItem(0).getType());
+
+        page.onClose(mock(InventoryCloseEvent.class));
+
+        // A real reopen attaches a fresh Bukkit Inventory — do the same here rather than
+        // reusing the closed one.
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertEquals(Material.DIAMOND, page.getInventory().getItem(0).getType(),
+                "reopening must produce a correctly-populated inventory, not reuse a stale "
+                        + "element tree left over from before dispose()");
+    }
+
+    // ------------------------------------------------------------------
+    // StatefulDeclarativeGui: confirms the SAME fix covers it too, with no further code
+    // change needed there — it never overrides onOpen()/build(), so it inherits Task 2's
+    // DeclarativeGui.onOpen() fix "for free". Its own setState() (business-state, unrelated
+    // to core.State<T extends StatefulWidget>) already called markNeedsBuild() -> 
+    // renderer.scheduleBuild() before this plan; only the supplier wiring was missing.
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("StatefulDeclarativeGui's own setState() also repaints, with no code change "
+            + "needed in StatefulDeclarativeGui itself")
+    void statefulDeclarativeGuiOwnSetStateAlsoRepaints() {
+        CounterStatefulPage page = new CounterStatefulPage(player, 1);
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+
+        assertEquals(Material.DIAMOND, page.getInventory().getItem(0).getType());
+
+        page.bump();
+
+        assertEquals(Material.GOLD_INGOT, page.getInventory().getItem(0).getType());
+    }
+
+    // ------------------------------------------------------------------
+    // Task 2 helper classes
+    // ------------------------------------------------------------------
+
+    private static final class FieldDrivenPage extends DeclarativeGui {
+        volatile Material material = Material.DIAMOND;
+
+        FieldDrivenPage(Player player, int rows) {
+            super(player, "field-driven-page", "Test", rows);
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            return ItemDisplay.builder(new ItemStack(material)).slot(0).build();
+        }
+    }
+
+    private static final class CountingPage extends DeclarativeGui {
+        private final AtomicInteger buildCount;
+
+        CountingPage(Player player, int rows, AtomicInteger buildCount) {
+            super(player, "counting-page", "Test", rows);
+            this.buildCount = buildCount;
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            buildCount.incrementAndGet();
+            return ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
+        }
+    }
+
+    private static final class ThreadRecordingPage extends DeclarativeGui {
+        private final AtomicBoolean sawBuildOnPrimaryThread;
+        volatile int counter = 0;
+
+        ThreadRecordingPage(Player player, int rows, AtomicBoolean sawBuildOnPrimaryThread) {
+            super(player, "thread-recording-page", "Test", rows);
+            this.sawBuildOnPrimaryThread = sawBuildOnPrimaryThread;
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            sawBuildOnPrimaryThread.set(Bukkit.isPrimaryThread());
+            return ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).lore("n=" + counter).build();
+        }
+
+        void setStateForTest(Runnable action) {
+            setState(action);
+        }
+    }
+
+    /**
+     * The CounterButton example from root {@code CLAUDE.md}'s "Declarative GUI" section,
+     * as a {@link DeclarativeGui} page: a {@link StatefulWidget} at the root whose
+     * {@link State} increments a counter on click.
+     */
+    private static final class CounterPage extends DeclarativeGui {
+        CounterPage(Player player, int rows) {
+            super(player, "counter-page", "Test", rows);
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            return new CounterWidget();
+        }
+    }
+
+    private static final class CounterWidget extends StatefulWidget {
+        @Override
+        public State<? extends StatefulWidget> createState() {
+            return new CounterState();
+        }
+    }
+
+    private static final class CounterState extends State<CounterWidget> {
+        private int count = 0;
+
+        @Override
+        public Widget build(BuildContext context) {
+            return TextButton.builder()
+                    .text("n=" + count)
+                    .slot(0)
+                    .onClick(() -> setState(() -> count++))
+                    .build();
+        }
+    }
+
+    /**
+     * {@link StatefulDeclarativeGui} analog of {@link FieldDrivenPage} — exercises its OWN
+     * {@code setState(Runnable)} (business state, unrelated to {@code core.State<T>}).
+     */
+    private static final class CounterStatefulPage
+            extends StatefulDeclarativeGui<CounterStatefulPage.PageState> {
+
+        CounterStatefulPage(Player player, int rows) {
+            super(player, "counter-stateful-page", "Test", rows);
+        }
+
+        @Override
+        protected PageState createState() {
+            return new PageState();
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            return ItemDisplay.builder(new ItemStack(getState().material)).slot(0).build();
+        }
+
+        void bump() {
+            getState().setState(() -> getState().material = Material.GOLD_INGOT);
+        }
+
+        final class PageState extends StatefulDeclarativeGui<PageState>.State {
+            Material material = Material.DIAMOND;
+        }
+    }
+
 }
