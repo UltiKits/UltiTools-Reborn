@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands.tabcomplete;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -9,6 +10,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
+
+import com.ultikits.ultitools.annotations.command.CmdParam;
 
 /**
  * Central manager for tab completion functionality.
@@ -174,7 +177,82 @@ public class TabCompletionManager {
         // Try method invocation completer
         return methodCompleter.complete(context);
     }
-    
+
+    /**
+     * Resolves suggestions using an explicitly-resolved {@code @CmdParam.suggest()} value,
+     * rather than {@code context}'s {@link TabCompletionContext#getParameterName()} -- which
+     * carries {@code @CmdParam.value()}, the parameter's DISPLAY NAME, not its suggestion
+     * (05-06 / D-07 Pitfall 2, T-05-28). {@link #suggest(TabCompletionContext)} above is left
+     * untouched for existing callers; this overload is the dual-notation entry point a caller
+     * that has already resolved the real {@code suggest()} value (see {@link
+     * #resolveSuggestValue(Method, String)}) should use instead.
+     * <p>
+     * A {@code resolvedSuggest} beginning with {@code @} resolves as a built-in or registered
+     * completer key. Any other value -- including {@code null} or empty -- falls through to the
+     * existing method-invocation completer (and its i18n hint-text fallback), unchanged.
+     * <p>
+     * 使用一个显式解析出的 {@code @CmdParam.suggest()} 值来生成建议，而不是 {@code context} 的
+     * {@link TabCompletionContext#getParameterName()}——后者携带的是 {@code @CmdParam.value()}，
+     * 即参数的显示名，而不是它的补全建议（05-06 / D-07 陷阱2, T-05-28）。
+     *
+     * @param context         the completion context <br> 补全上下文
+     * @param resolvedSuggest the already-resolved {@code @CmdParam.suggest()} string for the
+     *                        parameter being completed; may be {@code null} or empty
+     *                        <br> 已解析出的 {@code @CmdParam.suggest()} 字符串；可以为
+     *                        {@code null} 或空
+     * @return the suggestions; never null <br> 建议列表；永不为 null
+     * @since 6.3.0
+     */
+    public List<String> suggest(TabCompletionContext context, String resolvedSuggest) {
+        if (context == null) {
+            return Collections.emptyList();
+        }
+
+        if (resolvedSuggest != null && resolvedSuggest.startsWith("@")) {
+            TabCompleter completer = completers.get(resolvedSuggest);
+            if (completer != null) {
+                return completer.complete(context);
+            }
+            return Collections.emptyList();
+        }
+
+        return methodCompleter.complete(context);
+    }
+
+    /**
+     * Resolves {@code matchedMethod}'s {@code @CmdParam.suggest()} value for the parameter whose
+     * {@code @CmdParam.value()} equals {@code parameterName} -- i.e. it keys the lookup off the
+     * parameter's DISPLAY NAME to find the right parameter, then returns that parameter's
+     * suggestion, never the display name itself (05-06 / D-07). This mirrors {@code
+     * MethodInvocationCompleter.getSuggestName}'s existing lookup shape so the two stay
+     * consistent, without depending on that private method directly.
+     * <p>
+     * 解析 {@code matchedMethod} 中 {@code @CmdParam.value()} 等于 {@code parameterName} 的那个
+     * 参数的 {@code @CmdParam.suggest()} 值。
+     *
+     * @param matchedMethod the matched {@code @CmdMapping} method, or {@code null}
+     *                      <br> 匹配到的 {@code @CmdMapping} 方法，可以为 {@code null}
+     * @param parameterName the parameter's display name ({@code @CmdParam.value()}) to look up
+     *                      <br> 要查找的参数显示名（{@code @CmdParam.value()}）
+     * @return the resolved {@code suggest()} value, or {@code null} if {@code matchedMethod} is
+     *         {@code null} or no parameter's {@code value()} matches {@code parameterName}
+     *         <br> 解析出的 {@code suggest()} 值；若 {@code matchedMethod} 为 {@code null} 或没有
+     *         参数的 {@code value()} 匹配 {@code parameterName}，则为 {@code null}
+     * @since 6.3.0
+     */
+    public static String resolveSuggestValue(Method matchedMethod, String parameterName) {
+        if (matchedMethod == null || parameterName == null) {
+            return null;
+        }
+        for (Parameter parameter : matchedMethod.getParameters()) {
+            CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+            if (cmdParam != null && parameterName.equals(cmdParam.value())) {
+                return cmdParam.suggest();
+            }
+        }
+        return null;
+    }
+
     /**
      * Suggests completions for a specific parameter type.
      * 为特定参数类型建议补全。

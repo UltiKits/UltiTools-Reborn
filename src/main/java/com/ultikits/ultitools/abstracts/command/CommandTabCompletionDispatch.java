@@ -48,9 +48,12 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
  * AOP-proxied executor's suggestion method resolves correctly; the deprecated class's own eight
  * private reflection helpers did not.
  * <p>
- * {@code @key} notation (a {@code suggest()} value starting with {@code @}) is deliberately NOT
- * wired here -- plan 05-06 owns that branch (D-07). Until then, method-name resolution and the
- * i18n hint fallback are the only two behaviours the parameter-slot path delivers.
+ * {@code @key} notation (a {@code suggest()} value starting with {@code @}) resolves through
+ * {@link TabCompletionManager#resolveSuggestValue(Method, String)} +
+ * {@link TabCompletionManager#suggest(TabCompletionContext, String)} (05-06 / D-07) -- driven by
+ * the parameter's actual {@code @CmdParam.suggest()}, never by {@code parameterName} (the
+ * display name), so a display name that happens to start with {@code @} is never mistaken for a
+ * completer key.
  * <p>
  * 由两代命令执行器共用的单一 Tab 补全分发实现（WIRE-01 / D-06）。
  *
@@ -179,7 +182,11 @@ public final class CommandTabCompletionDispatch {
                 .parameterName(parameterName)
                 .executorInstance(executorInstance)
                 .build();
-        return TabCompletionManager.getInstance().suggest(context);
+        // Resolved from @CmdParam.suggest() -- NOT from parameterName (@CmdParam.value(), the
+        // display name) -- so a display name starting with "@" is never mistaken for a
+        // completer key (05-06 / D-07 Pitfall 2, T-05-28).
+        String resolvedSuggest = TabCompletionManager.resolveSuggestValue(method, parameterName);
+        return TabCompletionManager.getInstance().suggest(context, resolvedSuggest);
     }
 
     /**
