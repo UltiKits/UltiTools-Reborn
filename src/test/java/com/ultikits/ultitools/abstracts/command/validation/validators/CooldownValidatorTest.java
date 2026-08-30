@@ -107,6 +107,43 @@ class CooldownValidatorTest {
         public void methodWithOwnCooldownOverride() { /* Test stub */ }
     }
 
+    /**
+     * WR-02 (05-REVIEW.md) fixtures: a concrete executor SUBCLASS inheriting an unoverridden
+     * {@code @CmdMapping}-shaped method from a superclass -- {@code sharedMethod()}'s
+     * declaring class is always {@code SharedCooldownMappingBase}, regardless of which
+     * concrete subclass below is used to build the context.
+     */
+    static class SharedCooldownMappingBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    // Combo 1 (the WR-02 broken case): @CmdCD ONLY on the concrete subclass.
+    @CmdCD(20)
+    static class ConcreteSubclassOnlyCooldownFixture extends SharedCooldownMappingBase {
+        // inherits sharedMethod(); only this subclass carries @CmdCD
+    }
+
+    // Combo 2: @CmdCD ONLY on the declaring superclass -- pre-WR-02 behaviour, must stay unchanged.
+    @CmdCD(15)
+    static class DeclaringSuperclassCooldownBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    static class ConcreteSubclassNoOwnCooldownFixture extends DeclaringSuperclassCooldownBase {
+        // inherits sharedMethod() and the superclass's @CmdCD; declares none of its own
+    }
+
+    // Combo 3: BOTH levels carry @CmdCD with DIFFERENT values -- the concrete subclass must win.
+    @CmdCD(15)
+    static class BothLevelsSuperclassCooldownBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    @CmdCD(20)
+    static class BothLevelsConcreteSubclassCooldownFixture extends BothLevelsSuperclassCooldownBase {
+        // inherits sharedMethod(); both this class and its superclass carry @CmdCD
+    }
+
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()
                 .sender(mockPlayer)
@@ -114,6 +151,22 @@ class CooldownValidatorTest {
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
+                .build();
+    }
+
+    /**
+     * WR-02 overload: also threads the concrete executor class into the context, so
+     * {@code CooldownValidator} can resolve a class-level {@code @CmdCD} against it (not just
+     * {@code method.getDeclaringClass()}).
+     */
+    private CommandContext createPlayerContext(Method method, Class<?> executorClass) {
+        return CommandContext.builder()
+                .sender(mockPlayer)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .matchedMethod(method)
+                .executorClass(executorClass)
                 .build();
     }
 
@@ -615,6 +668,91 @@ class CooldownValidatorTest {
             assertTrue(remaining >= 1 && remaining <= 4,
                     "Expected the method's own 3s cooldown to win over the class's 30s, but remaining was: "
                             + remaining);
+        }
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): {@code ClassLevelFallbackTests} above never exercises a class-level
+     * {@code @CmdCD} declared on a SUBCLASS whose {@code @CmdMapping} method is inherited
+     * (unoverridden) from a superclass -- every fixture there declares its class-level
+     * annotation on the SAME class that declares the mapping method. This is exactly the WR-02
+     * defect: {@code method.getDeclaringClass()}-only resolution never sees a class-level
+     * annotation declared on the concrete SUBCLASS. All four combinations from the review's
+     * proof-form rule.
+     */
+    @Nested
+    @DisplayName("WR-02: executor-class-aware @CmdCD fallback (post-review gap closure)")
+    class ExecutorClassAwareFallbackTests {
+
+        @Test
+        @DisplayName("Concrete subclass only: inherited mapping still cools down (WR-02 broken case)")
+        void concreteSubclassOnly_appliesSubclassCooldown() throws Exception {
+            Method method = ConcreteSubclassOnlyCooldownFixture.class.getMethod("sharedMethod");
+            CommandContext context = createPlayerContext(method, ConcreteSubclassOnlyCooldownFixture.class);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 16 && remaining <= 21,
+                    "Expected the concrete subclass's 20s cooldown to apply, but remaining was: " + remaining);
+        }
+
+        @Test
+        @DisplayName("Declaring superclass only: inherited mapping still cools down (regression pin, unchanged)")
+        void declaringSuperclassOnly_stillAppliesSuperclassCooldown() throws Exception {
+            Method method = ConcreteSubclassNoOwnCooldownFixture.class.getMethod("sharedMethod");
+            CommandContext context = createPlayerContext(method, ConcreteSubclassNoOwnCooldownFixture.class);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 11 && remaining <= 16,
+                    "Expected the declaring superclass's 15s cooldown to still apply, but remaining was: "
+                            + remaining);
+        }
+
+        @Test
+        @DisplayName("Both levels present: the concrete subclass's cooldown wins over its superclass's")
+        void bothLevelsPresent_concreteSubclassWins() throws Exception {
+            Method method = BothLevelsConcreteSubclassCooldownFixture.class.getMethod("sharedMethod");
+            CommandContext context = createPlayerContext(method, BothLevelsConcreteSubclassCooldownFixture.class);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 16 && remaining <= 21,
+                    "Expected the concrete subclass's 20s cooldown to win over the superclass's 15s, "
+                            + "but remaining was: " + remaining);
+        }
+
+        @Test
+        @DisplayName("Neither level present: falls back to the default cooldown, unchanged")
+        void neitherLevelPresent_fallsBackToDefault() throws Exception {
+            Method method = SharedCooldownMappingBase.class.getMethod("sharedMethod");
+            CommandContext context = createPlayerContext(method, SharedCooldownMappingBase.class);
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, method.toString());
+            assertEquals(0, remaining, "No @CmdCD anywhere in the hierarchy -- no cooldown should apply");
+        }
+
+        @Test
+        @DisplayName("Null executorClass (context built without it): falls back to the pre-WR-02 "
+                + "declaring-class-only behaviour")
+        void nullExecutorClass_fallsBackToDeclaringClassOnly() throws Exception {
+            Method method = ConcreteSubclassOnlyCooldownFixture.class.getMethod("sharedMethod");
+            CommandContext context = createPlayerContext(method); // no executorClass set
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, method.toString());
+            assertEquals(0, remaining,
+                    "Without executorClass, resolution can only see the declaring superclass, which "
+                            + "carries no @CmdCD of its own");
         }
     }
 

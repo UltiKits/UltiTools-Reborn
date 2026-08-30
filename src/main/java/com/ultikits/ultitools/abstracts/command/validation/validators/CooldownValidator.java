@@ -89,12 +89,12 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         
         Player player = context.getPlayer();
         Method method = context.getMatchedMethod();
-        
+
         if (method == null) {
             return ValidationResult.success();
         }
-        
-        int cooldownSeconds = getCooldownSeconds(method);
+
+        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
         if (cooldownSeconds <= 0) {
             return ValidationResult.success();
         }
@@ -135,12 +135,12 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         
         Player player = context.getPlayer();
         Method method = context.getMatchedMethod();
-        
+
         if (method == null) {
             return;
         }
-        
-        int cooldownSeconds = getCooldownSeconds(method);
+
+        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
         if (cooldownSeconds <= 0) {
             return;
         }
@@ -302,12 +302,15 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * 拒绝检查已经采信的解析方式完全一致（SILENT-11 / D-01 追加任务）：一个仅在类级声明、通过了
      * 加载时检查的 {@code @CmdCD}，现在会真正冷却每一个未声明自己 {@code @CmdCD} 的映射。
      *
-     * @param method the matched command mapping method <br> 已匹配的命令映射方法
+     * @param method        the matched command mapping method <br> 已匹配的命令映射方法
+     * @param executorClass the concrete executor class dispatching this command (WR-02,
+     *                      05-REVIEW.md), or {@code null} when unavailable <br> 分发本次命令的
+     *                      具体执行器类（WR-02，05-REVIEW.md）；不可用时为 {@code null}
      * @return the resolved cooldown in seconds <br> 解析出的冷却秒数
      * @since 6.3.0
      */
-    private int getCooldownSeconds(Method method) {
-        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, CmdCD.class);
+    private int getCooldownSeconds(Method method, Class<?> executorClass) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
         if (cmdCD != null) {
             return cmdCD.value();
         }

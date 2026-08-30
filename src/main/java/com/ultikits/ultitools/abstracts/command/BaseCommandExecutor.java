@@ -242,11 +242,17 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         }
         
         // Create command context
+        // WR-02 (05-REVIEW.md): this.getClass() is the concrete executor class -- the SAME class
+        // PluginManager's load-time contract gate inspects (executor.getClass()) -- captured
+        // here so CooldownValidator/UsageLockValidator can resolve a class-level @CmdCD/
+        // @UsageLimit against it instead of only Method#getDeclaringClass(), which for an
+        // inherited, unoverridden @CmdMapping method is an ancestor, not this class.
         CommandContext context = CommandContext.builder()
                 .sender(sender)
                 .command(command)
                 .alias(alias)
                 .rawArgs(args)
+                .executorClass(this.getClass())
                 .build();
         
         // Match method

@@ -105,6 +105,69 @@ class ReflectionUtilTest {
         public void plainMethod() {}
     }
 
+    // WR-02 (05-REVIEW.md) fixtures for the 3-arg resolveMethodOrClassAnnotation(Method, Class,
+    // Class) overload -- a concrete SUBCLASS inheriting an unoverridden method from a
+    // superclass, exercising the class-vs-declaring-class divergence the 2-arg overload cannot
+    // see. sharedMethod() is inherited, never overridden, so Method#getDeclaringClass() is
+    // always the *Base class below, regardless of which concrete subclass is queried.
+
+    // Combo 1 (the WR-02 broken case): annotation ONLY on the concrete subclass, not on the
+    // declaring superclass.
+    static class Wr02DeclaringBase {
+        public void sharedMethod() {}
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02ConcreteSubclassOnly extends Wr02DeclaringBase {
+        // inherits sharedMethod() -- does not override it
+    }
+
+    // Combo 2: annotation ONLY on the declaring superclass -- the pre-WR-02 behaviour, must be
+    // preserved unchanged.
+    @TestAnnotation("declaringSuperclass")
+    static class Wr02DeclaringBaseWithAnnotation {
+        public void sharedMethod() {}
+    }
+
+    static class Wr02ConcreteSubclassNoAnnotation extends Wr02DeclaringBaseWithAnnotation {
+        // inherits sharedMethod(); carries no annotation of its own
+    }
+
+    // Combo 3: BOTH the concrete subclass and its declaring superclass carry the annotation,
+    // with DIFFERENT values -- the concrete (most-derived) class must win.
+    @TestAnnotation("declaringSuperclass")
+    static class Wr02BothLevelsBase {
+        public void sharedMethod() {}
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02BothLevelsConcreteSubclass extends Wr02BothLevelsBase {
+        // inherits sharedMethod(); both this class and its superclass carry @TestAnnotation
+    }
+
+    // Combo 4: neither level carries the annotation -- falls back to null, same as the 2-arg
+    // overload.
+    static class Wr02NeitherLevelBase {
+        public void sharedMethod() {}
+    }
+
+    static class Wr02NeitherLevelSubclass extends Wr02NeitherLevelBase {
+        // inherits sharedMethod(); no annotation anywhere in the hierarchy
+    }
+
+    // Method-level still wins over the concrete executor class -- most-derived-wins must hold
+    // for the 3-arg overload exactly as it does for the 2-arg one.
+    static class Wr02MethodLevelBase {
+        @TestAnnotation("methodLevel")
+        public void sharedMethod() {}
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02MethodLevelWinsSubclass extends Wr02MethodLevelBase {
+        // inherits sharedMethod(), whose OWN method-level annotation must still win over this
+        // subclass's class-level one
+    }
+
         // 测试用的没有无参构造函数的类
     static class NoDefaultConstructor {
         private final String value;
@@ -409,6 +472,90 @@ class ReflectionUtilTest {
 
             TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
 
+            assertThat(resolved).isNull();
+        }
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): the 3-arg {@code resolveMethodOrClassAnnotation(Method, Class,
+     * Class)} overload -- resolves against the CONCRETE executor class (the same class {@code
+     * PluginManager}'s load-time gate inspects via {@code executor.getClass()}), not just the
+     * matched method's declaring class. All four class-vs-method-annotation combinations from
+     * the review's proof-form rule, plus a most-derived-wins pin.
+     */
+    @Nested
+    @DisplayName("resolveMethodOrClassAnnotation(Method, Class, Class) 三参数重载测试（WR-02）")
+    class ResolveWithExecutorClassTests {
+
+        @Test
+        @DisplayName("类级注解仅在具体子类上：解析出子类的注解（WR-02 修复前会失败）")
+        void concreteSubclassOnly_resolvesSubclassAnnotation() throws Exception {
+            Method method = Wr02ConcreteSubclassOnly.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02ConcreteSubclassOnly.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("concreteSubclass");
+        }
+
+        @Test
+        @DisplayName("类级注解仅在声明超类上：仍解析出超类的注解（回归钉子，行为不变）")
+        void declaringSuperclassOnly_stillResolvesSuperclassAnnotation() throws Exception {
+            Method method = Wr02ConcreteSubclassNoAnnotation.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02ConcreteSubclassNoAnnotation.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("declaringSuperclass");
+        }
+
+        @Test
+        @DisplayName("具体子类与声明超类都有类级注解：具体子类（更派生）的注解胜出")
+        void bothLevelsPresent_concreteSubclassWins() throws Exception {
+            Method method = Wr02BothLevelsConcreteSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02BothLevelsConcreteSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("concreteSubclass");
+        }
+
+        @Test
+        @DisplayName("层级中任何位置都没有注解：返回 null")
+        void neitherLevelPresent_returnsNull() throws Exception {
+            Method method = Wr02NeitherLevelSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02NeitherLevelSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNull();
+        }
+
+        @Test
+        @DisplayName("方法级注解仍然胜过具体执行器类的类级注解（most-derived-wins 对三参数重载同样成立）")
+        void methodLevelStillWinsOverExecutorClass() throws Exception {
+            Method method = Wr02MethodLevelWinsSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02MethodLevelWinsSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("methodLevel");
+        }
+
+        @Test
+        @DisplayName("executorClass 为 null 时：等价于两参数重载（声明类回退）")
+        void nullExecutorClass_fallsBackToTwoArgBehavior() throws Exception {
+            Method method = Wr02ConcreteSubclassOnly.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, null, TestAnnotation.class);
+
+            // Wr02DeclaringBase (the declaring class) carries no @TestAnnotation of its own --
+            // only the concrete subclass does, which a null executorClass cannot see.
             assertThat(resolved).isNull();
         }
     }

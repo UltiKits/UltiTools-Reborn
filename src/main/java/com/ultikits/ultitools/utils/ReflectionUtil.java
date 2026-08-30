@@ -11,6 +11,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.annotation.Nullable;
+
 /**
  * 反射工具类
  * <p>
@@ -330,6 +332,21 @@ public final class ReflectionUtil {
      * {@code @Inherited}。这与 {@link #getAllMethods(Class)} 自身的层级遍历一致：一个从父类继承、
      * 未被重写的方法，其 {@code getDeclaringClass()} 本就是该父类，因此父类上的类级注解无需额外的
      * 祖先遍历即可在此被发现。
+     * <p>
+     * Convenience delegate to {@link #resolveMethodOrClassAnnotation(Method, Class, Class)} with
+     * {@code executorClass} as {@code null} -- kept for callers (and existing tests) that only
+     * ever had a {@code Method} to resolve against, not the dispatching executor's concrete
+     * class. Prefer the 3-argument overload when the concrete executor class is known: it also
+     * checks that class's own declaration, closing WR-02 (05-REVIEW.md) -- a class-level
+     * annotation declared on a concrete executor SUBCLASS, inherited by an unoverridden {@code
+     * @CmdMapping} method whose {@code getDeclaringClass()} is an ancestor, is invisible to this
+     * 2-argument form.
+     * <p>
+     * 委托给 {@link #resolveMethodOrClassAnnotation(Method, Class, Class)}，{@code executorClass}
+     * 传 {@code null}——为只有 {@code Method}、拿不到分发执行器具体类的调用方（及既有测试）保留。
+     * 已知具体执行器类时优先用三参数重载：它还会检查该类自身的声明，从而关闭 WR-02
+     * （05-REVIEW.md）——一个只声明在具体执行器子类上的类级注解，被一个未重写、其
+     * {@code getDeclaringClass()} 是祖先类的 {@code @CmdMapping} 方法继承时，这个双参数形式看不见它。
      *
      * @param method         the matched command mapping method <br> 已匹配的命令映射方法
      * @param annotationType the annotation type to resolve <br> 要解析的注解类型
@@ -340,6 +357,37 @@ public final class ReflectionUtil {
      * @since 6.3.0
      */
     public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, Class<A> annotationType) {
+        return resolveMethodOrClassAnnotation(method, null, annotationType);
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md) overload: same method-level-first resolution as {@link
+     * #resolveMethodOrClassAnnotation(Method, Class)}, but ALSO tries {@code executorClass}'s
+     * own class-level declaration before falling back to {@code method}'s declaring class.
+     * <p>
+     * TODO(WR-02 GREEN): {@code executorClass} is not yet consulted -- this currently delegates
+     * to the same two-step (method, then {@code method.getDeclaringClass()}) resolution as the
+     * 2-arg overload, so a class-level annotation declared ONLY on a concrete executor subclass
+     * (not on the ancestor that declares an inherited, unoverridden {@code @CmdMapping} method)
+     * is still not found. That is exactly the WR-02 defect this overload exists to close; the
+     * GREEN commit fills in the {@code executorClass}-own check.
+     *
+     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
+     * @param executorClass  the concrete {@code BaseCommandExecutor} class dispatching this
+     *                       command -- the SAME class {@code PluginManager}'s load-time gate
+     *                       inspects -- or {@code null} to fall back to the declaring-class-only
+     *                       resolution <br> 分发本次命令的具体 {@code BaseCommandExecutor}
+     *                       类——与 {@code PluginManager} 加载时门禁检查的是同一个类——为
+     *                       {@code null} 时回退到仅声明类的解析
+     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
+     * @param <A>            the annotation type <br> 注解类型
+     * @return the resolved annotation, or {@code null} if none of method, {@code executorClass},
+     *         or the method's declaring class carries one <br> 解析出的注解；方法、
+     *         {@code executorClass} 与方法声明类均未携带该注解时为 {@code null}
+     * @since 6.3.0
+     */
+    public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, @Nullable Class<?> executorClass,
+            Class<A> annotationType) {
         A onMethod = method.getAnnotation(annotationType);
         if (onMethod != null) {
             return onMethod;

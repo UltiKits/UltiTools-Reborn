@@ -45,6 +45,7 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * SILENT-11 half 2 (D-01, D-04, 05-02): a {@code @CmdCD}/{@code @UsageLimit} declaration whose
@@ -208,6 +209,43 @@ class PluginManagerCommandContractTest {
 
     private ValidatorChain emptyChain() {
         return ValidatorChain.builder().build();
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md) fixtures: an abstract executor SUPERCLASS declaring the
+     * {@code @CmdMapping} method, and a concrete SUBCLASS that inherits it without overriding --
+     * so {@code Method#getDeclaringClass()} for {@code doPing} is always {@code
+     * Wr02SharedMappingBase}, never the concrete subclass below, regardless of which subclass
+     * dispatches. {@code @CmdCD} is declared ONLY on the concrete subclass -- exactly the WR-02
+     * broken case: {@code PluginManager}'s load-time gate checks {@code executor.getClass()}
+     * (the concrete subclass, where {@code @CmdCD} lives) and correctly refuses when the
+     * validator is missing, but the pre-fix runtime resolution only ever checked {@code
+     * method.getDeclaringClass()} (the superclass, which carries no {@code @CmdCD}) and so never
+     * enforced it once the validator WAS present.
+     */
+    abstract static class Wr02SharedMappingBase extends BaseCommandExecutor {
+        Wr02SharedMappingBase(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @CmdMapping(format = "ping")
+        public void doPing(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"wr02concretesubclassonly"})
+    @CmdCD(20)
+    static class Wr02ConcreteSubclassOnlyCooldownExecutor extends Wr02SharedMappingBase {
+        Wr02ConcreteSubclassOnlyCooldownExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
     }
 
     // ==================== Task 1, Test 1 ====================
@@ -574,6 +612,60 @@ class PluginManagerCommandContractTest {
             } finally {
                 TabCompletionManager.getInstance().unregister("@fixtureSelfRegisteredKey");
             }
+        }
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): pairs {@code PluginManager.validateCommandExecutorContract} (the
+     * load-time gate) with {@code ReflectionUtil.resolveMethodOrClassAnnotation} (the runtime
+     * resolution {@code CooldownValidator}/{@code UsageLockValidator} call) against the SAME
+     * fixture, on the SAME production methods, so "the gate accepts this" and "the runtime
+     * enforces this" are proven to be the same fact -- not inferred from two separately-tested
+     * components that happen to agree today. {@link CooldownValidatorTest} and {@link
+     * UsageLockValidatorTest} already cover the full four-combination matrix end-to-end through
+     * the validators themselves; this class is the narrower, explicit tie between the two
+     * production entry points the review's finding is actually about.
+     */
+    @Nested
+    @DisplayName("WR-02: load-time gate and runtime resolution agree (post-review gap closure)")
+    class GateAndRuntimeResolutionAgreement {
+
+        @Test
+        @DisplayName("Gate refuses a concrete-subclass-only @CmdCD when the validator is missing")
+        void gateRefusesWhenValidatorMissing() {
+            Wr02ConcreteSubclassOnlyCooldownExecutor executor =
+                    new Wr02ConcreteSubclassOnlyCooldownExecutor(emptyChain());
+
+            PluginModuleException exception = assertThrows(PluginModuleException.class,
+                    () -> PluginManager.validateCommandExecutorContract(executor));
+            assertTrue(exception.getMessage().contains("Wr02ConcreteSubclassOnlyCooldownExecutor"));
+            assertTrue(exception.getMessage().contains("CmdCD"));
+        }
+
+        @Test
+        @DisplayName("Gate allows a concrete-subclass-only @CmdCD when the validator IS present, "
+                + "and the SAME production resolution call the validator uses finds that SAME annotation")
+        void gateAllowsWhenValidatorPresent_andRuntimeResolvesTheSameAnnotation() throws Exception {
+            ValidatorChain chainWithCooldown = ValidatorChain.builder()
+                    .add(new CooldownValidator())
+                    .build();
+            Wr02ConcreteSubclassOnlyCooldownExecutor executor =
+                    new Wr02ConcreteSubclassOnlyCooldownExecutor(chainWithCooldown);
+
+            // The gate: does not refuse, because CooldownValidator IS in the chain.
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+
+            // The runtime: the SAME resolution primitive CooldownValidator.getCooldownSeconds
+            // calls internally, given the SAME (method, concrete executor class) pair the gate
+            // just accepted. Before WR-02's fix, this returned null -- the gate's "fine to load"
+            // was a false assurance because nothing would actually enforce the declaration.
+            Method method = executor.getClass().getMethod("doPing", Player.class);
+            CmdCD resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, executor.getClass(), CmdCD.class);
+
+            assertTrue(resolved != null && resolved.value() == 20,
+                    "Expected the concrete subclass's @CmdCD(20) to be resolvable via the SAME "
+                            + "(method, executorClass) pair the load-time gate just accepted, but "
+                            + "resolution returned: " + resolved);
         }
     }
 }

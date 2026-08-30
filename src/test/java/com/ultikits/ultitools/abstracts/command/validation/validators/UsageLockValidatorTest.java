@@ -143,6 +143,46 @@ class UsageLockValidatorTest {
         public void methodWithOwnLimitOverride() { /* Test stub */ }
     }
 
+    /**
+     * WR-02 (05-REVIEW.md) fixtures: a concrete executor SUBCLASS inheriting an unoverridden
+     * {@code @CmdMapping}-shaped method from a superclass -- {@code sharedMethod()}'s declaring
+     * class is always {@code SharedUsageLimitMappingBase}, regardless of which concrete
+     * subclass below is used to build the context. Distinguishes ALL-scope from SENDER-scope
+     * behaviourally (blocks a DIFFERENT sender under ALL but not under SENDER), matching this
+     * file's existing {@code ClassLevelFallbackTests} convention.
+     */
+    static class SharedUsageLimitMappingBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    // Combo 1 (the WR-02 broken case): @UsageLimit ONLY on the concrete subclass.
+    @UsageLimit(value = UsageLimit.LimitType.ALL)
+    static class ConcreteSubclassOnlyUsageLimitFixture extends SharedUsageLimitMappingBase {
+        // inherits sharedMethod(); only this subclass carries @UsageLimit
+    }
+
+    // Combo 2: @UsageLimit ONLY on the declaring superclass -- pre-WR-02 behaviour, unchanged.
+    @UsageLimit(value = UsageLimit.LimitType.ALL)
+    static class DeclaringSuperclassUsageLimitBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    static class ConcreteSubclassNoOwnUsageLimitFixture extends DeclaringSuperclassUsageLimitBase {
+        // inherits sharedMethod() and the superclass's @UsageLimit; declares none of its own
+    }
+
+    // Combo 3: BOTH levels carry @UsageLimit with DIFFERENT scopes -- the concrete subclass
+    // (ALL) must win over the superclass (SENDER).
+    @UsageLimit(value = UsageLimit.LimitType.SENDER)
+    static class BothLevelsSuperclassUsageLimitBase {
+        public void sharedMethod() { /* Test stub */ }
+    }
+
+    @UsageLimit(value = UsageLimit.LimitType.ALL)
+    static class BothLevelsConcreteSubclassUsageLimitFixture extends BothLevelsSuperclassUsageLimitBase {
+        // inherits sharedMethod(); both this class and its superclass carry @UsageLimit
+    }
+
     private CommandContext createPlayerContext(Method method, Player player) {
         return CommandContext.builder()
                 .sender(player)
@@ -150,6 +190,22 @@ class UsageLockValidatorTest {
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
+                .build();
+    }
+
+    /**
+     * WR-02 overload: also threads the concrete executor class into the context, so
+     * {@code UsageLockValidator} can resolve a class-level {@code @UsageLimit} against it (not
+     * just {@code method.getDeclaringClass()}).
+     */
+    private CommandContext createPlayerContext(Method method, Player player, Class<?> executorClass) {
+        return CommandContext.builder()
+                .sender(player)
+                .command(mockCommand)
+                .alias("test")
+                .rawArgs(new String[]{})
+                .matchedMethod(method)
+                .executorClass(executorClass)
                 .build();
     }
 
@@ -931,6 +987,86 @@ class UsageLockValidatorTest {
                             + "class declares ALL -- if class-level had incorrectly won, this would fail");
             assertFalse(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
                     "method-level SENDER still blocks the SAME sender's second acquisition");
+        }
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): {@code ClassLevelFallbackTests} above never exercises a class-level
+     * {@code @UsageLimit} declared on a SUBCLASS whose {@code @CmdMapping} method is inherited
+     * (unoverridden) from a superclass -- every fixture there declares its class-level
+     * annotation on the SAME class that declares the mapping method. This is exactly the WR-02
+     * defect: {@code method.getDeclaringClass()}-only resolution never sees a class-level
+     * annotation declared on the concrete SUBCLASS. All four combinations from the review's
+     * proof-form rule.
+     */
+    @Nested
+    @DisplayName("WR-02: executor-class-aware @UsageLimit fallback (post-review gap closure)")
+    class ExecutorClassAwareFallbackTests {
+
+        @Test
+        @DisplayName("Concrete subclass only: ALL scope applies to the inherited mapping (WR-02 broken case)")
+        void concreteSubclassOnly_appliesSubclassScope() throws Exception {
+            Method method = ConcreteSubclassOnlyUsageLimitFixture.class.getMethod("sharedMethod");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer, ConcreteSubclassOnlyUsageLimitFixture.class))
+                            .isValid(),
+                    "first acquisition by player1 must succeed");
+            assertFalse(validator.validate(createPlayerContext(method, mockPlayer2, ConcreteSubclassOnlyUsageLimitFixture.class))
+                            .isValid(),
+                    "the concrete subclass's ALL scope must block a DIFFERENT sender too");
+        }
+
+        @Test
+        @DisplayName("Declaring superclass only: ALL scope still applies (regression pin, unchanged)")
+        void declaringSuperclassOnly_stillAppliesSuperclassScope() throws Exception {
+            Method method = ConcreteSubclassNoOwnUsageLimitFixture.class.getMethod("sharedMethod");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer, ConcreteSubclassNoOwnUsageLimitFixture.class))
+                            .isValid(),
+                    "first acquisition by player1 must succeed");
+            assertFalse(validator.validate(createPlayerContext(method, mockPlayer2, ConcreteSubclassNoOwnUsageLimitFixture.class))
+                            .isValid(),
+                    "the declaring superclass's ALL scope must still block a DIFFERENT sender");
+        }
+
+        @Test
+        @DisplayName("Both levels present: the concrete subclass's ALL scope wins over the superclass's SENDER scope")
+        void bothLevelsPresent_concreteSubclassWins() throws Exception {
+            Method method = BothLevelsConcreteSubclassUsageLimitFixture.class.getMethod("sharedMethod");
+
+            assertTrue(validator.validate(
+                            createPlayerContext(method, mockPlayer, BothLevelsConcreteSubclassUsageLimitFixture.class))
+                            .isValid(),
+                    "first acquisition by player1 must succeed");
+            assertFalse(validator.validate(
+                            createPlayerContext(method, mockPlayer2, BothLevelsConcreteSubclassUsageLimitFixture.class))
+                            .isValid(),
+                    "the concrete subclass's ALL scope must win: a DIFFERENT sender IS blocked -- if the "
+                            + "superclass's SENDER scope had incorrectly won, this would pass");
+        }
+
+        @Test
+        @DisplayName("Neither level present: no @UsageLimit anywhere -- validation always succeeds")
+        void neitherLevelPresent_alwaysValid() throws Exception {
+            Method method = SharedUsageLimitMappingBase.class.getMethod("sharedMethod");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer, SharedUsageLimitMappingBase.class))
+                    .isValid());
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer2, SharedUsageLimitMappingBase.class))
+                    .isValid());
+        }
+
+        @Test
+        @DisplayName("Null executorClass (context built without it): falls back to the pre-WR-02 "
+                + "declaring-class-only behaviour")
+        void nullExecutorClass_fallsBackToDeclaringClassOnly() throws Exception {
+            Method method = ConcreteSubclassOnlyUsageLimitFixture.class.getMethod("sharedMethod");
+
+            // Without executorClass, resolution can only see the declaring superclass
+            // (SharedUsageLimitMappingBase), which carries no @UsageLimit of its own -- so
+            // neither sender is ever blocked.
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer)).isValid());
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer2)).isValid());
         }
     }
 

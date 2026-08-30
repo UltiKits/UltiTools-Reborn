@@ -101,7 +101,7 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
         // follow-up most-derived-wins resolution) carries @UsageLimit with a SENDER or ALL
         // scope, so this resolves non-null here.
         Method method = context.getMatchedMethod();
-        UsageLimit limit = resolveLimit(method);
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
         if (limit.value() == UsageLimit.LimitType.SENDER) {
             return ValidationResult.failure(
                     ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"),
@@ -192,7 +192,7 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      */
     public boolean acquireLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        UsageLimit limit = resolveLimit(method);
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
         if (limit == null) {
             return true;
         }
@@ -238,7 +238,7 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      */
     public void releaseLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        UsageLimit limit = resolveLimit(method);
+        UsageLimit limit = resolveLimit(method, context.getExecutorClass());
         if (limit == null) {
             return;
         }
@@ -277,18 +277,21 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * 一个仅在类级声明、通过了加载时检查的 {@code @UsageLimit}，现在会真正锁定每一个未声明自己
      * {@code @UsageLimit} 的映射。
      *
-     * @param method the matched command mapping method, or {@code null} <br> 已匹配的命令映射方法，
-     *               可能为 {@code null}
+     * @param method        the matched command mapping method, or {@code null} <br> 已匹配的命令
+     *                      映射方法，可能为 {@code null}
+     * @param executorClass the concrete executor class dispatching this command (WR-02,
+     *                      05-REVIEW.md), or {@code null} when unavailable <br> 分发本次命令的
+     *                      具体执行器类（WR-02，05-REVIEW.md）；不可用时为 {@code null}
      * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
      *         neither the method nor its declaring class carries one <br> 解析出的注解；
      *         {@code method} 为 {@code null}，或方法与其声明类均未携带该注解时为 {@code null}
      * @since 6.3.0
      */
-    private static UsageLimit resolveLimit(Method method) {
+    private static UsageLimit resolveLimit(Method method, Class<?> executorClass) {
         if (method == null) {
             return null;
         }
-        return ReflectionUtil.resolveMethodOrClassAnnotation(method, UsageLimit.class);
+        return ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, UsageLimit.class);
     }
 
     /**

@@ -71,7 +71,29 @@ public final class CommandContext {
      */
     @Nullable
     private final String matchedFormat;
-    
+
+    /**
+     * The concrete {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor} class
+     * dispatching this command -- {@code this.getClass()} captured in {@code onCommand}, i.e.
+     * the SAME class {@code PluginManager}'s load-time contract gate inspects via
+     * {@code executor.getClass()}. WR-02 (05-REVIEW.md): {@link #matchedMethod}'s {@code
+     * getDeclaringClass()} is NOT always this class -- an inherited, unoverridden {@code
+     * @CmdMapping} method's declaring class is whatever ancestor first declared it. Threading
+     * the concrete executor class through the context lets {@code
+     * com.ultikits.ultitools.utils.ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class,
+     * Class)} resolve a class-level {@code @CmdCD}/{@code @UsageLimit} against the class the
+     * load-time gate actually checked, not an implementation detail of which ancestor happens to
+     * declare the mapping method.
+     * <p>
+     * {@code null} for a context built without it (e.g. a unit test constructing {@link
+     * CommandContext} directly) -- callers fall back to the pre-WR-02, declaring-class-only
+     * resolution in that case; see {@code resolveMethodOrClassAnnotation}'s own javadoc.
+     *
+     * @since 6.3.0
+     */
+    @Nullable
+    private final Class<?> executorClass;
+
     /**
      * Timestamp when the command was received.
      * 命令接收的时间戳。
