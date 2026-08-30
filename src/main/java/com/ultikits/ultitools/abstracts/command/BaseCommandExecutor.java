@@ -216,22 +216,31 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         }
         
         // Execute command
-        executeCommand(context, method, methodParams);
-        
+        executeCommand(context, method, methodParams, validationResult);
+
         return true;
     }
-    
+
     /**
      * Executes the command method.
      * Supports both synchronous and asynchronous execution via @AsyncCommand or @RunAsync.
      * 执行命令方法。
      * 通过 @AsyncCommand 或 @RunAsync 支持同步和异步执行。
      *
-     * @param context the command context
-     * @param method  the method to execute
-     * @param params  the method parameters
+     * @param context          the command context
+     * @param method           the method to execute
+     * @param params           the method parameters
+     * @param validationResult the chain result produced by {@code onCommand}'s validation step
+     *                         for THIS invocation; its
+     *                         {@link ValidatorChain.ChainValidationResult#getPassedValidators()}
+     *                         is the sole source that drives each validator's
+     *                         {@link CommandValidator#onComplete(CommandContext, boolean)} call --
+     *                         see D-01. Never recomputed here: re-validating would run every
+     *                         validator twice and re-trigger their gates (e.g. a second lock
+     *                         acquisition attempt).
      */
-    protected void executeCommand(CommandContext context, Method method, Object[] params) {
+    protected void executeCommand(CommandContext context, Method method, Object[] params,
+                                   ValidatorChain.ChainValidationResult validationResult) {
         // Check for async annotations
         AsyncCommand asyncCommand = method.getAnnotation(AsyncCommand.class);
         boolean isAsync = asyncCommand != null || method.isAnnotationPresent(RunAsync.class);
@@ -239,6 +248,14 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         // Capture trigger context BEFORE async dispatch (player info as immutable strings)
         final TriggerContext triggerCtx = TriggerContext.command(context.getSender(),
                 method.getName());
+
+        // The validators that actually ran (and passed) for THIS invocation. Per D-01, "in the
+        // chain" and "has side effects" are the same fact by construction: post-actions are
+        // driven from this list instead of naming cooldownValidator/lockValidator by field, so a
+        // custom ValidatorChain that omits a validator also omits its side effect.
+        final List<CommandValidator> ranValidators = validationResult != null
+                ? validationResult.getPassedValidators()
+                : Collections.emptyList();
 
         BukkitRunnable runnable = new BukkitRunnable() {
             @Override
@@ -258,11 +275,15 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
                 }
                 try {
+                    // UsageLockValidator's acquire/release halves are deliberately NOT
+                    // chain-driven yet -- that ordering/ownership decision lands in a follow-up
+                    // task. Left exactly as-is here rather than half-migrated.
                     lockValidator.acquireLock(context);
+                    boolean commandSucceeded = false;
                     try {
                         method.setAccessible(true);
                         method.invoke(BaseCommandExecutor.this, params);
-                        cooldownValidator.applyCooldown(context);
+                        commandSucceeded = true;
                     } catch (Exception e) {
                         context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
                         Logger.getLogger(BaseCommandExecutor.class.getName())
@@ -278,6 +299,11 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                             // Never re-enter logging from error reporting
                         }
                     } finally {
+                        // Post-actions run once per validator that passed for THIS invocation, in
+                        // chain order, whether the mapped method succeeded or threw.
+                        for (CommandValidator ranValidator : ranValidators) {
+                            ranValidator.onComplete(context, commandSucceeded);
+                        }
                         lockValidator.releaseLock(context);
                     }
                 } finally {

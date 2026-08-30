@@ -56,7 +56,35 @@ public interface CommandValidator {
     default String getName() {
         return this.getClass().getSimpleName();
     }
-    
+
+    /**
+     * Invoked once, after the mapped command method has returned or thrown, for each validator
+     * whose {@link #validate(CommandContext)} succeeded during the chain run that gated this
+     * invocation. Never invoked for a validator that did not run -- skipped via
+     * {@link #shouldValidate(CommandContext)}, or never reached because an earlier validator in
+     * the chain failed. Validators are invoked in the same order the chain validated them, i.e.
+     * ascending {@link #getOrder()}.
+     * <p>
+     * "In the chain that ran" and "receives this call" are the same fact by construction: the
+     * caller drives this hook from {@code ValidatorChain.ChainValidationResult#getPassedValidators()},
+     * never from a hard-coded reference to a specific validator instance.
+     * <p>
+     * 在映射的命令方法返回或抛出异常后，对本次调用所使用的责任链中每个 {@link #validate(CommandContext)}
+     * 成功的验证器调用一次。对于未运行的验证器（被 {@link #shouldValidate(CommandContext)} 跳过，
+     * 或因链中更早的验证器失败而从未到达）不会调用。验证器按链验证时的相同顺序（即 {@link #getOrder()}
+     * 升序）被调用。
+     * <p>
+     * The default implementation is a no-op, so existing validators that only gate -- and have no
+     * side effect to apply afterward -- require no change.
+     *
+     * @param context          the command context
+     * @param commandSucceeded {@code true} if the mapped method returned without throwing,
+     *                         {@code false} if it threw
+     * @since 6.3.0
+     */
+    default void onComplete(CommandContext context, boolean commandSucceeded) {
+    }
+
     /**
      * Result of a validation operation.
      * 验证操作的结果。

@@ -126,6 +126,25 @@ public class CooldownValidator implements CommandValidator {
     }
     
     /**
+     * Post-action hook that applies the cooldown recorded for this invocation. Delegates to
+     * {@link #applyCooldown(CommandContext)} and is invoked only by a chain that actually ran
+     * this validator for the current dispatch -- see
+     * {@link CommandValidator#onComplete(CommandContext, boolean)}.
+     * <p>
+     * 应用本次调用所需冷却的后置钩子。委托给 {@link #applyCooldown(CommandContext)}，仅由实际为本次
+     * 分发运行了该验证器的责任链调用——参见 {@link CommandValidator#onComplete(CommandContext, boolean)}。
+     *
+     * @param context          the command context
+     * @param commandSucceeded ignored -- the cooldown applies whether the mapped method
+     *                         succeeded or threw
+     * @since 6.3.0
+     */
+    @Override
+    public void onComplete(CommandContext context, boolean commandSucceeded) {
+        applyCooldown(context);
+    }
+
+    /**
      * Clears all cooldowns for a player.
      * 清除玩家的所有冷却。
      *
