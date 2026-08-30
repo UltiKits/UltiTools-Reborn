@@ -179,7 +179,15 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * true, and a cheap, safely-no-op-on-failure retry otherwise (see that field's javadoc).
      */
     private void ensurePlayerCacheRegistered() {
-        if (playerCacheRegistered || UltiTools.getInstance() == null) {
+        if (playerCacheRegistered) {
+            return;
+        }
+        UltiTools instance = UltiTools.getInstance();
+        // Checking getPluginManager() too, not just getInstance(), matters: a mock/test double
+        // that stands up UltiTools.getInstance() without yet wiring getPluginManager() would
+        // otherwise latch this flag true on a no-op attempt, permanently skipping the retry that
+        // would have succeeded once the chain was genuinely live.
+        if (instance == null || instance.getPluginManager() == null) {
             return;
         }
         PlayerCacheManager.tryRegister(this);
