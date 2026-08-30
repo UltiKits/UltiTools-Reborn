@@ -855,4 +855,100 @@ class TabCompletionManagerTest {
             assertTrue(suggestions.isEmpty());
         }
     }
+
+
+    // ============================================================================================
+    // 05-06 Task 3: owner-scoped registration & unregisterByOwner() (D-08 / T-05-24)
+    // ============================================================================================
+
+    @Nested
+    @DisplayName("Owner-scoped registration & unregisterByOwner() Tests (05-06 / D-08)")
+    class OwnerScopedRegistrationTests {
+
+        @Test
+        @DisplayName("a completer registered during a scope is unregistered by unregisterByOwner for that owner")
+        void scopedRegistrationIsSweptByOwner() {
+            manager.beginRegistrationScope("moduleA");
+            manager.register("@moduleAKey", ctx -> Collections.emptyList());
+            manager.endRegistrationScope();
+
+            int removed = manager.unregisterByOwner("moduleA");
+
+            assertEquals(1, removed);
+            assertNull(manager.getCompleter("@moduleAKey"));
+        }
+
+        @Test
+        @DisplayName("unregisterByOwner for module A does not remove module B's completer")
+        void ownerScopedSweepDoesNotTouchAnotherOwner() {
+            manager.beginRegistrationScope("moduleA");
+            manager.register("@moduleAKey2", ctx -> Collections.emptyList());
+            manager.endRegistrationScope();
+
+            manager.beginRegistrationScope("moduleB");
+            manager.register("@moduleBKey", ctx -> Collections.emptyList());
+            manager.endRegistrationScope();
+
+            manager.unregisterByOwner("moduleA");
+
+            assertNotNull(manager.getCompleter("@moduleBKey"));
+        }
+
+        @Test
+        @DisplayName("a completer registered outside any scope (core) survives unregisterByOwner for any module")
+        void unscopedCoreCompleterSurvivesAnyOwnerSweep() {
+            manager.register("@coreFixtureKey", ctx -> Collections.emptyList());
+
+            manager.unregisterByOwner("moduleA");
+            manager.unregisterByOwner("anyOtherModule");
+
+            assertNotNull(manager.getCompleter("@coreFixtureKey"));
+        }
+
+        @Test
+        @DisplayName("after module A's sweep, module B can register the same key and have it resolve to B's completer")
+        void keyCanBeReRegisteredByAnotherOwnerAfterSweep() {
+            TabCompleter completerA = ctx -> Arrays.asList("fromA");
+            TabCompleter completerB = ctx -> Arrays.asList("fromB");
+
+            manager.beginRegistrationScope("moduleA");
+            manager.register("@sharedKey", completerA);
+            manager.endRegistrationScope();
+
+            manager.unregisterByOwner("moduleA");
+            assertNull(manager.getCompleter("@sharedKey"));
+
+            manager.beginRegistrationScope("moduleB");
+            manager.register("@sharedKey", completerB);
+            manager.endRegistrationScope();
+
+            assertSame(completerB, manager.getCompleter("@sharedKey"));
+        }
+
+        @Test
+        @DisplayName("unregisterByOwner for a module that registered nothing is a no-op and throws nothing")
+        void sweepingAnUnknownOwnerIsANoOp() {
+            int removed = assertDoesNotThrow(() -> manager.unregisterByOwner("neverRegisteredModule"));
+
+            assertEquals(0, removed);
+        }
+
+        @Test
+        @DisplayName("unregisterByOwner(null) is a no-op")
+        void sweepingNullOwnerIsANoOp() {
+            assertEquals(0, manager.unregisterByOwner(null));
+        }
+
+        @Test
+        @DisplayName("published singleton shape unchanged: getInstance/register/unregister behave identically for an ownership-unaware caller")
+        void publishedShapeUnchangedForOwnershipUnawareCaller() {
+            TabCompleter completer = ctx -> Arrays.asList("unaware");
+
+            manager.register("@unawareKey", completer);
+            assertSame(completer, manager.getCompleter("@unawareKey"));
+
+            manager.unregister("@unawareKey");
+            assertNull(manager.getCompleter("@unawareKey"));
+        }
+    }
 }
