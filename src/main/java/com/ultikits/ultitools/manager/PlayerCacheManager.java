@@ -14,6 +14,7 @@ import java.util.logging.Logger;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -42,6 +43,19 @@ import org.jetbrains.annotations.ApiStatus;
 public class PlayerCacheManager {
 
     private static final Logger LOGGER = Logger.getLogger(PlayerCacheManager.class.getName());
+
+    /**
+     * Period, in ticks, between two consecutive expiry sweeps ({@link #sweepExpiredEntries()}).
+     * <p>
+     * Chosen conservatively: this task runs for the entire lifetime of a long-running server, and
+     * the per-player state it exists to bound (command cooldowns, usage locks) is expressed in
+     * seconds-to-minutes, not milliseconds -- there is no correctness requirement for the sweep to
+     * run more often than once every few minutes. 6000 ticks is 5 minutes at the server's nominal
+     * 20 ticks/second, which keeps the sweep's own overhead negligible (an empty or small registry
+     * costs microseconds per pass) while bounding the worst-case staleness of any expired entry to
+     * 5 minutes.
+     */
+    static final long EXPIRY_SWEEP_PERIOD_TICKS = 6000L;
 
     private final List<TrackedBean> trackedBeans = new ArrayList<>();
 
@@ -266,6 +280,61 @@ public class PlayerCacheManager {
      */
     public int getTrackedBeanCount() {
         return trackedBeans.size();
+    }
+
+    /**
+     * Periodic, time-based expiry sweep -- driven by the framework's own {@link Scheduled} (i.e.
+     * {@code @Scheduled}) mechanism rather than a hand-rolled {@code BukkitRunnable}, because this
+     * state is stale on a clock, not on a player-quit event: it must be pruned whether or not any
+     * player is online (D-03 -- mirrors {@code CooldownValidator.cleanupExpired}'s shape).
+     * <p>
+     * Every tracked instance that implements {@link ExpiringPlayerCache} has {@link
+     * ExpiringPlayerCache#sweepExpired()} invoked once per pass. One participant's hook throwing
+     * is caught, logged, and does not prevent the remaining participants' hooks from running in
+     * the same pass. An instance that does not implement {@link ExpiringPlayerCache} is not
+     * visited at all -- opt-in by type, not by reflection guessing at method names. Tolerates an
+     * empty registry and being invoked mid-shutdown: it touches only this manager's own tracked
+     * list, never the Bukkit API directly.
+     * <p>
+     * Sweep period: see {@link #EXPIRY_SWEEP_PERIOD_TICKS} (5 minutes -- see that constant's
+     * javadoc for the rationale).
+     *
+     * @since 6.3.0
+     */
+    @Scheduled(delay = EXPIRY_SWEEP_PERIOD_TICKS, period = EXPIRY_SWEEP_PERIOD_TICKS)
+    public void sweepExpiredEntries() {
+        // Snapshot before iterating: a participant's hook (or a concurrent unregisterBean call
+        // triggered from within it) must not raise a ConcurrentModificationException against the
+        // live list.
+        for (TrackedBean tracked : new ArrayList<>(trackedBeans)) {
+            if (tracked.bean instanceof ExpiringPlayerCache) {
+                try {
+                    ((ExpiringPlayerCache) tracked.bean).sweepExpired();
+                } catch (Exception e) {
+                    LOGGER.log(Level.WARNING, "Error running expiry sweep for "
+                            + tracked.bean.getClass().getName(), e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Opt-in contract for a tracked instance that also carries time-based (as opposed to
+     * player-quit-based) state to prune. Implemented by anything registered with this manager
+     * that wants {@link #sweepExpiredEntries()}'s periodic pass to invoke it -- narrow and
+     * type-checked rather than reflection guessing at a method name, so an instance that does not
+     * implement this is definitively not visited.
+     *
+     * @since 6.3.0
+     */
+    public interface ExpiringPlayerCache {
+        /**
+         * Invoked once per {@link #sweepExpiredEntries()} pass. Implementations should be cheap
+         * and must not rely on being called on the main thread. An exception thrown here is
+         * caught and logged by the caller; it aborts only this instance's own sweep for the
+         * current pass, not the pass as a whole.
+         */
+        void sweepExpired();
     }
 
     /**
