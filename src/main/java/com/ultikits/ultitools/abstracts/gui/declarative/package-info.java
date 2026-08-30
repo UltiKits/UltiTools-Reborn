@@ -4,26 +4,45 @@
  * 本框架基于 Flutter 的设计理念，提供声明式的 UI 构建方式。
  * 核心理念：<b>UI = f(state)</b>
  * <p>
- * <h2>⚠ 当前状态（6.2.5）</h2>
+ * <h2>状态说明（6.3.0）</h2>
  * <p>
- * <b>本包及其子包标记为 {@code @ApiStatus.Experimental}，API 可能在任何版本发生不兼容变动。</b>
+ * <b>本包及其子包仍标记为 {@code @ApiStatus.Experimental}，API 可能在未来版本发生不兼容变动。</b>
  * <p>
- * <b>状态驱动的重绘尚未实现。</b>{@code UI = f(state)} 是本框架的设计目标，但渲染引擎的三个接缝
- * 目前都还没接上：{@code build(BuildContext)} 只在 {@code onOpen} 中被调用一次；
- * {@code Element.update()} 不置脏标记；{@code State.setState} 的信号沿 Element 树上溯到根节点后
- * 静默终止，进不了调度器。因此下面「主要特性」中的 <i>setState 触发局部重建</i> 目前不生效，
- * 依赖 {@code setState} 的导航子系统（{@code Navigator.push} / {@code pop}）同样惰性。
- * 现阶段可靠可用的是<b>静态页面</b>：build 一次、渲染一次。
+ * <b>三个渲染接缝已在 6.3.0 修复，{@code UI = f(state)} 现在成立：</b>{@code GuiRenderer} 通过
+ * {@code Supplier<Widget>} 在每次 {@code performBuild()} 时重新生成 Widget 树（而非只在
+ * {@code onOpen} 调用一次）；{@code Element.update()} 无条件置脏标记；{@code State.setState()}
+ * ——包括嵌套 {@code StatefulWidget} 上的调用——现在能可靠地触发一次已调度的重绘。因此下面
+ * 「主要特性」中的 <i>setState 触发局部重建</i> 现已生效，依赖它的导航子系统
+ * （{@code Navigator.push} / {@code pop}）同样可用。点击分发同时收紧：{@code GuiRenderer} 会在
+ * 查找处理器之前校验 {@code event.getRawSlot()}，玩家自身背包中数值相同的槽位不会再触发
+ * GUI 的点击处理器。{@code GridView} 会在渲染时把计算出的槽位写给任意 Widget 类型的子节点
+ * （此前只有 {@code ItemDisplay} 能正确定位）。
  * <p>
- * <b>State-driven repaint is not implemented yet.</b> {@code UI = f(state)} is the design
- * goal, but all three rendering seams are still open: {@code build(BuildContext)} is called
- * exactly once from {@code onOpen}; {@code Element.update()} never marks anything dirty; and
- * the {@code State.setState} signal walks up the element tree and stops silently at the root
- * without reaching the scheduler. The <i>setState triggers a partial rebuild</i> bullet below
- * therefore does not hold today, and the navigation subsystem is inert for the same reason.
- * What works today is the <b>static page</b>: build once, render once.
+ * <b>标记为何保留：</b>截至本次发布，这三处改动尚未收到任何下游模块的真机反馈——正如零下游
+ * 采用不足以证明 API 已经稳定，它同样不足以构成删除标记的理由。标记至少保留到下一个版本，
+ * 待收到真机反馈后再作决定。
  * <p>
- * 修复排期见 <a href="https://github.com/UltiKits/UltiTools-Reborn/issues/200">issue #200</a>（6.3.0）。
+ * <b>Three rendering seams were fixed in 6.3.0 — {@code UI = f(state)} now holds:</b>
+ * {@code GuiRenderer} re-derives the Widget tree from a {@code Supplier<Widget>} on every
+ * {@code performBuild()} call, not just once from {@code onOpen}; {@code Element.update()}
+ * marks itself dirty unconditionally; and {@code State.setState()} — including a call on a
+ * nested {@code StatefulWidget} — now reliably reaches a scheduled repaint. The
+ * <i>setState triggers a partial rebuild</i> bullet below now holds, and the navigation
+ * subsystem that depends on it ({@code Navigator.push} / {@code pop}) is usable. Click
+ * dispatch was also tightened: {@code GuiRenderer} bounds-checks {@code event.getRawSlot()}
+ * before any handler lookup, so a numerically-colliding slot in the player's own inventory can
+ * no longer trigger a GUI handler. {@code GridView} now writes its computed slot onto any
+ * widget type's render node(s) at render time (previously only {@code ItemDisplay} positioned
+ * correctly).
+ * <p>
+ * <b>Why the marker stays.</b> As of this release, none of these three changes has real-server
+ * feedback from a downstream module — zero adoption is no more grounds for declaring the API
+ * stable than it would be for deleting it. The marker is retained for at least one more
+ * release pending that feedback.
+ * <p>
+ * 三个接缝均由 <a href="https://github.com/UltiKits/UltiTools-Reborn/issues/200">issue #200</a>
+ * 追踪。The three seams are tracked by
+ * <a href="https://github.com/UltiKits/UltiTools-Reborn/issues/200">issue #200</a>.
  *
  * <h2>主要特性：</h2>
  * <ul>
