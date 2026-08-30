@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.*;
 
 import java.io.File;
@@ -24,11 +26,14 @@ import com.ultikits.testfixtures.externalplugininjection.UltiToolsPluginInjectin
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.wr01fixtures.broken.ConnectorPluginFixtureBroken;
+import com.ultikits.ultitools.manager.wr01fixtures.ok.ConnectorPluginFixtureOk;
 
 public class ExternalPluginAdapterTest {
     private JavaPlugin mockPlugin;
@@ -317,6 +322,127 @@ public class ExternalPluginAdapterTest {
                     adapterOne.getContext().getBean(JavaPluginInjectingService.class);
             assertThat(serviceOne.getInjectedPlugin()).isSameAs(connectorOne);
             assertThat(serviceOne.getInjectedPlugin()).isNotSameAs(connectorTwo);
+        }
+    }
+
+    /**
+     * WR-01 (05-REVIEW.md): {@code PluginManager.registerExternal(...)} -- the External Plugin
+     * API's own registration path -- never reached
+     * {@code PluginManager.validateCommandExecutorContracts(...)}, the SILENT-11 load-time
+     * refusal that {@code register(UltiToolsPlugin)}/{@code initializePlugin} already enforce
+     * (called from the last line of {@code assemblePluginContainer}). An external Bukkit
+     * plugin's {@code BaseCommandExecutor} could declare {@code @CmdCD}/{@code @UsageLimit}
+     * against a chain that omits the required validator and load silently unenforced --
+     * SILENT-11, reached through the one command-registration surface the original fix did not
+     * cover.
+     * <p>
+     * Two-sided per the proof-form rule: {@code registerExternal_withUnenforceableAnnotation_isRefused}
+     * proves the gap is closed, and
+     * {@code registerExternal_withSatisfiedContract_stillRegistersNormally} proves the fix does
+     * not just refuse everything that comes through this path -- a one-sided assertion cannot
+     * distinguish "the external path now validates" from "the external path now refuses
+     * everything".
+     * <p>
+     * Uses the SAME MockBukkit-backed {@code registerExternal(...)} path as {@link
+     * ChildContainerInjectionTests}, not a hand-mocked {@code JavaPlugin}: a bare Mockito mock
+     * cannot reach far enough into {@code CommandManager.registerAllExternal} to exercise the
+     * bean lookup this fix's placement depends on. The satisfied-contract test stops short of
+     * asserting the FULL Bukkit {@code CommandMap} registration succeeds -- {@code
+     * CommandManager.getCommandMap()}'s reflective {@code instanceof SimplePluginManager} check
+     * returns {@code null} under MockBukkit's own {@code PluginManagerMock} regardless of this
+     * fix (see {@code CommandManagerTest.GetCommandMapSimplePluginManagerTests}, a pre-existing,
+     * documented environment limitation, not a WR-01 regression) -- and instead asserts the two
+     * facts WR-01 actually claims: no {@code PluginModuleException} was thrown, and the
+     * executor bean was constructed into the adapter's container.
+     */
+    @Nested
+    @DisplayName("WR-01: registerExternal contract enforcement (post-review gap closure)")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflective reset of UltiTools.ultiTools between tests
+    class Wr01ContractEnforcementTests {
+
+        @BeforeEach
+        void setUpMockBukkit() {
+            com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+            MockBukkit.mock();
+        }
+
+        @AfterEach
+        void tearDownMockBukkit() throws Exception {
+            resetUltiToolsInstance();
+            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        }
+
+        private void resetUltiToolsInstance() throws Exception {
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        }
+
+        private PluginManager newPluginManager() {
+            SimpleContainer parentContext = new SimpleContainer();
+            parentContext.refresh();
+
+            DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
+            when(mockDependenceManagers.getContext()).thenReturn(parentContext);
+
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getDependenceManagers()).thenReturn(mockDependenceManagers);
+                when(ultiTools.getCommandManager()).thenReturn(new CommandManager());
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                // wireAop resolves a DataSource through UltiTools.getInstance().getDataStore() for
+                // the @Transactional advisor -- see ChildContainerInjectionTests' identical stub.
+                when(ultiTools.getDataStore()).thenReturn(mock(DataStore.class, CALLS_REAL_METHODS));
+                // CommandManager.register(...) reads getDescription().getName() to register the
+                // Bukkit command under UltiTools' own plugin name -- unrelated to WR-01 itself,
+                // but required for registerExternal(...) to reach that far without an unrelated
+                // NullPointerException masking the assertion under test.
+                PluginDescriptionFile ultiToolsDescription = mock(PluginDescriptionFile.class);
+                when(ultiToolsDescription.getName()).thenReturn("UltiTools");
+                when(ultiTools.getDescription()).thenReturn(ultiToolsDescription);
+            });
+
+            return new PluginManager();
+        }
+
+        @Test
+        @DisplayName("An executor whose chain cannot enforce its declared @CmdCD is refused, exactly like the internal path")
+        void registerExternal_withUnenforceableAnnotation_isRefused() throws Exception {
+            PluginManager pm = newPluginManager();
+
+            ConnectorPluginFixtureBroken connectorPlugin = MockBukkit.loadSimple(ConnectorPluginFixtureBroken.class);
+            ExternalPluginAdapter adapter = new ExternalPluginAdapter(connectorPlugin);
+            assertThat(adapter.getScanPackage())
+                    .isEqualTo("com.ultikits.ultitools.manager.wr01fixtures.broken");
+
+            assertThatThrownBy(() -> pm.registerExternal(adapter))
+                    .isInstanceOf(PluginModuleException.class)
+                    .hasMessageContaining("UnenforceableExternalCommandExecutor")
+                    .hasMessageContaining("CmdCD");
+        }
+
+        @Test
+        @DisplayName("An executor whose chain CAN enforce its declared @CmdCD still registers normally through the same path")
+        void registerExternal_withSatisfiedContract_stillRegistersNormally() throws Exception {
+            PluginManager pm = newPluginManager();
+
+            ConnectorPluginFixtureOk connectorPlugin = MockBukkit.loadSimple(ConnectorPluginFixtureOk.class);
+            ExternalPluginAdapter adapter = new ExternalPluginAdapter(connectorPlugin);
+            assertThat(adapter.getScanPackage())
+                    .isEqualTo("com.ultikits.ultitools.manager.wr01fixtures.ok");
+
+            // See this class's javadoc: registerExternal(...) reaches WR-01's validation and
+            // MUST NOT refuse a satisfied contract -- but the LATER Bukkit CommandMap step
+            // throws a pre-existing, environment-specific NullPointerException under MockBukkit
+            // regardless of this fix, so a bare doesNotThrowAnyException() would be too strict.
+            Throwable thrown = catchThrowable(() -> pm.registerExternal(adapter));
+            assertThat(thrown).isNotInstanceOf(PluginModuleException.class);
+
+            // The container is assembled, refresh()'d, and validated (WR-01) BEFORE the Bukkit
+            // registration step that throws -- so its presence, with the executor bean inside,
+            // proves construction and validation both succeeded.
+            assertThat(adapter.getContext()).isNotNull();
+            assertThat(adapter.getContext().getBeanNamesForType(org.bukkit.command.CommandExecutor.class))
+                    .isNotEmpty();
         }
     }
 }
