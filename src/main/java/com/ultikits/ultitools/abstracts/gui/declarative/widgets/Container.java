@@ -16,7 +16,6 @@ import java.util.List;
  * <ul>
  *   <li>管理子 Widget 列表</li>
  *   <li>为子 Widget 分配槽位</li>
- *   <li>支持背景填充</li>
  * </ul>
  *
  * <p><strong>使用示例：</strong></p>
@@ -24,7 +23,6 @@ import java.util.List;
  * Container.builder()
  *     .child(ItemDisplay.builder(item).build())
  *     .child(TextButton.builder().text("Click").build())
- *     .background(backgroundIcon)
  *     .build();
  * }</pre>
  *
@@ -36,13 +34,10 @@ public class Container extends Widget {
 
     @NotNull
     private final List<Widget> children;
-    @Nullable
-    private final IconWrapper background;
 
     private Container(@NotNull Builder builder) {
         super(builder.key);
         this.children = Collections.unmodifiableList(new ArrayList<>(builder.children));
-        this.background = builder.background;
     }
 
     /**
@@ -60,11 +55,6 @@ public class Container extends Widget {
         return children;
     }
 
-    @Nullable
-    public IconWrapper getBackground() {
-        return background;
-    }
-
     @Override
     @NotNull
     public Element createElement() {
@@ -76,8 +66,6 @@ public class Container extends Widget {
      */
     public static class Builder implements WidgetBuilder<Container> {
         private final List<Widget> children = new ArrayList<>();
-        @Nullable
-        private IconWrapper background;
         @Nullable
         private SlotKey key;
 
@@ -93,11 +81,6 @@ public class Container extends Widget {
 
         public Builder children(@NotNull Widget... children) {
             Collections.addAll(this.children, children);
-            return this;
-        }
-
-        public Builder background(@Nullable IconWrapper background) {
-            this.background = background;
             return this;
         }
 

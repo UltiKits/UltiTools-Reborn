@@ -62,19 +62,6 @@ public class ContainerTest {
     }
 
     @Test
-    void testContainerWithBackground() {
-        IconWrapper background = IconWrapper.builder(new ItemStack(Material.GRAY_STAINED_GLASS_PANE))
-                // .name(" ") // Removed name test to avoid MockBukkit Adventure issue
-                .build();
-
-        Container container = Container.builder()
-                .background(background)
-                .build();
-
-        assertNotNull(container.getBackground());
-    }
-
-    @Test
     void testContainerWithKey() {
         Container container = Container.builder()
                 .key("main-container")

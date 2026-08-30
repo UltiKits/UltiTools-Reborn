@@ -50,7 +50,6 @@
  *     @Override
  *     public Widget build(BuildContext context) {
  *         return Container.builder()
- *             .background(IconWrapper.builder(glassPane).name(" ").build())
  *             .children(
  *                 // 标题
  *                 TextButton.builder()
@@ -62,7 +61,6 @@
  *                 GridView.<ItemStack>builder()
  *                     .startSlot(10)
  *                     .columns(7)
- *                     .rows(4)
  *                     .items(items, item -> ItemDisplay.builder(item)
  *                         .onClick(() -> buyItem(item))
  *                         .build())

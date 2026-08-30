@@ -26,7 +26,6 @@ import java.util.function.Function;
  * // 手动指定子 Widget
  * GridView.builder()
  *     .startSlot(10)
- *     .rows(4)
  *     .columns(7)
  *     .children(buttons)
  *     .build();
@@ -49,7 +48,6 @@ public class GridView<T> extends Widget {
 
     private final int startSlot;
     private final int columns;
-    private final int maxRows;
     @NotNull
     private final List<Widget> children;
 
@@ -57,7 +55,6 @@ public class GridView<T> extends Widget {
         super(builder.key);
         this.startSlot = builder.startSlot;
         this.columns = builder.columns;
-        this.maxRows = builder.maxRows;
         this.children = Collections.unmodifiableList(new ArrayList<>(builder.children));
     }
 
@@ -78,10 +75,6 @@ public class GridView<T> extends Widget {
 
     public int getColumns() {
         return columns;
-    }
-
-    public int getMaxRows() {
-        return maxRows;
     }
 
     @NotNull
@@ -113,7 +106,6 @@ public class GridView<T> extends Widget {
     public static class Builder<T> implements WidgetBuilder<GridView<T>> {
         private int startSlot = 0;
         private int columns = 9;
-        private int maxRows = 6;
         @NotNull
         private List<Widget> children = new ArrayList<>();
         @Nullable
@@ -126,11 +118,6 @@ public class GridView<T> extends Widget {
 
         public Builder<T> columns(int columns) {
             this.columns = columns;
-            return this;
-        }
-
-        public Builder<T> rows(int rows) {
-            this.maxRows = rows;
             return this;
         }
 
