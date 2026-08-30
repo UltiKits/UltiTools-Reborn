@@ -325,8 +325,10 @@ public abstract class Element {
      * pairing where it does not -- so a caller that never supplies a key sees exactly the
      * same index-based behaviour this method replaces.
      * <p>
-     * This is the shared implementation D-09 item 5 asks for: {@link ContainerElement} and
-     * {@link GridViewElement} were literal twins, each hand-rolling the same
+     * This is the shared implementation D-09 item 5 asks for:
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.ContainerElement} and
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridViewElement} were
+     * literal twins, each hand-rolling the same
      * {@code Math.min(size)} index pairing and never reading {@link Widget#getKey()}. Both
      * now call this method instead of maintaining their own copy, so the two classes cannot
      * drift apart the way they did before this plan.
