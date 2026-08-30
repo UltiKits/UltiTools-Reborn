@@ -7,9 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.bukkit.command.Command;
@@ -29,6 +34,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Comprehensive unit tests for UsageLockValidator.
@@ -924,6 +931,84 @@ class UsageLockValidatorTest {
                             + "class declares ALL -- if class-level had incorrectly won, this would fail");
             assertFalse(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
                     "method-level SENDER still blocks the SAME sender's second acquisition");
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@link #senderLocks}/{@link #serverLocks} are now registered with the live
+     * {@link PlayerCacheManager} (lazy first-use, triggered from {@link
+     * UsageLockValidator#validate}), so a quitting player's lock entries are pruned through the
+     * REAL quit path -- {@link PlayerCacheManager#onPlayerQuit(UUID)}, the same method {@code
+     * PluginManager}'s {@code PlayerQuitEvent} listener calls -- rather than by calling {@link
+     * UsageLockValidator#clearPlayerLocks(UUID)} directly. These assertions fail on the
+     * pre-migration build: nothing was ever registered, so {@code onPlayerQuit} had no tracked
+     * field to sweep.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager quit-based sweep (GEN-08, D-03)")
+    class PlayerCacheSweepTests {
+
+        private PlayerCacheManager liveManager;
+
+        @BeforeEach
+        void wireLiveManager() {
+            liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
+        private Map<UUID, Set<String>> senderLocksField() throws Exception {
+            Field field = UsageLockValidator.class.getDeclaredField("senderLocks");
+            field.setAccessible(true);
+            return (Map<UUID, Set<String>>) field.get(validator);
+        }
+
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
+        private Map<String, UUID> serverLocksField() throws Exception {
+            Field field = UsageLockValidator.class.getDeclaredField("serverLocks");
+            field.setAccessible(true);
+            return (Map<String, UUID>) field.get(validator);
+        }
+
+        @Test
+        @DisplayName("A SENDER-scope lock entry is gone after its holder quits, observed through the real quit path")
+        void senderScopeLockGoneAfterRealQuitPath() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
+            CommandContext context = createPlayerContext(method, mockPlayer);
+
+            // validate() both acquires the lock (acquire-then-execute, D-02) and triggers lazy
+            // first-use registration with the live manager wired above.
+            assertTrue(validator.validate(context).isValid());
+            assertTrue(senderLocksField().containsKey(player1UUID));
+
+            liveManager.onPlayerQuit(player1UUID);
+
+            assertFalse(senderLocksField().containsKey(player1UUID),
+                    "the quitting player's own sender-lock entry must be removed");
+        }
+
+        @Test
+        @DisplayName("An ALL-scope lock held by the quitting player is gone; one held by another player survives")
+        void allScopeLockGoneOnlyForQuittingHolder() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            String otherMethodKey = method.toString() + "#other";
+
+            CommandContext context = createPlayerContext(method, mockPlayer);
+            assertTrue(validator.validate(context).isValid());
+            assertTrue(serverLocksField().containsKey(method.toString()));
+
+            // A second, distinct ALL-scope entry held by a DIFFERENT player -- inserted directly
+            // since acquiring the SAME method key twice would be blocked by design.
+            serverLocksField().put(otherMethodKey, player2UUID);
+
+            liveManager.onPlayerQuit(player1UUID);
+
+            assertFalse(serverLocksField().containsKey(method.toString()),
+                    "the ALL-scope entry held by the quitting player must be removed");
+            assertEquals(player2UUID, serverLocksField().get(otherMethodKey),
+                    "an ALL-scope entry held by a DIFFERENT, still-online player must be untouched");
         }
     }
 }

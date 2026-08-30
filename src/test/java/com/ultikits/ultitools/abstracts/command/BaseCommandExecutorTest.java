@@ -13,6 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -43,6 +44,8 @@ import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -1153,6 +1156,47 @@ class BaseCommandExecutorTest {
             BareCommandExecutor executor = new BareCommandExecutor();
 
             assertFalse(executor.validateParameterCount(new String[]{"extra"}, "", mockPlayer, mockCommand));
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@link CooldownValidator}/{@link com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator}
+     * register their per-player state with {@link PlayerCacheManager} lazily, from their own
+     * first {@code validate(CommandContext)} call -- NOT from this executor's constructor. A
+     * bare construction (the shape a unit test, or a real module's own constructor, reaches
+     * long before any command is ever dispatched) must never even attempt contact with a core
+     * plugin that may not exist yet.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager registration is lazy, not eager at construction (GEN-08, D-03)")
+    class LazyPlayerCacheRegistrationTests {
+
+        @Test
+        @DisplayName("Constructing a subclass with no core plugin available neither throws nor registers")
+        void constructionWithNoCorePluginNeitherThrowsNorRegisters() {
+            assertDoesNotThrow(() -> new BareCommandExecutor());
+        }
+
+        @Test
+        @DisplayName("Constructing a subclass does not register anything even when the core plugin IS "
+                + "available -- registration is deferred to the validators' first validate() call")
+        void constructionDoesNotRegisterEvenWhenCoreAvailable() {
+            // The class-level @BeforeEach already makes UltiTools.getInstance() resolve to
+            // mockUltiTools -- wire IT (rather than registering a second, conflicting static
+            // mock) through to a real, live PlayerCacheManager so "core available" is genuine.
+            PlayerCacheManager liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            // lenient(): the whole point of this test is that construction never reaches either
+            // stub -- a strict-stubbing "unnecessary stubbing" failure here would be a false
+            // negative on the very behaviour being asserted.
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+
+            new BareCommandExecutor();
+
+            assertEquals(0, liveManager.getTrackedBeanCount(),
+                    "construction alone must not register the validators with PlayerCacheManager; "
+                            + "that only happens on their own first validate() call");
         }
     }
 

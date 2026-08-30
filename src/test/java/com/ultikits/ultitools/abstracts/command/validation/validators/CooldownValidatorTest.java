@@ -11,7 +11,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.UUID;
 
 import org.bukkit.command.Command;
@@ -31,6 +33,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Comprehensive unit tests for CooldownValidator.
@@ -611,6 +615,107 @@ class CooldownValidatorTest {
             assertTrue(remaining >= 1 && remaining <= 4,
                     "Expected the method's own 3s cooldown to win over the class's 30s, but remaining was: "
                             + remaining);
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@link #cooldowns} is now registered with the live {@link
+     * PlayerCacheManager} (lazy first-use, triggered from {@link CooldownValidator#validate}),
+     * so a quitting player's entry is pruned through the REAL quit path --
+     * {@link PlayerCacheManager#onPlayerQuit(UUID)}, the same method {@code PluginManager}'s
+     * {@code PlayerQuitEvent} listener calls -- rather than by calling {@link
+     * CooldownValidator#clearCooldowns(UUID)} directly. These assertions fail on the
+     * pre-migration build: nothing was ever registered, so {@code onPlayerQuit} had no tracked
+     * field to sweep.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager quit-based and time-based sweep (GEN-08, D-03)")
+    class PlayerCacheSweepTests {
+
+        private PlayerCacheManager liveManager;
+
+        @BeforeEach
+        void wireLiveManager() {
+            liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
+        private Map<UUID, Map<String, Long>> cooldownsField() throws Exception {
+            Field field = CooldownValidator.class.getDeclaredField("cooldowns");
+            field.setAccessible(true);
+            return (Map<UUID, Map<String, Long>>) field.get(validator);
+        }
+
+        @Test
+        @DisplayName("A cooldown entry is gone after the player quits, observed through the real quit path")
+        void cooldownGoneAfterRealQuitPath() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithCooldown");
+            CommandContext context = createPlayerContext(method);
+
+            // validate() triggers lazy first-use registration with the live manager wired above.
+            validator.validate(context);
+            validator.applyCooldown(context);
+            assertTrue(validator.getRemainingCooldown(playerUUID, method.toString()) > 0);
+
+            liveManager.onPlayerQuit(playerUUID);
+
+            assertEquals(0, validator.getRemainingCooldown(playerUUID, method.toString()));
+            assertTrue(cooldownsField().get(playerUUID) == null,
+                    "the quitting player's own map entry must be removed, not merely read as expired");
+        }
+
+        @Test
+        @DisplayName("A still-online player's cooldown survives another player's quit")
+        void otherPlayersCooldownUntouchedByQuit() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithCooldown");
+            UUID otherPlayerUuid = UUID.randomUUID();
+            Player otherPlayer = mock(Player.class);
+            lenient().when(otherPlayer.getUniqueId()).thenReturn(otherPlayerUuid);
+
+            CommandContext context = createPlayerContext(method);
+            validator.validate(context);
+            validator.applyCooldown(context);
+
+            CommandContext otherContext = CommandContext.builder()
+                    .sender(otherPlayer)
+                    .command(mockCommand)
+                    .alias("test")
+                    .rawArgs(new String[]{})
+                    .matchedMethod(method)
+                    .build();
+            validator.validate(otherContext);
+            validator.applyCooldown(otherContext);
+
+            // playerUUID quits; otherPlayerUuid remains online.
+            liveManager.onPlayerQuit(playerUUID);
+
+            assertEquals(0, validator.getRemainingCooldown(playerUUID, method.toString()));
+            assertTrue(validator.getRemainingCooldown(otherPlayerUuid, method.toString()) > 0,
+                    "a sweep triggered by one player's quit must not touch another, still-online player's cooldown");
+        }
+
+        @Test
+        @DisplayName("An expired cooldown is removed by the time-based sweep, with no quit event")
+        void expiredCooldownRemovedByTimeBasedSweepNoQuit() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithCooldown");
+            CommandContext context = createPlayerContext(method);
+
+            // Register via lazy first-use, then force the recorded cooldown into the past --
+            // deterministic "expired but never swept" without depending on wall-clock waiting.
+            validator.validate(context);
+            validator.applyCooldown(context);
+            cooldownsField().get(playerUUID).put(method.toString(), System.currentTimeMillis() - 1000L);
+
+            // The time-based sweep -- PlayerCacheManager.sweepExpiredEntries() -- NOT a quit event.
+            liveManager.sweepExpiredEntries();
+
+            Map<String, Long> remaining = cooldownsField().get(playerUUID);
+            assertTrue(remaining == null || remaining.isEmpty(),
+                    "cleanupExpired (reached via ExpiringPlayerCache.sweepExpired()) must actually "
+                            + "remove the stale entry from the map, not merely make it read as expired");
         }
     }
 }
