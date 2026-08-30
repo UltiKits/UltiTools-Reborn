@@ -718,4 +718,90 @@ class CooldownValidatorTest {
                             + "remove the stale entry from the map, not merely make it read as expired");
         }
     }
+
+    /**
+     * GEN-08's own acceptance criterion (D-05): "assert both maps' size returns to 0 after 100
+     * players quit". N = 100 is the stated floor. Both tests here drive the quit through the
+     * real quit path -- {@link PlayerCacheManager#onPlayerQuit(UUID)} -- and Test 2 distinguishes
+     * a correct per-player sweep from a blunt clear by keeping a subset of senders online.
+     */
+    @Nested
+    @DisplayName("GEN-08 soak: state returns to bounded after N distinct senders quit (D-05)")
+    class Gen08SoakTests {
+
+        private static final int SOAK_N = 100;
+
+        private PlayerCacheManager liveManager;
+
+        @BeforeEach
+        void wireLiveManager() {
+            liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @Test
+        @DisplayName("After " + SOAK_N + " distinct senders trigger and quit, cooldown state for all of them is empty")
+        void stateEmptyAfterNDistinctSendersQuit() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithCooldown");
+            UUID[] senders = new UUID[SOAK_N];
+
+            for (int i = 0; i < SOAK_N; i++) {
+                UUID senderUuid = UUID.randomUUID();
+                senders[i] = senderUuid;
+                Player sender = mock(Player.class);
+                lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
+                CommandContext context = CommandContext.builder()
+                        .sender(sender).command(mockCommand).alias("test")
+                        .rawArgs(new String[]{}).matchedMethod(method).build();
+                validator.validate(context);
+                validator.applyCooldown(context);
+            }
+
+            for (UUID senderUuid : senders) {
+                liveManager.onPlayerQuit(senderUuid);
+            }
+
+            for (UUID senderUuid : senders) {
+                assertEquals(0, validator.getRemainingCooldown(senderUuid, method.toString()));
+            }
+        }
+
+        @Test
+        @DisplayName("With a subset of the " + SOAK_N + " senders still online, exactly the offline "
+                + "senders' state is gone and the online senders' state remains")
+        void distinguishesCorrectSweepFromBluntClear() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("methodWithCooldown");
+            UUID[] senders = new UUID[SOAK_N];
+
+            for (int i = 0; i < SOAK_N; i++) {
+                UUID senderUuid = UUID.randomUUID();
+                senders[i] = senderUuid;
+                Player sender = mock(Player.class);
+                lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
+                CommandContext context = CommandContext.builder()
+                        .sender(sender).command(mockCommand).alias("test")
+                        .rawArgs(new String[]{}).matchedMethod(method).build();
+                validator.validate(context);
+                validator.applyCooldown(context);
+            }
+
+            // Odd-indexed senders quit; even-indexed senders remain online.
+            for (int i = 1; i < SOAK_N; i += 2) {
+                liveManager.onPlayerQuit(senders[i]);
+            }
+
+            for (int i = 0; i < SOAK_N; i++) {
+                if (i % 2 == 1) {
+                    assertEquals(0, validator.getRemainingCooldown(senders[i], method.toString()),
+                            "offline sender #" + i + " must have its cooldown removed");
+                } else {
+                    assertTrue(validator.getRemainingCooldown(senders[i], method.toString()) > 0,
+                            "still-online sender #" + i + " must retain its cooldown -- a blunt clear "
+                                    + "would wrongly wipe this too");
+                }
+            }
+        }
+    }
 }

@@ -1011,4 +1011,159 @@ class UsageLockValidatorTest {
                     "an ALL-scope entry held by a DIFFERENT, still-online player must be untouched");
         }
     }
+
+    /**
+     * GEN-08's own acceptance criterion (D-05): "assert both maps' size returns to 0 after 100
+     * players quit". N = 100 is the stated floor. Each test distinguishes a correct per-player
+     * sweep from a blunt clear by keeping a subset of senders online.
+     */
+    @Nested
+    @DisplayName("GEN-08 soak: state returns to bounded after N distinct senders quit (D-05)")
+    class Gen08SoakTests {
+
+        private static final int SOAK_N = 100;
+
+        private PlayerCacheManager liveManager;
+
+        @BeforeEach
+        void wireLiveManager() {
+            liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+        }
+
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
+        private Map<UUID, Set<String>> senderLocksField() throws Exception {
+            Field field = UsageLockValidator.class.getDeclaredField("senderLocks");
+            field.setAccessible(true);
+            return (Map<UUID, Set<String>>) field.get(validator);
+        }
+
+        @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
+        private Map<String, UUID> serverLocksField() throws Exception {
+            Field field = UsageLockValidator.class.getDeclaredField("serverLocks");
+            field.setAccessible(true);
+            return (Map<String, UUID>) field.get(validator);
+        }
+
+        @Test
+        @DisplayName("After " + SOAK_N + " distinct senders acquire and quit, sender-scoped lock state for all of them is empty")
+        void senderScopeStateEmptyAfterNDistinctSendersQuit() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
+            UUID[] senders = soakAcquireSenderLocks(method, SOAK_N);
+
+            for (UUID senderUuid : senders) {
+                liveManager.onPlayerQuit(senderUuid);
+            }
+
+            for (UUID senderUuid : senders) {
+                assertFalse(senderLocksField().containsKey(senderUuid));
+            }
+        }
+
+        @Test
+        @DisplayName("With a subset of the " + SOAK_N + " sender-scope holders still online, exactly the "
+                + "offline holders' locks are gone and the online holders' locks remain")
+        void senderScopeDistinguishesCorrectSweepFromBluntClear() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
+            UUID[] senders = soakAcquireSenderLocks(method, SOAK_N);
+
+            // Odd-indexed senders quit; even-indexed senders remain online.
+            for (int i = 1; i < SOAK_N; i += 2) {
+                liveManager.onPlayerQuit(senders[i]);
+            }
+
+            for (int i = 0; i < SOAK_N; i++) {
+                if (i % 2 == 1) {
+                    assertFalse(senderLocksField().containsKey(senders[i]),
+                            "offline holder #" + i + " must have its sender-scope lock removed");
+                } else {
+                    assertTrue(senderLocksField().containsKey(senders[i]),
+                            "still-online holder #" + i + " must retain its sender-scope lock -- a "
+                                    + "blunt clear would wrongly wipe this too");
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("After " + SOAK_N + " distinct ALL-scope holders quit, server-scoped lock state for all of them is empty")
+        void serverScopeStateEmptyAfterNDistinctHoldersQuit() throws Exception {
+            UUID[] holders = soakInsertServerLocks(SOAK_N);
+
+            for (UUID holderUuid : holders) {
+                liveManager.onPlayerQuit(holderUuid);
+            }
+
+            assertTrue(serverLocksField().isEmpty());
+        }
+
+        @Test
+        @DisplayName("With a subset of the " + SOAK_N + " ALL-scope holders still online, exactly the "
+                + "offline holders' locks are gone and the online holders' locks remain")
+        void serverScopeDistinguishesCorrectSweepFromBluntClear() throws Exception {
+            UUID[] holders = soakInsertServerLocks(SOAK_N);
+            Map<String, UUID> serverLocks = serverLocksField();
+
+            // Odd-indexed holders quit; even-indexed holders remain online.
+            for (int i = 1; i < SOAK_N; i += 2) {
+                liveManager.onPlayerQuit(holders[i]);
+            }
+
+            for (int i = 0; i < SOAK_N; i++) {
+                String methodKey = "soak-method-key-" + i;
+                if (i % 2 == 1) {
+                    assertFalse(serverLocks.containsKey(methodKey),
+                            "offline holder #" + i + "'s ALL-scope entry must be removed");
+                } else {
+                    assertEquals(holders[i], serverLocks.get(methodKey),
+                            "still-online holder #" + i + " must retain its ALL-scope entry -- a "
+                                    + "blunt clear would wrongly wipe this too");
+                }
+            }
+        }
+
+        /**
+         * Triggers lazy first-use registration via one genuine {@code validate()} acquisition,
+         * then acquires a distinct SENDER-scope lock for each of {@code n} newly-mocked senders
+         * via the real {@code validate()} path.
+         */
+        private UUID[] soakAcquireSenderLocks(Method method, int n) {
+            UUID[] senders = new UUID[n];
+            for (int i = 0; i < n; i++) {
+                UUID senderUuid = UUID.randomUUID();
+                senders[i] = senderUuid;
+                Player sender = mock(Player.class);
+                lenient().when(sender.getUniqueId()).thenReturn(senderUuid);
+                CommandContext context = createPlayerContext(method, sender);
+                assertTrue(validator.validate(context).isValid(),
+                        "each of the " + n + " senders must be a FIRST, distinct acquisition");
+            }
+            return senders;
+        }
+
+        /**
+         * Triggers lazy first-use registration via one genuine SENDER-scope acquisition (ALL-scope
+         * entries are inserted directly below since only one real holder can occupy a given
+         * method key at a time -- generating n distinct real @UsageLimit(ALL) fixture methods is
+         * impractical; the removal predicate under test is identical either way, see
+         * PlayerCacheManager's value-side sweep branch), then inserts {@code n} distinct
+         * methodKey -> holder entries directly into {@code serverLocks}.
+         */
+        private UUID[] soakInsertServerLocks(int n) throws Exception {
+            Method senderMethod = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
+            Player registrationTrigger = mock(Player.class);
+            lenient().when(registrationTrigger.getUniqueId()).thenReturn(UUID.randomUUID());
+            validator.validate(createPlayerContext(senderMethod, registrationTrigger));
+
+            Map<String, UUID> serverLocks = serverLocksField();
+            UUID[] holders = new UUID[n];
+            for (int i = 0; i < n; i++) {
+                UUID holderUuid = UUID.randomUUID();
+                holders[i] = holderUuid;
+                serverLocks.put("soak-method-key-" + i, holderUuid);
+            }
+            return holders;
+        }
+    }
 }
