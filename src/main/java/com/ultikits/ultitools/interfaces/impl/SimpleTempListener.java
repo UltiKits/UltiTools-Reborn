@@ -63,6 +63,14 @@ public class SimpleTempListener<E extends Event> implements TempListener {
             Collections.newSetFromMap(new WeakHashMap<>());
 
     public void register() {
+        if (eventClass == null) {
+            throw new IllegalStateException(
+                    "Cannot register a TempListener: eventClass is not set.");
+        }
+        if (eventHandler == null) {
+            throw new IllegalStateException(
+                    "Cannot register a TempListener: eventHandler is not set.");
+        }
         if (!REGISTERED.add(this)) {
             // Already registered - a second register() call on the same instance is a no-op
             // rather than a silent duplicate Bukkit registration.
