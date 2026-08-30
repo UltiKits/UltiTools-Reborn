@@ -361,24 +361,37 @@ public final class ReflectionUtil {
     }
 
     /**
-     * WR-02 (05-REVIEW.md) overload: same method-level-first resolution as {@link
-     * #resolveMethodOrClassAnnotation(Method, Class)}, but ALSO tries {@code executorClass}'s
-     * own class-level declaration before falling back to {@code method}'s declaring class.
+     * WR-02 (05-REVIEW.md): resolves {@code annotationType} in THREE steps, most-derived-first:
+     * (1) {@code method}'s own declaration, (2) {@code executorClass}'s own class-level
+     * declaration -- the CONCRETE, most-derived executor class actually loaded, the SAME class
+     * {@code PluginManager}'s load-time gate inspects via {@code executor.getClass()} -- (3)
+     * {@code method.getDeclaringClass()}'s class-level declaration, for a shared abstract base
+     * that declares BOTH the mapping method and the annotation together.
      * <p>
-     * TODO(WR-02 GREEN): {@code executorClass} is not yet consulted -- this currently delegates
-     * to the same two-step (method, then {@code method.getDeclaringClass()}) resolution as the
-     * 2-arg overload, so a class-level annotation declared ONLY on a concrete executor subclass
-     * (not on the ancestor that declares an inherited, unoverridden {@code @CmdMapping} method)
-     * is still not found. That is exactly the WR-02 defect this overload exists to close; the
-     * GREEN commit fills in the {@code executorClass}-own check.
+     * Step (2) is what {@link #resolveMethodOrClassAnnotation(Method, Class)} (the 2-arg
+     * overload) cannot do: for an inherited, unoverridden {@code @CmdMapping} method, {@code
+     * method.getDeclaringClass()} is whatever ANCESTOR first declared it -- never the concrete
+     * subclass, since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. A
+     * class-level annotation declared ONLY on such a subclass previously passed {@code
+     * PluginManager}'s load-time gate (which correctly checks {@code executor.getClass()}) but
+     * was never found by {@code CooldownValidator}/{@code UsageLockValidator} at runtime -- the
+     * gate's "fine to load" was a false assurance. Step (3) is kept as a further fallback so a
+     * shared abstract base that declares both the mapping and the annotation together -- the
+     * pre-WR-02 working case -- is unaffected.
+     * <p>
+     * {@code executorClass} is checked as a DIRECT declaration only (no ancestor walk of its
+     * own): if the concrete class itself does not carry the annotation, step (3) already covers
+     * the "declared on an ancestor of the mapping method" case, and there is no third distinct
+     * class to consult for the same annotation type.
      *
      * @param method         the matched command mapping method <br> 已匹配的命令映射方法
      * @param executorClass  the concrete {@code BaseCommandExecutor} class dispatching this
      *                       command -- the SAME class {@code PluginManager}'s load-time gate
-     *                       inspects -- or {@code null} to fall back to the declaring-class-only
-     *                       resolution <br> 分发本次命令的具体 {@code BaseCommandExecutor}
-     *                       类——与 {@code PluginManager} 加载时门禁检查的是同一个类——为
-     *                       {@code null} 时回退到仅声明类的解析
+     *                       inspects -- or {@code null} to fall back to the pre-WR-02,
+     *                       declaring-class-only resolution <br> 分发本次命令的具体
+     *                       {@code BaseCommandExecutor} 类——与 {@code PluginManager} 加载时
+     *                       门禁检查的是同一个类——为 {@code null} 时回退到 WR-02 之前的、
+     *                       仅声明类的解析
      * @param annotationType the annotation type to resolve <br> 要解析的注解类型
      * @param <A>            the annotation type <br> 注解类型
      * @return the resolved annotation, or {@code null} if none of method, {@code executorClass},
@@ -391,6 +404,12 @@ public final class ReflectionUtil {
         A onMethod = method.getAnnotation(annotationType);
         if (onMethod != null) {
             return onMethod;
+        }
+        if (executorClass != null) {
+            A onExecutorClass = executorClass.getAnnotation(annotationType);
+            if (onExecutorClass != null) {
+                return onExecutorClass;
+            }
         }
         return method.getDeclaringClass().getAnnotation(annotationType);
     }

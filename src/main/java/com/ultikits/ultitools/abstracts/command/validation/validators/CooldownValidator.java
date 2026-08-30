@@ -289,23 +289,31 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     
     /**
      * Resolves the cooldown for {@code method}: the method's own {@code @CmdCD}, falling back
-     * to a class-level {@code @CmdCD} on its declaring class, falling back to
-     * {@link #defaultCooldownSeconds} when neither is present -- most-derived-wins, via
-     * {@link ReflectionUtil#resolveMethodOrClassAnnotation}. This is the SAME resolution
-     * {@code PluginManager}'s load-time refusal already treats as satisfying the contract
-     * (SILENT-11 / D-01 follow-up): a class-level-only {@code @CmdCD} that passes the load-time
-     * check now actually cools down every mapping that does not declare its own.
+     * to a class-level {@code @CmdCD} on the CONCRETE executor class dispatching this command,
+     * falling back to a class-level {@code @CmdCD} on the method's declaring class, falling back
+     * to {@link #defaultCooldownSeconds} when none is present -- most-derived-wins, via {@link
+     * ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)}. This is the SAME
+     * resolution {@code PluginManager}'s load-time refusal treats as satisfying the contract
+     * (SILENT-11 / D-01 follow-up, WR-02 / 05-REVIEW.md fix): a class-level {@code @CmdCD} that
+     * passes the load-time check -- whether declared on a shared abstract base or on the
+     * concrete executor class itself -- now actually cools down every inherited mapping that
+     * does not declare its own.
      * <p>
-     * 解析 {@code method} 的冷却时间：方法自身的 {@code @CmdCD}，若无则回退到其声明类上的类级
-     * {@code @CmdCD}，两者都不存在时回退到 {@link #defaultCooldownSeconds}——方法级优先，经由
-     * {@link ReflectionUtil#resolveMethodOrClassAnnotation} 解析。这与 {@code PluginManager} 加载时
-     * 拒绝检查已经采信的解析方式完全一致（SILENT-11 / D-01 追加任务）：一个仅在类级声明、通过了
-     * 加载时检查的 {@code @CmdCD}，现在会真正冷却每一个未声明自己 {@code @CmdCD} 的映射。
+     * 解析 {@code method} 的冷却时间：方法自身的 {@code @CmdCD}，若无则回退到分发本次命令的具体
+     * 执行器类上的类级 {@code @CmdCD}，再无则回退到方法声明类上的类级 {@code @CmdCD}，均不存在时
+     * 回退到 {@link #defaultCooldownSeconds}——方法级优先，经由 {@link
+     * ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)} 解析。这与
+     * {@code PluginManager} 加载时拒绝检查所采信的解析方式完全一致（SILENT-11 / D-01 追加任务，
+     * WR-02 / 05-REVIEW.md 修复）：一个通过了加载时检查的类级 {@code @CmdCD}——无论声明在共享的
+     * 抽象基类上，还是声明在具体执行器类自身上——现在都会真正冷却每一个未声明自己
+     * {@code @CmdCD} 的继承映射。
      *
      * @param method        the matched command mapping method <br> 已匹配的命令映射方法
      * @param executorClass the concrete executor class dispatching this command (WR-02,
-     *                      05-REVIEW.md), or {@code null} when unavailable <br> 分发本次命令的
-     *                      具体执行器类（WR-02，05-REVIEW.md）；不可用时为 {@code null}
+     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
+     *                      pre-WR-02, declaring-class-only resolution in that case <br>
+     *                      分发本次命令的具体执行器类（WR-02，05-REVIEW.md）；不可用时为
+     *                      {@code null}，此时回退到 WR-02 之前的、仅声明类的解析
      * @return the resolved cooldown in seconds <br> 解析出的冷却秒数
      * @since 6.3.0
      */

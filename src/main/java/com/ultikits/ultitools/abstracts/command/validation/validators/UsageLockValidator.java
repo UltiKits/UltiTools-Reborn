@@ -265,26 +265,34 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
     
     /**
      * Resolves the effective {@code @UsageLimit} for {@code method}: the method's own
-     * declaration, falling back to a class-level one on its declaring class -- most-derived
-     * wins, via {@link ReflectionUtil#resolveMethodOrClassAnnotation}. This is the SAME
-     * resolution {@code PluginManager}'s load-time refusal already treats as satisfying the
-     * contract (SILENT-11 / D-01 follow-up): a class-level-only {@code @UsageLimit} that passes
-     * the load-time check now actually locks every mapping that does not declare its own.
+     * declaration, falling back to a class-level one on the CONCRETE executor class dispatching
+     * this command, falling back to a class-level one on the method's declaring class --
+     * most-derived-wins, via {@link ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class,
+     * Class)}. This is the SAME resolution {@code PluginManager}'s load-time refusal treats as
+     * satisfying the contract (SILENT-11 / D-01 follow-up, WR-02 / 05-REVIEW.md fix): a
+     * class-level {@code @UsageLimit} that passes the load-time check -- whether declared on a
+     * shared abstract base or on the concrete executor class itself -- now actually locks every
+     * inherited mapping that does not declare its own.
      * <p>
-     * 解析 {@code method} 生效的 {@code @UsageLimit}：方法自身的声明，若无则回退到其声明类上的
-     * 类级声明——方法级优先，经由 {@link ReflectionUtil#resolveMethodOrClassAnnotation} 解析。这与
-     * {@code PluginManager} 加载时拒绝检查已经采信的解析方式完全一致（SILENT-11 / D-01 追加任务）：
-     * 一个仅在类级声明、通过了加载时检查的 {@code @UsageLimit}，现在会真正锁定每一个未声明自己
-     * {@code @UsageLimit} 的映射。
+     * 解析 {@code method} 生效的 {@code @UsageLimit}：方法自身的声明，若无则回退到分发本次命令的
+     * 具体执行器类上的类级声明，再无则回退到方法声明类上的类级声明——方法级优先，经由
+     * {@link ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)} 解析。这与
+     * {@code PluginManager} 加载时拒绝检查所采信的解析方式完全一致（SILENT-11 / D-01 追加任务，
+     * WR-02 / 05-REVIEW.md 修复）：一个通过了加载时检查的类级 {@code @UsageLimit}——无论声明在
+     * 共享的抽象基类上，还是声明在具体执行器类自身上——现在都会真正锁定每一个未声明自己
+     * {@code @UsageLimit} 的继承映射。
      *
      * @param method        the matched command mapping method, or {@code null} <br> 已匹配的命令
      *                      映射方法，可能为 {@code null}
      * @param executorClass the concrete executor class dispatching this command (WR-02,
-     *                      05-REVIEW.md), or {@code null} when unavailable <br> 分发本次命令的
-     *                      具体执行器类（WR-02，05-REVIEW.md）；不可用时为 {@code null}
+     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
+     *                      pre-WR-02, declaring-class-only resolution in that case <br>
+     *                      分发本次命令的具体执行器类（WR-02，05-REVIEW.md）；不可用时为
+     *                      {@code null}，此时回退到 WR-02 之前的、仅声明类的解析
      * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
-     *         neither the method nor its declaring class carries one <br> 解析出的注解；
-     *         {@code method} 为 {@code null}，或方法与其声明类均未携带该注解时为 {@code null}
+     *         neither the method, {@code executorClass}, nor its declaring class carries one
+     *         <br> 解析出的注解；{@code method} 为 {@code null}，或方法、
+     *         {@code executorClass} 与其声明类均未携带该注解时为 {@code null}
      * @since 6.3.0
      */
     private static UsageLimit resolveLimit(Method method, Class<?> executorClass) {
