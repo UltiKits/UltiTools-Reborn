@@ -12,6 +12,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Collections;
 
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -31,11 +32,14 @@ import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
@@ -375,6 +379,200 @@ class PluginManagerCommandContractTest {
                         "the surviving module's command executor bean must still be present after assembly");
             } finally {
                 instanceField.set(null, null);
+            }
+        }
+    }
+
+    // ==================== 05-06 Task 2: unknown @CmdParam.suggest key refused at load ====================
+
+    /**
+     * Fixture: {@code @CmdParam(suggest = "@nosuchkey")} -- no completer is registered under
+     * this key, so the module must be refused at load (D-07).
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"unknownkey"})
+    static class UnknownSuggestKeyExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "@nosuchkey") String target) {
+            // Test stub - not exercised
+        }
+    }
+
+    /**
+     * Fixture: {@code @CmdParam(suggest = "@players")} -- a built-in key, always registered.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"knownkey"})
+    static class KnownSuggestKeyExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "@players") String target) {
+            // Test stub - not exercised
+        }
+    }
+
+    /**
+     * Fixture: plain method-name notation naming a method that does not exist -- keeps the
+     * published i18n hint-text fallback and must NOT be refused (D-07 leaves this fallback
+     * deliberately unchanged; out of this check's scope entirely).
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"methodname"})
+    static class MethodNameSuggestExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "suggestDoesNotExist") String target) {
+            // Test stub - not exercised
+        }
+    }
+
+    /**
+     * Fixture: a key registered at runtime BEFORE this executor's own container is validated --
+     * must be treated as known.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"runtimekey"})
+    static class RuntimeKeySuggestExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "@fixtureRuntimeKey") String target) {
+            // Test stub - not exercised
+        }
+    }
+
+    /**
+     * Fixture: a {@code @PostConstruct} bean that registers its own completer key -- simulates a
+     * module registering a completer during its own load (i.e. during {@code
+     * pluginContext.refresh()}), which {@link SimpleContainer#registerSingleton(String, Object)}
+     * invokes synchronously (see its own javadoc), the same as {@code refresh()} does for scanned
+     * beans.
+     */
+    static class SelfRegisteringCompleterService {
+        @PostConstruct
+        public void registerCompleter() {
+            TabCompletionManager.getInstance().register(
+                    "@fixtureSelfRegisteredKey", ctx -> Collections.emptyList());
+        }
+    }
+
+    /**
+     * Fixture: uses the key {@link SelfRegisteringCompleterService} registers -- must NOT be
+     * refused when both beans are in the same container (the ordering this task pins).
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"selfkey"})
+    static class SelfKeySuggestExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "@fixtureSelfRegisteredKey") String target) {
+            // Test stub - not exercised
+        }
+    }
+
+    @Nested
+    @DisplayName("Task 2 (05-06): @CmdParam.suggest \"@key\" refused at load when unknown (D-07)")
+    class UnknownSuggestKeyTests {
+
+        @Test
+        @DisplayName("Test 1: an unknown @key refuses the module, naming class, method and key")
+        void unknownKeyRefusesLoad() {
+            UnknownSuggestKeyExecutor executor = new UnknownSuggestKeyExecutor();
+
+            PluginModuleException exception = assertThrows(PluginModuleException.class,
+                    () -> PluginManager.validateCommandExecutorContract(executor));
+
+            assertTrue(exception.getMessage().contains(UnknownSuggestKeyExecutor.class.getName()));
+            assertTrue(exception.getMessage().contains("giveCommand"));
+            assertTrue(exception.getMessage().contains("@nosuchkey"));
+        }
+
+        @Test
+        @DisplayName("Test 2: a known built-in key loads without incident")
+        void knownKeyLoadsWithoutIncident() {
+            KnownSuggestKeyExecutor executor = new KnownSuggestKeyExecutor();
+
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+        }
+
+        @Test
+        @DisplayName("Test 3: method-name notation naming a non-existent method loads -- keeps the i18n hint fallback, never refused")
+        void methodNameNotationNeverRefused() {
+            MethodNameSuggestExecutor executor = new MethodNameSuggestExecutor();
+
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+        }
+
+        @Test
+        @DisplayName("Test 4: one module's unknown-key refusal does not prevent a sibling module's container from validating cleanly")
+        void oneModuleFailingDoesNotBlockAnother() {
+            SimpleContainer badContainer = new SimpleContainer();
+            badContainer.registerSingleton("bad", new UnknownSuggestKeyExecutor());
+
+            SimpleContainer goodContainer = new SimpleContainer();
+            goodContainer.registerSingleton("good", new KnownSuggestKeyExecutor());
+
+            assertThrows(PluginModuleException.class,
+                    () -> PluginManager.validateCommandExecutorContracts(badContainer));
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContracts(goodContainer));
+        }
+
+        @Test
+        @DisplayName("Test 5: a key registered at runtime before the module loads is treated as known")
+        void runtimeRegisteredKeyTreatedAsKnown() {
+            TabCompletionManager.getInstance().register(
+                    "@fixtureRuntimeKey", ctx -> Collections.emptyList());
+            try {
+                RuntimeKeySuggestExecutor executor = new RuntimeKeySuggestExecutor();
+
+                assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+            } finally {
+                TabCompletionManager.getInstance().unregister("@fixtureRuntimeKey");
+            }
+        }
+
+        @Test
+        @DisplayName("Test 6: a module that registers its own completer key during its own load, and uses it, is not refused")
+        void moduleRegisteringOwnKeyDuringOwnLoadIsNotRefused() {
+            // SimpleContainer.registerSingleton invokes @PostConstruct synchronously (its own
+            // javadoc) -- registering the self-registering service into the SAME container
+            // before the executor mirrors pluginContext.refresh()'s real ordering: every bean's
+            // @PostConstruct runs during refresh(), and validateCommandExecutorContracts is only
+            // ever called strictly AFTER refresh() completes (assemblePluginContainer). This test
+            // pins that ordering explicitly rather than relying on it silently.
+            try {
+                SimpleContainer container = new SimpleContainer();
+                container.registerSingleton("selfRegisteringService", new SelfRegisteringCompleterService());
+                container.registerSingleton("executor", new SelfKeySuggestExecutor());
+
+                assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContracts(container));
+            } finally {
+                TabCompletionManager.getInstance().unregister("@fixtureSelfRegisteredKey");
             }
         }
     }
