@@ -2,6 +2,7 @@ package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -361,6 +362,47 @@ class TempListenerTest {
             // Assert - 只处理第一个事件
             assertThat(eventCount.get()).isEqualTo(1);
         }
+
+        @Test
+        @DisplayName("SILENT-13: 一次 build() 调用产生的实例应该同时具备过滤和注销能力")
+        void sameInstanceShouldFilterAndUnregister() {
+            // Arrange - ONE construction call, ONE instance, used for every assertion below.
+            AtomicInteger handledCount = new AtomicInteger(0);
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> event.getPlayer().getName().equals("Accepted"))
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+
+            // Act + Assert - capability 1: the filter drops a non-matching event
+            listener.register();
+            server.addPlayer("Rejected");
+            assertThat(handledCount.get()).isZero();
+
+            // Act + Assert - capability 2 (same instance): the filter delivers a matching event
+            server.addPlayer("Accepted");
+            assertThat(handledCount.get()).isEqualTo(1);
+
+            // Act + Assert - capability 3 (same instance): unregister() stops further delivery
+            listener.unregister();
+            server.addPlayer("Accepted");
+            assertThat(handledCount.get()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("缺少 eventHandler 时 register() 应该给出明确报错而不是裸 NPE")
+        void registerWithoutEventHandlerShouldFailWithMessage() {
+            // Arrange - the builder always has an eventClass (constructor parameter), so the
+            // only never-set element reachable through the builder is eventHandler.
+            TempListener listener = TempListener.common(PlayerJoinEvent.class).build();
+
+            // Act + Assert
+            assertThatThrownBy(listener::register)
+                    .isNotInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("eventHandler");
+        }
     }
 
     @Nested
@@ -387,6 +429,71 @@ class TempListenerTest {
 
             // Assert
             assertThat(eventCount.get()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("重复调用 unregister() 应该是无操作且不抛出异常")
+        void unregisterTwiceShouldBeNoOp() {
+            // Arrange
+            AtomicInteger eventCount = new AtomicInteger(0);
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .eventHandler(event -> {
+                        eventCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+
+            // Act + Assert
+            assertThatCode(() -> {
+                listener.unregister();
+                listener.unregister();
+            }).doesNotThrowAnyException();
+
+            server.addPlayer("AfterDoubleUnregister");
+            assertThat(eventCount.get()).isZero();
+        }
+
+        @Test
+        @DisplayName("从未注册过的监听器调用 unregister() 不应该抛出异常")
+        void unregisterNeverRegisteredShouldNotThrow() {
+            // Arrange
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .eventHandler(event -> false)
+                    .build();
+
+            // Act + Assert
+            assertThatCode(listener::unregister).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("注销一个监听器不应该影响同事件类型的另一个监听器")
+        void unregisterOneShouldNotAffectAnother() {
+            // Arrange
+            AtomicInteger firstHandled = new AtomicInteger(0);
+            AtomicInteger secondHandled = new AtomicInteger(0);
+            TempListener first = TempListener.common(PlayerJoinEvent.class)
+                    .eventHandler(event -> {
+                        firstHandled.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            TempListener second = TempListener.common(PlayerJoinEvent.class)
+                    .eventHandler(event -> {
+                        secondHandled.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            first.register();
+            second.register();
+
+            // Act
+            first.unregister();
+            server.addPlayer("StillListening");
+
+            // Assert - unregistering the first is scoped to that instance
+            assertThat(firstHandled.get()).isZero();
+            assertThat(secondHandled.get()).isEqualTo(1);
         }
     }
 
