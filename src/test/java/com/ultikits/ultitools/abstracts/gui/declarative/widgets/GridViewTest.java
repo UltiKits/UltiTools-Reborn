@@ -404,4 +404,41 @@ public class GridViewTest {
         assertEquals(3, gridView.getColumns());
         assertTrue(gridView.getChildren().isEmpty());
     }
+
+    // ==================================================================
+    // Task 3 (D-09): Container.background(...) and its silently no-op peers.
+    // ==================================================================
+
+    /**
+     * {@code Container.background(...)} had no obvious semantics to implement:
+     * {@code Container}, unlike {@link GridView}, carries no spatial bounds of its own
+     * (no startSlot/columns/rows) -- "fill the unoccupied slots" is only answerable by
+     * guessing a bounding region, and the only region actually available (the whole GUI, via
+     * {@code BuildContext.getSize()}) would silently overwrite content belonging to sibling
+     * subtrees the Container has no visibility into. Deleted rather than guessed, per this
+     * task's own instruction that a wrong implementation is worse than an honest removal on
+     * an {@code @ApiStatus.Experimental} class. See 05-13-SUMMARY.md's full builder-method
+     * inventory.
+     */
+    @Test
+    void containerNoLongerExposesBackground() throws Exception {
+        assertThrows(NoSuchMethodException.class,
+                () -> Container.Builder.class.getMethod("background", IconWrapper.class));
+        assertThrows(NoSuchMethodException.class,
+                () -> Container.class.getMethod("getBackground"));
+    }
+
+    /**
+     * {@code GridView.Builder.rows(...)} set a field ({@code maxRows}) that
+     * {@code calculateSlotForChild} never read -- the exact same no-op-fluent-method defect as
+     * {@code Container.background(...)}. Implementing an overflow rule here would have
+     * contradicted Task 2's own instruction not to invent one; deleted rather than guessed.
+     */
+    @Test
+    void gridViewNoLongerExposesRows() {
+        assertThrows(NoSuchMethodException.class,
+                () -> GridView.Builder.class.getMethod("rows", int.class));
+        assertThrows(NoSuchMethodException.class,
+                () -> GridView.class.getMethod("getMaxRows"));
+    }
 }
