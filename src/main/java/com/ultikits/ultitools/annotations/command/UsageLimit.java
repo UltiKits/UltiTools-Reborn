@@ -21,9 +21,15 @@ public @interface UsageLimit {
     LimitType value();
 
     /**
+     * Whether a console sender is subject to this limit, the same as a player sender.
+     * Defaults to {@code true} as of 6.3.0 -- a console sender is included unless a mapping
+     * opts out explicitly. <br>
+     * 控制台发送者是否与玩家发送者一样受此限制约束。自 6.3.0 起默认值为 {@code true}——除非映射显式排除，
+     * 否则控制台默认也受限制。
+     *
      * @return whether to contain console <br> 是否包含控制台
      */
-    boolean ContainConsole() default false;
+    boolean ContainConsole() default true;
 
     enum LimitType {
         NONE,

@@ -275,10 +275,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
                 }
                 try {
-                    // UsageLockValidator's acquire/release halves are deliberately NOT
-                    // chain-driven yet -- that ordering/ownership decision lands in a follow-up
-                    // task. Left exactly as-is here rather than half-migrated.
-                    lockValidator.acquireLock(context);
                     boolean commandSucceeded = false;
                     try {
                         method.setAccessible(true);
@@ -301,10 +297,13 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     } finally {
                         // Post-actions run once per validator that passed for THIS invocation, in
                         // chain order, whether the mapped method succeeded or threw.
+                        // UsageLockValidator's release is one of these post-actions as of D-02:
+                        // acquisition happened inside its validate() step (acquire-as-you-validate),
+                        // so it is no longer named by field here either -- lockValidator.releaseLock
+                        // is reached only via onComplete, only for a validator that actually ran.
                         for (CommandValidator ranValidator : ranValidators) {
                             ranValidator.onComplete(context, commandSucceeded);
                         }
-                        lockValidator.releaseLock(context);
                     }
                 } finally {
                     AuditableDataEntity.clearCurrentUser();
