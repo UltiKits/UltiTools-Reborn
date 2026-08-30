@@ -65,7 +65,27 @@ public class TabCompletionManager {
     
     private final Map<String, TabCompleter> completers = new ConcurrentHashMap<>();
     private final MethodInvocationCompleter methodCompleter = new MethodInvocationCompleter();
-    
+
+    /**
+     * Key -&gt; owner (05-06 / D-08, T-05-24). Populated only while a {@link
+     * #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window is active, so a
+     * completer registered through the plain public {@link #register(String, TabCompleter)} by a
+     * caller unaware of ownership is simply never recorded here -- "unowned", never swept by
+     * {@link #unregisterByOwner(String)}. Keyed by the completer KEY (a {@code String}), not by
+     * the completer's {@code Class} -- Phase 1 D-35/D-38 forbids static {@code Class}-keyed maps
+     * because they pin a plugin's ClassLoader; a String key holds nothing that does.
+     */
+    private final Map<String, String> keyOwners = new ConcurrentHashMap<>();
+
+    /**
+     * The owner currently attributed to registrations made via {@link #register(String,
+     * TabCompleter)} -- set by {@link #beginRegistrationScope(String)}, cleared by {@link
+     * #endRegistrationScope()}. {@code ThreadLocal} rather than a plain field because {@link
+     * #getInstance()} is one process-wide singleton and PluginManager's own module loading,
+     * while sequential today, should not silently corrupt ownership if that ever changes.
+     */
+    private final ThreadLocal<String> currentOwner = new ThreadLocal<>();
+
     /**
      * Private constructor - use getInstance().
      */
@@ -116,8 +136,14 @@ public class TabCompletionManager {
             throw new IllegalArgumentException("Key and completer must not be null");
         }
         completers.put(key, completer);
+        String owner = currentOwner.get();
+        if (owner != null) {
+            keyOwners.put(key, owner);
+        } else {
+            keyOwners.remove(key);
+        }
     }
-    
+
     /**
      * Unregisters a completer.
      * 注销补全器。
@@ -126,8 +152,99 @@ public class TabCompletionManager {
      */
     public void unregister(String key) {
         completers.remove(key);
+        keyOwners.remove(key);
     }
-    
+
+    /**
+     * Marks the beginning of a registration scope attributed to {@code owner} -- every completer
+     * key registered via {@link #register(String, TabCompleter)} while this scope is active is
+     * recorded as owned by {@code owner}, so {@link #unregisterByOwner(String)} can sweep it
+     * later without requiring caller code to pass an owner explicitly (05-06 / D-08's "explicit
+     * owner parameter on an internal registration path" -- the parameter is ambient rather than a
+     * new argument on the published {@link #register(String, TabCompleter)} signature, which
+     * stays frozen).
+     * <p>
+     * <b>ClassLoader-derived ownership was considered and rejected for this codebase.</b> Every
+     * internal {@code UltiToolsPlugin} module is loaded through ONE shared {@code
+     * URLClassLoader} covering the whole {@code plugins/} folder (see {@code
+     * PluginManager.init(ClassLoader)}) -- the identical structural finding already recorded at
+     * {@code PluginManager.validateAdditionalEntity}'s javadoc for D-19 -- so a completer
+     * instance's {@code getClass().getClassLoader()} cannot distinguish between two different
+     * modules here. An explicit scope is the only mechanism reachable from a module's only
+     * registration entry point (the public {@link #register(String, TabCompleter)}) that still
+     * correctly separates two modules' completers.
+     * <p>
+     * Not part of the frozen 6.2.5 singleton shape ({@link #getInstance()}, {@link
+     * #register(String, TabCompleter)}, {@link #unregister(String)}) -- new in 6.3.0, intended
+     * for {@code PluginManager}'s own module load/unload sequence, not for module authors.
+     * <p>
+     * Scopes do not nest: a second {@code beginRegistrationScope} call while one is already
+     * active simply replaces the current owner. {@code UltiTools}' own module loading is
+     * sequential -- one module's container is fully assembled (including its {@code
+     * pluginContext.refresh()}, where {@code @PostConstruct} runs) before the next module's load
+     * begins -- so nesting has never been required; this is a stated assumption, not an enforced
+     * invariant.
+     * <p>
+     * 标记一个归属于 {@code owner} 的注册作用域的开始——在此作用域激活期间通过
+     * {@link #register(String, TabCompleter)} 注册的每一个补全器键都会被记录为归
+     * {@code owner} 所有，使 {@link #unregisterByOwner(String)} 之后能够清理它们。
+     *
+     * @param owner the identifier (the framework uses the plugin's name) to attribute subsequent
+     *              registrations to <br> 后续注册要归属到的标识符（框架内部使用插件名）
+     * @since 6.3.0
+     */
+    public void beginRegistrationScope(String owner) {
+        currentOwner.set(owner);
+    }
+
+    /**
+     * Ends the current registration scope started by {@link #beginRegistrationScope(String)}.
+     * Registrations made after this call (and before another scope begins) are unowned and never
+     * swept by {@link #unregisterByOwner(String)} -- the same as every registration made before
+     * this mechanism existed.
+     * <p>
+     * 结束由 {@link #beginRegistrationScope(String)} 开始的当前注册作用域。
+     *
+     * @since 6.3.0
+     */
+    public void endRegistrationScope() {
+        currentOwner.remove();
+    }
+
+    /**
+     * Bulk-unregisters every completer key currently attributed to {@code owner} by an earlier
+     * {@link #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window, built
+     * entirely from the already-public {@link #unregister(String)} -- so removal semantics are
+     * identical to a caller unregistering each key by hand, just batched by owner (D-08: "No new
+     * public method is needed: {@code unregister(String)} already exists -- the bulk sweep can be
+     * built from it"). A key registered outside any scope (core built-ins, or any caller that
+     * never calls {@link #beginRegistrationScope(String)}) has no recorded owner and is never
+     * matched here, regardless of {@code owner}'s value.
+     * <p>
+     * 批量注销当前归属于 {@code owner} 的每一个补全器键，其实现完全建立在已公开的
+     * {@link #unregister(String)} 之上。
+     *
+     * @param owner the owner identifier to sweep; {@code null} matches nothing and is a no-op
+     *              <br> 要清理的所有者标识；{@code null} 不匹配任何内容，是一个空操作
+     * @return the number of keys unregistered <br> 被注销的键数量
+     * @since 6.3.0
+     */
+    public int unregisterByOwner(String owner) {
+        if (owner == null) {
+            return 0;
+        }
+        List<String> keysToRemove = new ArrayList<>();
+        for (Map.Entry<String, String> entry : keyOwners.entrySet()) {
+            if (owner.equals(entry.getValue())) {
+                keysToRemove.add(entry.getKey());
+            }
+        }
+        for (String key : keysToRemove) {
+            unregister(key);
+        }
+        return keysToRemove.size();
+    }
+
     /**
      * Gets a registered completer by key.
      * 根据键获取已注册的补全器。

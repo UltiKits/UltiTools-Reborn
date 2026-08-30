@@ -383,6 +383,11 @@ public class PluginManager {
                 playerCacheManager.unregisterBean(bean);
             }
         }
+        // Bulk-unregister this module's tab-completion completers so the singleton does not
+        // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
+        // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
+        // return 0 and throw nothing).
+        TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
         // Unregister @ModuleEventHandler handlers from EventBus
         EventBus eventBus = UltiTools.getInstance().getEventBus();
         if (eventBus != null) {
@@ -1696,7 +1701,19 @@ public class PluginManager {
         registerEntityOwnership(scope);
         plugin.setDataScope(scope);
         wireAop(pluginContext, scope);
-        pluginContext.refresh();
+        // T-05-24 / D-08: attribute any TabCompletionManager.register(...) call made during
+        // this plugin's own @PostConstruct (which runs synchronously inside refresh()) to this
+        // plugin, so unregister(UltiToolsPlugin) can sweep it on unload without pinning the
+        // module's ClassLoader. ClassLoader-derived ownership does not work here: every internal
+        // module shares ONE URLClassLoader (see init(ClassLoader) and validateAdditionalEntity's
+        // identical D-19 finding above) -- an explicit scope is the only mechanism that still
+        // separates two modules' completers.
+        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName());
+        try {
+            pluginContext.refresh();
+        } finally {
+            TabCompletionManager.getInstance().endRegistrationScope();
+        }
 
         // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
         // already fully assembles its argument unconditionally (D-14), so there is nothing left
