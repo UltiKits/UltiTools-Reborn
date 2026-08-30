@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -23,6 +24,7 @@ import java.util.logging.Level;
 import javax.sql.DataSource;
 
 import org.bukkit.Bukkit;
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -31,6 +33,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
@@ -38,6 +44,9 @@ import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
@@ -61,6 +70,7 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
 import lombok.Getter;
@@ -1704,8 +1714,141 @@ public class PluginManager {
             }
             pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
+
+        // SILENT-11 half 2 (D-01, D-04): every CommandExecutor bean this container just fully
+        // assembled -- autowired, @PostConstruct'd, refresh()'d -- is checked here, before
+        // registerBukkit() ever hands one to Bukkit's CommandMap. See
+        // validateCommandExecutorContracts's own javadoc for the fail-closed contract; both
+        // callers of assemblePluginContainer already wrap it in a try/catch that routes any
+        // PluginModuleException through logPluginInitializationFailure, so this refusal is
+        // module-granular for free -- no new try/catch is added here.
+        validateCommandExecutorContracts(pluginContext);
     }
-    
+
+    /**
+     * Refuses to load a module whose {@link BaseCommandExecutor} bean declares {@code @CmdCD} or
+     * {@code @UsageLimit} -- on a {@code @CmdMapping} method or on the executor class itself --
+     * while its OWN validator chain (the exact chain {@code onCommand} dispatches through, not a
+     * freshly built default one) holds no instance of the corresponding validator type
+     * (SILENT-11 / D-01 half 2, D-04). Every {@link CommandExecutor} bean in {@code pluginContext}
+     * is checked; a bean that is not a {@link BaseCommandExecutor} (the legacy
+     * {@code AbstractCommandExecutor} generation has no {@link
+     * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} at all) is skipped.
+     * <p>
+     * This is a STRUCTURAL check only -- it asks whether the required validator TYPE is present
+     * in the chain, never whether a given invocation would actually be blocked. No opt-out exists
+     * (D-04): a declared cooldown or usage limit that cannot be enforced is always a module-author
+     * bug, and Phase 3 D-08's module-granularity isolation -- this refusal alone fails the
+     * offending module, every other module in the same load pass still completes -- is the
+     * accepted escape hatch.
+     * <p>
+     * 拒绝加载：某个 {@link BaseCommandExecutor} bean 在 {@code @CmdMapping} 方法上或执行器类本身
+     * 声明了 {@code @CmdCD} 或 {@code @UsageLimit}，而它自己的验证器链（{@code onCommand} 实际派发
+     * 所经过的那一条，而不是重新构建的默认链）中不包含对应验证器类型的实例
+     * （SILENT-11 / D-01 第二部分, D-04）。{@code pluginContext} 中每一个 {@link CommandExecutor}
+     * bean 都会被检查；不是 {@link BaseCommandExecutor} 的 bean（旧一代
+     * {@code AbstractCommandExecutor} 根本没有 {@link
+     * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain}）会被跳过。
+     * <p>
+     * 这只是一个结构性检查——只问链中是否存在所需验证器的类型，从不问某次具体调用是否真的会被
+     * 拦下。此拒绝没有开关（D-04）：一个无法生效的冷却或使用限制声明永远是模块作者的错误，
+     * Phase 3 D-08 的模块粒度隔离——只有问题模块本身加载失败，同一次加载中的其余模块仍会完成——
+     * 是被接受的退路。
+     *
+     * @param pluginContext the just-assembled, just-{@code refresh()}ed container to scan for
+     *                       {@link CommandExecutor} beans <br> 刚组装、刚 refresh() 的容器，
+     *                       扫描其中的 {@link CommandExecutor} bean
+     * @throws PluginModuleException fail-closed (D-01, D-04), naming the offending class and,
+     *                                when known, the offending mapping method
+     */
+    static void validateCommandExecutorContracts(SimpleContainer pluginContext) {
+        for (String beanName : pluginContext.getBeanNamesForType(CommandExecutor.class)) {
+            CommandExecutor commandExecutor = pluginContext.getBean(beanName, CommandExecutor.class);
+            if (commandExecutor instanceof BaseCommandExecutor) {
+                validateCommandExecutorContract((BaseCommandExecutor) commandExecutor);
+            }
+        }
+    }
+
+    /**
+     * The per-executor half of {@link #validateCommandExecutorContracts(SimpleContainer)} --
+     * package-private, not private, so {@code PluginManagerCommandContractTest} (same package)
+     * can drive it directly with a hand-built fixture, without reflection or
+     * {@code setAccessible(true)}. Mirrors the test-seam rationale already used for
+     * {@link #logPluginInitializationFailure(String, Throwable)}: this is not {@code public}, so
+     * it never enters the published surface.
+     * <p>
+     * {@code @UsageLimit(LimitType.NONE)} is exempt -- it declares no limit to enforce, so
+     * requiring {@code UsageLockValidator} for it would refuse a legitimate no-op declaration.
+     *
+     * @param executor the already-constructed executor instance <br> 已经构造好的执行器实例
+     * @throws PluginModuleException fail-closed (D-01, D-04), naming the offending class and,
+     *                                when known, the offending mapping method
+     */
+    static void validateCommandExecutorContract(BaseCommandExecutor executor) {
+        List<CommandValidator> validators = executor.getValidatorChain().getValidators();
+        boolean hasCooldownValidator = false;
+        boolean hasUsageLockValidator = false;
+        for (CommandValidator validator : validators) {
+            hasCooldownValidator |= validator instanceof CooldownValidator;
+            hasUsageLockValidator |= validator instanceof UsageLockValidator;
+        }
+
+        Class<?> executorClass = executor.getClass();
+
+        if (executorClass.isAnnotationPresent(CmdCD.class) && !hasCooldownValidator) {
+            throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                    unenforceableCommandAnnotationMessage(executorClass, null, CmdCD.class, CooldownValidator.class));
+        }
+        UsageLimit classLevelUsageLimit = executorClass.getAnnotation(UsageLimit.class);
+        if (classLevelUsageLimit != null && classLevelUsageLimit.value() != UsageLimit.LimitType.NONE
+                && !hasUsageLockValidator) {
+            throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                    unenforceableCommandAnnotationMessage(executorClass, null, UsageLimit.class, UsageLockValidator.class));
+        }
+
+        for (Method method : ReflectionUtil.getAllMethods(executorClass)) {
+            if (!method.isAnnotationPresent(CmdMapping.class)) {
+                continue;
+            }
+            if (method.isAnnotationPresent(CmdCD.class) && !hasCooldownValidator) {
+                throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                        unenforceableCommandAnnotationMessage(executorClass, method, CmdCD.class, CooldownValidator.class));
+            }
+            UsageLimit methodUsageLimit = method.getAnnotation(UsageLimit.class);
+            if (methodUsageLimit != null && methodUsageLimit.value() != UsageLimit.LimitType.NONE
+                    && !hasUsageLockValidator) {
+                throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                        unenforceableCommandAnnotationMessage(executorClass, method, UsageLimit.class, UsageLockValidator.class));
+            }
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateCommandExecutorContract(BaseCommandExecutor)},
+     * naming the offending class and, when {@code method} is non-null, the offending mapping
+     * method -- mirroring {@link #additionalEntityRefusalMessage(String, Class, String)}'s
+     * message-builder shape.
+     *
+     * @param executorClass          the offending executor class <br> 问题执行器类
+     * @param method                 the offending mapping method, or {@code null} for a
+     *                                class-level declaration <br> 问题映射方法；类级声明时为
+     *                                {@code null}
+     * @param annotationType         the declared annotation ({@code @CmdCD} or
+     *                                {@code @UsageLimit}) <br> 声明的注解
+     * @param requiredValidatorType  the validator type the chain is missing <br> 链中缺失的验证器类型
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String unenforceableCommandAnnotationMessage(Class<?> executorClass, Method method,
+            Class<? extends Annotation> annotationType, Class<? extends CommandValidator> requiredValidatorType) {
+        String location = method != null ? "on method '" + method.getName() + "'" : "at the class level";
+        return "Command executor '" + executorClass.getName() + "' declares @" + annotationType.getSimpleName()
+                + " " + location + ", but its validator chain contains no "
+                + requiredValidatorType.getSimpleName() + " -- the annotation would be silently unenforced. "
+                + "Add " + requiredValidatorType.getSimpleName()
+                + " to createDefaultValidatorChain() or the ValidatorChain passed to the constructor.";
+    }
+
     /**
      * Validate constructor arguments for security.
      * <br>

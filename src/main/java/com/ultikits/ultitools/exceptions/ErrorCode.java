@@ -46,6 +46,7 @@ public enum ErrorCode {
     COMMAND_COOLDOWN_ACTIVE(4003, "Command on cooldown"),
     COMMAND_PARSE_ERROR(4004, "Command parse error"),
     COMMAND_EXECUTION_FAILED(4005, "Command execution failed"),
+    COMMAND_ANNOTATION_UNENFORCEABLE(4006, "Command annotation cannot be enforced by the validator chain"),
 
     // ===== Configuration Errors (5000-5999) =====
     CONFIG_ERROR(5000, "Configuration error"),
