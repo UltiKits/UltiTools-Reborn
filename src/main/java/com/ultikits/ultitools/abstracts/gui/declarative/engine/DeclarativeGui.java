@@ -148,10 +148,13 @@ public abstract class DeclarativeGui extends Gui {
     @Override
     public final void onOpen(@NotNull InventoryOpenEvent event) {
         if (!initialized) {
-            // 初始化渲染器
+            // 初始化渲染器。传入的是一个 Supplier，而不是构建好的 Widget——
+            // GuiRenderer 会在每一帧的开头重新调用 build(context)，这样状态变化才能
+            // 真正重新派生出 Widget 树（D-09 item 1；GuiRenderer 的这半改动来自 05-11
+            // 计划的 Task 1，这里的调用点更新属于 Task 2 的范围，为了保持编译通过
+            // 提前完成）。
             BuildContext context = BuildContext.root(player, getId(), getSize() / 9);
-            Widget rootWidget = build(context);
-            renderer.initialize(rootWidget, context);
+            renderer.initialize(() -> build(context), context);
             initialized = true;
         }
 

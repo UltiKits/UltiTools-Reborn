@@ -91,6 +91,11 @@ public abstract class Element {
                     "Cannot update " + this + " with " + newWidget);
         }
         _widget = newWidget;
+        // D-09 item 2: mark dirty here, in the BASE class, so StatefulElement and
+        // StatelessElement (which both call super.update() before their own logic)
+        // pick this up "for free" and move in step. Before this, only markNeedsBuild()
+        // ever set _dirty, so a Widget swap via update() never scheduled a rebuild.
+        _dirty = true;
     }
 
     /**
