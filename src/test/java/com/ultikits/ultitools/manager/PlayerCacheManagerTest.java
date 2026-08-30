@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -19,6 +20,7 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -104,6 +106,43 @@ class PlayerCacheManagerTest {
     static class ValidatorLikeService {
         @PlayerCache
         final Map<UUID, String> state = new HashMap<>();
+    }
+
+    static class ExpiringService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+        int sweepCount = 0;
+
+        @Override
+        public void sweepExpired() {
+            sweepCount++;
+        }
+    }
+
+    static class NonExpiringService {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+    }
+
+    static class ThrowingExpiringService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+
+        @Override
+        public void sweepExpired() {
+            throw new IllegalStateException("boom -- this participant always fails");
+        }
+    }
+
+    static class ExpiringWithDataService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, Long> expiryTimestamps = new HashMap<>();
+
+        @Override
+        public void sweepExpired() {
+            long now = System.currentTimeMillis();
+            expiryTimestamps.values().removeIf(ts -> ts < now);
+        }
     }
 
     static class CountingSavingService implements PlayerCacheSaver {
@@ -500,6 +539,102 @@ class PlayerCacheManagerTest {
                     .withFailMessage("unregistering one instance must not affect the other")
                     .containsKey(playerUuid);
             assertThat(second.state).doesNotContainKey(playerUuid);
+        }
+    }
+
+    @Nested
+    @DisplayName("Time-based expiry sweep on @Scheduled (D-03)")
+    class ExpirySweep {
+
+        @Test
+        @DisplayName("Invokes a registered ExpiringPlayerCache's hook with no player online and no quit event")
+        void invokesRegisteredExpiryHook() {
+            ExpiringService service = new ExpiringService();
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+
+            assertThat(service.sweepCount).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Does not disturb a registered object that exposes no expiry hook")
+        void leavesNonExpiringObjectUndisturbed() {
+            NonExpiringService service = new NonExpiringService();
+            UUID playerUuid = UUID.randomUUID();
+            service.state.put(playerUuid, "value");
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+
+            assertThat(service.state).containsKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("One participant's hook throwing does not prevent the others from running in the same pass")
+        void isolatesOneParticipantsFailure() {
+            ThrowingExpiringService failing = new ThrowingExpiringService();
+            ExpiringService healthy = new ExpiringService();
+            manager.registerBean(failing);
+            manager.registerBean(healthy);
+
+            assertThatCode(() -> manager.sweepExpiredEntries()).doesNotThrowAnyException();
+
+            assertThat(healthy.sweepCount).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Running the sweep twice with no intervening state change is idempotent")
+        void isIdempotentAcrossConsecutivePasses() {
+            ExpiringWithDataService service = new ExpiringWithDataService();
+            UUID expired = UUID.randomUUID();
+            UUID stillValid = UUID.randomUUID();
+            service.expiryTimestamps.put(expired, System.currentTimeMillis() - 60_000L);
+            service.expiryTimestamps.put(stillValid, System.currentTimeMillis() + 60_000L);
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+            assertThat(service.expiryTimestamps).doesNotContainKey(expired).containsKey(stillValid);
+
+            assertThatCode(() -> manager.sweepExpiredEntries()).doesNotThrowAnyException();
+            assertThat(service.expiryTimestamps)
+                    .withFailMessage("a second pass must remove nothing further")
+                    .doesNotContainKey(expired)
+                    .containsKey(stillValid);
+        }
+
+        @Test
+        @DisplayName("An object unregistered between two passes is not visited by the second")
+        void skipsAnObjectUnregisteredBetweenPasses() {
+            ExpiringService service = new ExpiringService();
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+            assertThat(service.sweepCount).isEqualTo(1);
+
+            manager.unregisterBean(service);
+            manager.sweepExpiredEntries();
+
+            assertThat(service.sweepCount)
+                    .withFailMessage("an unregistered object must not be visited by a later pass")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("sweepExpiredEntries is a void, no-arg @Scheduled method")
+        void isProperlyScheduled() throws NoSuchMethodException {
+            Method method = PlayerCacheManager.class.getDeclaredMethod("sweepExpiredEntries");
+
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+            assertThat(method.getParameterCount()).isEqualTo(0);
+
+            Scheduled scheduled = method.getAnnotation(Scheduled.class);
+            assertThat(scheduled)
+                    .withFailMessage("sweepExpiredEntries must be driven by the framework's own @Scheduled mechanism")
+                    .isNotNull();
+            assertThat(scheduled.period())
+                    .withFailMessage("period must be a positive, repeating interval, not a one-shot delayed task")
+                    .isPositive();
         }
     }
 }
