@@ -333,6 +333,7 @@ class PluginManagerCommandContractTest {
          */
         @Test
         @DisplayName("the offending module fails assembly while a sibling module's assembly still completes")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void offendingModuleFailsAssemblyWhileSiblingModuleStillCompletes() throws Exception {
             UltiTools ultiTools = mock(UltiTools.class);
             DependenceManagers dependenceManagers = mock(DependenceManagers.class);
