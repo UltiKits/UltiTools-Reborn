@@ -297,7 +297,7 @@ public class TabCompletionManager {
 
     /**
      * Resolves suggestions using an explicitly-resolved {@code @CmdParam.suggest()} value,
-     * rather than {@code context}'s {@link TabCompletionContext#getParameterName()} -- which
+     * rather than {@code context}'s {@link TabCompletionContext#parameterName} -- which
      * carries {@code @CmdParam.value()}, the parameter's DISPLAY NAME, not its suggestion
      * (05-06 / D-07 Pitfall 2, T-05-28). {@link #suggest(TabCompletionContext)} above is left
      * untouched for existing callers; this overload is the dual-notation entry point a caller
@@ -309,7 +309,7 @@ public class TabCompletionManager {
      * existing method-invocation completer (and its i18n hint-text fallback), unchanged.
      * <p>
      * 使用一个显式解析出的 {@code @CmdParam.suggest()} 值来生成建议，而不是 {@code context} 的
-     * {@link TabCompletionContext#getParameterName()}——后者携带的是 {@code @CmdParam.value()}，
+     * {@link TabCompletionContext#parameterName}——后者携带的是 {@code @CmdParam.value()}，
      * 即参数的显示名，而不是它的补全建议（05-06 / D-07 陷阱2, T-05-28）。
      *
      * @param context         the completion context <br> 补全上下文
