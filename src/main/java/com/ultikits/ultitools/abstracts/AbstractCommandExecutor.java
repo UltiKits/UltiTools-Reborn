@@ -32,6 +32,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandTabCompletionDispatch;
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
@@ -362,31 +363,6 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
 
 
     /**
-     * Checks whether the sender has permission.
-     * <p>
-     * 检查发送者是否有权限。
-     *
-     * @param sender The sender of the command. <br> 命令的发送者。
-     * @param method The method that matches the command. <br> 匹配命令的方法。
-     * @return Whether the sender has permission. <br> 发送者是否有权限。
-     */
-    private boolean checkPermission(CommandSender sender, Method method) {
-        if (!method.isAnnotationPresent(CmdMapping.class)) {
-            return true;
-        }
-        CmdMapping cmdMapping = method.getAnnotation(CmdMapping.class);
-        if (cmdMapping.permission().isEmpty()) {
-            return true;
-        }
-        String permission = cmdMapping.permission();
-        if (sender.hasPermission(permission)) {
-            return true;
-        }
-        sender.sendMessage(String.format(UltiTools.getInstance().i18n("需要权限"), permission));
-        return false;
-    }
-
-    /**
      * Checks whether the sender need to be an OP.
      * <p>
      * 检查发送者是否需要是OP。
@@ -401,27 +377,6 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
         }
         CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
         if (cmdExecutor.requireOp() && !sender.isOp()) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * Checks whether the sender need to be an OP.
-     * <p>
-     * 检查发送者是否需要是OP。
-     *
-     * @param sender The sender of the command. <br> 命令的发送者。
-     * @param method The method that matches the command. <br> 匹配命令的方法。
-     * @return Whether the sender need to be an OP. <br> 发送者是否需要是OP。
-     */
-    private boolean checkOp(CommandSender sender, Method method) {
-        if (!method.isAnnotationPresent(CmdMapping.class)) {
-            return true;
-        }
-        CmdMapping cmdMapping = method.getAnnotation(CmdMapping.class);
-        if (cmdMapping.requireOp() && !sender.isOp()) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
             return false;
         }
@@ -714,7 +669,8 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
             for (Map.Entry<String, Method> entry : mappings.entrySet()) {
                 Method method = entry.getValue();
                 String format = entry.getKey();
-                if (!checkPermission(player, method) || !checkOp(player, method)) {
+                if (!CommandTabCompletionDispatch.checkPermission(player, method)
+                        || !CommandTabCompletionDispatch.checkOp(player, method)) {
                     continue;
                 }
                 String arg = format.split(" ")[0];
@@ -956,7 +912,8 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
             Method method = entry.getValue();
             String format = entry.getKey();
             if (format.startsWith(command.substring(0, command.lastIndexOf(" ")))) {
-                if (checkPermission(player, method) && checkOp(player, method)) {
+                if (CommandTabCompletionDispatch.checkPermission(player, method)
+                            && CommandTabCompletionDispatch.checkOp(player, method)) {
                     perfectMatch.add(method);
                 }
             } else {
@@ -970,7 +927,8 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
                     }
                 }
                 if (match) {
-                    if (checkPermission(player, method) && checkOp(player, method)) {
+                    if (CommandTabCompletionDispatch.checkPermission(player, method)
+                                && CommandTabCompletionDispatch.checkOp(player, method)) {
                         methods.add(method);
                     }
                 }
@@ -1021,10 +979,11 @@ public abstract class AbstractCommandExecutor implements TabExecutor {
         if (!checkSender(commandSender, method)) {
             return true;
         }
-        if (!checkPermission(commandSender) || !checkPermission(commandSender, method)) {
+        if (!checkPermission(commandSender)
+                || !CommandTabCompletionDispatch.checkPermission(commandSender, method)) {
             return true;
         }
-        if (!checkOp(commandSender) || !checkOp(commandSender, method)) {
+        if (!checkOp(commandSender) || !CommandTabCompletionDispatch.checkOp(commandSender, method)) {
             return true;
         }
         if (checkLock(commandSender, method)) {
