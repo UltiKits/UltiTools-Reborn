@@ -169,6 +169,13 @@ public class GuiRenderer {
                 "rootContext must be assigned by initialize() before performBuild() can mount a root");
         rootElement = widget.createElement();
         rootElement.assignContext(context);
+        // The root Element's markNeedsBuild()/markChildNeedsBuild() bubbling terminates
+        // in a no-op once it reaches an Element with no parent — that IS the mounted root.
+        // Without this registration, State.setState() on a nested StatefulWidget mutates
+        // its field and marks the tree dirty, but nothing ever calls scheduleBuild(), so
+        // the mutation never reaches the Inventory. This is what closes the "setState ->
+        // automatic repaint" half of D-09/WIRE-02 for the documented CounterButton shape.
+        rootElement.setRootBuildScheduler(this::scheduleBuild);
         rootElement.mount(null);
     }
 
@@ -321,6 +328,7 @@ public class GuiRenderer {
         scheduler.cancelAll();
 
         if (rootElement != null) {
+            rootElement.setRootBuildScheduler(null);
             rootElement.unmount();
             rootElement = null;
         }
