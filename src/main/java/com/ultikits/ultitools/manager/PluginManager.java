@@ -2233,6 +2233,17 @@ public class PluginManager {
         context.refresh();
         adapter.setContext(context);
 
+        // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
+        // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
+        // enforce it (assemblePluginContainer's own last line), but registerExternal is a
+        // separate, parallel container-assembly path that built its own SimpleContainer and
+        // skipped straight to task/listener/command registration. Placed here -- immediately
+        // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
+        // registration, EventBus wiring, command/listener registration) -- mirroring the internal
+        // path's placement as the last step of container assembly, so a refusal leaves no partial
+        // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
+        validateCommandExecutorContracts(context);
+
         String pluginName = adapter.getPluginName();
 
         // 4. Register @Scheduled tasks

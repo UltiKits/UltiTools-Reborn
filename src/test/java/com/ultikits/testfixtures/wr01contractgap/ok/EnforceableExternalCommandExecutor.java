@@ -1,4 +1,4 @@
-package com.ultikits.ultitools.manager.wr01fixtures.ok;
+package com.ultikits.testfixtures.wr01contractgap.ok;
 
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -11,7 +11,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 
 /**
  * WR-01 fixture (05-REVIEW.md): the satisfied counterpart to {@code
- * com.ultikits.ultitools.manager.wr01fixtures.broken.UnenforceableExternalCommandExecutor} --
+ * com.ultikits.testfixtures.wr01contractgap.broken.UnenforceableExternalCommandExecutor} --
  * deliberately in a SEPARATE sub-package so each fixture can be scanned in isolation --
  * declares the SAME {@code @CmdCD} shape, but
  * keeps the default validator chain (which always carries {@code CooldownValidator}). Required

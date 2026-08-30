@@ -1,4 +1,4 @@
-package com.ultikits.ultitools.manager.wr01fixtures.broken;
+package com.ultikits.testfixtures.wr01contractgap.broken;
 
 import org.bukkit.plugin.java.JavaPlugin;
 

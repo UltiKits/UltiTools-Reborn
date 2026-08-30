@@ -23,6 +23,8 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import com.ultikits.testfixtures.externalplugininjection.ConnectorPluginFixture;
 import com.ultikits.testfixtures.externalplugininjection.JavaPluginInjectingService;
 import com.ultikits.testfixtures.externalplugininjection.UltiToolsPluginInjectingService;
+import com.ultikits.testfixtures.wr01contractgap.broken.ConnectorPluginFixtureBroken;
+import com.ultikits.testfixtures.wr01contractgap.ok.ConnectorPluginFixtureOk;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -32,8 +34,6 @@ import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.manager.wr01fixtures.broken.ConnectorPluginFixtureBroken;
-import com.ultikits.ultitools.manager.wr01fixtures.ok.ConnectorPluginFixtureOk;
 
 public class ExternalPluginAdapterTest {
     private JavaPlugin mockPlugin;
@@ -412,7 +412,7 @@ public class ExternalPluginAdapterTest {
             ConnectorPluginFixtureBroken connectorPlugin = MockBukkit.loadSimple(ConnectorPluginFixtureBroken.class);
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(connectorPlugin);
             assertThat(adapter.getScanPackage())
-                    .isEqualTo("com.ultikits.ultitools.manager.wr01fixtures.broken");
+                    .isEqualTo("com.ultikits.testfixtures.wr01contractgap.broken");
 
             assertThatThrownBy(() -> pm.registerExternal(adapter))
                     .isInstanceOf(PluginModuleException.class)
@@ -428,7 +428,7 @@ public class ExternalPluginAdapterTest {
             ConnectorPluginFixtureOk connectorPlugin = MockBukkit.loadSimple(ConnectorPluginFixtureOk.class);
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(connectorPlugin);
             assertThat(adapter.getScanPackage())
-                    .isEqualTo("com.ultikits.ultitools.manager.wr01fixtures.ok");
+                    .isEqualTo("com.ultikits.testfixtures.wr01contractgap.ok");
 
             // See this class's javadoc: registerExternal(...) reaches WR-01's validation and
             // MUST NOT refuse a satisfied contract -- but the LATER Bukkit CommandMap step
