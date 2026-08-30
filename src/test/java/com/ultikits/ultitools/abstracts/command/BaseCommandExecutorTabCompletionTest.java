@@ -6,9 +6,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -24,6 +27,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
+import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -265,6 +269,101 @@ class BaseCommandExecutorTabCompletionTest {
     }
 
     // ========================================================================================
+    // Task 3: the old base class becomes a shell -- the parity condition is pinned
+    // ========================================================================================
+
+    @Nested
+    @DisplayName("Task 3: AbstractCommandExecutor becomes a shell; D-06's parity condition is pinned")
+    class ShellAndParityTests {
+
+        @Test
+        @DisplayName("D-06 parity, first-token case: both generations agree for the same fixture and player")
+        void parityHoldsForFirstTokenCase() {
+            OldParityExecutor oldExecutor = new OldParityExecutor();
+            NewParityExecutor newExecutor = new NewParityExecutor();
+
+            List<String> oldCompletions =
+                    oldExecutor.onTabComplete(player, mockCommand, "parity", new String[]{""});
+            List<String> newCompletions =
+                    newExecutor.onTabComplete(player, mockCommand, "parity", new String[]{""});
+
+            // Ordering is a deliberate, named difference -- Task 2 adopts the package's sort+dedup
+            // for the new generation's first-token branch (see the plan's SUMMARY). This fixture's
+            // mappings all have distinct first tokens, so set equality is the correct parity
+            // contract; a fixture with a duplicated first token would additionally need to account
+            // for the dedup difference, which is out of scope for this assertion.
+            assertThat(newCompletions).containsExactlyInAnyOrderElementsOf(oldCompletions);
+        }
+
+        @Test
+        @DisplayName("D-06 parity, multi-token literal-continuation case")
+        void parityHoldsForMultiTokenLiteralCase() {
+            OldParityExecutor oldExecutor = new OldParityExecutor();
+            NewParityExecutor newExecutor = new NewParityExecutor();
+
+            List<String> oldCompletions =
+                    oldExecutor.onTabComplete(player, mockCommand, "parity", new String[]{"mode", ""});
+            List<String> newCompletions =
+                    newExecutor.onTabComplete(player, mockCommand, "parity", new String[]{"mode", ""});
+
+            assertThat(newCompletions).containsExactlyInAnyOrderElementsOf(oldCompletions);
+            assertThat(newCompletions).containsExactly("direct");
+        }
+
+        @Test
+        @DisplayName("D-06 parity, @CmdParam(suggest=) reflective case")
+        void parityHoldsForReflectiveSuggestCase() {
+            OldParityExecutor oldExecutor = new OldParityExecutor();
+            NewParityExecutor newExecutor = new NewParityExecutor();
+
+            List<String> oldCompletions =
+                    oldExecutor.onTabComplete(player, mockCommand, "parity", new String[]{"give", ""});
+            List<String> newCompletions =
+                    newExecutor.onTabComplete(player, mockCommand, "parity", new String[]{"give", ""});
+
+            assertThat(newCompletions).containsExactlyInAnyOrderElementsOf(oldCompletions);
+            assertThat(newCompletions).containsExactlyInAnyOrder("alice", "bob", "charlie");
+        }
+
+        @Test
+        @DisplayName("D-06 parity, permission-gated case: an unprivileged player is withheld identically")
+        void parityHoldsForPermissionGatedCase() {
+            OldParityExecutor oldExecutor = new OldParityExecutor();
+            NewParityExecutor newExecutor = new NewParityExecutor();
+
+            List<String> oldCompletions =
+                    oldExecutor.onTabComplete(player, mockCommand, "parity", new String[]{""});
+            List<String> newCompletions =
+                    newExecutor.onTabComplete(player, mockCommand, "parity", new String[]{""});
+
+            assertThat(oldCompletions).doesNotContain("secret");
+            assertThat(newCompletions).doesNotContain("secret");
+        }
+
+        @Test
+        @DisplayName("the deprecated class's private reflection helpers are gone")
+        void deprecatedReflectionHelpersAreDeleted() {
+            Set<String> remaining = Arrays.stream(AbstractCommandExecutor.class.getDeclaredMethods())
+                    .map(Method::getName)
+                    .collect(Collectors.toSet());
+
+            assertThat(remaining).doesNotContain("getArgSuggestion", "getFormatByMethod", "getArgAt",
+                    "getSuggestName", "getSuggestMethodByName", "getMethod", "invokeSuggestMethod",
+                    "getMethodsByArg");
+        }
+
+        @Test
+        @DisplayName("the deprecated class's completion entry point still returns results after the helpers are deleted")
+        void deprecatedShellStillReturnsResults() {
+            OldParityExecutor executor = new OldParityExecutor();
+
+            List<String> completions = executor.onTabComplete(player, mockCommand, "parity", new String[]{""});
+
+            assertThat(completions).isNotEmpty();
+        }
+    }
+
+    // ========================================================================================
     // Shared fixture command classes
     // ========================================================================================
 
@@ -367,5 +466,86 @@ class BaseCommandExecutorTabCompletionTest {
         // Deliberately empty: simulates the shape an AOP subclass proxy produces (a subclass
         // instance whose suggestion method is declared on the superclass), without depending on
         // ByteBuddy proxy generation in this test.
+    }
+
+    /**
+     * Shared suggestion content for the Task 3 parity fixtures below, so the two generations'
+     * {@code suggestTargets} methods are guaranteed to return identical data -- the fixtures
+     * themselves stay two separate classes (Java has no multiple inheritance across the two
+     * unrelated base-class hierarchies), but what they return cannot drift out of sync.
+     */
+    static final class ParitySuggestions {
+        private ParitySuggestions() {
+        }
+
+        static List<String> targets() {
+            return Arrays.asList("alice", "bob", "charlie");
+        }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class OldParityExecutor extends AbstractCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "open")
+        public void openCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "secret", permission = "parity.secret")
+        public void secretCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "target", suggest = "suggestTargets") String target) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "mode direct")
+        public void modeDirectCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        public List<String> suggestTargets(Player player, Command command, String[] args) {
+            return ParitySuggestions.targets();
+        }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class NewParityExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "open")
+        public void openCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "secret", permission = "parity.secret")
+        public void secretCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "target", suggest = "suggestTargets") String target) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "mode direct")
+        public void modeDirectCommand(@CmdSender CommandSender sender) {
+            // Test stub
+        }
+
+        public List<String> suggestTargets(Player player, Command command, String[] args) {
+            return ParitySuggestions.targets();
+        }
     }
 }
