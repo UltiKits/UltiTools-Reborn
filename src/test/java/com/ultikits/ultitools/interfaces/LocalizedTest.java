@@ -1,24 +1,44 @@
 package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.lang.reflect.Method;
+import java.lang.reflect.Type;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
+import org.bukkit.command.Command;
+import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.I18n;
+import com.ultikits.ultitools.annotations.command.CmdCD;
 
 /**
  * Localized 接口测试
@@ -330,6 +350,177 @@ class LocalizedTest {
 
             // Assert
             assertThat(result).isEqualTo("Test");
+        }
+    }
+
+    /**
+     * SILENT-15: {@code CooldownValidator} formats a parameterized source literal (see its
+     * {@code validate()}), but neither {@code lang/en.json} nor {@code lang/zh.json} carried an
+     * entry for it -- an English-locale player saw raw Chinese, and Chinese only looked correct
+     * by {@link com.ultikits.ultitools.entities.Language#getLocalizedText}'s identity fallback (source text returned unchanged
+     * when no dictionary entry exists), not because the key existed.
+     * <p>
+     * The expected key is DERIVED from {@link CooldownValidator}'s own message-building call to
+     * {@code UltiTools.getInstance().i18n(...)} at test time -- captured via a mocked {@code
+     * i18n(String)} -- rather than retyped here, so a future edit to the source literal breaks
+     * this test instead of silently reintroducing the identity-fallback gap the fallback masks.
+     * <br>
+     * SILENT-15：{@code CooldownValidator} 格式化的是一个带参数的源字面量（见其 {@code validate()}），
+     * 但 {@code lang/en.json} 与 {@code lang/zh.json} 都没有对应条目——英文玩家看到的是原始中文，
+     * 中文玩家只是因为 {@link com.ultikits.ultitools.entities.Language#getLocalizedText} 的恒等回退（找不到词典条目时原样返回源文本）
+     * 而“看起来正确”，并非因为该 key 真的存在。
+     */
+    @Nested
+    @DisplayName("cooldown 消息 i18n key 完整性测试 (SILENT-15)")
+    class CooldownMessageKeyCompletenessTests {
+
+        private static final String LEGACY_COOLDOWN_KEY = "操作频繁，请稍后再试";
+
+        private final Type langMapType = new TypeToken<Map<String, String>>() {
+        }.getType();
+
+        private Player mockPlayer;
+        private Command mockCommand;
+        private UltiTools mockUltiTools;
+        private MockedStatic<UltiTools> mockedUltiTools;
+        private String expectedKey;
+
+        /** Fixture method carrying {@code @CmdCD} so {@code CooldownValidator} treats it as
+         * cooldown-gated -- never invoked, only read for its annotation. */
+        @CmdCD(5)
+        private void methodWithCooldown() {
+        }
+
+        @BeforeEach
+        void setUp() throws Exception {
+            mockPlayer = mock(Player.class);
+            mockCommand = mock(Command.class);
+            mockUltiTools = mock(UltiTools.class);
+            mockedUltiTools = mockStatic(UltiTools.class);
+            mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+
+            AtomicReference<String> captured = new AtomicReference<>();
+            when(mockUltiTools.i18n(anyString())).thenAnswer(invocation -> {
+                captured.set(invocation.getArgument(0));
+                return invocation.getArgument(0);
+            });
+            when(mockPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+            when(mockCommand.getName()).thenReturn("test");
+
+            CooldownValidator validator = new CooldownValidator();
+            Method method = getClass().getDeclaredMethod("methodWithCooldown");
+            CommandContext context = CommandContext.builder()
+                    .sender(mockPlayer)
+                    .command(mockCommand)
+                    .alias("test")
+                    .rawArgs(new String[]{})
+                    .matchedMethod(method)
+                    .build();
+
+            // Put the player on cooldown, then trigger the rejection path -- this is what
+            // reaches CooldownValidator's i18n(...) call and captures its exact argument.
+            validator.applyCooldown(context);
+            validator.validate(context);
+
+            expectedKey = captured.get();
+            assertThat(expectedKey)
+                    .as("CooldownValidator.validate() must call i18n(...) while the player is on "
+                            + "cooldown -- if this is null, the derivation itself is broken, not "
+                            + "the language files")
+                    .isNotNull();
+        }
+
+        @AfterEach
+        void tearDown() {
+            if (mockedUltiTools != null) {
+                mockedUltiTools.close();
+            }
+        }
+
+        private Map<String, String> loadLangResource(String resourcePath) throws IOException {
+            try (Reader reader = new InputStreamReader(
+                    getClass().getClassLoader().getResourceAsStream(resourcePath), StandardCharsets.UTF_8)) {
+                return new Gson().fromJson(reader, langMapType);
+            }
+        }
+
+        @Test
+        @DisplayName("Test 1: lang/en.json contains the parameterized cooldown key (presence, "
+                + "not message production)")
+        void enJsonContainsParameterizedCooldownKey() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+
+            assertThat(en)
+                    .as("en.json must carry the exact key CooldownValidator formats -- absence "
+                            + "is invisible at runtime because i18n falls back to the source text")
+                    .containsKey(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 2: lang/zh.json contains the same parameterized cooldown key")
+        void zhJsonContainsParameterizedCooldownKey() throws IOException {
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(zh)
+                    .as("zh.json is missing this key too -- Chinese players only saw a correct "
+                            + "message by identity-fallback coincidence, not because the key existed")
+                    .containsKey(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 3: the English value carries a %d placeholder and formats a "
+                + "well-formed English sentence")
+        void enValueHasPlaceholderAndFormatsToEnglish() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            String value = en.get(expectedKey);
+
+            assertThat(value).as("en.json entry for the cooldown key").isNotNull();
+            assertThat(value).as("the English translation must carry the %%d placeholder")
+                    .contains("%d");
+
+            String formatted = String.format(value, 5L);
+            assertThat(formatted)
+                    .as("formatting the remaining-seconds argument must fully substitute the "
+                            + "placeholder and read as English, not leak raw Chinese source text")
+                    .doesNotContain("%d")
+                    .doesNotMatch(".*[一-鿿].*");
+        }
+
+        @Test
+        @DisplayName("Test 4: the Chinese value follows the file's identity-mapping convention")
+        void zhValueIsIdentityMapped() throws IOException {
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(zh.get(expectedKey))
+                    .as("zh.json maps every Chinese-source key to itself, matching every other "
+                            + "Chinese-source entry in the file")
+                    .isEqualTo(expectedKey);
+        }
+
+        @Test
+        @DisplayName("Test 5: both files carry the same production-derived key, byte-identical "
+                + "to the source literal (never retyped)")
+        void bothLanguageFilesUseTheSameProductionDerivedKey() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(en).containsKey(expectedKey);
+            assertThat(zh).containsKey(expectedKey);
+            assertThat(expectedKey)
+                    .as("the derived key must carry the %%d placeholder CooldownValidator "
+                            + "actually formats -- confirms the derivation reached the real call")
+                    .contains("%d");
+        }
+
+        @Test
+        @DisplayName("Test 6: the older, non-parameterized cooldown key is still present in both "
+                + "files -- nothing in this plan requires its removal")
+        void olderNonParameterizedKeyStillPresentInBothFiles() throws IOException {
+            Map<String, String> en = loadLangResource("lang/en.json");
+            Map<String, String> zh = loadLangResource("lang/zh.json");
+
+            assertThat(en).containsKey(LEGACY_COOLDOWN_KEY);
+            assertThat(zh).containsKey(LEGACY_COOLDOWN_KEY);
         }
     }
 }
