@@ -1297,6 +1297,49 @@ measured sites use plain method names), so the refusal has no known site to warn
 `japicmp` cannot detect this — `CmdParam.suggest()`'s signature is unchanged; only the runtime
 resolution of its `String` value changes.
 
+### Recorded instance: tab completion now filters a `@CmdMapping` by permission before it can contribute a suggestion or be reflectively invoked (SILENT-25, 6.3.0)
+
+Before 6.3.0, `BaseCommandExecutor.suggest` ran with **zero** permission checks. Every `@CmdMapping`
+on a command class was offered to `TAB` regardless of the sender's `@CmdMapping(permission=)` or
+`requireOp()` value — on the first-token literal list, on the multi-token literal-sibling scan, and
+on the `<param>` slot for a mapping the sender could never invoke. That last path is not merely
+information disclosure: a resolved `<param>` slot is handed to
+`commands/tabcomplete/MethodInvocationCompleter`, which **reflectively invokes** the method behind
+`@CmdParam(suggest = "methodName")` to produce its suggestions. With no permission gate, a sender
+pressing `TAB` on a permission-gated mapping's parameter could cause that method to be invoked
+before ever attempting to run the command itself. The deprecated
+`abstracts.AbstractCommandExecutor.suggest` already carried an equivalent guard on its first-token
+and parameter-slot branches, but not on its multi-token literal-sibling branch — so migrating a
+command onto the then-current `BaseCommandExecutor` generation silently widened the exposure rather
+than narrowing it.
+
+6.3.0 closes this as part of the same WIRE-01 rewrite that unifies tab completion onto one dispatch
+implementation for both command-executor generations (see the entry above):
+`abstracts.command.CommandTabCompletionDispatch.isVisible(CommandSender, Method)` — the mapping's
+declared permission checked, then its `requireOp()` — gates every one of the three dispatch paths
+(first-token, `<param>`-slot, and the multi-token literal-sibling scan) before a mapping can
+contribute anything, on both command-executor generations. Delivered by plan 05-05,
+`BaseCommandExecutorTabCompletionTest$PermissionFilterTests` (6 tests) plus
+`$ArgumentPositionResolutionTests#permissionFilterHoldsOnMultiTokenPath` and
+`$ShellAndParityTests` (agreement between both generations, including withholding a
+permission-gated mapping).
+
+**What a module author should check.** A `@CmdMapping` carrying a `permission` its players do not
+hold will now stop appearing in tab completion for them — this is the intended fix, not a defect,
+but it is a visible behaviour change: a sender who previously saw (and could trigger reflective
+invocation for) every sub-command now sees only the ones they are permitted to run.
+
+**Bucket.** This is recorded as a **security fix**, not a neutral behaviour tidy-up, for the same
+reason as the GUI click-dispatch entry below: a sender who could previously see a permission-gated
+mapping's suggestions, or trigger its suggestion method's reflective invocation, was exploiting a
+missing check, not relying on a documented contract. Per
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)
+above, security fixes may land without prior notice; no warning period applies here.
+
+`suggest(Player, Command, String[])`'s public signature is unchanged, so `japicmp` cannot detect
+this — the entry exists precisely because this document's criterion requires recording what a
+signature diff cannot show.
+
 ### Recorded instance: `@AsyncCommand.timeout()` is now honoured, and the default-path double async dispatch is removed (WIRE-12, 6.3.0)
 
 Before 6.3.0, `timeout() > 0` — the default, since `timeout()` defaults to `30` — wrapped the
@@ -2512,6 +2555,41 @@ default 方法；新增第 4 个 default 方法延续了这个既有约定，而
 
 `japicmp` 无法检测到这一点——`CmdParam.suggest()` 的签名没有变化，只是其 `String` 值的运行时
 解析方式变了。
+
+### 已记录的实例：Tab 补全现在会在一个 `@CmdMapping` 能贡献建议或被反射调用之前先按权限过滤它（SILENT-25，6.3.0）
+
+6.3.0 之前，`BaseCommandExecutor.suggest` **完全没有**权限检查。命令类上的每一个 `@CmdMapping`
+都会不加区分地提供给 `TAB` 补全，无论发送者是否持有其 `@CmdMapping(permission=)` 或
+`requireOp()` 所要求的权限——首个 token 的字面量列表、多 token 的同级字面量扫描、以及为某个
+发送者永远无法调用的映射所解析出的 `<param>` 槽位，都不例外。最后这一条不仅是信息泄露：一个
+已解析的 `<param>` 槽位会被交给 `commands/tabcomplete/MethodInvocationCompleter`，后者会
+**反射调用** `@CmdParam(suggest = "methodName")` 背后的方法来产出建议。在没有权限门控的情况下，
+发送者只需对一个受权限限制的映射的参数按下 `TAB`，就可能在他们真正尝试执行该命令之前触发那个
+方法被调用。已废弃的 `abstracts.AbstractCommandExecutor.suggest` 在其首 token 与参数槽位分支上
+已经带有等价的守卫，但在其多 token 同级字面量分支上没有——因此把一条命令迁移到当时的
+`BaseCommandExecutor` 世代上，实际上是静默地扩大了暴露面，而不是缩小它。
+
+作为把两代命令执行器的 Tab 补全统一到同一个分发实现的这次 WIRE-01 重写（见上一条记录）的
+一部分，6.3.0 关闭了这个口子：`abstracts.command.CommandTabCompletionDispatch.isVisible(CommandSender,
+Method)`——先检查映射声明的权限，再检查其 `requireOp()`——在一个映射能贡献任何内容之前，
+为三条分发路径（首 token、`<param>` 槽位、以及多 token 同级字面量扫描）中的每一条设防，两代
+命令执行器均如此。由 plan 05-05 交付，`BaseCommandExecutorTabCompletionTest$PermissionFilterTests`
+（6 个测试），加上 `$ArgumentPositionResolutionTests#permissionFilterHoldsOnMultiTokenPath` 与
+`$ShellAndParityTests`（两代之间的一致性，包括对受权限限制的映射保持隐藏）。
+
+**模块作者应该检查什么。** 一个携带了玩家不持有的 `permission` 的 `@CmdMapping`，现在将不再
+出现在这些玩家的 Tab 补全结果中——这是预期的修复，不是缺陷，但它是一次可见的行为变化：此前能
+看到（并可能触发其建议方法被反射调用的）每一个子命令的发送者，现在只能看到他们被允许执行的
+那些。
+
+**归类。** 与下文的 GUI 点击派发条目出于相同的理由，这一条被记录为一次**安全修复**，而不是一次
+中性的行为整理：此前能够看到受权限限制映射的补全建议、或触发其建议方法反射调用的发送者，利用
+的是一个缺失的检查，而不是在依赖某项被文档记载的契约。依据上面的
+[无需迁移期的行为变更](#哪些行为变更可以在-minor-直接做)，安全修复可以不经事先通知直接落地；
+这里同样不设警告期。
+
+`suggest(Player, Command, String[])` 的公开签名未变，所以 `japicmp` 无法检测到这一点——这条记录
+正是为了写下签名差异写不出来的东西而存在。
 
 ### 已记录的实例：`@AsyncCommand.timeout()` 现在真正生效，默认路径上的双重异步派发被移除（WIRE-12，6.3.0）
 
