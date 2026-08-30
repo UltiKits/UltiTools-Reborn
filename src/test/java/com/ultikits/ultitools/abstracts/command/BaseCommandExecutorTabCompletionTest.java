@@ -1,15 +1,18 @@
 package com.ultikits.ultitools.abstracts.command;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +48,7 @@ class BaseCommandExecutorTabCompletionTest {
     private ServerMock server;
     private PlayerMock player;
     private Command mockCommand;
+    private UltiToolsPlugin mockPlugin;
 
     @BeforeEach
     void setUp() {
@@ -57,7 +61,7 @@ class BaseCommandExecutorTabCompletionTest {
         when(mockCommand.getName()).thenReturn("fixture");
 
         CommandManager mockCommandManager = mock(CommandManager.class);
-        UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
+        mockPlugin = mock(UltiToolsPlugin.class);
         TestHelper.mockUltiToolsInstance(ultiTools ->
                 when(ultiTools.getCommandManager()).thenReturn(mockCommandManager));
         when(mockCommandManager.getPluginByCommand(any())).thenReturn(mockPlugin);
@@ -156,6 +160,111 @@ class BaseCommandExecutorTabCompletionTest {
     }
 
     // ========================================================================================
+    // Task 2: one dispatch -- argument-position resolution into commands/tabcomplete/
+    // ========================================================================================
+
+    @Nested
+    @DisplayName("Task 2: entry-point dispatch + argument-position resolution")
+    class ArgumentPositionResolutionTests {
+
+        @Test
+        @DisplayName("entry-point assertion: onTabComplete resolves a @CmdParam(suggest=) slot through commands/tabcomplete/")
+        void entryPointResolvesParamSuggestMethod() {
+            MultiTokenExecutor executor = new MultiTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+
+            // Entered through the executor's OWN onTabComplete -- not TabCompletionManager
+            // directly. Seven pre-existing test classes have passed against TabCompletionManager
+            // for the entire period this package had zero callers; that is explicitly not
+            // acceptable evidence for this assertion (05-05 plan, Task 2).
+            assertThat(completions).containsExactlyInAnyOrder("alice", "bob", "charlie");
+        }
+
+        @Test
+        @DisplayName("argument-position resolution: matched method and parameter name resolved at a later position")
+        void resolvesMatchedMethodAndParameterNameAtLaterPosition() {
+            MultiTokenExecutor executor = new MultiTokenExecutor();
+
+            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture",
+                    new String[]{"teleport", "steve", ""});
+
+            // At HEAD, TabCompletionManager.createContext leaves matchedMethod/parameterName
+            // null -- this only resolves because BaseCommandExecutor.suggest now performs the
+            // index -> method -> parameter-name resolution before delegating.
+            assertThat(completions).containsExactlyInAnyOrder("overworld", "nether", "the_end");
+        }
+
+        @Test
+        @DisplayName("AOP-proxy-safe: a suggestion method declared on a superclass is found via a subclass instance")
+        void findsSuggestionMethodOnProxiedSubclass() {
+            // Simulates the shape an AOP subclass proxy produces: executorInstance is a subclass
+            // instance, and the suggestion method is declared on its superclass. Exercises
+            // MethodInvocationCompleter's hierarchy walk (issue #190), which the deprecated
+            // class's own reflection helpers did not perform.
+            ProxiedMultiTokenExecutor executor = new ProxiedMultiTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+
+            assertThat(completions).containsExactlyInAnyOrder("alice", "bob", "charlie");
+        }
+
+        @Test
+        @DisplayName("suggest= naming a non-existent method still falls back to the i18n hint text")
+        void fallsBackToI18nHintWhenSuggestMethodMissing() {
+            when(mockPlugin.i18n("aHintOnlyKey")).thenReturn("Pick a mode");
+            MultiTokenExecutor executor = new MultiTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"mode", ""});
+
+            assertThat(completions).containsExactly("Pick a mode");
+        }
+
+        @Test
+        @DisplayName("first-token completion is sorted and de-duplicated")
+        void firstTokenCompletionSortedAndDeduplicated() {
+            // "give <target>" and "give <target> silently" share the first literal token "give".
+            // The deprecated class's own first-token branch would list it twice, unsorted; the
+            // package's suggestFirstArgs sorts and dedupes -- adopted here as the new generation's
+            // behaviour (deliberate, named change; see the plan's SUMMARY).
+            MultiTokenExecutor executor = new MultiTokenExecutor();
+
+            List<String> completions = executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+
+            assertThat(completions).containsExactly("give", "mode", "teleport");
+        }
+
+        @Test
+        @DisplayName("an argument vector longer than any mapping's format returns an empty list, not a throw")
+        void overLongArgumentVectorReturnsEmptyListWithoutThrowing() {
+            MultiTokenExecutor executor = new MultiTokenExecutor();
+
+            List<String> completions = assertDoesNotThrow(() -> executor.onTabComplete(
+                    player, mockCommand, "fixture", new String[]{"give", "alice", "extra", "waytoolong"}));
+
+            assertThat(completions).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Task 1's permission assertions still hold on the newly-populated multi-token path")
+        void permissionFilterHoldsOnMultiTokenPath() {
+            PermissionAwareExecutor executor = new PermissionAwareExecutor();
+
+            List<String> denied =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"secretgive", ""});
+            assertThat(denied).isEmpty();
+
+            grant("fixture.secretgive");
+            List<String> allowed =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"secretgive", ""});
+            assertThat(allowed).containsExactly("hiddenTarget");
+        }
+    }
+
+    // ========================================================================================
     // Shared fixture command classes
     // ========================================================================================
 
@@ -185,6 +294,16 @@ class BaseCommandExecutorTabCompletionTest {
         public void secretParamCommand(@CmdSender CommandSender sender, @CmdParam("value") String value) {
             // Test stub
         }
+
+        @CmdMapping(format = "secretgive <target>", permission = "fixture.secretgive")
+        public void secretGiveCommand(@CmdSender CommandSender sender,
+                                       @CmdParam(value = "target", suggest = "suggestSecretTargets") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestSecretTargets(Player player, Command command, String[] args) {
+            return Arrays.asList("hiddenTarget");
+        }
     }
 
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
@@ -198,5 +317,55 @@ class BaseCommandExecutorTabCompletionTest {
         public void secretCommand(@CmdSender CommandSender sender) {
             // Test stub
         }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class MultiTokenExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "target", suggest = "suggestTargets") String target) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "give <target> silently")
+        public void giveSilentlyCommand(@CmdSender CommandSender sender, @CmdParam("target") String target) {
+            // Test stub -- shares the first literal token "give" with giveCommand's mapping, to
+            // exercise dedup on the first-token path.
+        }
+
+        @CmdMapping(format = "mode <choice>")
+        public void modeCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "choice", suggest = "aHintOnlyKey") String choice) {
+            // Test stub -- "aHintOnlyKey" names no method on this class, exercising the i18n hint
+            // fallback (D-07 leaves this fallback unchanged; pinned here so plan 05-06 cannot
+            // break it accidentally).
+        }
+
+        @CmdMapping(format = "teleport <player> <world>")
+        public void teleportCommand(@CmdSender CommandSender sender,
+                                     @CmdParam("player") String targetPlayer,
+                                     @CmdParam(value = "world", suggest = "suggestWorlds") String world) {
+            // Test stub
+        }
+
+        public List<String> suggestTargets(Player player, Command command, String[] args) {
+            return Arrays.asList("alice", "bob", "charlie");
+        }
+
+        public List<String> suggestWorlds(Player player, Command command, String[] args) {
+            return Arrays.asList("overworld", "nether", "the_end");
+        }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class ProxiedMultiTokenExecutor extends MultiTokenExecutor {
+        // Deliberately empty: simulates the shape an AOP subclass proxy produces (a subclass
+        // instance whose suggestion method is declared on the superclass), without depending on
+        // ByteBuddy proxy generation in this test.
     }
 }
