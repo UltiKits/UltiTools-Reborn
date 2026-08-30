@@ -3,6 +3,7 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -44,6 +45,9 @@ class UsageLockValidatorTest {
     private Player mockPlayer2;
 
     @Mock
+    private Player mockPlayer3;
+
+    @Mock
     private ConsoleCommandSender mockConsole;
 
     @Mock
@@ -57,6 +61,7 @@ class UsageLockValidatorTest {
     private UsageLockValidator validator;
     private UUID player1UUID;
     private UUID player2UUID;
+    private UUID player3UUID;
 
     @BeforeEach
     void setUp() {
@@ -66,8 +71,10 @@ class UsageLockValidatorTest {
 
         player1UUID = UUID.randomUUID();
         player2UUID = UUID.randomUUID();
+        player3UUID = UUID.randomUUID();
         lenient().when(mockPlayer.getUniqueId()).thenReturn(player1UUID);
         lenient().when(mockPlayer2.getUniqueId()).thenReturn(player2UUID);
+        lenient().when(mockPlayer3.getUniqueId()).thenReturn(player3UUID);
         lenient().when(mockCommand.getName()).thenReturn("test");
 
         validator = new UsageLockValidator();
@@ -97,7 +104,20 @@ class UsageLockValidatorTest {
     @UsageLimit(value = UsageLimit.LimitType.NONE)
     public void noLimitMethod() { /* Test stub for annotation testing */ }
 
+    @UsageLimit(value = UsageLimit.LimitType.ALL, ContainConsole = false)
+    public void serverWideLimitedNoConsole() { /* Test stub for annotation testing */ }
+
     public void methodWithoutUsageLimit() { /* Test stub for annotation testing */ }
+
+    /**
+     * Distinct class carrying a method with the SAME simple name as
+     * {@link #serverWideLimitedMethod()}, for the GEN-09 key-equality edge (Method#toString()
+     * embeds the fully-qualified declaring class, so identical simple names never collide).
+     */
+    static class OtherFixtureWithSameMethodName {
+        @UsageLimit(value = UsageLimit.LimitType.ALL)
+        public void serverWideLimitedMethod() { /* Test stub - same simple name, different declaring class */ }
+    }
 
     private CommandContext createPlayerContext(Method method, Player player) {
         return CommandContext.builder()
@@ -581,16 +601,27 @@ class UsageLockValidatorTest {
     class EdgeCaseTests {
 
         @Test
-        @DisplayName("Should handle rapid lock/unlock cycles")
+        @DisplayName("Should handle rapid lock/unlock cycles via validate()+onComplete() (acquire-as-you-validate, D-02)")
         void shouldHandleRapidLockUnlockCycles() throws Exception {
+            // D-02 adjudication: this test previously called acquireLock() then validate() then
+            // releaseLock() then validate() again in the same iteration, assuming validate() is a
+            // pure read. Under acquire-as-you-validate (Task 2's chosen ordering, recorded in
+            // UsageLockValidator's class javadoc), validate() itself performs the acquisition --
+            // so a bare validate() call is no longer idempotent, it is the acquisition step. The
+            // scenario (rapid lock/unlock symmetry) is preserved; the call pattern is corrected to
+            // match the new, plan-mandated contract instead of the old read-only one.
             Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
             CommandContext context = createPlayerContext(method, mockPlayer);
 
             for (int i = 0; i < 100; i++) {
-                assertTrue(validator.acquireLock(context));
-                assertFalse(validator.validate(context).isValid());
-                validator.releaseLock(context);
+                // validate() IS the acquisition step: the first call in a fresh cycle acquires
+                // the lock as a side effect and succeeds.
                 assertTrue(validator.validate(context).isValid());
+                // A second validate() call before release finds the lock already held.
+                assertFalse(validator.validate(context).isValid());
+                // onComplete() is the release step -- it must free exactly what validate()
+                // acquired, restoring the cycle to its starting state.
+                validator.onComplete(context, true);
             }
         }
 
@@ -607,8 +638,12 @@ class UsageLockValidatorTest {
             // Player 1 locks sender method
             validator.acquireLock(p1sender);
 
-            // Player 2 can still use sender method (separate lock)
+            // Player 2 can still use sender method (separate lock). validate() acquires it as a
+            // side effect under acquire-as-you-validate (D-02), so release it immediately
+            // afterward (as a real dispatch's onComplete would) to keep this check independent
+            // of the final re-check below.
             assertTrue(validator.validate(p2sender).isValid());
+            validator.onComplete(p2sender, true);
 
             // Player 1 locks server method
             validator.acquireLock(p1server);
@@ -617,17 +652,20 @@ class UsageLockValidatorTest {
             CommandContext p2server = createPlayerContext(serverMethod, mockPlayer2);
             assertFalse(validator.validate(p2server).isValid());
 
-            // But player 2's sender method is still available
+            // But player 2's sender method is still available -- independent of player 1's
+            // unrelated server-method lock, not merely a re-acquisition of what it already holds.
             assertTrue(validator.validate(p2sender).isValid());
         }
 
         @Test
-        @DisplayName("Console should not acquire sender lock when ContainConsole is false")
-        void consoleShouldNotAcquireSenderLockWhenContainConsoleFalse() throws Exception {
+        @DisplayName("Console never OWNS a SENDER-scope lock, regardless of ContainConsole (senderLocks is keyed by player UUID)")
+        void consoleNeverOwnsSenderLockRegardlessOfContainConsole() throws Exception {
             Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
             CommandContext consoleContext = createConsoleContext(method);
 
-            // Console should return true (no lock acquired, treated as success)
+            // Console should return true (no lock acquired, treated as success) -- true whether
+            // ContainConsole() is true (its 6.3.0 default, used here) or false, since senderLocks
+            // has no representation for a non-player sender at all.
             assertTrue(validator.acquireLock(consoleContext));
             
             // Validation should also pass
@@ -635,12 +673,14 @@ class UsageLockValidatorTest {
         }
 
         @Test
-        @DisplayName("Console should not acquire server lock when ContainConsole is false")
-        void consoleShouldNotAcquireServerLockWhenContainConsoleFalse() throws Exception {
+        @DisplayName("Console never OWNS an ALL-scope lock, regardless of ContainConsole (serverLocks' value is a player UUID)")
+        void consoleNeverOwnsServerLockRegardlessOfContainConsole() throws Exception {
             Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
             CommandContext consoleContext = createConsoleContext(method);
 
-            // Console should return true (no lock acquired)
+            // Console should return true (no lock acquired) when nothing else holds it -- true
+            // whether ContainConsole() is true (its 6.3.0 default, used here) or false, since a
+            // console sender can never be recorded as an ALL-scope lock's owner.
             assertTrue(validator.acquireLock(consoleContext));
             
             // Player should still be able to acquire lock
@@ -694,6 +734,122 @@ class UsageLockValidatorTest {
 
             // Should not throw
             assertDoesNotThrow(() -> validator.releaseLock(consoleContext));
+        }
+    }
+
+    @Nested
+    @DisplayName("GEN-09 Serialization Guarantee Tests (D-02)")
+    class SerializationGuaranteeTests {
+
+        @Test
+        @DisplayName("GEN-09 Test 1: two senders contending for an ALL-scope lock -- second acquisition fails")
+        void secondSenderAcquisitionFailsUnderContention() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            CommandContext contextA = createPlayerContext(method, mockPlayer);
+            CommandContext contextB = createPlayerContext(method, mockPlayer2);
+
+            assertTrue(validator.validate(contextA).isValid(), "A's acquisition (via validate()) must succeed");
+            assertFalse(validator.validate(contextB).isValid(), "B's acquisition must fail while A holds the lock");
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 2 (Pitfall 5): B's post-action does not free A's ALL-scope lock")
+        void bPostActionDoesNotFreeAsLock() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            CommandContext contextA = createPlayerContext(method, mockPlayer);
+            CommandContext contextB = createPlayerContext(method, mockPlayer2);
+            CommandContext contextC = createPlayerContext(method, mockPlayer3);
+
+            assertTrue(validator.validate(contextA).isValid(), "A acquires the lock");
+            assertFalse(validator.validate(contextB).isValid(), "B is rejected while A holds the lock");
+
+            // B never held the lock (its acquisition failed), so B's post-action must not free
+            // A's. On the pre-6.3.0 build, releaseLock's ALL branch removed unconditionally --
+            // this call would have freed A's lock despite B never holding it.
+            validator.onComplete(contextB, true);
+
+            assertFalse(validator.validate(contextC).isValid(),
+                    "a third party must still be rejected -- A's lock must remain held after B's onComplete");
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 3: A's own post-action frees A's ALL-scope lock")
+        void aOwnPostActionFreesLock() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            CommandContext contextA = createPlayerContext(method, mockPlayer);
+            CommandContext contextB = createPlayerContext(method, mockPlayer2);
+
+            assertTrue(validator.validate(contextA).isValid());
+            validator.onComplete(contextA, true);
+
+            assertTrue(validator.validate(contextB).isValid(), "the lock must be free after A's own post-action");
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 4: SENDER scope remains independent per sender (no ownership regression)")
+        void senderScopeStaysIndependentPerSender() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("senderLimitedMethod");
+            CommandContext contextA = createPlayerContext(method, mockPlayer);
+            CommandContext contextB = createPlayerContext(method, mockPlayer2);
+
+            assertTrue(validator.validate(contextA).isValid(), "A acquires its own SENDER-scope lock");
+            assertTrue(validator.validate(contextB).isValid(), "B independently acquires its own SENDER-scope lock");
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 5: ContainConsole defaults to true as of 6.3.0 -- console is subject to the limit")
+        void containConsoleDefaultsToTrue() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            CommandContext playerContext = createPlayerContext(method, mockPlayer);
+            CommandContext consoleContext = createConsoleContext(method);
+
+            assertTrue(validator.validate(playerContext).isValid(), "player acquires the ALL-scope lock");
+            assertFalse(validator.validate(consoleContext).isValid(),
+                    "console must now be gated by the lock -- ContainConsole() defaults to true as of 6.3.0");
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 6a: a null matched method acquires nothing and blocks nothing")
+        void nullMatchedMethodAcquiresNothing() {
+            CommandContext context = CommandContext.builder()
+                    .sender(mockPlayer)
+                    .command(mockCommand)
+                    .alias("test")
+                    .rawArgs(new String[]{})
+                    .matchedMethod(null)
+                    .build();
+
+            assertTrue(validator.validate(context).isValid());
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 6b: a non-player sender under explicit ContainConsole=false acquires nothing and blocks nothing")
+        void explicitContainConsoleFalseExemptsNonPlayer() throws Exception {
+            Method method = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedNoConsole");
+            CommandContext consoleContext = createConsoleContext(method);
+
+            assertTrue(validator.validate(consoleContext).isValid(), "console must be exempt when ContainConsole() is explicitly false");
+
+            // And does not block a player from acquiring afterward -- the console never acquired
+            // anything to be a false owner of.
+            CommandContext playerContext = createPlayerContext(method, mockPlayer);
+            assertTrue(validator.validate(playerContext).isValid());
+        }
+
+        @Test
+        @DisplayName("GEN-09 Test 7: same-named methods on different declaring classes do not share a lock")
+        void sameNamedMethodsOnDifferentClassesDoNotShareLock() throws Exception {
+            Method methodA = getClass().getEnclosingClass().getDeclaredMethod("serverWideLimitedMethod");
+            Method methodB = OtherFixtureWithSameMethodName.class.getDeclaredMethod("serverWideLimitedMethod");
+            assertNotEquals(methodA.toString(), methodB.toString(),
+                    "Method#toString() must embed the declaring class so identical simple names do not collide");
+
+            CommandContext contextA = createPlayerContext(methodA, mockPlayer);
+            CommandContext contextB = createPlayerContext(methodB, mockPlayer2);
+
+            assertTrue(validator.validate(contextA).isValid());
+            assertTrue(validator.validate(contextB).isValid(),
+                    "different declaring class -> independent lock key, even though the simple name is identical");
         }
     }
 }
