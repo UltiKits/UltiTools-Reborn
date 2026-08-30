@@ -92,7 +92,20 @@ class ReflectionUtilTest {
         public void normalMethod() {}
     }
 
-    // 测试用的没有无参构造函数的类
+    // resolveMethodOrClassAnnotation 追加任务的 fixture：class 上没有 @TestAnnotation，
+    // 方法本身携带 -- 用于 "method-level only" 场景。
+    static class NoClassAnnotationFixture {
+        @TestAnnotation("methodOnly")
+        public void annotatedMethod() {}
+    }
+
+    // resolveMethodOrClassAnnotation 追加任务的 fixture：class 和方法都没有 @TestAnnotation，
+    // 用于确认两者都缺失时回退结果为 null。
+    static class NoAnnotationAtAllFixture {
+        public void plainMethod() {}
+    }
+
+        // 测试用的没有无参构造函数的类
     static class NoDefaultConstructor {
         private final String value;
 
@@ -337,6 +350,66 @@ class ReflectionUtilTest {
 
             assertThat(ReflectionUtil.hasAnnotation(annotatedField, TestAnnotation.class)).isTrue();
             assertThat(ReflectionUtil.hasAnnotation(normalField, TestAnnotation.class)).isFalse();
+        }
+    }
+
+    /**
+     * resolveMethodOrClassAnnotation -- the shared most-derived-wins resolution helper the
+     * maintainer required after the 05-02 follow-up: PluginManager's load-time refusal already
+     * treated a class-level @CmdCD/@UsageLimit as satisfying the contract, but CooldownValidator
+     * and UsageLockValidator only ever read the method -- so a class-level-only declaration
+     * passed the load-time check yet enforced nothing at runtime. This helper is the single
+     * primitive both validators now call, so "the load-time check accepts this" and "the runtime
+     * validator reads this" are provably the same fact.
+     * <p>
+     * Three required cases (method-only, class-only, both-present) plus the neither-present
+     * null case.
+     */
+    @Nested
+    @DisplayName("resolveMethodOrClassAnnotation 方法测试（most-derived-wins，D-01 追加任务）")
+    class ResolveMethodOrClassAnnotationTests {
+
+        @Test
+        @DisplayName("方法级注解存在、类级不存在时：返回方法级注解（行为不变）")
+        void methodLevelOnly_unchanged() throws Exception {
+            Method method = NoClassAnnotationFixture.class.getDeclaredMethod("annotatedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("methodOnly");
+        }
+
+        @Test
+        @DisplayName("方法级注解不存在、类级存在时：回退到类级注解（新增行为）")
+        void classLevelOnly_newFallbackBehavior() throws Exception {
+            Method method = ChildClass.class.getDeclaredMethod("normalMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("child");
+        }
+
+        @Test
+        @DisplayName("方法级与类级注解都存在时：方法级优先（most-derived-wins）")
+        void bothPresent_methodLevelWins() throws Exception {
+            Method method = ChildClass.class.getDeclaredMethod("annotatedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("method");
+        }
+
+        @Test
+        @DisplayName("两者都不存在时：返回 null")
+        void neitherPresent_returnsNull() throws Exception {
+            Method method = NoAnnotationAtAllFixture.class.getDeclaredMethod("plainMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNull();
         }
     }
 

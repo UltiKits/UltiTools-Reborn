@@ -119,6 +119,23 @@ class UsageLockValidatorTest {
         public void serverWideLimitedMethod() { /* Test stub - same simple name, different declaring class */ }
     }
 
+    /**
+     * Fixtures for the class-level @UsageLimit fallback (D-01 follow-up, most-derived-wins) --
+     * see {@link com.ultikits.ultitools.utils.ReflectionUtil#resolveMethodOrClassAnnotation}.
+     */
+    static class MethodLevelOnlyUsageLimitFixture {
+        @UsageLimit(value = UsageLimit.LimitType.SENDER)
+        public void methodWithOwnLimit() { /* Test stub */ }
+    }
+
+    @UsageLimit(value = UsageLimit.LimitType.ALL)
+    static class ClassLevelUsageLimitFixture {
+        public void methodWithoutOwnLimit() { /* Test stub */ }
+
+        @UsageLimit(value = UsageLimit.LimitType.SENDER)
+        public void methodWithOwnLimitOverride() { /* Test stub */ }
+    }
+
     private CommandContext createPlayerContext(Method method, Player player) {
         return CommandContext.builder()
                 .sender(player)
@@ -850,6 +867,63 @@ class UsageLockValidatorTest {
             assertTrue(validator.validate(contextA).isValid());
             assertTrue(validator.validate(contextB).isValid(),
                     "different declaring class -> independent lock key, even though the simple name is identical");
+        }
+    }
+
+    /**
+     * D-01 follow-up (maintainer-required): a class-level {@code @UsageLimit} must actually be
+     * honoured by {@code UsageLockValidator} itself, not just accepted by
+     * {@code PluginManager}'s load-time structural check -- otherwise the check's own "pass" is
+     * a false assurance. Most-derived-wins: a method-level {@code @UsageLimit} takes precedence
+     * over a class-level one on the same executor.
+     * <p>
+     * Each test distinguishes ALL-scope (class-level fixture default) from SENDER-scope
+     * (method-level fixture default) behaviourally -- a second, DIFFERENT sender is blocked
+     * under ALL but not under SENDER -- rather than merely asserting presence, so "class level
+     * is read" and "precedence is backwards" cannot be confused with each other.
+     */
+    @Nested
+    @DisplayName("Class-level @UsageLimit fallback (D-01, most-derived-wins)")
+    class ClassLevelFallbackTests {
+
+        @Test
+        @DisplayName("Method-level only: SENDER scope applies, unchanged -- blocks the same sender, not a different one")
+        void methodLevelOnly_unchanged() throws Exception {
+            Method method = MethodLevelOnlyUsageLimitFixture.class.getDeclaredMethod("methodWithOwnLimit");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
+                    "first acquisition by player1 must succeed");
+            assertFalse(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
+                    "SENDER scope must block a second acquisition by the SAME sender");
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer2)).isValid(),
+                    "SENDER scope must NOT block a DIFFERENT sender");
+        }
+
+        @Test
+        @DisplayName("Class-level only: ALL scope applies (new behaviour -- fails on pre-follow-up HEAD)")
+        void classLevelOnly_newBehaviorAppliesClassScope() throws Exception {
+            Method method = ClassLevelUsageLimitFixture.class.getDeclaredMethod("methodWithoutOwnLimit");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
+                    "first acquisition by player1 must succeed");
+            assertFalse(validator.validate(createPlayerContext(method, mockPlayer2)).isValid(),
+                    "class-level ALL scope must block a DIFFERENT sender too -- on pre-follow-up HEAD "
+                            + "the method carries no @UsageLimit of its own, so acquireLock() returns true "
+                            + "unconditionally and this assertion fails");
+        }
+
+        @Test
+        @DisplayName("Both present: the method-level SENDER scope wins over the class-level ALL scope")
+        void bothPresent_methodLevelWins() throws Exception {
+            Method method = ClassLevelUsageLimitFixture.class.getDeclaredMethod("methodWithOwnLimitOverride");
+
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
+                    "first acquisition by player1 must succeed");
+            assertTrue(validator.validate(createPlayerContext(method, mockPlayer2)).isValid(),
+                    "method-level SENDER must win: a DIFFERENT sender is NOT blocked, even though the "
+                            + "class declares ALL -- if class-level had incorrectly won, this would fail");
+            assertFalse(validator.validate(createPlayerContext(method, mockPlayer)).isValid(),
+                    "method-level SENDER still blocks the SAME sender's second acquisition");
         }
     }
 }

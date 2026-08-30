@@ -86,6 +86,23 @@ class CooldownValidatorTest {
 
     public void methodWithoutCooldown() {}
 
+    /**
+     * Fixtures for the class-level @CmdCD fallback (D-01 follow-up, most-derived-wins) --
+     * see {@link com.ultikits.ultitools.utils.ReflectionUtil#resolveMethodOrClassAnnotation}.
+     */
+    static class MethodLevelOnlyCooldownFixture {
+        @CmdCD(4)
+        public void methodWithOwnCooldown() { /* Test stub */ }
+    }
+
+    @CmdCD(30)
+    static class ClassLevelOnlyCooldownFixture {
+        public void methodWithoutOwnCooldown() { /* Test stub */ }
+
+        @CmdCD(3)
+        public void methodWithOwnCooldownOverride() { /* Test stub */ }
+    }
+
     private CommandContext createPlayerContext(Method method) {
         return CommandContext.builder()
                 .sender(mockPlayer)
@@ -537,6 +554,63 @@ class CooldownValidatorTest {
         @DisplayName("Should have correct name")
         void shouldHaveCorrectName() {
             assertEquals("CooldownValidator", validator.getName());
+        }
+    }
+
+    /**
+     * D-01 follow-up (maintainer-required): a class-level {@code @CmdCD} must actually be
+     * honoured by {@code CooldownValidator} itself, not just accepted by
+     * {@code PluginManager}'s load-time structural check -- otherwise the check's own "pass"
+     * is a false assurance (the exact defect class this milestone exists to eliminate).
+     * Most-derived-wins: a method-level {@code @CmdCD} takes precedence over a class-level one
+     * on the same executor; the class-level value is used only as a fallback when the matched
+     * method carries none.
+     */
+    @Nested
+    @DisplayName("Class-level @CmdCD fallback (D-01, most-derived-wins)")
+    class ClassLevelFallbackTests {
+
+        @Test
+        @DisplayName("Method-level only: applies the method's own cooldown, unchanged")
+        void methodLevelOnly_unchanged() throws Exception {
+            Method method = MethodLevelOnlyCooldownFixture.class.getDeclaredMethod("methodWithOwnCooldown");
+            CommandContext context = createPlayerContext(method);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 1 && remaining <= 5,
+                    "Expected the method's own 4s cooldown, but remaining was: " + remaining);
+        }
+
+        @Test
+        @DisplayName("Class-level only: applies the class's cooldown (new behaviour -- fails on pre-follow-up HEAD)")
+        void classLevelOnly_newBehaviorAppliesClassCooldown() throws Exception {
+            Method method = ClassLevelOnlyCooldownFixture.class.getDeclaredMethod("methodWithoutOwnCooldown");
+            CommandContext context = createPlayerContext(method);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 25 && remaining <= 31,
+                    "Expected the class-level 30s cooldown to apply, but remaining was: " + remaining);
+        }
+
+        @Test
+        @DisplayName("Both present: the method-level value wins over the class-level one")
+        void bothPresent_methodLevelWins() throws Exception {
+            Method method = ClassLevelOnlyCooldownFixture.class.getDeclaredMethod("methodWithOwnCooldownOverride");
+            CommandContext context = createPlayerContext(method);
+            String methodKey = method.toString();
+
+            validator.applyCooldown(context);
+
+            long remaining = validator.getRemainingCooldown(playerUUID, methodKey);
+            assertTrue(remaining >= 1 && remaining <= 4,
+                    "Expected the method's own 3s cooldown to win over the class's 30s, but remaining was: "
+                            + remaining);
         }
     }
 }
