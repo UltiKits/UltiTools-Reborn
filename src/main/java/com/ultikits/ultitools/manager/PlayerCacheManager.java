@@ -1,22 +1,35 @@
 package com.ultikits.ultitools.manager;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * Manages automatic cleanup of @PlayerCache-annotated Map fields when players quit.
+ * Manages automatic cleanup of @PlayerCache-annotated fields when players quit.
  * <p>
- * 管理带有 @PlayerCache 注解的 Map 字段，在玩家退出时自动清理。
+ * Three field shapes are recognised: a {@code Map} keyed by {@link UUID} (the entire entry --
+ * including a nested value, e.g. {@code Map<UUID, Map<String, Long>>} -- is removed on quit), a
+ * {@code Set<UUID>} (the UUID itself is removed), and a {@code Map} whose VALUE is a
+ * {@link UUID} (every entry whose value equals the quitting player's UUID is removed, other
+ * players' entries are left intact). A field whose generic shape cannot be resolved to one of
+ * these three is refused at registration time -- an annotation that cannot take effect fails
+ * loudly rather than being silently skipped.
+ * <p>
+ * 管理带有 @PlayerCache 注解的字段，在玩家退出时自动清理。
  *
  * @since 6.2.0
  */
@@ -29,8 +42,21 @@ public class PlayerCacheManager {
 
     /**
      * Scans a bean for @PlayerCache fields and tracks them.
+     * <p>
+     * Idempotent by reference identity: registering the same instance more than once is a no-op
+     * on the second and subsequent calls, so an instance never accumulates duplicate tracked
+     * entries or is swept more than once per player quit.
+     *
+     * @throws PluginModuleException if a {@link PlayerCache}-annotated field's shape is none of
+     *                                the three this manager can sweep (a {@code Map} keyed by
+     *                                {@link UUID}, a {@code Set<UUID>}, or a {@code Map} whose
+     *                                value is a {@link UUID}) -- an annotation that cannot take
+     *                                effect must fail loudly rather than be silently skipped.
      */
     public void registerBean(Object bean) {
+        if (isTracked(bean)) {
+            return;
+        }
         List<TrackedField> fields = new ArrayList<>();
         // Walk the class hierarchy: getDeclaredFields() skips inherited fields, so a
         // @PlayerCache field on a superclass was never tracked. This also covers beans that
@@ -38,14 +64,80 @@ public class PlayerCacheManager {
         // subclass's own. See issue #190.
         for (Field field : ReflectionUtil.getFields(bean.getClass())) {
             PlayerCache annotation = field.getAnnotation(PlayerCache.class);
-            if (annotation != null && Map.class.isAssignableFrom(field.getType())) {
-                field.setAccessible(true); // NOPMD
-                fields.add(new TrackedField(field, annotation.saveBeforeRemove()));
+            if (annotation == null) {
+                continue;
             }
+            FieldShape shape = classifyField(field);
+            if (shape == null) {
+                throw new PluginModuleException(ErrorCode.INVALID_ARGUMENT,
+                        "@PlayerCache field '" + field.getName() + "' on "
+                                + field.getDeclaringClass().getName() + " has an unsupported "
+                                + "shape; PlayerCacheManager can only sweep Map<UUID, ?> "
+                                + "(key-side), Map<?, UUID> (value-side), and Set<UUID>");
+            }
+            field.setAccessible(true); // NOPMD
+            fields.add(new TrackedField(field, annotation.saveBeforeRemove(), shape));
         }
         if (!fields.isEmpty()) {
             trackedBeans.add(new TrackedBean(bean, fields));
         }
+    }
+
+    private boolean isTracked(Object bean) {
+        for (TrackedBean tracked : trackedBeans) {
+            if (tracked.bean == bean) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Classifies a {@link PlayerCache}-annotated field's generic shape.
+     * <p>
+     * Java 8 erasure means the key-side and value-side {@code Map} cases cannot be told apart
+     * from {@link Field#getType()} alone -- this reads {@link Field#getGenericType()} and its
+     * actual type arguments instead. Where the generic signature is absent or unresolvable (a raw
+     * type, or neither side is {@link UUID}), this returns {@code null} rather than guessing, and
+     * the caller refuses the field.
+     *
+     * @param field the field to classify
+     * @return the recognised shape, or {@code null} if the field's shape is unsupported
+     */
+    private static FieldShape classifyField(Field field) {
+        Class<?> rawType = field.getType();
+        Type genericType = field.getGenericType();
+        if (Map.class.isAssignableFrom(rawType)) {
+            if (!(genericType instanceof ParameterizedType)) {
+                return null;
+            }
+            Type[] typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
+            if (typeArguments.length != 2) {
+                return null;
+            }
+            if (isUuid(typeArguments[0])) {
+                return FieldShape.KEY_MAP;
+            }
+            if (isUuid(typeArguments[1])) {
+                return FieldShape.VALUE_MAP;
+            }
+            return null;
+        }
+        if (Set.class.isAssignableFrom(rawType)) {
+            if (!(genericType instanceof ParameterizedType)) {
+                return null;
+            }
+            Type[] typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
+            if (typeArguments.length == 1 && isUuid(typeArguments[0])) {
+                return FieldShape.UUID_SET;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private static boolean isUuid(Type type) {
+        return UUID.class.equals(type);
     }
 
     /**
@@ -56,9 +148,8 @@ public class PlayerCacheManager {
     }
 
     /**
-     * Called when a player quits. Cleans up all tracked maps.
+     * Called when a player quits. Cleans up all tracked fields across all three supported shapes.
      */
-    @SuppressWarnings("unchecked")
     public void onPlayerQuit(UUID playerId) {
         for (TrackedBean tracked : trackedBeans) {
             for (TrackedField tf : tracked.fields) {
@@ -66,10 +157,11 @@ public class PlayerCacheManager {
                     if (tf.saveBeforeRemove && tracked.bean instanceof PlayerCacheSaver) {
                         ((PlayerCacheSaver) tracked.bean).savePlayerData(playerId);
                     }
-                    Map<UUID, ?> map = (Map<UUID, ?>) tf.field.get(tracked.bean);
-                    if (map != null) {
-                        map.remove(playerId);
+                    Object value = tf.field.get(tracked.bean);
+                    if (value == null) {
+                        continue;
                     }
+                    sweepField(value, tf.shape, playerId);
                 } catch (IllegalAccessException e) {
                     LOGGER.log(Level.WARNING, "Failed to clean player cache field: "
                             + tf.field.getName() + " on " + tracked.bean.getClass().getName(), e);
@@ -78,11 +170,42 @@ public class PlayerCacheManager {
         }
     }
 
+    private static void sweepField(Object value, FieldShape shape, UUID playerId) {
+        switch (shape) {
+            case KEY_MAP:
+                ((Map<?, ?>) value).remove(playerId);
+                break;
+            case VALUE_MAP:
+                // Mirrors UsageLockValidator.clearPlayerLocks's already-correct predicate:
+                // remove every entry whose VALUE is the quitting player's UUID, leaving entries
+                // belonging to other players intact.
+                ((Map<?, ?>) value).entrySet().removeIf(entry -> playerId.equals(entry.getValue()));
+                break;
+            case UUID_SET:
+                ((Set<?>) value).remove(playerId);
+                break;
+            default:
+                throw new IllegalStateException("Unreachable: unknown field shape " + shape);
+        }
+    }
+
     /**
      * Returns the number of beans being tracked.
      */
     public int getTrackedBeanCount() {
         return trackedBeans.size();
+    }
+
+    /**
+     * The three field shapes {@link #registerBean(Object)} can sweep.
+     */
+    private enum FieldShape {
+        /** {@code Map<UUID, ?>} -- the whole entry (key + value) is removed on quit. */
+        KEY_MAP,
+        /** {@code Map<?, UUID>} -- every entry whose VALUE equals the quitting player is removed. */
+        VALUE_MAP,
+        /** {@code Set<UUID>} -- the UUID itself is removed. */
+        UUID_SET
     }
 
     private static class TrackedBean {
@@ -98,10 +221,12 @@ public class PlayerCacheManager {
     private static class TrackedField {
         final Field field;
         final boolean saveBeforeRemove;
+        final FieldShape shape;
 
-        TrackedField(Field field, boolean saveBeforeRemove) {
+        TrackedField(Field field, boolean saveBeforeRemove, FieldShape shape) {
             this.field = field;
             this.saveBeforeRemove = saveBeforeRemove;
+            this.shape = shape;
         }
     }
 }
