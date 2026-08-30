@@ -30,6 +30,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import com.ultikits.ultitools.annotations.command.CmdParam;
+
 /**
  * Unit tests for TabCompletionManager.
  */
@@ -701,6 +703,156 @@ class TabCompletionManagerTest {
             
             // Should only have one "add"
             assertEquals(1, suggestions.stream().filter(s -> s.equals("add")).count());
+        }
+    }
+
+    // ============================================================================================
+    // 05-06 Task 1: resolveSuggestValue() and suggest(TabCompletionContext, String) -- dual notation
+    // ============================================================================================
+
+    /**
+     * Fixture for {@link ResolveSuggestValueMethodTests}: two {@code @CmdParam}-annotated
+     * parameters on one method, one with an ordinary display name and one whose DISPLAY NAME
+     * itself starts with {@code @} (the wrong-attribute trap D-07 Pitfall 2 warns about).
+     */
+    private static class ResolveSuggestValueFixture {
+        void mapping(@CmdParam(value = "target", suggest = "suggestTarget") String target,
+                @CmdParam(value = "@trap", suggest = "suggestTrapMethod") String trap) {
+            // Test fixture -- never invoked
+        }
+    }
+
+    @Nested
+    @DisplayName("resolveSuggestValue() Method Tests (05-06 dual notation)")
+    class ResolveSuggestValueMethodTests {
+
+        private Method fixtureMethod;
+
+        @BeforeEach
+        void locateFixtureMethod() throws NoSuchMethodException {
+            fixtureMethod = ResolveSuggestValueFixture.class.getDeclaredMethod(
+                    "mapping", String.class, String.class);
+        }
+
+        @Test
+        @DisplayName("returns suggest() for the parameter whose value() matches parameterName")
+        void returnsSuggestForMatchingParameter() {
+            assertEquals("suggestTarget",
+                    TabCompletionManager.resolveSuggestValue(fixtureMethod, "target"));
+        }
+
+        @Test
+        @DisplayName("keys off suggest(), not the display name -- a display name starting with @ does not change the result")
+        void resolvesByValueLookupNotDisplayNameContent() {
+            assertEquals("suggestTrapMethod",
+                    TabCompletionManager.resolveSuggestValue(fixtureMethod, "@trap"));
+        }
+
+        @Test
+        @DisplayName("returns null when no @CmdParam on the method matches parameterName")
+        void returnsNullWhenNoMatch() {
+            assertNull(TabCompletionManager.resolveSuggestValue(fixtureMethod, "doesNotExist"));
+        }
+
+        @Test
+        @DisplayName("returns null for a null method")
+        void returnsNullForNullMethod() {
+            assertNull(TabCompletionManager.resolveSuggestValue(null, "target"));
+        }
+    }
+
+    /**
+     * Fixture for {@link SuggestWithResolvedSuggestMethodTests}'s method-invocation fall-through
+     * assertions -- a real suggestion method returning known content, so the fall-through path's
+     * OUTPUT is asserted, not merely that it does not throw.
+     */
+    private static class MethodFallbackFixture {
+        void mapping(@CmdParam(value = "thing", suggest = "suggestValues") String thing) {
+            // Test fixture -- never invoked
+        }
+
+        List<String> suggestValues(Player player, Command command, String[] args) {
+            return Arrays.asList("fallbackOne", "fallbackTwo");
+        }
+    }
+
+    @Nested
+    @DisplayName("suggest(TabCompletionContext, String) Method Tests (05-06 dual notation)")
+    class SuggestWithResolvedSuggestMethodTests {
+
+        @Test
+        @DisplayName("resolvedSuggest starting with @ resolves through the registered completer")
+        void resolvedSuggestAtPrefixResolvesThroughCompleter() {
+            TabCompletionContext context = TabCompletionContext.builder()
+                    .args(new String[]{""})
+                    .currentArgIndex(0)
+                    .partialArg("")
+                    .build();
+
+            List<String> suggestions = manager.suggest(context, TabCompletionManager.BOOLEAN);
+
+            assertTrue(suggestions.contains("true"));
+            assertTrue(suggestions.contains("false"));
+        }
+
+        @Test
+        @DisplayName("an unregistered @key returns an empty list rather than throwing")
+        void unregisteredAtKeyReturnsEmpty() {
+            TabCompletionContext context = TabCompletionContext.builder()
+                    .args(new String[]{""})
+                    .currentArgIndex(0)
+                    .partialArg("")
+                    .build();
+
+            List<String> suggestions = manager.suggest(context, "@doesNotExist");
+
+            assertTrue(suggestions.isEmpty());
+        }
+
+        @Test
+        @DisplayName("resolvedSuggest with no leading @ falls through to the method-invocation completer and returns its output")
+        void resolvedSuggestWithoutAtFallsThroughToMethodCompleter() throws NoSuchMethodException {
+            MethodFallbackFixture fixture = new MethodFallbackFixture();
+            Method fixtureMethod = MethodFallbackFixture.class.getDeclaredMethod("mapping", String.class);
+            TabCompletionContext context = TabCompletionContext.builder()
+                    .args(new String[]{""})
+                    .currentArgIndex(0)
+                    .partialArg("")
+                    .matchedMethod(fixtureMethod)
+                    .parameterName("thing")
+                    .executorInstance(fixture)
+                    .build();
+
+            List<String> suggestions = manager.suggest(context, "suggestValues");
+
+            assertEquals(Arrays.asList("fallbackOne", "fallbackTwo"), suggestions);
+        }
+
+        @Test
+        @DisplayName("a null resolvedSuggest falls through to the method-invocation completer")
+        void nullResolvedSuggestFallsThrough() throws NoSuchMethodException {
+            MethodFallbackFixture fixture = new MethodFallbackFixture();
+            Method fixtureMethod = MethodFallbackFixture.class.getDeclaredMethod("mapping", String.class);
+            TabCompletionContext context = TabCompletionContext.builder()
+                    .args(new String[]{""})
+                    .currentArgIndex(0)
+                    .partialArg("")
+                    .matchedMethod(fixtureMethod)
+                    .parameterName("thing")
+                    .executorInstance(fixture)
+                    .build();
+
+            List<String> suggestions = manager.suggest(context, null);
+
+            assertEquals(Arrays.asList("fallbackOne", "fallbackTwo"), suggestions);
+        }
+
+        @Test
+        @DisplayName("returns empty list for a null context regardless of resolvedSuggest")
+        void nullContextReturnsEmpty() {
+            List<String> suggestions = manager.suggest((TabCompletionContext) null, "@boolean");
+
+            assertTrue(suggestions.isEmpty());
         }
     }
 }

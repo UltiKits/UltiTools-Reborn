@@ -33,6 +33,7 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -364,6 +365,116 @@ class BaseCommandExecutorTabCompletionTest {
     }
 
     // ========================================================================================
+    // 05-06 Task 1: dual notation on @CmdParam.suggest, entered through onTabComplete (D-07)
+    // ========================================================================================
+
+    @Nested
+    @DisplayName("05-06 Task 1: dual notation on @CmdParam.suggest, entered through onTabComplete")
+    class SuggestKeyNotationTests {
+
+        @Test
+        @DisplayName("@players resolves through OnlinePlayersCompleter")
+        void atPlayersResolvesThroughOnlinePlayersCompleter() {
+            server.addPlayer("otherOnline");
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"give", ""});
+
+            assertThat(completions).contains("otherOnline", "tabPlayer");
+        }
+
+        @Test
+        @DisplayName("@worlds resolves through WorldsCompleter")
+        void atWorldsResolvesThroughWorldsCompleter() {
+            server.addSimpleWorld("fixtureworld");
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"goto", ""});
+
+            assertThat(completions).contains("fixtureworld");
+        }
+
+        @Test
+        @DisplayName("@materials resolves through MaterialsCompleter")
+        void atMaterialsResolvesThroughMaterialsCompleter() {
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"build", "sto"});
+
+            assertThat(completions).contains("STONE");
+        }
+
+        @Test
+        @DisplayName("@boolean resolves through StaticSuggestionsCompleter")
+        void atBooleanResolvesThroughStaticSuggestionsCompleter() {
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"toggle", ""});
+
+            assertThat(completions).containsExactlyInAnyOrder("true", "false");
+        }
+
+        @Test
+        @DisplayName("a suggest value with no leading @ still resolves by method name -- the 24 downstream sites need zero change")
+        void nonAtSuggestStillResolvesByMethodName() {
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"legacy", ""});
+
+            assertThat(completions).containsExactlyInAnyOrder("alpha", "beta");
+        }
+
+        @Test
+        @DisplayName("a suggest value naming a non-existent method still falls back to the i18n hint text, unchanged")
+        void suggestNamingMissingMethodStillFallsBackToHint() {
+            when(mockPlugin.i18n("aHintOnlyKeyForNotation")).thenReturn("Pick a notation");
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"hint", ""});
+
+            assertThat(completions).containsExactly("Pick a notation");
+        }
+
+        @Test
+        @DisplayName("wrong-attribute trap: a display name beginning with @ is not consulted as the key")
+        void displayNameStartingWithAtIsNotConsultedAsKey() {
+            // @CmdParam(value = "@trap", suggest = "suggestTrap") -- the DISPLAY NAME starts with
+            // @, but suggest() names a real method. Resolution must be driven by suggest(), never
+            // by the display name (D-07 Pitfall 2 / T-05-28) -- if it were, this would either
+            // throw (no completer registered under "@trap") or silently return nothing.
+            KeyNotationExecutor executor = new KeyNotationExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"trap", ""});
+
+            assertThat(completions).containsExactly("trapped");
+        }
+
+        @Test
+        @DisplayName("a completer registered at runtime under a custom key is reachable through the same @key branch as a built-in")
+        void runtimeRegisteredCustomKeyIsReachable() {
+            TabCompletionManager.getInstance().register("@fixtureCustomKey",
+                    ctx -> Arrays.asList("customOne", "customTwo"));
+            try {
+                KeyNotationExecutor executor = new KeyNotationExecutor();
+
+                List<String> completions =
+                        executor.onTabComplete(player, mockCommand, "fixture", new String[]{"custom", ""});
+
+                assertThat(completions).containsExactlyInAnyOrder("customOne", "customTwo");
+            } finally {
+                TabCompletionManager.getInstance().unregister("@fixtureCustomKey");
+            }
+        }
+    }
+
+    // ========================================================================================
     // Shared fixture command classes
     // ========================================================================================
 
@@ -466,6 +577,78 @@ class BaseCommandExecutorTabCompletionTest {
         // Deliberately empty: simulates the shape an AOP subclass proxy produces (a subclass
         // instance whose suggestion method is declared on the superclass), without depending on
         // ByteBuddy proxy generation in this test.
+    }
+
+    /**
+     * 05-06 Task 1 fixture: one mapping per built-in completer key, plus the method-name,
+     * missing-method-fallback, wrong-attribute-trap and runtime-custom-key cases.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class KeyNotationExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "target", suggest = "@players") String target) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "goto <world>")
+        public void gotoCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "world", suggest = "@worlds") String world) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "build <material>")
+        public void buildCommand(@CmdSender CommandSender sender,
+                                  @CmdParam(value = "material", suggest = "@materials") String material) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "toggle <state>")
+        public void toggleCommand(@CmdSender CommandSender sender,
+                                   @CmdParam(value = "state", suggest = "@boolean") String state) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "legacy <name>")
+        public void legacyCommand(@CmdSender CommandSender sender,
+                                   @CmdParam(value = "name", suggest = "suggestNames") String name) {
+            // Test stub -- plain method-name notation, unaffected by the @key branch.
+        }
+
+        public List<String> suggestNames(Player player, Command command, String[] args) {
+            return Arrays.asList("alpha", "beta");
+        }
+
+        @CmdMapping(format = "hint <choice>")
+        public void hintCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "choice", suggest = "aHintOnlyKeyForNotation") String choice) {
+            // Test stub -- "aHintOnlyKeyForNotation" names no method, exercising the unchanged
+            // i18n hint fallback (D-07 leaves it deliberately unchanged).
+        }
+
+        // Wrong-attribute trap (D-07 Pitfall 2 / T-05-28): the parameter's DISPLAY NAME
+        // (@CmdParam.value()) starts with "@", but suggest() names a real method. Resolution
+        // must be driven by suggest(), never by value().
+        @CmdMapping(format = "trap <@trap>")
+        public void trapCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "@trap", suggest = "suggestTrap") String value) {
+            // Test stub
+        }
+
+        public List<String> suggestTrap(Player player, Command command, String[] args) {
+            return Arrays.asList("trapped");
+        }
+
+        @CmdMapping(format = "custom <opt>")
+        public void customCommand(@CmdSender CommandSender sender,
+                                   @CmdParam(value = "opt", suggest = "@fixtureCustomKey") String opt) {
+            // Test stub -- a runtime-registered custom key, not one of the four built-ins.
+        }
     }
 
     /**
