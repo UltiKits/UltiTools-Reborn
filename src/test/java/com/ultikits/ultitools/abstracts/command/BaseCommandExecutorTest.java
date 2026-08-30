@@ -1,24 +1,33 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +42,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -980,6 +990,130 @@ class BaseCommandExecutorTest {
     }
 
     @Nested
+    @DisplayName("Chain-Driven Post-Action Tests")
+    class ChainDrivenPostActionTests {
+
+        private UUID player1UUID;
+
+        @BeforeEach
+        void stubPlayerUuid() {
+            player1UUID = UUID.randomUUID();
+            lenient().when(mockPlayer.getUniqueId()).thenReturn(player1UUID);
+        }
+
+        /**
+         * Stubs {@code Bukkit.getScheduler()} so {@code BukkitRunnable#runTask} invokes the
+         * runnable synchronously instead of touching a real Bukkit scheduler, which does not
+         * exist under plain Mockito. Mirrors the pattern already used in
+         * {@code GuiSchedulerTest#testRunOnMainThread_WhenNotOnMainThread}.
+         */
+        private void stubSyncScheduler(MockedStatic<Bukkit> bukkit) {
+            BukkitScheduler scheduler = mock(BukkitScheduler.class);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable task = invocation.getArgument(1);
+                task.run();
+                return null;
+            });
+        }
+
+        @Test
+        @DisplayName("SEAM: custom chain with CooldownValidator rejects the second dispatch within the cooldown window")
+        void customChainWithCooldownValidatorRejectsSecondDispatch() {
+            ValidatorChain chain = ValidatorChain.builder().add(new CooldownValidator()).build();
+            CooldownSeamExecutor executor = new CooldownSeamExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+            }
+
+            assertEquals(1, executor.pingCount,
+                    "the second dispatch inside the cooldown window must be rejected -- the mapped method must not run");
+        }
+
+        @Test
+        @DisplayName("Negative half: custom chain WITHOUT CooldownValidator permits both dispatches and records no cooldown state")
+        void customChainWithoutCooldownValidatorRecordsNoCooldownState() throws Exception {
+            ValidatorChain chain = ValidatorChain.builder().build();
+            CooldownSeamExecutor executor = new CooldownSeamExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+            }
+
+            assertEquals(2, executor.pingCount,
+                    "both dispatches must proceed when the chain lacks a CooldownValidator");
+
+            Method pingMethod = CooldownSeamExecutor.class.getDeclaredMethod("doPing", Player.class);
+            long remaining = executor.getCooldownValidator().getRemainingCooldown(player1UUID, pingMethod.toString());
+            assertEquals(0, remaining,
+                    "the field-created cooldownValidator (absent from the custom chain) must record no cooldown state");
+        }
+
+        @Test
+        @DisplayName("Two passing validators each receive exactly one post-action call, in chain order")
+        void twoPassingValidatorsEachReceiveOnePostActionInOrder() {
+            List<String> completionOrder = new ArrayList<>();
+            RecordingValidator first = new RecordingValidator("first", 10, true, completionOrder);
+            RecordingValidator second = new RecordingValidator("second", 20, true, completionOrder);
+            // Added out of order to also prove the chain still sorts by getOrder().
+            ValidatorChain chain = ValidatorChain.builder().add(second).add(first).build();
+            PostActionOrderExecutor executor = new PostActionOrderExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+            }
+
+            assertEquals(1, executor.invokeCount);
+            assertEquals(1, first.completions.size());
+            assertEquals(1, second.completions.size());
+            assertTrue(first.completions.get(0));
+            assertTrue(second.completions.get(0));
+            assertEquals(Arrays.asList("first", "second"), completionOrder,
+                    "post-actions must fire in chain order (by getOrder())");
+        }
+
+        @Test
+        @DisplayName("Failure short-circuit: when the first validator fails, the second receives no post-action call")
+        void failingFirstValidatorPreventsSecondPostAction() {
+            RecordingValidator failing = new RecordingValidator("failing", 10, false, null);
+            RecordingValidator second = new RecordingValidator("second", 20, true, null);
+            ValidatorChain chain = ValidatorChain.builder().add(failing).add(second).build();
+            PostActionOrderExecutor executor = new PostActionOrderExecutor(chain);
+
+            boolean result = executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+
+            assertTrue(result);
+            assertEquals(0, executor.invokeCount, "the mapped method must not run when validation fails");
+            assertEquals(0, failing.completions.size());
+            assertEquals(0, second.completions.size(),
+                    "a validator the chain never reached must receive no post-action call");
+        }
+
+        @Test
+        @DisplayName("When the mapped method throws, validators that ran still receive their post-action call with success=false")
+        void throwingMappedMethodStillInvokesPostActionWithFailureFlag() {
+            RecordingValidator recorder = new RecordingValidator("recorder", 10, true, null);
+            ValidatorChain chain = ValidatorChain.builder().add(recorder).build();
+            ThrowingCommandExecutor executor = new ThrowingCommandExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                assertDoesNotThrow(() ->
+                        executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"}));
+            }
+
+            assertEquals(1, recorder.completions.size());
+            assertFalse(recorder.completions.get(0), "the success flag must be false when the mapped method threw");
+        }
+    }
+
+    @Nested
     @DisplayName("Bare Command Tests")
     class BareCommandTests {
 
@@ -1073,7 +1207,8 @@ class BaseCommandExecutorTest {
         }
 
         @Override
-        protected void executeCommand(CommandContext context, Method method, Object[] params) {
+        protected void executeCommand(CommandContext context, Method method, Object[] params,
+                                       ValidatorChain.ChainValidationResult validationResult) {
             // No setAccessible here: the invocation happens inside this class on its own
             // public methods, so the access check already passes.
             try {
@@ -1112,17 +1247,134 @@ class BaseCommandExecutorTest {
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"custom"})
     static class CustomChainExecutor extends BaseCommandExecutor {
-        
+
         public CustomChainExecutor(ValidatorChain chain) {
             super(chain);
         }
-        
+
         @Override
         protected void handleHelp(CommandSender sender) {
             // Test stub - help handler not used in tests
         }
     }
-    
+
+    /**
+     * Fixture for the SILENT-11 seam assertion: constructed via the custom-{@link ValidatorChain}
+     * constructor, carries a {@code @CmdCD}-annotated mapping so enforcement can be observed
+     * through a real dispatch.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"seam"})
+    static class CooldownSeamExecutor extends BaseCommandExecutor {
+        int pingCount = 0;
+
+        CooldownSeamExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "ping")
+        @CmdCD(5)
+        public void doPing(Player player) {
+            pingCount++;
+        }
+    }
+
+    /**
+     * Fixture for the post-action order/arity/failure-short-circuit tests. Carries no
+     * cooldown/lock annotation so only the {@link RecordingValidator}s injected via the custom
+     * chain gate and receive post-actions.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"postaction"})
+    static class PostActionOrderExecutor extends BaseCommandExecutor {
+        int invokeCount = 0;
+
+        PostActionOrderExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "go")
+        public void doGo(Player player) {
+            invokeCount++;
+        }
+    }
+
+    /**
+     * Fixture whose mapped method always throws, for asserting that post-actions still fire
+     * with a false success flag.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"throwing"})
+    static class ThrowingCommandExecutor extends BaseCommandExecutor {
+
+        ThrowingCommandExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "boom")
+        public void doBoom(Player player) {
+            throw new IllegalStateException("boom");
+        }
+    }
+
+    /**
+     * A {@link CommandValidator} test double that records each {@code onComplete} invocation's
+     * success flag and, optionally, appends its name to a shared log so relative call order
+     * across multiple validators can be asserted.
+     */
+    static class RecordingValidator implements CommandValidator {
+        private final String name;
+        private final int order;
+        private final boolean succeeds;
+        private final List<String> sharedLog;
+        final List<Boolean> completions = new ArrayList<>();
+
+        RecordingValidator(String name, int order, boolean succeeds, List<String> sharedLog) {
+            this.name = name;
+            this.order = order;
+            this.succeeds = succeeds;
+            this.sharedLog = sharedLog;
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return succeeds ? ValidationResult.success() : ValidationResult.failure("forced failure: " + name);
+        }
+
+        @Override
+        public void onComplete(CommandContext context, boolean commandSucceeded) {
+            completions.add(commandSucceeded);
+            if (sharedLog != null) {
+                sharedLog.add(name);
+            }
+        }
+
+        @Override
+        public int getOrder() {
+            return order;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+    }
+
     @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
     @CmdExecutor(alias = {"consoleonly"})
     static class ConsoleOnlyExecutor extends BaseCommandExecutor {
