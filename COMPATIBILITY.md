@@ -1195,6 +1195,186 @@ contradicts the documentation": a declared attribute that the framework accepts,
 silently never reads is a self-contradicting contract regardless of whether it happens to have
 zero current users.
 
+### Recorded instance: the declarative GUI repaint pipeline actually repaints, and `GuiRenderer.initialize`'s signature changes to carry a `Supplier<Widget>` (D-09 items 1-3 / WIRE-02, 6.3.0)
+
+Before 6.3.0, nothing in the declarative GUI layer repainted after the first frame. `GuiRenderer`
+built its `Widget` tree once, at `initialize(Widget, BuildContext)`, and never re-derived it;
+`Element.update()` never marked itself dirty; and `collectRenderNodesRecursive` stored the same
+live, cached `RenderObjectElement.getRenderNode()` reference into `lastRenderNodes` on every frame,
+so `RenderNodeDiffer.diff()` always compared a node against itself. A lore-only, display-name-only,
+or item-type-only widget change produced no inventory update at all — `UI = f(state)`, the
+subsystem's own thesis, did not hold.
+
+6.3.0 closes this. `GuiRenderer.initialize(Supplier<Widget> widgetSupplier, BuildContext context)`
+re-derives the `Widget` tree from current state exactly once per `performBuild()`, including the
+first frame; `Element.update()` marks its element dirty unconditionally, in the base class, for all
+three subclasses; `collectRenderNodesRecursive` snapshots each `RenderNode` via `.copy()` before
+storing, breaking the self-comparison. A second, previously undocumented gap was found and closed
+in the same plan: `State.setState()` on a nested `StatefulWidget` bubbles toward the mounted root,
+but nothing connected that bubbling to `GuiRenderer.scheduleBuild()` — root `CLAUDE.md`'s own
+documented `CounterButton` example did not actually hold until this fix
+(`Element.setRootBuildScheduler(Runnable)`, registered by `GuiRenderer.mountRoot()`). Delivered by
+plan 05-11, `GuiRendererRepaintTest` (14 tests).
+
+**Unlike every other entry in this document's "Behavioral changes" section, this one is not
+invisible to `japicmp`.** `GuiRenderer.initialize`'s parameter type changed from `Widget` to
+`Supplier<Widget>` — a genuine JVM method-descriptor change — and `japicmp`'s own report
+(`target/japicmp/japicmp.diff`, baseline the released 6.2.5 jar, per this repository's japicmp
+configuration) names it directly:
+
+```
+***! MODIFIED CLASS: PUBLIC com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer  (not serializable)
+---! REMOVED METHOD: PUBLIC(-) void initialize(com.ultikits...core.Widget, com.ultikits...core.BuildContext)
++++  NEW METHOD: PUBLIC(+) void initialize(java.util.function.Supplier<com.ultikits...core.Widget>, com.ultikits...core.BuildContext)
+```
+
+An earlier draft of the plan that produced this entry asserted "none of the behaviour changes
+alters a signature, so `japicmp` cannot surface any of them" for the whole GUI lane. That is wrong
+for this one member specifically, and the claim is not repeated here — see plan 05-15's own SUMMARY
+for the correction. Every other entry below this one in this document's GUI-lane record is a true
+behavior-only change with no signature diff; this is the one exception, and `japicmp`'s own diff is
+quoted above rather than asserted.
+
+**Bucket.** `DeclarativeGui.onOpen()` is the only in-tree caller of `initialize(...)` and was
+updated in the same plan, so this is source- and binary-incompatible for any external caller. The
+entire `abstracts.gui.declarative` package tree carries `@ApiStatus.Experimental`, and this method
+was measured with **zero** downstream call sites across the monorepo (control: the older, stable
+imperative `abstracts.gui` generation has 8 — confirming the search mechanism works; see
+`05-CONTEXT.md` D-12). No `@Deprecated(forRemoval = true)` warning period preceded this change, and
+none is offered here, under the same reasoning this document already applies to the AOP removals in
+[the same-release removal exception](#exception-removal-in-the-same-release-that-announces-it):
+clause 2 ("shipped but never wired into anything that calls it") holds on the zero-adoption
+measurement above, and clause 1 ("proven non-functional on the currently released version") holds
+independently — the pre-6.3.0 method was itself non-functional in the released 6.2.5 jar, since a
+`Widget` supplied once at `initialize()` time and never re-derived meant every subsequent frame
+silently failed to repaint; the released jar's own behaviour is the reproduction, not an argument
+about it. This method does not appear on the [removal list](#removal-list-for-630) above because it
+was never `@Deprecated` — it cannot be entered there by this document's own generation rule, which
+is exactly why it is recorded here by hand instead.
+
+### Recorded instance: a click on the player's own inventory can no longer reach a declarative-GUI handler (D-09 item 4 / WIRE-02, 6.3.0)
+
+Before 6.3.0, `GuiRenderer.handleClick` looked its `clickHandlers` map up by `event.getSlot()` — a
+slot number relative to whichever inventory the click landed in, which collides between the GUI's
+own top inventory and the player's own inventory shown below it in the same `InventoryView`. A click
+in the **player's own inventory**, at a slot numerically equal to a slot the GUI had registered a
+handler for, invoked that handler — an unintended cross-inventory dispatch, not a documented
+capability.
+
+6.3.0 bounds-checks `event.getRawSlot()` against `gui.getSize()` before any handler lookup, and
+looks the handler up in the same slot space `RenderNode.getSlotIndex()` already populates
+`clickHandlers` with. This rejects every player-inventory raw slot (which always follows the GUI's
+own slots in the combined `InventoryView`) and the `-999` sentinel Bukkit reports for a click
+outside the window entirely. `clickHandlers` remains the sole record of slot ownership — only the
+lookup key changed, from a colliding relative slot to a bounds-checked raw slot. Delivered by plan
+05-12, `GuiClickDispatchTest` (7 tests), including the whole colliding-slot range, shift-click and
+number-key clicks, and a repaint that moves a handler's slot moving its click target with it.
+
+**Bucket.** This is recorded as a **security fix**, not a neutral behaviour tidy-up: a caller who
+could previously trigger a GUI handler by clicking a numerically-colliding slot in their own
+inventory was exploiting a defect, not relying on a documented contract. Per
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)
+above, security fixes may land without prior notice; no warning period applies here.
+
+`handleClick`'s public signature is unchanged (`public void handleClick(InventoryClickEvent
+event)`), so `japicmp` cannot detect this — the entry exists precisely because this document's
+criterion requires recording what a signature diff cannot show.
+
+### Recorded instance: `GridView` positions any widget type as parent data written at render time (D-11 / WIRE-03, 6.3.0)
+
+Before 6.3.0, `GridView.Builder.items(items, itemBuilder)` special-cased `ItemDisplay` — a
+six-field hand copy computed each child's slot and constructed the `ItemDisplay` directly. Any
+other widget type added to a `GridView` via `.child(Widget)`/`.children(...)` — a `TextButton`, or a
+mixed-type grid — was never auto-positioned; it simply stacked on its own declared (or default)
+slot, which the grid never touched.
+
+6.3.0 writes each child's grid-computed slot onto the `RenderNode`(s) that child's own subtree
+produced, at render time (`GridViewElement.applyGridPositions()`, called from both `mount()` and
+`performRebuild()`, before `GuiRenderer`'s snapshot collection) — mirroring
+[Flutter's `ParentDataWidget`](https://api.flutter.dev/flutter/widgets/ParentDataWidget-class.html)
+/ `Stack`+`Positioned`, the pattern this subsystem's own documentation already claims to port: a
+layout parent attaches data the child never sees, rather than the child computing its own position.
+`GridView.Builder.items()`'s `ItemDisplay`-only special case is deleted; any widget type now
+positions correctly inside a `GridView`. `Widget`'s own API gained no slot-related method, so no
+downstream custom widget needs to change. Delivered by plan 05-13, `GridViewTest` (15 tests) and
+`GridViewElementTest` (13 tests — D-09 item 5's keyed-reconciliation convergence that this
+positioning is built on).
+
+**Conflict rule (D-11).** A `GridView` always wins over an explicit child slot, **and** emits a
+`WARNING` naming the child — mirroring Flutter's hard failure on a misplaced `Positioned` rather
+than silently ignoring it. A child with no explicit slot, or legitimately declared at slot `0` (the
+`ItemDisplay`/`TextButton` builders' own pre-existing default, treated as the "unset" signal since
+neither builder carries a separate sentinel — a widget explicitly calling `.slot(0)` inside a
+`GridView` is therefore indistinguishable from one that never called `.slot()` at all, and neither
+triggers the warning; see 05-13-SUMMARY.md's stated tradeoff), produces no warning.
+
+`GridView.Builder.items()`'s signature is unchanged — its `ItemDisplay`-only branch was deleted, not
+the method itself — so `japicmp` cannot detect this behavioural change.
+
+### Recorded instance: two declarative-GUI builder-method pairs are removed rather than given a guessed implementation (D-09, 6.3.0)
+
+`Container.Builder.background(IconWrapper)`/`Container.getBackground()` and
+`GridView.Builder.rows(int)`/`GridView.getMaxRows()` are deleted, not implemented. Both pairs were
+fluent builder methods whose stored value was never read by any downstream code:
+
+- `Container` carries no spatial bounds of its own — no `startSlot`/`columns`/`rows` the way
+  `GridView` does — so "fill the unoccupied slots" has no answerable scope from inside
+  `ContainerElement` without risking a silent overwrite of a sibling subtree's `RenderNode`s, the
+  only region actually visible from a `Container`'s own subtree. A wrong implementation would have
+  looked correct for a single root-level `Container` and corrupted the display the moment one was
+  nested next to other content.
+- `GridView.Builder.rows(int)`'s `maxRows` field was set but never read by
+  `calculateSlotForChild` (grep-confirmed across `src/main` and `src/test`); implementing an
+  overflow-capping rule using it would have meant inventing new layout semantics outside this
+  plan's own scope.
+
+Root `CLAUDE.md` gotcha #14 previously — and, before plan 05-13, correctly — described
+`Container.background(...)` as dead code that "silently does nothing." As of this plan, calling
+either deleted method is a **compile error**, not a silent no-op; the gotcha has been corrected to
+say so. `IconWrapper.java` is left in place, though `Container.background(...)` was its only
+production call site and it is therefore now fully unused in `src/main` — flagged for a future
+cleanup plan, not resolved here. Delivered by plan 05-13,
+`GridViewTest#containerNoLongerExposesBackground` / `#gridViewNoLongerExposesRows` (reflection-based
+regression guards asserting `NoSuchMethodException`).
+
+**`japicmp` read, per this phase's stated obligation — not assumed.** Both classes carry
+`@ApiStatus.Experimental`; neither method pair ever carried `@Deprecated(forRemoval = true)`, so
+neither is entered on the [removal list](#removal-list-for-630) above by this document's own
+generation rule — that list is generated from the annotation, and this lane deprecates nothing, it
+deletes outright. `japicmp`'s own report (`target/japicmp/japicmp.diff`, `mvn -B clean verify`
+against the baseline released 6.2.5 jar) was read directly and confirms exactly these two pairs,
+nothing more:
+
+```
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper getBackground()
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container$Builder background(com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper)
+---! REMOVED METHOD: PUBLIC(-) int getMaxRows()
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView$Builder<T> rows(int)
+```
+
+The gate is **report-only** — `pom.xml` sets no `breakBuildOn*` flag for `japicmp-maven-plugin` — so
+this `mvn verify` passing is not itself evidence of compatibility; only the diff read directly is.
+This is also the list Phase 7 is expected to lift into its japicmp exclusion list member-by-member,
+matching this entry, when that phase arms the gate.
+
+**Bucket.** Same reasoning as the `initialize(...)` entry above: clause 2 of
+[the same-release removal exception](#exception-removal-in-the-same-release-that-announces-it)
+("shipped but never wired into anything that calls it"), confirmed by the grep above for both
+fields. No warning period, because there is no working behaviour a warning period would protect — a
+fluent method whose stored value nothing reads has no observable effect to preserve in the first
+place.
+
+### Recorded instance: `@ApiStatus.Experimental` is retained on the declarative GUI packages; only the wording changes (D-12, 6.3.0)
+
+No removal, no signature change, no behavioural change — recorded here only so the three entries
+above are not misread as "the surface is now stable." All six `package-info.java` files under
+`abstracts.gui.declarative` (root, `core`, `engine`, `widgets`, `util`, `widgets.navigation`) keep
+`@ApiStatus.Experimental`. Only the accompanying javadoc — and the documentation site's matching
+`::: warning` — changes, from describing "known gaps in v6.2.5" to naming the three seams this
+phase closed (repaint re-derivation, click-dispatch bounds-checking, `GridView` any-widget-type
+positioning) and stating why the marker is retained: zero downstream real-server feedback on four
+rewritten core mechanisms at once. Delivered by plan 05-14.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
@@ -2249,6 +2429,167 @@ MINOR：6.3.0 正是那个首个发布，所以最早也要到 6.4.0 才有资�
 `AbstractMethodError` 或 `NoSuchMethodError`。`japicmp` 这个保守的分类，对这个具体变换（抽象
 变默认、签名不变、返回类型不变）来说，看起来比 JVM 实际的二进制兼容保证更严格——记在这里是为了
 不让只看 `japicmp` 原始报告的读者被误导，同时也不让本文件自己的兼容性承诺说得比实际更满。
+
+### 已记录的实例：声明式 GUI 的重绘管线现在真正会重绘，`GuiRenderer.initialize` 的签名改为接受一个 `Supplier<Widget>`（D-09 第 1-3 项 / WIRE-02，6.3.0）
+
+6.3.0 之前，声明式 GUI 层在第一帧之后就再也不会重绘。`GuiRenderer` 只在 `initialize(Widget,
+BuildContext)` 时构建一次 `Widget` 树，此后从不重新推导；`Element.update()` 从不把自己标记为
+脏；而 `collectRenderNodesRecursive` 在每一帧都把同一个被缓存的、存活的
+`RenderObjectElement.getRenderNode()` 引用原样存进 `lastRenderNodes`，导致
+`RenderNodeDiffer.diff()` 每次都在拿一个节点和它自己比较。仅改变 lore、仅改变展示名、或仅改变
+物品类型的 widget 变化完全不会产生任何库存更新——这个子系统自己宣称的论点 `UI = f(state)` 并不
+成立。
+
+6.3.0 修复了这一点。`GuiRenderer.initialize(Supplier<Widget> widgetSupplier, BuildContext
+context)` 现在会在每一次 `performBuild()` 时（包括第一帧）从当前状态恰好重新推导一次 `Widget`
+树；`Element.update()` 在基类中无条件地把元素标记为脏，三个子类均如此；
+`collectRenderNodesRecursive` 在存入之前会通过 `.copy()` 对每个 `RenderNode` 做快照，从而打破
+自比较。同一个 plan 中还发现并修复了第二个、此前从未被记录的缺口：嵌套的 `StatefulWidget` 上的
+`State.setState()` 会向已挂载的根节点冒泡，但此前没有任何机制把这个冒泡与
+`GuiRenderer.scheduleBuild()` 连接起来——根目录 `CLAUDE.md` 自己记载的 `CounterButton` 示例，
+在这次修复之前实际上并不成立（修复方式：`Element.setRootBuildScheduler(Runnable)`，由
+`GuiRenderer.mountRoot()` 注册）。由 plan 05-11 交付，`GuiRendererRepaintTest`（14 个测试）。
+
+**与本文档「行为变更」小节中的其它每一条不同，这一条对 `japicmp` 并非不可见。**
+`GuiRenderer.initialize` 的参数类型从 `Widget` 改为 `Supplier<Widget>`——这是一次真正的 JVM
+方法描述符变化——`japicmp` 自己的报告（`target/japicmp/japicmp.diff`，基线为已发布的 6.2.5
+jar，依据本仓库的 japicmp 配置）直接点名了它：
+
+```
+***! MODIFIED CLASS: PUBLIC com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer  (not serializable)
+---! REMOVED METHOD: PUBLIC(-) void initialize(com.ultikits...core.Widget, com.ultikits...core.BuildContext)
++++  NEW METHOD: PUBLIC(+) void initialize(java.util.function.Supplier<com.ultikits...core.Widget>, com.ultikits...core.BuildContext)
+```
+
+产生这条记录的 plan 的早期草稿曾断言「没有一处行为变更改动了签名，所以 `japicmp` 无法发现任何
+一处」，这对整个 GUI 分支而言并不成立——至少这一个成员就是反例，本文档不重复这个错误断言；
+更正说明见 plan 05-15 自己的 SUMMARY。本文档中这一条以下的每一条 GUI 分支记录都是没有签名差异
+的纯行为变更；这一条是唯一的例外，上面直接引用的是 `japicmp` 自己的 diff，而非一句断言。
+
+**归类。** `DeclarativeGui.onOpen()` 是 `initialize(...)` 在仓库内唯一的调用方，已在同一个
+plan 中更新——因此对任何外部调用方而言，这是源码级和二进制级都不兼容的变更。整个
+`abstracts.gui.declarative` 包树都带有 `@ApiStatus.Experimental`，且这个方法被实测在整个
+monorepo 范围内有**零**个下游调用点（对照组：更老、更稳定的命令式 `abstracts.gui` 一代有 8 个
+——确认了搜索机制本身有效；见 `05-CONTEXT.md` D-12）。此次变更之前没有
+`@Deprecated(forRemoval = true)` 警告期，这里也不提供警告期，依据的是本文档已经用于上面 AOP
+移除项的同一套推理（见
+[同一发布内移除的例外条款](#例外在宣布的同一个发布里移除)）：第 2 款（「已发布但从未被任何调用方
+接入」）在上面的零采用实测下成立；第 1 款（「在当前已发布版本上被证明不可用」）也独立成立——
+6.3.0 之前的这个方法在已发布的 6.2.5 jar 中本身就不可用：`Widget` 只在 `initialize()` 时提供
+一次、此后从不重新推导，意味着此后每一帧都会静默地无法重绘；已发布 jar 自己的行为就是复现，
+而不是一个需要论证的说法。这个方法没有出现在上面的[移除清单](#630-的移除清单)中，因为它从未
+带过 `@Deprecated`——按本文档自己的生成规则它不可能被列入那张表，这正是这里需要手工记录它的
+原因。
+
+### 已记录的实例：点击玩家自己的物品栏不再能触发声明式 GUI 的处理器（D-09 第 4 项 / WIRE-02，6.3.0）
+
+6.3.0 之前，`GuiRenderer.handleClick` 是按 `event.getSlot()`——一个相对于点击落在哪个物品栏的
+槽位号——去查 `clickHandlers` 表的，而这个槽位号在 GUI 自己的顶部物品栏与同一个 `InventoryView`
+下方显示的玩家自己的物品栏之间会发生数值冲突。点击**玩家自己的物品栏**中某个槽位，只要该槽位
+数值恰好等于 GUI 已注册处理器的某个槽位，就会触发该处理器——这是一次非预期的跨物品栏派发，
+不是一项被文档记载的能力。
+
+6.3.0 在任何处理器查找之前，先用 `gui.getSize()` 对 `event.getRawSlot()` 做边界检查，并在
+`RenderNode.getSlotIndex()` 已经用来填充 `clickHandlers` 的同一个槽位空间里做查找。这会拒绝
+每一个玩家物品栏的原始槽位（在同一个组合 `InventoryView` 中，它们总是排在 GUI 自己的槽位之后）
+以及 Bukkit 对「点击在窗口之外」报告的 `-999` 哨兵值。`clickHandlers` 仍然是槽位归属的唯一记录
+——只有查找用的 key 变了，从会冲突的相对槽位改为经过边界检查的原始槽位。由 plan 05-12 交付，
+`GuiClickDispatchTest`（7 个测试），覆盖了整个会冲突的槽位范围、shift 点击与数字键点击，以及
+一次重绘把处理器移动到新槽位后，其点击目标也随之移动的情形。
+
+**归类。** 这一条被记录为一次**安全修复**，而不是一次中性的行为整理：此前能够通过点击自己
+物品栏中数值冲突的槽位来触发 GUI 处理器的调用方，利用的是一个缺陷，而不是在依赖某项被文档记载
+的契约。依据上面的
+[无需迁移期的行为变更](#哪些行为变更可以在-minor-直接做)，安全修复可以不经事先通知直接
+落地；这里同样不设警告期。
+
+`handleClick` 的公开签名未变（仍是 `public void handleClick(InventoryClickEvent event)`），所以
+`japicmp` 无法检测到这一点——这条记录正是为了写下签名差异写不出来的东西而存在。
+
+### 已记录的实例：`GridView` 现在会把任意 widget 类型都作为渲染时写入的父数据来定位（D-11 / WIRE-03，6.3.0）
+
+6.3.0 之前，`GridView.Builder.items(items, itemBuilder)` 对 `ItemDisplay` 做了特殊处理——用一次
+六字段的手工拷贝计算每个子项的槽位并直接构造 `ItemDisplay`。任何通过 `.child(Widget)` /
+`.children(...)` 加入 `GridView` 的其它 widget 类型——一个 `TextButton`，或一个混合类型的网格
+——从来不会被自动定位；它只会停在自己声明（或默认）的槽位上，而网格从不触碰这个槽位。
+
+6.3.0 会在渲染时把每个子项的网格计算槽位写到该子项自己子树产生的 `RenderNode` 上
+（`GridViewElement.applyGridPositions()`，在 `mount()` 与 `performRebuild()` 中都会调用，发生
+在 `GuiRenderer` 收集快照之前）——这与
+[Flutter 的 `ParentDataWidget`](https://api.flutter.dev/flutter/widgets/ParentDataWidget-class.html)
+/ `Stack`+`Positioned` 一致，也正是这个子系统自己的文档所声称移植的模式：由布局父组件附加数据，
+子组件永远看不到这份数据，而不是子组件自己计算自己的位置。`GridView.Builder.items()` 中
+`ItemDisplay` 专属的特殊分支被删除；现在任意 widget 类型都能在 `GridView` 内正确定位。
+`Widget` 自身的 API 没有新增任何与槽位相关的方法，因此没有任何下游自定义 widget 需要改动。
+由 plan 05-13 交付，`GridViewTest`（15 个测试）与 `GridViewElementTest`（13 个测试——D-09 第 5
+项的键控回收敛，这次定位工作建立在它之上）。
+
+**冲突规则（D-11）。** `GridView` 总是优先于子项显式声明的槽位，**并且**会发出一条点名该子项的
+`WARNING`——这与 Flutter 对错放的 `Positioned` 直接硬失败、而不是静默忽略保持一致。子项若没有
+显式槽位，或合法地声明在槽位 `0`（`ItemDisplay`/`TextButton` 构建器自身原有的默认值，被当作
+「未设置」的信号，因为两个构建器都没有单独的哨兵值——在 `GridView` 内显式调用 `.slot(0)` 的
+widget，因此与从未调用过 `.slot()` 的 widget 无法区分，二者都不会触发警告；见
+05-13-SUMMARY.md 中明确记录的这一取舍），则不会产生警告。
+
+`GridView.Builder.items()` 的签名未变——被删除的是它内部的 `ItemDisplay` 专属分支，而不是这个
+方法本身——所以 `japicmp` 无法检测到这一行为变化。
+
+### 已记录的实例：两对声明式 GUI 构建器方法被直接删除，而不是给出一个猜测出来的实现（D-09，6.3.0）
+
+`Container.Builder.background(IconWrapper)`/`Container.getBackground()` 与
+`GridView.Builder.rows(int)`/`GridView.getMaxRows()` 被删除，而不是被实现。这两对都是流式构建器
+方法，它们存下的值从未被任何下游代码读取过：
+
+- `Container` 自己不带任何空间边界——不像 `GridView` 那样有 `startSlot`/`columns`/`rows`——所以
+  「填充未占用的槽位」在 `ContainerElement` 内部根本没有一个能给出答案的作用域，若强行实现，就
+  有可能静默覆盖某个兄弟子树的 `RenderNode`，而这是 `Container` 自己的子树唯一能看到的区域。一
+  个错误的实现在单个根级 `Container` 的常见情形下会显得正确，却会在它与其它内容并列嵌套的那一
+  刻悄悄破坏显示。
+- `GridView.Builder.rows(int)` 的 `maxRows` 字段虽然被赋值，却从未被 `calculateSlotForChild`
+  读取过（已用 grep 在 `src/main` 与 `src/test` 中确认）；用它实现一条溢出封顶规则，将意味着
+  发明本 plan 自身范围之外的新布局语义。
+
+根目录 `CLAUDE.md` 的第 14 条注意事项此前——在 plan 05-13 之前——曾正确地把
+`Container.background(...)` 描述为「静默什么都不做」的死代码。从本 plan 起，调用任一被删除的
+方法会是一次**编译错误**，而不再是静默的空操作；该条注意事项已被更正为如实陈述这一点。
+`IconWrapper.java` 被保留，尽管 `Container.background(...)` 是它在 `src/main` 中唯一的生产
+调用点，因此它现在在生产代码中已完全无人使用——这一点被标记留给未来的一个清理 plan，本 plan
+不解决它。由 plan 05-13 交付，`GridViewTest#containerNoLongerExposesBackground` /
+`#gridViewNoLongerExposesRows`（基于反射、断言 `NoSuchMethodException` 的回归防护测试）。
+
+**依据本阶段自身要求读取的 `japicmp` 结果——而非假设得出。** 这两个类都带有
+`@ApiStatus.Experimental`；两对方法都从未带过 `@Deprecated(forRemoval = true)`，因此按本文档
+自己的生成规则，它们都不会被列入上面的[移除清单](#630-的移除清单)——那张表是从该注解生成的，
+而这一条分支什么都没有标记废弃，是直接删除的。`japicmp` 自己的报告
+（`target/japicmp/japicmp.diff`，`mvn -B clean verify` 相对已发布 6.2.5 jar 基线运行）被直接
+读取，确认了恰好这两对方法，别无其它：
+
+```
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper getBackground()
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container$Builder background(com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper)
+---! REMOVED METHOD: PUBLIC(-) int getMaxRows()
+---! REMOVED METHOD: PUBLIC(-) com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView$Builder<T> rows(int)
+```
+
+该关卡是**仅报告**模式——`pom.xml` 没有为 `japicmp-maven-plugin` 设置任何 `breakBuildOn*` 标志
+——所以这次 `mvn verify` 通过本身并不构成兼容性的证据；只有直接读取的 diff 才算数。这也是
+Phase 7 预期要逐条搬进它自己的 japicmp 排除清单、与本条一一对应的清单，等到那个阶段真正激活
+这道关卡的时候。
+
+**归类。** 与上面 `initialize(...)` 条目相同的推理：
+[同一发布内移除的例外情形](#例外在宣布的同一个发布里移除)的第 2 款（「已发布但从未被任何调用方
+接入」），依据上面对两个字段的 grep 结果成立。不设警告期，因为根本没有任何真实工作行为需要
+警告期去保护——一个存下的值从未被任何人读取的流式方法，本来就没有任何可观察的效果需要保留。
+
+### 已记录的实例：声明式 GUI 包上的 `@ApiStatus.Experimental` 被保留，只改了措辞（D-12，6.3.0）
+
+没有移除，没有签名变化，也没有行为变化——记录在这里只是为了不让上面三条被误读成「这个界面
+现在已经稳定了」。`abstracts.gui.declarative` 下全部六个 `package-info.java` 文件（根包、
+`core`、`engine`、`widgets`、`util`、`widgets.navigation`）都保留了 `@ApiStatus.Experimental`。
+只有随附的 javadoc——以及文档站点上与之对应的 `::: warning`——发生了变化：从描述「v6.2.5 中的
+已知缺口」，改为点名本阶段修复的三处渲染接缝（重绘重新推导、点击派发的边界检查、`GridView`
+对任意 widget 类型的定位），并说明为什么这个标记仍被保留：四个核心机制一次性被重写，却还没有
+任何真实服务器环境的下游反馈。由 plan 05-14 交付。
 
 ## 移除清单覆盖不到的二进制不兼容
 
