@@ -22,7 +22,6 @@ import java.util.function.Function;
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/event-listener.html#temporary-listener">Temporary Listener</a>
  */
 @AllArgsConstructor
-@NoArgsConstructor
 @Setter
 @Getter
 public class SimpleTempListener<E extends Event> implements TempListener {
@@ -31,17 +30,94 @@ public class SimpleTempListener<E extends Event> implements TempListener {
     private TempEventHandler<E> eventHandler;
     private Function<E, Boolean> filter = (ignored) -> true;
 
+    /**
+     * Hand-written rather than Lombok-generated so it can carry its own javadoc.
+     * Lombok's {@code @NoArgsConstructor(onConstructor_ = @Deprecated(...))} form was
+     * confirmed (via javap on the compiled class) to correctly carry
+     * {@code since}/{@code forRemoval} into the class file under this project's
+     * {@code -source 1.8} / JDK 21 toolchain, but a Lombok-generated member has no
+     * source declaration to attach a {@code @deprecated} tag to.
+     * <br>
+     * 手写而非由 Lombok 生成，以便携带自己的 javadoc。
+     *
+     * @deprecated Use the four-argument
+     * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
+     * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
+     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
+     * milestone.
+     * <br>
+     * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
+     * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
+     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public SimpleTempListener() {
+    }
+
+    /**
+     * No filter, default priority. Indistinguishable at the call site from the other
+     * three-and-fewer-argument constructors below - this confusability is exactly why
+     * these constructors are being removed (T-05-37).
+     * <br>
+     * 无过滤器，默认优先级。
+     *
+     * @deprecated Use the four-argument
+     * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
+     * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
+     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
+     * milestone.
+     * <br>
+     * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
+     * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
+     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler) {
         this.eventClass = eventClass;
         this.eventHandler = eventHandler;
     }
 
+    /**
+     * Filter, default priority.
+     * <br>
+     * 有过滤器，默认优先级。
+     *
+     * @deprecated Use the four-argument
+     * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
+     * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
+     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
+     * milestone.
+     * <br>
+     * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
+     * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
+     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler, Function<E, Boolean> filter) {
         this.eventClass = eventClass;
         this.eventHandler = eventHandler;
         this.filter = filter;
     }
 
+    /**
+     * No filter, explicit priority. This is the overload {@code build()} used to resolve
+     * to before SILENT-12 was fixed - the last-parameter arity clash with the constructor
+     * above (a {@code Function} vs. an {@code EventPriority} in the same position) is the
+     * defect mechanism this deprecation window exists to remove.
+     * <br>
+     * 无过滤器，显式优先级。
+     *
+     * @deprecated Use the four-argument
+     * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
+     * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
+     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
+     * milestone.
+     * <br>
+     * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
+     * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
+     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler, EventPriority priority) {
         this.eventClass = eventClass;
         this.priority = priority;
