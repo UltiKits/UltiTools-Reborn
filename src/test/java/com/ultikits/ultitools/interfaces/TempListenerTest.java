@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -82,23 +83,179 @@ class TempListenerTest {
         }
 
         @Test
-        @DisplayName("应该设置过滤器")
+        @DisplayName("应该设置过滤器 (SILENT-12: build() 必须传递过滤器)")
         void shouldSetFilter() {
             // Arrange
             AtomicBoolean filterCalled = new AtomicBoolean(false);
+            AtomicBoolean eventHandled = new AtomicBoolean(false);
 
-            // Act
-            DefaultTempListenerBuilder<PlayerJoinEvent> builder = TempListener.common(PlayerJoinEvent.class)
+            // Act - the filter rejects every event
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
                     .filter(event -> {
                         filterCalled.set(true);
-                        return true;
+                        return false;
                     })
-                    .eventHandler(event -> false);
+                    .eventHandler(event -> {
+                        eventHandled.set(true);
+                        return false;
+                    })
+                    .build();
+            listener.register();
 
-            TempListener listener = builder.build();
+            server.addPlayer("RejectedByFilter");
+
+            // Assert - the filter set via .build() was actually consulted, and a rejected
+            // event never reaches the handler. On the pre-fix build() (which drops the
+            // filter to its (ignored) -> true default) this assertion fails: filterCalled
+            // stays false and eventHandled becomes true.
+            assertThat(filterCalled.get()).isTrue();
+            assertThat(eventHandled.get()).isFalse();
+        }
+
+        @Test
+        @DisplayName("build() 的监听器应该恰好处理一次被过滤器接受的事件")
+        void shouldHandleAcceptedEventExactlyOnceViaBuild() {
+            // Arrange
+            AtomicInteger handledCount = new AtomicInteger(0);
+
+            // Act
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> true)
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+
+            server.addPlayer("AcceptedByFilter");
 
             // Assert
-            assertThat(listener).isNotNull();
+            assertThat(handledCount.get()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("未调用 .filter(...) 时 build() 的监听器应该处理所有事件")
+        void shouldHandleAllEventsWhenNoFilterSetViaBuild() {
+            // Arrange
+            AtomicInteger handledCount = new AtomicInteger(0);
+
+            // Act - no .filter(...) call: the field default (ignored) -> true must still apply
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+
+            server.addPlayer("Player1");
+            server.addPlayer("Player2");
+
+            // Assert
+            assertThat(handledCount.get()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("装箱 Boolean 过滤结果应该与基本类型行为一致")
+        void shouldTreatBoxedBooleanFilterResultsLikePrimitivesViaBuild() {
+            // Arrange
+            AtomicInteger handledCount = new AtomicInteger(0);
+
+            // Act - filter explicitly returns boxed Boolean.TRUE / Boolean.FALSE
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> event.getPlayer().getName().equals("BoxedAccepted")
+                            ? Boolean.TRUE : Boolean.FALSE)
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+
+            server.addPlayer("BoxedRejected");
+            server.addPlayer("BoxedAccepted");
+
+            // Assert
+            assertThat(handledCount.get()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("过滤器返回 null 时应该丢弃事件且不向外传播拆箱异常")
+        void shouldDropEventWhenFilterReturnsNullViaBuild() {
+            // Arrange
+            AtomicInteger handledCount = new AtomicInteger(0);
+
+            // Act - Function<E, Boolean> permits a null return
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> null)
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+
+            // Assert - firing the event must not throw an unboxing NullPointerException,
+            // and a null filter result is treated as non-matching (event dropped)
+            assertThatCode(() -> server.addPlayer("NullFilterResult")).doesNotThrowAnyException();
+            assertThat(handledCount.get()).isZero();
+        }
+
+        @Test
+        @DisplayName("同优先级的多个监听器都应该收到匹配事件")
+        void shouldDeliverToAllListenersAtSamePriorityViaBuild() {
+            // Arrange
+            AtomicInteger firstHandled = new AtomicInteger(0);
+            AtomicInteger secondHandled = new AtomicInteger(0);
+
+            // Act - two independently built listeners, same event class, same (default) priority
+            TempListener first = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> true)
+                    .eventHandler(event -> {
+                        firstHandled.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            TempListener second = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> true)
+                    .eventHandler(event -> {
+                        secondHandled.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            first.register();
+            second.register();
+
+            server.addPlayer("SharedPriorityPlayer");
+
+            // Assert - both receive the matching event; relative order is Bukkit's own and
+            // is not asserted here.
+            assertThat(firstHandled.get()).isEqualTo(1);
+            assertThat(secondHandled.get()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("重复调用 register() 不应该重复处理同一事件")
+        void shouldNotDeliverTwiceWhenRegisteredTwiceViaBuild() {
+            // Arrange
+            AtomicInteger handledCount = new AtomicInteger(0);
+
+            // Act
+            TempListener listener = TempListener.common(PlayerJoinEvent.class)
+                    .filter(event -> true)
+                    .eventHandler(event -> {
+                        handledCount.incrementAndGet();
+                        return false;
+                    })
+                    .build();
+            listener.register();
+            listener.register();
+
+            server.addPlayer("DoubleRegisteredPlayer");
+
+            // Assert
+            assertThat(handledCount.get()).isEqualTo(1);
         }
 
         @Test
