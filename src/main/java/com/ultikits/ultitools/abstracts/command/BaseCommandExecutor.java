@@ -7,11 +7,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
 
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -328,56 +330,72 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                 ? validationResult.getPassedValidators()
                 : Collections.emptyList();
 
+        // WIRE-12/D-13: shared between the command body's own completion and the timeout
+        // watcher armed below. Whichever side wins the CAS is the ONLY side that reports to
+        // the sender -- the loser is a no-op. Read/set from two different threads (the async
+        // worker running the body and the delayed async watcher task), so this MUST be an
+        // atomic, not a plain boolean. Harmless when timeout() <= 0: no watcher is armed, so
+        // nothing else ever touches this flag and the body's own CAS below is a pure no-op.
+        final AtomicBoolean reported = new AtomicBoolean(false);
+
         BukkitRunnable runnable = new BukkitRunnable() {
             @Override
             public void run() {
-                // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
-                // AuditableDataEntity's audit columns is set and cleared HERE, inside the
-                // runnable that actually invokes the matched method -- not around the
-                // runTask()/runTaskAsynchronously() call below that schedules this runnable.
-                // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
-                // run on another thread entirely; a ThreadLocal write made on the scheduling
-                // thread would be invisible on whichever thread actually executes this run()
-                // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
-                // finally around the whole body so a pooled Bukkit worker thread never carries
-                // one command's user into the next, whether this command's sender was a Player
-                // or not, and whether the handler returned normally or threw.
-                if (context.isPlayer()) {
-                    AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
-                }
                 try {
-                    boolean commandSucceeded = false;
+                    // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
+                    // AuditableDataEntity's audit columns is set and cleared HERE, inside the
+                    // runnable that actually invokes the matched method -- not around the
+                    // runTask()/runTaskAsynchronously() call below that schedules this runnable.
+                    // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
+                    // run on another thread entirely; a ThreadLocal write made on the scheduling
+                    // thread would be invisible on whichever thread actually executes this run()
+                    // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
+                    // finally around the whole body so a pooled Bukkit worker thread never carries
+                    // one command's user into the next, whether this command's sender was a Player
+                    // or not, and whether the handler returned normally or threw.
+                    if (context.isPlayer()) {
+                        AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
+                    }
                     try {
-                        method.setAccessible(true);
-                        method.invoke(BaseCommandExecutor.this, params);
-                        commandSucceeded = true;
-                    } catch (Exception e) {
-                        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
-                        Logger.getLogger(BaseCommandExecutor.class.getName())
-                                .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
-                        // Report to error collector
+                        boolean commandSucceeded = false;
                         try {
-                            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-                            if (erc != null) {
-                                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                                erc.reportError(cause, extractModuleName(), triggerCtx);
+                            method.setAccessible(true);
+                            method.invoke(BaseCommandExecutor.this, params);
+                            commandSucceeded = true;
+                        } catch (Exception e) {
+                            context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
+                            Logger.getLogger(BaseCommandExecutor.class.getName())
+                                    .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
+                            // Report to error collector
+                            try {
+                                ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                                if (erc != null) {
+                                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                                    erc.reportError(cause, extractModuleName(), triggerCtx);
+                                }
+                            } catch (Exception ignored) {
+                                // Never re-enter logging from error reporting
                             }
-                        } catch (Exception ignored) {
-                            // Never re-enter logging from error reporting
+                        } finally {
+                            // Post-actions run once per validator that passed for THIS invocation, in
+                            // chain order, whether the mapped method succeeded or threw.
+                            // UsageLockValidator's release is one of these post-actions as of D-02:
+                            // acquisition happened inside its validate() step (acquire-as-you-validate),
+                            // so it is no longer named by field here either -- lockValidator.releaseLock
+                            // is reached only via onComplete, only for a validator that actually ran.
+                            for (CommandValidator ranValidator : ranValidators) {
+                                ranValidator.onComplete(context, commandSucceeded);
+                            }
                         }
                     } finally {
-                        // Post-actions run once per validator that passed for THIS invocation, in
-                        // chain order, whether the mapped method succeeded or threw.
-                        // UsageLockValidator's release is one of these post-actions as of D-02:
-                        // acquisition happened inside its validate() step (acquire-as-you-validate),
-                        // so it is no longer named by field here either -- lockValidator.releaseLock
-                        // is reached only via onComplete, only for a validator that actually ran.
-                        for (CommandValidator ranValidator : ranValidators) {
-                            ranValidator.onComplete(context, commandSucceeded);
-                        }
+                        AuditableDataEntity.clearCurrentUser();
                     }
                 } finally {
-                    AuditableDataEntity.clearCurrentUser();
+                    // WIRE-12: claim the flag so a watcher that fires later -- a stale delayed
+                    // task racing a body that already finished -- becomes a no-op (Test 5/6).
+                    // The body is NEVER interrupted to make this deadline; it always runs this
+                    // finally exactly once, win or lose the race.
+                    reported.compareAndSet(false, true);
                 }
             }
         };
@@ -392,18 +410,34 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                 context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
             }
             
-            // Handle timeout
+            // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
+            // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
+            // this runnable in another one -- that "wrap and re-dispatch" shape is what
+            // produced the double async dispatch this replaces, on the DEFAULT path of every
+            // @AsyncCommand (timeout()'s default is 30).
+            runnable.runTaskAsynchronously(UltiTools.getInstance());
+
             if (asyncCommand != null && asyncCommand.timeout() > 0) {
-                BukkitRunnable timeoutTask = runnable;
-                runnable = new BukkitRunnable() {
+                // The watcher does NOT touch, cancel, or interrupt the body's task -- Bukkit's
+                // async scheduler pool is shared, and interrupting a pooled thread is unsafe
+                // (it can affect unrelated tasks). It only stops WAITING and reports, once,
+                // via the CAS above; the body keeps running to completion regardless and its
+                // result (success or exception) is discarded from the watcher's perspective.
+                BukkitRunnable watcher = new BukkitRunnable() {
                     @Override
                     public void run() {
-                        timeoutTask.runTaskAsynchronously(UltiTools.getInstance());
+                        if (reported.compareAndSet(false, true)) {
+                            // Paper's AsyncCatcher governs what may be touched off the main
+                            // thread; hop back through it to send the message, same mechanism
+                            // CommandExecutionManager already uses for this purpose.
+                            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () ->
+                                    context.getSender().sendMessage(ChatColor.RED + UltiTools.getInstance()
+                                            .i18n("命令执行超时，已停止等待，命令仍在后台继续执行")));
+                        }
                     }
                 };
+                watcher.runTaskLaterAsynchronously(UltiTools.getInstance(), asyncCommand.timeout() * 20L);
             }
-            
-            runnable.runTaskAsynchronously(UltiTools.getInstance());
         } else {
             runnable.runTask(UltiTools.getInstance());
         }
