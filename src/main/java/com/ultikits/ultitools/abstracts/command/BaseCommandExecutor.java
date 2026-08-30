@@ -84,7 +84,27 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Creates a new command executor with a custom validator chain.
+     * <p>
+     * This is the other half of the construction surface {@link #createDefaultValidatorChain()}
+     * warns about: a chain supplied directly here is subject to the exact same load-time
+     * contract. If any {@code @CmdMapping} method on this class -- or the class itself -- declares
+     * {@code @CmdCD} while {@code validatorChain} holds no {@code CooldownValidator}, or
+     * declares {@code @UsageLimit} (any scope but {@code NONE}) while it holds no
+     * {@code UsageLockValidator}, the module is refused at load, naming this class and the
+     * offending mapping method (SILENT-11 / D-01, D-04; enforced by
+     * {@code PluginManager.validateCommandExecutorContract}). There is no opt-out: Phase 3 D-08's
+     * module-granularity isolation is the accepted escape hatch -- only this module fails to
+     * load, every other module still starts.
+     * <p>
      * 使用自定义验证器链创建新的命令执行器。
+     * <p>
+     * 这是 {@link #createDefaultValidatorChain()} 所警示的构造入口的另一半：这里直接传入的链
+     * 同样受相同的加载时契约约束。若本类的某个 {@code @CmdMapping} 方法——或本类本身——声明了
+     * {@code @CmdCD}，而 {@code validatorChain} 中不含 {@code CooldownValidator}；或声明了
+     * {@code @UsageLimit}（{@code NONE} 之外的任意范围），而其中不含 {@code UsageLockValidator}，
+     * 该模块会在加载时被拒绝，并指出本类与问题映射方法（SILENT-11 / D-01, D-04；由
+     * {@code PluginManager.validateCommandExecutorContract} 强制执行）。此拒绝没有开关：Phase 3
+     * D-08 的模块粒度隔离是被接受的退路——只有本模块加载失败，其余模块正常启动。
      *
      * @param validatorChain the custom validator chain
      */
@@ -101,19 +121,25 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * Override this method to customize the validation pipeline.
      * <p>
      * An override that drops {@code CooldownValidator} or {@code UsageLockValidator} from the
-     * chain while a mapping on this class declares {@code @CmdCD} or {@code @UsageLimit}
-     * respectively must be refused at load, naming the offending class -- not a silent
-     * degradation to an unenforced annotation (SILENT-11 / D-01, D-04). As of this plan, that
-     * load-time refusal is not yet implemented; this javadoc states the contract the framework
-     * is committed to, and a later phase plan enforces it.
+     * chain while a mapping on this class -- or the class itself -- declares {@code @CmdCD} or
+     * {@code @UsageLimit} (any scope but {@code NONE}) respectively IS refused at load, naming
+     * the offending class and, when known, the offending mapping method (SILENT-11 / D-01, D-04;
+     * enforced by {@code PluginManager.validateCommandExecutorContract}, hooked at the end of
+     * container assembly, before any command reaches Bukkit). There is no opt-out: no system
+     * property, config key, or annotation attribute disables this check. Phase 3 D-08's
+     * module-granularity isolation is the accepted escape hatch instead -- only the offending
+     * module fails to load, every other module still starts.
      * <p>
      * 创建具有标准验证器的默认验证器链。
      * 重写此方法以自定义验证管道。
      * <p>
-     * 若某次重写在本类的某映射声明了 {@code @CmdCD} 或 {@code @UsageLimit} 的同时，从链中省略了对应的
-     * {@code CooldownValidator} 或 {@code UsageLockValidator}，必须在加载时被拒绝并指出问题类，而不是
-     * 静默降级为注解不生效（SILENT-11 / D-01, D-04）。截至本计划，该加载时拒绝机制尚未实现；本 javadoc
-     * 陈述框架所承诺的契约，由后续阶段计划实现。
+     * 若某次重写在本类的某映射——或本类本身——声明了 {@code @CmdCD} 或 {@code @UsageLimit}
+     * （{@code NONE} 之外的任意范围）的同时，从链中省略了对应的 {@code CooldownValidator} 或
+     * {@code UsageLockValidator}，会在加载时被拒绝，并指出问题类，以及（已知时）问题映射方法
+     * （SILENT-11 / D-01, D-04；由 {@code PluginManager.validateCommandExecutorContract} 强制
+     * 执行，挂在容器组装的最后一步，早于任何命令抵达 Bukkit）。此拒绝没有开关：没有系统属性、
+     * 配置项或注解属性可以关闭这项检查。Phase 3 D-08 的模块粒度隔离是被接受的退路——只有问题模块
+     * 加载失败，其余模块正常启动。
      *
      * @return the validator chain
      */
