@@ -303,7 +303,50 @@ public final class ReflectionUtil {
     public static boolean hasAnnotation(Field field, Class<? extends Annotation> annotationClass) {
         return field.isAnnotationPresent(annotationClass);
     }
-    
+
+    /**
+     * Resolves {@code annotationType} for {@code method}, preferring a declaration on the
+     * method itself and falling back to one on the method's declaring class -- most-derived
+     * wins, the same precedence {@code SenderTypeValidator} already applies for
+     * {@code @CmdTarget} inside this same validator chain, and the precedent Spring's
+     * {@code @Transactional} and Spring Security's {@code @PreAuthorize} both document for a
+     * class-vs-method annotation conflict.
+     * <p>
+     * Only the method's OWN declaring class is consulted (via
+     * {@code method.getDeclaringClass().getAnnotation(...)}) -- not the class's own ancestors,
+     * since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. This matches
+     * {@link #getAllMethods(Class)}'s own hierarchy walk: a method inherited from a superclass
+     * without being overridden is returned with that superclass already as its
+     * {@code getDeclaringClass()}, so a class-level annotation on that superclass is still found
+     * without any extra ancestor walk here.
+     * <p>
+     * 解析 {@code method} 上的 {@code annotationType}：优先取方法自身的声明，若方法未声明则回退到
+     * 方法所属声明类上的声明——方法级优先，与本验证器链中 {@code SenderTypeValidator} 对
+     * {@code @CmdTarget} 已经采用的优先级完全一致，也是 Spring 的 {@code @Transactional} 与 Spring
+     * Security 的 {@code @PreAuthorize} 在类级/方法级注解冲突时共同采用的先例。
+     * <p>
+     * 只查询方法自身声明类（通过 {@code method.getDeclaringClass().getAnnotation(...)}）——不会
+     * 再向上查询该类的祖先类，因为 {@code @CmdCD} 与 {@code @UsageLimit} 均未标注
+     * {@code @Inherited}。这与 {@link #getAllMethods(Class)} 自身的层级遍历一致：一个从父类继承、
+     * 未被重写的方法，其 {@code getDeclaringClass()} 本就是该父类，因此父类上的类级注解无需额外的
+     * 祖先遍历即可在此被发现。
+     *
+     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
+     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
+     * @param <A>            the annotation type <br> 注解类型
+     * @return the method-level annotation if present, otherwise the declaring class's
+     *         annotation, or {@code null} if neither declares it <br> 方法级注解（若存在）；
+     *         否则为声明类上的注解；两者均不存在时为 {@code null}
+     * @since 6.3.0
+     */
+    public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, Class<A> annotationType) {
+        A onMethod = method.getAnnotation(annotationType);
+        if (onMethod != null) {
+            return onMethod;
+        }
+        return method.getDeclaringClass().getAnnotation(annotationType);
+    }
+
     // ==================== 方法操作 ====================
     
     /**

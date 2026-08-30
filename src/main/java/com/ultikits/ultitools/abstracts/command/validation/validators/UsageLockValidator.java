@@ -4,6 +4,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 
 import java.lang.reflect.Method;
@@ -73,10 +74,11 @@ public class UsageLockValidator implements CommandValidator {
             return ValidationResult.success();
         }
 
-        // acquireLock() only returns false when the method carries @UsageLimit with a
-        // SENDER or ALL scope, so both are non-null here.
+        // acquireLock() only returns false when the method (or its declaring class, per D-01
+        // follow-up most-derived-wins resolution) carries @UsageLimit with a SENDER or ALL
+        // scope, so this resolves non-null here.
         Method method = context.getMatchedMethod();
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
+        UsageLimit limit = resolveLimit(method);
         if (limit.value() == UsageLimit.LimitType.SENDER) {
             return ValidationResult.failure(
                     ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"),
@@ -126,11 +128,11 @@ public class UsageLockValidator implements CommandValidator {
      */
     public boolean acquireLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        if (method == null || !method.isAnnotationPresent(UsageLimit.class)) {
+        UsageLimit limit = resolveLimit(method);
+        if (limit == null) {
             return true;
         }
-        
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
+
         String methodKey = method.toString();
         
         if (!context.isPlayer() && !limit.ContainConsole()) {
@@ -172,11 +174,11 @@ public class UsageLockValidator implements CommandValidator {
      */
     public void releaseLock(CommandContext context) {
         Method method = context.getMatchedMethod();
-        if (method == null || !method.isAnnotationPresent(UsageLimit.class)) {
+        UsageLimit limit = resolveLimit(method);
+        if (limit == null) {
             return;
         }
-        
-        UsageLimit limit = method.getAnnotation(UsageLimit.class);
+
         String methodKey = method.toString();
         
         if (limit.value() == UsageLimit.LimitType.SENDER && context.isPlayer()) {
@@ -197,6 +199,34 @@ public class UsageLockValidator implements CommandValidator {
         }
     }
     
+    /**
+     * Resolves the effective {@code @UsageLimit} for {@code method}: the method's own
+     * declaration, falling back to a class-level one on its declaring class -- most-derived
+     * wins, via {@link ReflectionUtil#resolveMethodOrClassAnnotation}. This is the SAME
+     * resolution {@code PluginManager}'s load-time refusal already treats as satisfying the
+     * contract (SILENT-11 / D-01 follow-up): a class-level-only {@code @UsageLimit} that passes
+     * the load-time check now actually locks every mapping that does not declare its own.
+     * <p>
+     * 解析 {@code method} 生效的 {@code @UsageLimit}：方法自身的声明，若无则回退到其声明类上的
+     * 类级声明——方法级优先，经由 {@link ReflectionUtil#resolveMethodOrClassAnnotation} 解析。这与
+     * {@code PluginManager} 加载时拒绝检查已经采信的解析方式完全一致（SILENT-11 / D-01 追加任务）：
+     * 一个仅在类级声明、通过了加载时检查的 {@code @UsageLimit}，现在会真正锁定每一个未声明自己
+     * {@code @UsageLimit} 的映射。
+     *
+     * @param method the matched command mapping method, or {@code null} <br> 已匹配的命令映射方法，
+     *               可能为 {@code null}
+     * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
+     *         neither the method nor its declaring class carries one <br> 解析出的注解；
+     *         {@code method} 为 {@code null}，或方法与其声明类均未携带该注解时为 {@code null}
+     * @since 6.3.0
+     */
+    private static UsageLimit resolveLimit(Method method) {
+        if (method == null) {
+            return null;
+        }
+        return ReflectionUtil.resolveMethodOrClassAnnotation(method, UsageLimit.class);
+    }
+
     /**
      * Clears all locks for a player.
      * Useful when a player disconnects.

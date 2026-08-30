@@ -4,6 +4,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 
@@ -204,9 +205,29 @@ public class CooldownValidator implements CommandValidator {
         });
     }
     
+    /**
+     * Resolves the cooldown for {@code method}: the method's own {@code @CmdCD}, falling back
+     * to a class-level {@code @CmdCD} on its declaring class, falling back to
+     * {@link #defaultCooldownSeconds} when neither is present -- most-derived-wins, via
+     * {@link ReflectionUtil#resolveMethodOrClassAnnotation}. This is the SAME resolution
+     * {@code PluginManager}'s load-time refusal already treats as satisfying the contract
+     * (SILENT-11 / D-01 follow-up): a class-level-only {@code @CmdCD} that passes the load-time
+     * check now actually cools down every mapping that does not declare its own.
+     * <p>
+     * 解析 {@code method} 的冷却时间：方法自身的 {@code @CmdCD}，若无则回退到其声明类上的类级
+     * {@code @CmdCD}，两者都不存在时回退到 {@link #defaultCooldownSeconds}——方法级优先，经由
+     * {@link ReflectionUtil#resolveMethodOrClassAnnotation} 解析。这与 {@code PluginManager} 加载时
+     * 拒绝检查已经采信的解析方式完全一致（SILENT-11 / D-01 追加任务）：一个仅在类级声明、通过了
+     * 加载时检查的 {@code @CmdCD}，现在会真正冷却每一个未声明自己 {@code @CmdCD} 的映射。
+     *
+     * @param method the matched command mapping method <br> 已匹配的命令映射方法
+     * @return the resolved cooldown in seconds <br> 解析出的冷却秒数
+     * @since 6.3.0
+     */
     private int getCooldownSeconds(Method method) {
-        if (method.isAnnotationPresent(CmdCD.class)) {
-            return method.getAnnotation(CmdCD.class).value();
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, CmdCD.class);
+        if (cmdCD != null) {
+            return cmdCD.value();
         }
         return defaultCooldownSeconds;
     }
