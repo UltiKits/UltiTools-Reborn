@@ -11,6 +11,7 @@ import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -29,6 +30,10 @@ import org.jetbrains.annotations.ApiStatus;
  * these three is refused at registration time -- an annotation that cannot take effect fails
  * loudly rather than being silently skipped.
  * <p>
+ * A non-bean instance -- one that is never resolved from any {@code SimpleContainer}, e.g. a
+ * command validator {@code new}-ed directly in a constructor -- can register itself via {@link
+ * #tryRegister(Object)} even before the core plugin is enabled; see that method's javadoc.
+ * <p>
  * 管理带有 @PlayerCache 注解的字段，在玩家退出时自动清理。
  *
  * @since 6.2.0
@@ -39,6 +44,73 @@ public class PlayerCacheManager {
     private static final Logger LOGGER = Logger.getLogger(PlayerCacheManager.class.getName());
 
     private final List<TrackedBean> trackedBeans = new ArrayList<>();
+
+    /**
+     * Attempts lazy first-use registration of a non-bean instance with the live {@link
+     * PlayerCacheManager} singleton.
+     * <p>
+     * Accepts any object -- it does not need to be a container-managed bean; this is the entry
+     * point objects that are {@code new}-ed directly (e.g. a command validator constructed inside
+     * {@code BaseCommandExecutor}'s constructor) use to reach the sweep mechanism, since {@code
+     * PluginManager}'s bean-iteration registration loops only ever see objects resolved from a
+     * plugin's {@code SimpleContainer}.
+     * <p>
+     * <b>Safe to call before the core plugin is enabled.</b> If {@link UltiTools#getInstance()}
+     * (or its {@code PluginManager} / {@code PlayerCacheManager}) is not yet available -- for
+     * example, a bare {@code new MyCommand()} constructed in a unit test with no running server --
+     * this method returns without throwing and without registering anything. It is intended to be
+     * retried on a later first-use once the core plugin is available; degrading gracefully to
+     * "never registered, never swept" in a pure-unit-test context is deliberate (D-03).
+     * <p>
+     * <b>Idempotent per instance.</b> Calling this method more than once with the same instance
+     * (by reference identity, not {@code equals}) results in exactly one tracked entry and one
+     * sweep per player quit -- see {@link #registerBean(Object)}.
+     * <p>
+     * <b>The caller owns unregistration.</b> This method has no matching automatic teardown; a
+     * caller that registers itself is responsible for calling {@link #tryUnregister(Object)} on
+     * its own teardown, so the manager does not keep tracking an instance whose owner has gone
+     * away.
+     *
+     * @param instance the object to register; scanned for {@link PlayerCache}-annotated fields
+     * @since 6.3.0
+     */
+    public static void tryRegister(Object instance) {
+        PlayerCacheManager manager = resolveLive();
+        if (manager != null) {
+            manager.registerBean(instance);
+        }
+    }
+
+    /**
+     * The static counterpart to {@link #tryRegister(Object)} -- unregisters a previously
+     * registered non-bean instance from the live {@link PlayerCacheManager} singleton.
+     * <p>
+     * Safe to call before the core plugin is enabled or after it has been disabled: if the live
+     * manager cannot be resolved, this is a no-op. Also safe to call on an instance that was
+     * never registered (e.g. because an earlier {@link #tryRegister(Object)} attempt found the
+     * core plugin unavailable) -- {@link #unregisterBean(Object)} is itself a no-op in that case.
+     *
+     * @param instance the object to stop tracking
+     * @since 6.3.0
+     */
+    public static void tryUnregister(Object instance) {
+        PlayerCacheManager manager = resolveLive();
+        if (manager != null) {
+            manager.unregisterBean(instance);
+        }
+    }
+
+    private static PlayerCacheManager resolveLive() {
+        UltiTools ultiTools = UltiTools.getInstance();
+        if (ultiTools == null) {
+            return null;
+        }
+        PluginManager pluginManager = ultiTools.getPluginManager();
+        if (pluginManager == null) {
+            return null;
+        }
+        return pluginManager.getPlayerCacheManager();
+    }
 
     /**
      * Scans a bean for @PlayerCache fields and tracks them.
