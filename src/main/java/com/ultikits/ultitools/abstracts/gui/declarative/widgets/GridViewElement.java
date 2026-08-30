@@ -33,7 +33,10 @@ public class GridViewElement extends Element {
     @Override
     public void update(@NotNull Widget newWidget) {
         super.update(newWidget);
-        updateChildren();
+        GridView<?> gridView = (GridView<?>) getWidget();
+        List<Element> reconciled = updateChildren(childElements, gridView.getChildren());
+        childElements.clear();
+        childElements.addAll(reconciled);
     }
 
     @Override
@@ -67,41 +70,6 @@ public class GridViewElement extends Element {
             Element childElement = childWidget.createElement();
             childElement.mount(this);
             childElements.add(childElement);
-        }
-    }
-
-    private void updateChildren() {
-        GridView<?> gridView = (GridView<?>) getWidget();
-        List<Widget> newChildren = gridView.getChildren();
-
-        int commonLength = Math.min(childElements.size(), newChildren.size());
-
-        // 更新现有的
-        for (int i = 0; i < commonLength; i++) {
-            Element oldChild = childElements.get(i);
-            Widget newWidget = newChildren.get(i);
-
-            if (oldChild.canUpdate(newWidget)) {
-                oldChild.update(newWidget);
-            } else {
-                oldChild.unmount();
-                Element newChild = newWidget.createElement();
-                newChild.mount(this);
-                childElements.set(i, newChild);
-            }
-        }
-
-        // 添加新增的
-        for (int i = commonLength; i < newChildren.size(); i++) {
-            Element newChild = newChildren.get(i).createElement();
-            newChild.mount(this);
-            childElements.add(newChild);
-        }
-
-        // 移除多余的
-        while (childElements.size() > newChildren.size()) {
-            Element removed = childElements.remove(childElements.size() - 1);
-            removed.unmount();
         }
     }
 }

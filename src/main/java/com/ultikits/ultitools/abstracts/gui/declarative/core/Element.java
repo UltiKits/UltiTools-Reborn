@@ -319,6 +319,64 @@ public abstract class Element {
         return newChild;
     }
 
+    /**
+     * Reconciles a list of old child Elements against a list of new Widgets, pairing by
+     * {@link SlotKey} where a Widget declares one and falling back to positional (index)
+     * pairing where it does not -- so a caller that never supplies a key sees exactly the
+     * same index-based behaviour this method replaces.
+     * <p>
+     * This is the shared implementation D-09 item 5 asks for: {@link ContainerElement} and
+     * {@link GridViewElement} were literal twins, each hand-rolling the same
+     * {@code Math.min(size)} index pairing and never reading {@link Widget#getKey()}. Both
+     * now call this method instead of maintaining their own copy, so the two classes cannot
+     * drift apart the way they did before this plan.
+     * <p>
+     * <b>算法（中文补充）：</b>先把旧子 Element 按"有 key"与"无 key"分两组；遍历新 Widget
+     * 列表，有 key 的按 key 查找旧组中的匹配项，没有 key 的按顺序从"无 key 旧组"里取一个——
+     * 找到匹配就调用 {@link #updateChild(Widget, Element)} 复用（或在类型不匹配时替换），
+     * 找不到就新建。遍历结束后，两组里还剩下的旧 Element（没有被任何新 Widget 认领）全部
+     * unmount。
+     *
+     * @param oldChildren the previously-mounted child Elements, in their current order
+     * @param newWidgets  the new child Widgets, in their desired order
+     * @return the reconciled child Elements, in {@code newWidgets}' order
+     */
+    @NotNull
+    protected List<Element> updateChildren(@NotNull List<Element> oldChildren, @NotNull List<Widget> newWidgets) {
+        List<Element> newChildren = new ArrayList<>(newWidgets.size());
+
+        Map<SlotKey, Element> keyedOld = new HashMap<>();
+        Deque<Element> unkeyedOld = new ArrayDeque<>();
+        for (Element old : oldChildren) {
+            SlotKey key = old.getWidget().getKey();
+            if (key != null) {
+                keyedOld.put(key, old);
+            } else {
+                unkeyedOld.addLast(old);
+            }
+        }
+
+        for (Widget newWidget : newWidgets) {
+            SlotKey key = newWidget.getKey();
+            Element oldChild = key != null ? keyedOld.remove(key)
+                    : (unkeyedOld.isEmpty() ? null : unkeyedOld.pollFirst());
+            Element updated = updateChild(newWidget, oldChild);
+            if (updated != null) {
+                newChildren.add(updated);
+            }
+        }
+
+        // Anything left in either group was not claimed by any new Widget -- unmount it.
+        for (Element leftover : keyedOld.values()) {
+            leftover.unmount();
+        }
+        for (Element leftover : unkeyedOld) {
+            leftover.unmount();
+        }
+
+        return newChildren;
+    }
+
     @Override
     public String toString() {
         return getClass().getSimpleName() + "(" + _widget + ")";
