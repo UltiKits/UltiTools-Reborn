@@ -13,7 +13,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
+import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -666,6 +668,154 @@ class PluginManagerCommandContractTest {
                     "Expected the concrete subclass's @CmdCD(20) to be resolvable via the SAME "
                             + "(method, executorClass) pair the load-time gate just accepted, but "
                             + "resolution returned: " + resolved);
+        }
+    }
+
+    // ==================== UAT Fix (05-fix) Part 2: uninvocable suggest-method signature ====================
+
+    /**
+     * Fixture: {@code @CmdParam(suggest = "suggestBad")} names a method that DOES exist on this
+     * class, but whose signature -- {@code (int)} -- is not one of the five shapes {@code
+     * MethodInvocationCompleter} knows how to invoke. Before this fix, this loaded cleanly and
+     * threw {@code IllegalArgumentException} only the first time a player pressed Tab (the
+     * real-machine-UAT regression); this fixture pins the load-time refusal that replaces it.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"uninvocablesig"})
+    static class UninvocableSuggestSignatureExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "give <target>")
+        public void giveCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "suggestBad") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestBad(int notSupported) {
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Fixture: one mapping per invocable signature shape -- the positive counterpart to {@link
+     * UninvocableSuggestSignatureExecutor}, pinning that the new check does not over-refuse a
+     * module using any of the five shapes {@code MethodInvocationCompleter} actually supports.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"allshapes"})
+    static class AllInvocableSuggestSignatureShapesExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "zero <target>")
+        public void zeroCommand(Player player,
+                                 @CmdParam(value = "target", suggest = "suggestZero") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestZero() {
+            return Collections.emptyList();
+        }
+
+        @CmdMapping(format = "playeronly <target>")
+        public void playerOnlyCommand(Player player,
+                                       @CmdParam(value = "target", suggest = "suggestPlayerOnly") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestPlayerOnly(Player p) {
+            return Collections.emptyList();
+        }
+
+        @CmdMapping(format = "stringonly <target>")
+        public void stringOnlyCommand(Player player,
+                                       @CmdParam(value = "target", suggest = "suggestStringOnly") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestStringOnly(String s) {
+            return Collections.emptyList();
+        }
+
+        @CmdMapping(format = "playerstring <target>")
+        public void playerStringCommand(Player player,
+                                         @CmdParam(value = "target", suggest = "suggestPlayerString") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestPlayerString(Player p, String s) {
+            return Collections.emptyList();
+        }
+
+        @CmdMapping(format = "playercmdargs <target>")
+        public void playerCmdArgsCommand(Player player,
+                @CmdParam(value = "target", suggest = "suggestPlayerCmdArgs") String target) {
+            // Test stub - not exercised
+        }
+
+        public List<String> suggestPlayerCmdArgs(Player p, Command c, String[] a) {
+            return Collections.emptyList();
+        }
+    }
+
+    @Nested
+    @DisplayName("UAT Fix (05-fix): @CmdParam.suggest method-name signature refused at load when uninvocable")
+    class UninvocableSuggestMethodSignatureTests {
+
+        @Test
+        @DisplayName("a suggest method whose signature the completer cannot invoke is refused at "
+                + "load, naming the class, the mapping method and the offending signature")
+        void uninvocableSignatureRefusesLoad() {
+            UninvocableSuggestSignatureExecutor executor = new UninvocableSuggestSignatureExecutor();
+
+            PluginModuleException exception = assertThrows(PluginModuleException.class,
+                    () -> PluginManager.validateCommandExecutorContract(executor));
+
+            assertEquals(ErrorCode.COMMAND_SUGGEST_METHOD_UNINVOCABLE, exception.getErrorCode());
+            assertTrue(exception.getMessage().contains(UninvocableSuggestSignatureExecutor.class.getName()));
+            assertTrue(exception.getMessage().contains("giveCommand"));
+            assertTrue(exception.getMessage().contains("suggestBad"));
+            assertTrue(exception.getMessage().contains("int"));
+        }
+
+        @Test
+        @DisplayName("each of the five invocable suggest-method signature shapes loads without incident")
+        void allFiveInvocableShapesLoadCleanly() {
+            AllInvocableSuggestSignatureShapesExecutor executor = new AllInvocableSuggestSignatureShapesExecutor();
+
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+        }
+
+        @Test
+        @DisplayName("a suggest value naming a non-existent method still loads -- the unchanged "
+                + "D-07 i18n hint fallback stays out of this check's scope")
+        void nonExistentMethodNameStillLoadsCleanly() {
+            // Reuses the pre-existing MethodNameSuggestExecutor fixture (Task 2's own D-07 test)
+            // to pin that this NEW signature check does not regress the pre-existing "unknown
+            // method name falls back to the i18n hint" behaviour.
+            MethodNameSuggestExecutor executor = new MethodNameSuggestExecutor();
+
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContract(executor));
+        }
+
+        @Test
+        @DisplayName("one module's uninvocable-signature refusal does not prevent a sibling "
+                + "module's container from validating cleanly")
+        void oneModuleFailingDoesNotBlockAnother() {
+            SimpleContainer badContainer = new SimpleContainer();
+            badContainer.registerSingleton("bad", new UninvocableSuggestSignatureExecutor());
+
+            SimpleContainer goodContainer = new SimpleContainer();
+            goodContainer.registerSingleton("good", new AllInvocableSuggestSignatureShapesExecutor());
+
+            assertThrows(PluginModuleException.class,
+                    () -> PluginManager.validateCommandExecutorContracts(badContainer));
+            assertDoesNotThrow(() -> PluginManager.validateCommandExecutorContracts(goodContainer));
         }
     }
 }
