@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,18 +12,23 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collection;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -812,6 +818,127 @@ class ServerMonitorManagerTest {
 
             // Act & Assert - 不应该抛出异常
             assertDoesNotThrow(() -> method.invoke(serverMonitorManager));
+        }
+    }
+
+    @Nested
+    @DisplayName("sendBatchUpdate 的 logs 能力网关")
+    class SendBatchUpdateCapabilityTests {
+
+        private LogStreamManager mockLogStreamManagerForBatch;
+        private ErrorReportCollector mockErrorReportCollectorForBatch;
+
+        @BeforeEach
+        void setUpCapabilityGate() {
+            mockLogStreamManagerForBatch = mock(LogStreamManager.class);
+            mockErrorReportCollectorForBatch = mock(ErrorReportCollector.class);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                lenient().when(ultiTools.getLogStreamManager()).thenReturn(mockLogStreamManagerForBatch);
+                lenient().when(ultiTools.getErrorReportCollector()).thenReturn(mockErrorReportCollectorForBatch);
+            });
+            // drainErrors 返回 Gson 的 JsonArray，不是 java.util.Collection，Mockito 的
+            // RETURNS_DEFAULTS 不会替它兜底成空数组——不预先打桩，未显式关心 errors 的用例会在
+            // sendBatchUpdate 里对 null 调 .size() 直接 NPE。
+            lenient().when(mockErrorReportCollectorForBatch.drainErrors(org.mockito.ArgumentMatchers.anyInt()))
+                    .thenReturn(new JsonArray());
+        }
+
+        private YamlConfiguration configWith(String path, boolean value) {
+            YamlConfiguration config = new YamlConfiguration();
+            config.set(path, value);
+            return config;
+        }
+
+        private void invokeSendBatchUpdate(ServerMonitorManager manager) throws Exception {
+            Method method = ServerMonitorManager.class.getDeclaredMethod("sendBatchUpdate");
+            method.setAccessible(true);
+            method.invoke(manager);
+        }
+
+        /** 反射读队列长度，与 CloudReconnectStateMachineTest 的 queueSizeOf 同一手法。 */
+        private int queueSizeOf(UltiPanelLogTransmitter transmitter) throws Exception {
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            return ((Collection<?>) queueField.get(transmitter)).size();
+        }
+
+        @Test
+        @DisplayName("logs 禁用时：batch_update 无 logs 成员，仍带 status/metrics，传输器队列未被排空")
+        void logsDisabledNoLogsMemberAndQueueUnchanged() throws Exception {
+            when(UltiTools.getInstance().getConfig())
+                    .thenReturn(configWith(Capability.LOGS.getConfigPath(), false));
+
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.info("queued line", "test");
+                int queueSizeBefore = queueSizeOf(transmitter);
+                assertThat(queueSizeBefore).as("前置条件：队列里得真有东西，否则本用例是空的").isPositive();
+
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs")).as("logs 禁用时不应带 logs 成员").isFalse();
+                assertThat(data.has("status")).as("logs 开关不应影响 status").isTrue();
+                assertThat(data.has("metrics")).as("logs 开关不应影响 metrics").isTrue();
+                assertThat(queueSizeOf(transmitter))
+                        .as("排空前置的门必须挡在 drainQueue 之前，队列不能被动过")
+                        .isEqualTo(queueSizeBefore);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("logs 禁用时：errors 排空仍照常进行，不受任何 Capability 影响（D-07）")
+        void errorsDrainStillOccursWithLogsDisabled() throws Exception {
+            when(UltiTools.getInstance().getConfig())
+                    .thenReturn(configWith(Capability.LOGS.getConfigPath(), false));
+
+            JsonArray errors = new JsonArray();
+            JsonObject errorEntry = new JsonObject();
+            errorEntry.addProperty("message", "boom");
+            errors.add(errorEntry);
+            when(mockErrorReportCollectorForBatch.drainErrors(10)).thenReturn(errors);
+
+            invokeSendBatchUpdate(serverMonitorManager);
+
+            ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(sent.capture());
+            JsonObject data = sent.getValue().getAsJsonObject("data");
+
+            assertThat(data.has("errors")).as("errors 只受 error-reporting.enabled 控制，不受 LOGS 影响").isTrue();
+        }
+
+        @Test
+        @DisplayName("logs 启用时：batch_update 带 logs 成员，与今天行为一致")
+        void logsEnabledStillCarriesLogsMember() throws Exception {
+            // LOGS 出厂默认即为开启（D-08），空配置已经够了。
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs")).as("logs 开启且队列非空时应带 logs 成员").isTrue();
+            } finally {
+                transmitter.shutdown();
+            }
         }
     }
 }
