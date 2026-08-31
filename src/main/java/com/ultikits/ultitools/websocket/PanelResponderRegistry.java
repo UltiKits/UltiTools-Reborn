@@ -3,6 +3,9 @@ package com.ultikits.ultitools.websocket;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import com.google.gson.JsonObject;
@@ -32,11 +35,45 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
 public class PanelResponderRegistry {
 
     /**
+     * The bounded wall-clock time {@link #dispatch} gives a registered responder's future to
+     * complete before completing exceptionally on the caller's behalf (D-27). One timeout, applied
+     * in exactly one place — inside {@code dispatch} — so no responder and no caller implements its
+     * own. 3 seconds: long enough for a responder doing real database or disk work, short enough
+     * that a human operator watching the panel does not start to think it froze. Package-private
+     * (not private) so {@code PanelResponderRegistryTest} can bound its own wait without
+     * duplicating this value.
+     */
+    static final long RESPONDER_TIMEOUT_MILLIS = 3000L;
+
+    /**
      * Pairs a responder function with the module name that registered it. Never exposed outside
      * this class — {@link #hasResponder(String)}/{@link #unregisterAll(String)} are the only
      * externally visible views of what this map holds.
      */
     private final Map<String, ResponderEntry> responders = new ConcurrentHashMap<>();
+
+    /**
+     * Schedules {@link #RESPONDER_TIMEOUT_MILLIS}'s one-timeout-in-one-place enforcement. A
+     * dedicated single-thread pool, not a shared framework scheduler, so one slow responder cannot
+     * starve unrelated timeout tasks. {@code setRemoveOnCancelPolicy(true)} makes a cancelled task
+     * — the fast path, when the responder completes before the timeout fires — removed from the
+     * queue synchronously inside {@code cancel()}, rather than lingering in the queue until its
+     * scheduled time; without it a fast responder would still "leak" a queued task for
+     * {@link #RESPONDER_TIMEOUT_MILLIS}. There is no {@code CompletableFuture.orTimeout} on the
+     * Java 8 bytecode target this framework compiles to (that method is Java 9+), which is why the
+     * timeout is hand-scheduled here rather than chained.
+     */
+    private final ScheduledThreadPoolExecutor timeoutScheduler = createTimeoutScheduler();
+
+    private static ScheduledThreadPoolExecutor createTimeoutScheduler() {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread thread = new Thread(r, "UltiTools-PanelResponderRegistry-Timeout");
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
 
     /**
      * Registers {@code responder} as the single owner of {@code messageType}.
@@ -108,6 +145,90 @@ public class PanelResponderRegistry {
      */
     public boolean hasResponder(String messageType) {
         return messageType != null && responders.containsKey(messageType);
+    }
+
+    /**
+     * Invokes {@code messageType}'s registered responder and returns a future that is already
+     * bounded by {@link #RESPONDER_TIMEOUT_MILLIS} — the single timeout-and-reply-shape point every
+     * failure mode routes through (D-27):
+     * <ul>
+     *   <li>the responder throws synchronously, before returning a future — caught and becomes a
+     *       failed future rather than escaping;</li>
+     *   <li>the responder returns {@code null} — treated as an explicit failure, not a
+     *       {@code NullPointerException};</li>
+     *   <li>the responder's future never completes — the scheduled timeout task completes this
+     *       method's returned future exceptionally with
+     *       {@link PluginModuleException#responderTimedOut(String, String, long)};</li>
+     *   <li>the responder's future completes exceptionally — that exception is relayed directly.</li>
+     * </ul>
+     * On the fast path (the responder's future is already complete, or completes before the
+     * timeout fires), the scheduled timeout task is cancelled inside the same
+     * {@code whenComplete} callback that resolves the returned future, so nothing is left pending.
+     *
+     * @param messageType the message type to dispatch, expected to already have a registered
+     *                     responder ({@link #hasResponder(String)})
+     * @param data         the inbound message's {@code data} object, passed straight to the
+     *                     responder
+     * @param requestId    the request's correlation id — not used by {@code dispatch} itself, but
+     *                     accepted so the call site does not have to separately track it; reserved
+     *                     for the caller assembling the outbound reply
+     * @return a future that always completes — successfully with the responder's result, or
+     *         exceptionally with a failure describing what went wrong
+     */
+    public CompletableFuture<JsonObject> dispatch(String messageType, JsonObject data, String requestId) {
+        CompletableFuture<JsonObject> outcome = new CompletableFuture<>();
+        ResponderEntry entry = responders.get(messageType);
+        if (entry == null) {
+            outcome.completeExceptionally(
+                    new IllegalStateException("No responder registered for '" + messageType + "'"));
+            return outcome;
+        }
+
+        CompletableFuture<JsonObject> responderFuture;
+        try {
+            responderFuture = entry.responder.apply(data);
+        } catch (RuntimeException e) {
+            outcome.completeExceptionally(e);
+            return outcome;
+        }
+        if (responderFuture == null) {
+            outcome.completeExceptionally(new IllegalStateException("Responder for '" + messageType
+                    + "' (owned by module '" + entry.ownerModule + "') returned null"));
+            return outcome;
+        }
+
+        ScheduledFuture<?> timeoutTask = timeoutScheduler.schedule(
+                () -> outcome.completeExceptionally(
+                        PluginModuleException.responderTimedOut(messageType, entry.ownerModule,
+                                RESPONDER_TIMEOUT_MILLIS)),
+                RESPONDER_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+
+        responderFuture.whenComplete((value, throwable) -> {
+            // Cancelling here — win or lose the race against the scheduled task above — is what
+            // guarantees the fast path leaves nothing pending: if the timeout already fired,
+            // outcome is already complete and these calls are harmless no-ops (CompletableFuture's
+            // second completion attempt is silently ignored).
+            timeoutTask.cancel(false);
+            if (throwable != null) {
+                outcome.completeExceptionally(throwable);
+            } else if (value == null) {
+                outcome.completeExceptionally(new IllegalStateException("Responder for '" + messageType
+                        + "' (owned by module '" + entry.ownerModule + "') completed with null"));
+            } else {
+                outcome.complete(value);
+            }
+        });
+        return outcome;
+    }
+
+    /**
+     * Test-only accessor for how many timeout tasks are still queued. Proves the fast path in
+     * {@link #dispatch} leaves nothing pending, rather than merely proving a reply arrived.
+     *
+     * @return the number of scheduled-but-not-yet-run-or-cancelled timeout tasks
+     */
+    int pendingTimeoutTaskCountForTesting() {
+        return timeoutScheduler.getQueue().size();
     }
 
     /** An immutable pairing of a responder function and the module name that registered it. */

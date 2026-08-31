@@ -22,6 +22,7 @@ import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
@@ -536,13 +537,25 @@ public class PluginInitiationUtils {
             if (entry != null) {
                 shouldPublishEvent = dispatchWithCapabilityGate(type, message, data, entry);
             } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                // Don't send error responses to avoid feedback loops with server
+                // Module-owned responders are served from this exact branch — the same lookup
+                // that serves the framework's own 24 types — rather than a second dispatch
+                // mechanism (01-CONTEXT D-10/D-11, WIRE-16, Plan 06-08). A registered responder
+                // earns its own dispatch and reply; a genuinely unknown type keeps today's
+                // behaviour unchanged (one warning, no reply, to avoid feedback loops with the
+                // server).
+                PanelResponderRegistry responderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+                if (responderRegistry != null && responderRegistry.hasResponder(type)) {
+                    dispatchToResponder(type, data, responderRegistry);
+                } else {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
+                    // Don't send error responses to avoid feedback loops with server
+                }
                 // Unknown to the framework's own dispatch table is exactly the case WIRE-16
                 // exists to serve — a module's own responder for a type the framework does not
                 // own. No capability gate applies (there is no entry to resolve one from), so
-                // this is unconditionally publishable.
+                // this is unconditionally publishable, whether or not a responder actually
+                // served it.
                 shouldPublishEvent = true;
             }
         } catch (Exception e) {
@@ -565,6 +578,74 @@ public class PluginInitiationUtils {
         if (shouldPublishEvent) {
             publishPanelMessageEvent(type, message, data);
         }
+    }
+
+    /**
+     * Dispatches {@code type} to its registered responder and, once the registry's returned future
+     * settles, sends exactly one reply through the same client accessor the other outbound helpers
+     * use — {@code panelWS.sendMessage(...)}, matching {@code sendCapabilityRefusal}'s and
+     * {@code FileOperationManager#sendFileOperationResult}'s existing pattern (WIRE-16, D-27).
+     * <p>
+     * No Bukkit main-thread hop here, deliberately: unlike {@link PanelMessageEvent}'s publish
+     * (which must run on the main thread because a subscriber may touch Bukkit API), sending a
+     * reply over the WebSocket client is plain network I/O — the same off-main-thread pattern
+     * {@code CommandExecutionManager}/{@code FileOperationManager} already use for their own
+     * outbound replies.
+     * <p>
+     * The reply always carries the message type and the request's {@code requestId} (echoed from
+     * {@code data}), and either the responder's resolved {@link JsonObject} or an {@code error}
+     * member naming the failure — {@link PanelResponderRegistry#dispatch} guarantees its returned
+     * future always settles one way or the other, so this method never has to guess. When the
+     * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
+     * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
+     * reasoning for {@code commandId}/{@code operationId}.
+     *
+     * @param type     the message type, already confirmed to have a registered responder
+     * @param data     the message's {@code data} object, possibly {@code null}
+     * @param registry the registry to dispatch through
+     */
+    private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
+        String requestId = data != null ? readString(data, "requestId") : null;
+        registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
+            if (requestId == null || requestId.isEmpty()) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
+                return;
+            }
+            JsonObject payload = throwable != null ? new JsonObject() : result;
+            payload.addProperty("requestId", requestId);
+            if (throwable != null) {
+                payload.addProperty("error", rootCauseMessage(throwable));
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("type", type);
+            response.add("data", payload);
+            if (panelWS != null) {
+                response.addProperty("serverId", panelWS.getServerId());
+                panelWS.sendMessage(response);
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
+            }
+        });
+    }
+
+    /**
+     * The deepest non-null message on {@code throwable}'s cause chain, falling back to the
+     * throwable's own class name when every message is {@code null} — a bare
+     * {@code NullPointerException} carries no message at all, and an empty {@code error} field
+     * would tell the panel operator nothing.
+     *
+     * @param throwable the throwable to describe
+     * @return a human-readable description, never {@code null}
+     */
+    private static String rootCauseMessage(Throwable throwable) {
+        Throwable deepest = throwable;
+        while (deepest.getCause() != null && deepest.getCause() != deepest) {
+            deepest = deepest.getCause();
+        }
+        return deepest.getMessage() != null ? deepest.getMessage() : deepest.getClass().getSimpleName();
     }
 
     /**

@@ -66,6 +66,7 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -158,6 +159,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     @Getter
     private RemoteActionLog remoteActionLog;
+    /**
+     * The single-owner registry a module uses to claim a request/response responder for a panel
+     * message type the framework itself does not own (WIRE-16, D-26/D-27). Constructed
+     * unconditionally in {@link #initWebSocketManagers()} alongside the seven WebSocket managers —
+     * not gated by any {@link Capability}, since the registry itself holds no data and starts no
+     * collection; what flows through it is already gated at the dispatch table it sits behind.
+     */
+    @Getter
+    private PanelResponderRegistry panelResponderRegistry;
 
     /**
      * Returns the instance of the UltiTools.
@@ -453,6 +463,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // Constructed unconditionally, gated by no Capability — D-32.
         remoteActionLog = new RemoteActionLog();
         remoteActionLog.init(getDataFolder());
+        // Constructed unconditionally alongside the managers above — not gated by any
+        // Capability (WIRE-16); see the field javadoc.
+        panelResponderRegistry = new PanelResponderRegistry();
     }
 
     private boolean attemptCloudLogin() {
