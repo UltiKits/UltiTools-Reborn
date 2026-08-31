@@ -330,6 +330,10 @@ class PanelResponderRegistryTest {
         @AfterEach
         void tearDown() throws Exception {
             setPanelWs(previousPanelWs);
+            // Reaches UltiTools' private static singleton field to reset it between tests —
+            // this framework's security model IS its visibility boundaries, so a test that
+            // needs to control the singleton lifecycle has no route but reflection.
+            @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
             instanceField.set(null, null);
@@ -374,6 +378,9 @@ class PanelResponderRegistryTest {
 
         @Test
         @DisplayName("responder 抛出/超时：仍然发送一条携带 error 字段的回复，而不是静默失败")
+        // PMD.AvoidThrowingRawExceptionTypes: driving the responder's failure path IS the test —
+        // it proves the error reply is sent even when a responder throws unchecked.
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void failingResponderStillSendsErrorReply() throws Exception {
             registry.registerResponder("my_module_fails", data -> {
                 throw new RuntimeException("boom — deliberately thrown by a test responder");
@@ -415,12 +422,19 @@ class PanelResponderRegistryTest {
      * in {@code websocket}, a different package from {@code utils} — same reason
      * {@code CapabilityGateTracerTest}/{@code PanelMessageEventDispatchTest} need reflection.
      */
+    // PMD.AvoidAccessibilityAlteration: reaches a private method on PluginInitiationUtils —
+    // this framework's security model IS its visibility boundaries, and dispatch tests have no
+    // route to the panel-message entry point except reflection (see javadoc above).
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static void invokeHandleInboundMessage(JsonObject message) throws Exception {
         Method method = PluginInitiationUtils.class.getDeclaredMethod("handleInboundMessage", JsonObject.class);
         method.setAccessible(true);
         method.invoke(null, message);
     }
 
+    // PMD.AvoidAccessibilityAlteration: reaches a private static field on PluginInitiationUtils
+    // to swap in a mock WebSocket client between tests — same visibility-boundary rationale.
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static Object setPanelWs(Object value) throws Exception {
         Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
         field.setAccessible(true);
