@@ -5,8 +5,14 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
@@ -16,12 +22,19 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
  * 文件操作管理器
  * 负责处理来自WebSocket的文件操作请求
+ *
+ * <p>The remote file API is confined to two layers (D-14): an unconditional, non-configurable
+ * deny layer for credential-bearing files and the framework's own action-log directory, and an
+ * operator-configured editable-root set (D-15) that answers "where" once the deny layer has
+ * already answered "not this, ever". See {@link #isPathAllowed(String)} for the ordering
+ * rationale.
  */
 @ApiStatus.Internal
 public class FileOperationManager {
@@ -40,10 +53,25 @@ public class FileOperationManager {
         ".jar", ".sh", ".bat", ".exe", ".class"
     ));
 
+    /** D-15's config key for the operator-configured editable-root set. */
+    private static final String EDITABLE_ROOTS_CONFIG_KEY = "ultipanel.files.editable-roots";
+
+    /** D-15's shipped default: plugin configs and historical logs, nothing else. */
+    private static final List<String> DEFAULT_EDITABLE_ROOTS =
+            Collections.unmodifiableList(Arrays.asList("plugins", "logs"));
+
+    /**
+     * The operator-configured editable-root set (D-15), resolved to {@link File}s rooted at
+     * {@link #serverRoot}. Not {@code final} — {@link #reloadRootsFromConfig()} may reassign it
+     * without reconstructing the manager.
+     */
+    private List<File> editableRoots;
+
     public FileOperationManager() {
         this.serverRoot = new File(System.getProperty("user.dir"));
+        reloadRootsFromConfig();
     }
-    
+
     /**
      * 设置WebSocket客户端
      * @param client WebSocket客户端
@@ -53,40 +81,147 @@ public class FileOperationManager {
     }
 
     /**
-     * 检查文件路径是否允许远程访问
-     * Check if a file path is allowed for remote access.
+     * The operator-configured editable-root set this manager currently enforces.
      *
-     * @param path 文件路径
-     * @return 是否允许访问
+     * @return an unmodifiable view of the resolved root directories
      */
-    public boolean isPathAllowed(String path) {
+    public List<File> getEditableRoots() {
+        return Collections.unmodifiableList(editableRoots);
+    }
+
+    /**
+     * (Re)loads {@link #editableRoots} from {@code ultipanel.files.editable-roots}, mirroring
+     * {@code ErrorReportCollector.loadConfiguration()}'s try/catch shape. Public so a future
+     * config reload does not require reconstructing the manager.
+     * <p>
+     * An <b>absent</b> key resolves to the shipped default ({@code plugins}, {@code logs}); an
+     * <b>explicit empty list</b> is honoured as the operator deliberately granting nothing —
+     * collapsing those two cases would make "grant nothing" inexpressible.
+     */
+    public final void reloadRootsFromConfig() {
+        List<String> roots = DEFAULT_EDITABLE_ROOTS;
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance != null && instance.getConfig().isSet(EDITABLE_ROOTS_CONFIG_KEY)) {
+                roots = instance.getConfig().getStringList(EDITABLE_ROOTS_CONFIG_KEY);
+            }
+        } catch (Exception e) {
+            roots = DEFAULT_EDITABLE_ROOTS;
+            logWarning("Failed to load " + EDITABLE_ROOTS_CONFIG_KEY
+                    + ", using shipped default (plugins, logs): " + e.getMessage());
+        }
+
+        List<File> resolved = new ArrayList<>();
+        for (String root : roots) {
+            resolved.add(new File(serverRoot, root));
+        }
+        this.editableRoots = Collections.unmodifiableList(resolved);
+    }
+
+    /**
+     * Best-effort warning logging that never throws — {@link UltiTools#getInstance()} may be
+     * {@code null} in a test harness with no live plugin.
+     */
+    private static void logWarning(String message) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance != null) {
+                instance.getLogger().log(Level.WARNING, message);
+            }
+        } catch (Exception ignored) {
+            // Best-effort logging only — never let a diagnostic warning break the caller.
+        }
+    }
+
+    /**
+     * Checks whether a file path may be reached through the remote file API, and — unlike the
+     * {@code boolean} this returned before 6.3.0 — says <b>why not</b> when it is refused (D-17).
+     * <p>
+     * Two ordered layers. The unconditional deny layer ({@link #deniedUnconditionally(String)})
+     * runs <b>first</b>; the editable-root set runs second. <b>Order is load-bearing:</b> a
+     * credential file that happens to sit inside a granted editable root (e.g.
+     * {@code plugins/UltiTools/data.json} with {@code plugins} granted) must report the
+     * non-configurable cause — checking the root set first would report the wrong cause for
+     * exactly that file.
+     *
+     * @param path the requested path, forward- or back-slash separated, with or without a
+     *             leading slash
+     * @return an {@link AccessDecision} carrying the refusal cause when denied
+     */
+    public AccessDecision isPathAllowed(String path) {
         if (path == null || path.trim().isEmpty()) {
-            return false;
+            return AccessDecision.deniedNonConfigurable("path is null or empty");
         }
 
-        String normalized = path.trim().replace("\\", "/");
-        // Strip leading slash
-        if (normalized.startsWith("/")) {
-            normalized = normalized.substring(1);
+        String normalized = normalize(path);
+
+        AccessDecision deny = deniedUnconditionally(normalized);
+        if (deny != null) {
+            return deny;
         }
 
-        // Check blocked file names (basename only)
-        String fileName = normalized.contains("/")
-            ? normalized.substring(normalized.lastIndexOf("/") + 1)
-            : normalized;
-
-        if (BLOCKED_FILES.contains(fileName.toLowerCase())) {
-            return false;
+        if (!isWithinEditableRoots(normalized)) {
+            return AccessDecision.deniedConfigurable(
+                    "'" + normalized + "' is outside the editable roots",
+                    EDITABLE_ROOTS_CONFIG_KEY);
         }
 
-        // Check blocked extensions
+        return AccessDecision.allowed();
+    }
+
+    /**
+     * The unconditional deny layer (D-16): checks that no configuration can lift. Reads no
+     * config key and consults no {@code Capability}. Currently folds in the pre-6.3.0
+     * {@link #BLOCKED_FILES}/{@link #BLOCKED_EXTENSIONS} sets; the credential-pattern layer
+     * (D-16/D-19/D-23) is added on top of this same method.
+     *
+     * @param normalizedPath the path already stripped of a leading slash, forward-slash separated
+     * @return a denied, non-configurable {@link AccessDecision} if this layer refuses the path;
+     *         {@code null} if this layer has no objection and the caller must still run the
+     *         editable-root check
+     */
+    public AccessDecision deniedUnconditionally(String normalizedPath) {
+        String fileName = basenameOf(normalizedPath);
+        String fileNameLower = fileName.toLowerCase(Locale.ROOT);
+
+        if (BLOCKED_FILES.contains(fileNameLower)) {
+            return AccessDecision.deniedNonConfigurable("'" + fileName + "' is a protected server file");
+        }
         for (String ext : BLOCKED_EXTENSIONS) {
-            if (fileName.toLowerCase().endsWith(ext)) {
-                return false;
+            if (fileNameLower.endsWith(ext)) {
+                return AccessDecision.deniedNonConfigurable("'" + fileName + "' has a protected extension");
             }
         }
 
-        return true;
+        return null;
+    }
+
+    private static String basenameOf(String normalizedPath) {
+        int idx = normalizedPath.lastIndexOf('/');
+        return idx >= 0 ? normalizedPath.substring(idx + 1) : normalizedPath;
+    }
+
+    private static String normalize(String path) {
+        String trimmed = path.trim().replace("\\", "/");
+        return trimmed.startsWith("/") ? trimmed.substring(1) : trimmed;
+    }
+
+    /**
+     * Lexical containment check against {@link #editableRoots} — no filesystem access, safe to
+     * call before any real file exists. {@link #getSecureFile(String)} performs the real,
+     * symlink-aware containment check once a file handle is actually needed.
+     */
+    private boolean isWithinEditableRoots(String normalizedPath) {
+        if (editableRoots.isEmpty()) {
+            return false;
+        }
+        Path candidate = new File(serverRoot, normalizedPath).toPath().normalize();
+        for (File root : editableRoots) {
+            if (candidate.startsWith(root.toPath().normalize())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -139,7 +274,8 @@ public class FileOperationManager {
      */
     private void handleReadOperation(String path, JsonObject operationData, String operationId) {
         try {
-            if (!isPathAllowed(path)) {
+            AccessDecision readDecision = isPathAllowed(path);
+            if (!readDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "read", path, false,
                     "Access denied: this file is protected", null);
                 return;
@@ -189,7 +325,8 @@ public class FileOperationManager {
      */
     private void handleWriteOperation(String path, JsonObject operationData, String operationId) {
         try {
-            if (!isPathAllowed(path)) {
+            AccessDecision writeDecision = isPathAllowed(path);
+            if (!writeDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "write", path, false,
                     "Access denied: this file is protected", null);
                 return;
@@ -256,7 +393,8 @@ public class FileOperationManager {
                 String childPath = (path == null || path.isEmpty() || path.equals("/"))
                     ? file.getName()
                     : path + "/" + file.getName();
-                if (!file.isDirectory() && !isPathAllowed(childPath)) {
+                AccessDecision childDecision = isPathAllowed(childPath);
+                if (!file.isDirectory() && !childDecision.isAllowed()) {
                     continue;
                 }
 
@@ -287,7 +425,8 @@ public class FileOperationManager {
      */
     private void handleDeleteOperation(String path, JsonObject operationData, String operationId) {
         try {
-            if (!isPathAllowed(path)) {
+            AccessDecision deleteDecision = isPathAllowed(path);
+            if (!deleteDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "delete", path, false,
                     "Access denied: this file is protected", null);
                 return;
