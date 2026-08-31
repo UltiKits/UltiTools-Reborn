@@ -2,7 +2,7 @@ package com.ultikits.ultitools.entities;
 
 /**
  * The reason-carrying return type both remote-surface policy predicates change to as of 6.3.0:
- * {@code CommandExecutionManager.isCommandAllowed} and {@code FileOperationManager.isPathAllowed}
+ * {@code CommandExecutionManager}'s command-allowed check and {@code FileOperationManager.isPathAllowed}
  * both previously returned {@code boolean}. Both managers carry {@code @ApiStatus.Internal}, so
  * this signature change is not itself a compatibility event — {@code COMPATIBILITY.md} states that
  * {@code @ApiStatus.Internal} types are not public API — but it is recorded in

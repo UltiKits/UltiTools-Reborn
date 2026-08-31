@@ -57,6 +57,10 @@ class CommandExecutionManagerTest {
         mockLogger = mock(Logger.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
+            // An empty config (absent ultipanel.commands.blocklist key) so the constructor's
+            // loadConfiguration() falls through cleanly to the shipped default instead of hitting
+            // its failure branch on every test — a real UltiTools.getConfig() never returns null.
+            when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
         });
 
         // Mock WebSocket client
@@ -1113,96 +1117,101 @@ class CommandExecutionManagerTest {
             assertThat(data.get("success").getAsBoolean()).isFalse();
             assertThat(data.get("output").getAsString()).contains("blocked");
         }
+    }
 
-        @Test
-        @DisplayName("should load the blocklist from ultipanel.commands.blocklist, honoring removals and empty lists")
-        void shouldLoadBlocklistFromConfig() {
-            // Arrange & Act — a configured list omitting "op" allows it, keeps "stop" blocked
-            CommandExecutionManager configuredManager =
-                    createManagerWithConfiguredBlocklist(Arrays.asList("stop", "deop"));
+    // --- Top-level (not @Nested): Surefire's bare -Dtest=Class#method filter used by
+    // 06-VALIDATION.md's automated commands does not descend into @Nested classes — verified
+    // empirically by Plan 06-03 (FileOperationManagerTest). Placing these four here, not inside
+    // CommandBlocklistTests, is what makes that exact command actually run them. ---
 
-            // Assert
-            assertThat(configuredManager.isCommandAllowed("op").isAllowed()).isTrue();
-            assertThat(configuredManager.isCommandAllowed("stop").isAllowed()).isFalse();
+    @Test
+    @DisplayName("should load the blocklist from ultipanel.commands.blocklist, honoring removals and empty lists")
+    void shouldLoadBlocklistFromConfig() {
+        // Arrange & Act — a configured list omitting "op" allows it, keeps "stop" blocked
+        CommandExecutionManager configuredManager =
+                createManagerWithConfiguredBlocklist(Arrays.asList("stop", "deop"));
 
-            // Act — an explicit empty list is D-03's honest escape value: block nothing
-            CommandExecutionManager emptyBlocklistManager =
-                    createManagerWithConfiguredBlocklist(Collections.emptyList());
+        // Assert
+        assertThat(configuredManager.isCommandAllowed("op").isAllowed()).isTrue();
+        assertThat(configuredManager.isCommandAllowed("stop").isAllowed()).isFalse();
 
-            // Assert
-            assertThat(emptyBlocklistManager.isCommandAllowed("op").isAllowed()).isTrue();
-            assertThat(emptyBlocklistManager.isCommandAllowed("stop").isAllowed()).isTrue();
+        // Act — an explicit empty list is D-03's honest escape value: block nothing
+        CommandExecutionManager emptyBlocklistManager =
+                createManagerWithConfiguredBlocklist(Collections.emptyList());
 
-            // Act — an absent key is NOT the same as an empty list; it falls back to the
-            // shipped ten-command default (T-06-12)
-            CommandExecutionManager defaultManager = createManagerWithConfiguredBlocklist(null);
+        // Assert
+        assertThat(emptyBlocklistManager.isCommandAllowed("op").isAllowed()).isTrue();
+        assertThat(emptyBlocklistManager.isCommandAllowed("stop").isAllowed()).isTrue();
 
-            // Assert
-            assertThat(defaultManager.isCommandAllowed("op").isAllowed()).isFalse();
-            assertThat(defaultManager.isCommandAllowed("say hi").isAllowed()).isTrue();
-        }
+        // Act — an absent key is NOT the same as an empty list; it falls back to the
+        // shipped ten-command default (T-06-12)
+        CommandExecutionManager defaultManager = createManagerWithConfiguredBlocklist(null);
 
-        @Test
-        @DisplayName("should return a refusal that names its config key and file")
-        void shouldReturnRefusalWithConfigKey() {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
+        // Assert
+        assertThat(defaultManager.isCommandAllowed("op").isAllowed()).isFalse();
+        assertThat(defaultManager.isCommandAllowed("say hi").isAllowed()).isTrue();
+    }
 
-            // Act
-            AccessDecision decision = newManager.isCommandAllowed("op");
+    @Test
+    @DisplayName("should return a refusal that names its config key and file")
+    void shouldReturnRefusalWithConfigKey() {
+        // Arrange
+        CommandExecutionManager newManager = new CommandExecutionManager();
 
-            // Assert
-            assertThat(decision.isAllowed()).isFalse();
-            assertThat(decision.isConfigurable()).isTrue();
-            assertThat(decision.getConfigKey()).isEqualTo("ultipanel.commands.blocklist");
-            assertThat(decision.getMessage())
-                    .contains("ultipanel.commands.blocklist")
-                    .contains("plugins/UltiTools/config.yml");
-        }
+        // Act
+        AccessDecision decision = newManager.isCommandAllowed("op");
 
-        @Test
-        @DisplayName("should distinguish malformed input from a blocklist hit")
-        void shouldDistinguishMalformedInputFromBlocklistHit() {
-            // Arrange
-            CommandExecutionManager newManager = new CommandExecutionManager();
+        // Assert
+        assertThat(decision.isAllowed()).isFalse();
+        assertThat(decision.isConfigurable()).isTrue();
+        assertThat(decision.getConfigKey()).isEqualTo("ultipanel.commands.blocklist");
+        assertThat(decision.getMessage())
+                .contains("ultipanel.commands.blocklist")
+                .contains("plugins/UltiTools/config.yml");
+    }
 
-            // Act
-            AccessDecision blank = newManager.isCommandAllowed("   ");
-            AccessDecision nullCommand = newManager.isCommandAllowed(null);
-            AccessDecision blocked = newManager.isCommandAllowed("op");
+    @Test
+    @DisplayName("should distinguish malformed input from a blocklist hit")
+    void shouldDistinguishMalformedInputFromBlocklistHit() {
+        // Arrange
+        CommandExecutionManager newManager = new CommandExecutionManager();
 
-            // Assert — malformed input carries no config key, since no config change makes a
-            // blank command valid
-            assertThat(blank.isConfigurable()).isFalse();
-            assertThat(blank.getConfigKey()).isNull();
-            assertThat(nullCommand.isConfigurable()).isFalse();
-            assertThat(nullCommand.getConfigKey()).isNull();
-            assertThat(blocked.isConfigurable()).isTrue();
-            assertThat(blank.getReason()).isNotEqualTo(blocked.getReason());
-        }
+        // Act
+        AccessDecision blank = newManager.isCommandAllowed("   ");
+        AccessDecision nullCommand = newManager.isCommandAllowed(null);
+        AccessDecision blocked = newManager.isCommandAllowed("op");
 
-        @Test
-        @DisplayName("a command refused by isCommandAllowed should never reach dispatch, through any code path")
-        void refusedCommandShouldNeverReachDispatch() {
-            // Arrange — the only production call site for isCommandAllowed is executeCommand's
-            // own refusal branch; no other public method on this manager consults the blocklist
-            CommandExecutionManager configuredManager =
-                    createManagerWithConfiguredBlocklist(Collections.singletonList("help"));
-            configuredManager.setWebSocketClient(mockWebSocketClient);
+        // Assert — malformed input carries no config key, since no config change makes a
+        // blank command valid
+        assertThat(blank.isConfigurable()).isFalse();
+        assertThat(blank.getConfigKey()).isNull();
+        assertThat(nullCommand.isConfigurable()).isFalse();
+        assertThat(nullCommand.getConfigKey()).isNull();
+        assertThat(blocked.isConfigurable()).isTrue();
+        assertThat(blank.getReason()).isNotEqualTo(blocked.getReason());
+    }
 
-            JsonObject commandData = new JsonObject();
-            commandData.addProperty("command", "help");
-            commandData.addProperty("executor", "console");
-            commandData.addProperty("async", false);
-            commandData.addProperty("commandId", "guard-test");
+    @Test
+    @DisplayName("a command refused by isCommandAllowed should never reach dispatch, through any code path")
+    void refusedCommandShouldNeverReachDispatch() {
+        // Arrange — the only production call site for isCommandAllowed is executeCommand's
+        // own refusal branch; no other public method on this manager consults the blocklist
+        CommandExecutionManager configuredManager =
+                createManagerWithConfiguredBlocklist(Collections.singletonList("help"));
+        configuredManager.setWebSocketClient(mockWebSocketClient);
 
-            int initialTaskCount = server.getScheduler().getPendingTasks().size();
+        JsonObject commandData = new JsonObject();
+        commandData.addProperty("command", "help");
+        commandData.addProperty("executor", "console");
+        commandData.addProperty("async", false);
+        commandData.addProperty("commandId", "guard-test");
 
-            // Act
-            configuredManager.executeCommand(commandData);
+        int initialTaskCount = server.getScheduler().getPendingTasks().size();
 
-            // Assert
-            assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
-        }
+        // Act
+        configuredManager.executeCommand(commandData);
+
+        // Assert
+        assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
     }
 }
