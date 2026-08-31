@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 
 import com.ultikits.ultitools.UltiTools;
@@ -83,9 +84,23 @@ public class MethodInvocationCompleter implements TabCompleter {
     
     /**
      * Gets suggest methods by name from the executor class or @CmdSuggest classes.
+     * <p>
+     * {@code public static} (not {@code private}) so {@code PluginManager}'s load-time contract
+     * validation (T-05-fix Part 2) can resolve exactly the method this completer would invoke at
+     * completion time -- own class first, then {@code @CmdSuggest}-referenced classes -- without
+     * a second, independently-maintained lookup implementation. Neither this method nor {@link
+     * #findMethodsByName(Class, String)} reads instance state, so both are {@code static}.
+     * <p>
      * 从执行器类或 @CmdSuggest 类中按名称获取建议方法。
+     *
+     * @param executor    the executor instance whose class (and {@code @CmdSuggest}-referenced
+     *                    classes) is searched <br> 要搜索的执行器实例
+     * @param suggestName the {@code @CmdParam.suggest()} value, a plain method name (with or
+     *                    without a trailing {@code "()"}) <br> {@code @CmdParam.suggest()} 的值
+     * @return the matching methods, or {@code null} if none found <br> 匹配的方法，未找到则为
+     *         {@code null}
      */
-    private Method[] getSuggestMethodsByName(Object executor, String suggestName) {
+    public static Method[] getSuggestMethodsByName(Object executor, String suggestName) {
         if (executor == null) {
             return null;
         }
@@ -122,7 +137,7 @@ public class MethodInvocationCompleter implements TabCompleter {
      * Finds methods by name in a class.
      * 在类中按名称查找方法。
      */
-    private Method[] findMethodsByName(Class<?> clazz, String methodName) {
+    private static Method[] findMethodsByName(Class<?> clazz, String methodName) {
         // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
         // overrides, so a suggest method declared elsewhere in the class would silently stop being
         // found. See issue #190.
@@ -161,19 +176,56 @@ public class MethodInvocationCompleter implements TabCompleter {
                 return Collections.emptyList();
             }
             
-            // Invoke with appropriate parameters
+            // Invoke with appropriate parameters, dispatched on the SAME classification
+            // isInvocableSuggestSignature (and therefore PluginManager's load-time contract
+            // check, T-05-fix Part 2) uses -- one decision point, not two independently
+            // maintained lists of "which signatures are supported".
             Object result;
             Class<?>[] paramTypes = suggestMethod.getParameterTypes();
-            
-            if (paramTypes.length == 0) {
-                result = suggestMethod.invoke(target);
-            } else if (paramTypes.length == 3) {
-                // (Player, Command, String[])
-                result = suggestMethod.invoke(target, context.getPlayer(), context.getCommand(), context.getArgs());
-            } else if (paramTypes.length == 1 && paramTypes[0] == Player.class) {
-                result = suggestMethod.invoke(target, context.getPlayer());
-            } else {
-                result = suggestMethod.invoke(target);
+            SuggestSignatureShape shape = classifySuggestSignature(paramTypes);
+
+            switch (shape) {
+                case NO_ARGS:
+                    result = suggestMethod.invoke(target);
+                    break;
+                case PLAYER_ONLY:
+                    result = suggestMethod.invoke(target, context.getPlayer());
+                    break;
+                case STRING_ONLY:
+                    // (String) -- the current partial token being completed. Mirrors
+                    // UltiEssentials' BaseEssentialsCommand#suggestOnlinePlayers/
+                    // suggestOfflinePlayers/suggestAllPlayers(String prefix) (T-05-fix Part 1).
+                    result = suggestMethod.invoke(target, context.getCurrentInput());
+                    break;
+                case PLAYER_AND_STRING:
+                    // (Player, String) -- the shape 16 of UltiWorlds' 24 downstream call sites
+                    // use (suggestWorlds, suggestWorldTypes, suggestOptions, suggestBooleans,
+                    // suggestDifficulties). This is the real-machine-UAT regression: every one
+                    // of these previously fell into the unreachable-by-construction branch below
+                    // and was invoked with zero arguments, throwing IllegalArgumentException at
+                    // Tab-press time (T-05-fix Part 1).
+                    result = suggestMethod.invoke(target, context.getPlayer(), context.getCurrentInput());
+                    break;
+                case PLAYER_COMMAND_ARGS:
+                    result = suggestMethod.invoke(target, context.getPlayer(), context.getCommand(),
+                            context.getArgs());
+                    break;
+                case UNSUPPORTED:
+                default:
+                    // Unreachable by construction in a module that passed load --
+                    // PluginManager.validateCommandExecutorContract (T-05-fix Part 2) refuses to
+                    // load any module whose @CmdParam.suggest() method-name resolves to a
+                    // signature outside the five shapes above. If this IS reached anyway (e.g. a
+                    // signature that changed after load), fail loudly instead of silently
+                    // invoking with the wrong arity and swallowing the result -- that silent
+                    // wrong-invocation behaviour is exactly the defect class this fix exists to
+                    // eliminate, not a fallback to preserve.
+                    logger.log(Level.SEVERE, "Refusing to invoke suggest method with an unsupported "
+                            + "signature (this should have been refused at load time): "
+                            + declaringClass.getName() + "#" + suggestMethod.getName() + " has "
+                            + paramTypes.length + " parameter(s). Supported signatures: (), (Player), "
+                            + "(String), (Player, String), (Player, Command, String[]).");
+                    return Collections.emptyList();
             }
             
             // Convert result to list
@@ -204,5 +256,65 @@ public class MethodInvocationCompleter implements TabCompleter {
             logger.log(Level.WARNING, "Failed to invoke suggest method: " + suggestMethod.getName(), e);
             return Collections.emptyList();
         }
+    }
+
+    /**
+     * The signature shapes {@link #invokeSuggestMethod(TabCompletionContext, Method)} knows how
+     * to invoke a {@code @CmdParam.suggest()} method-name target with.
+     */
+    private enum SuggestSignatureShape {
+        NO_ARGS,
+        PLAYER_ONLY,
+        STRING_ONLY,
+        PLAYER_AND_STRING,
+        PLAYER_COMMAND_ARGS,
+        UNSUPPORTED
+    }
+
+    /**
+     * Classifies {@code paramTypes} into the signature shape {@link
+     * #invokeSuggestMethod(TabCompletionContext, Method)} dispatches on. This is the SINGLE
+     * decision point both invocation and load-time validation (via {@link
+     * #isInvocableSuggestSignature(Class[])}) consult -- there is deliberately no second,
+     * independently-maintained list of "which signatures are supported" for the two to drift out
+     * of sync (T-05-fix Part 1 + Part 2).
+     *
+     * @param paramTypes the candidate suggest method's parameter types
+     * @return the matching shape, or {@link SuggestSignatureShape#UNSUPPORTED} if none match
+     */
+    private static SuggestSignatureShape classifySuggestSignature(Class<?>[] paramTypes) {
+        if (paramTypes.length == 0) {
+            return SuggestSignatureShape.NO_ARGS;
+        }
+        if (paramTypes.length == 1 && paramTypes[0] == Player.class) {
+            return SuggestSignatureShape.PLAYER_ONLY;
+        }
+        if (paramTypes.length == 1 && paramTypes[0] == String.class) {
+            return SuggestSignatureShape.STRING_ONLY;
+        }
+        if (paramTypes.length == 2 && paramTypes[0] == Player.class && paramTypes[1] == String.class) {
+            return SuggestSignatureShape.PLAYER_AND_STRING;
+        }
+        if (paramTypes.length == 3 && paramTypes[0] == Player.class && paramTypes[1] == Command.class
+                && paramTypes[2] == String[].class) {
+            return SuggestSignatureShape.PLAYER_COMMAND_ARGS;
+        }
+        return SuggestSignatureShape.UNSUPPORTED;
+    }
+
+    /**
+     * Whether {@link #invokeSuggestMethod(TabCompletionContext, Method)} can invoke a method with
+     * exactly {@code paramTypes}. Exposed so {@code PluginManager}'s load-time contract check
+     * (T-05-fix Part 2) can refuse a module whose {@code @CmdParam.suggest()} method-name value
+     * resolves to a signature this completer cannot call -- naming the class, the mapping method
+     * and the offending signature at load time, rather than invoking it with the wrong arity the
+     * first time a player presses Tab.
+     *
+     * @param paramTypes the candidate suggest method's parameter types
+     * @return {@code true} if this completer knows how to invoke a method with this exact
+     *         parameter list
+     */
+    public static boolean isInvocableSuggestSignature(Class<?>[] paramTypes) {
+        return classifySuggestSignature(paramTypes) != SuggestSignatureShape.UNSUPPORTED;
     }
 }
