@@ -88,6 +88,46 @@ public class PluginInitiationUtils {
             ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
 
     /**
+     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
+     * that serves it.
+     * <p>
+     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
+     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
+     * finding). A switch multiplies independent path counts by the number of branches; a lookup
+     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
+     * rather than by how many message types exist. Built once, statically, and never mutated after
+     * construction — see {@link #buildInboundHandlers()}.
+     * <p>
+     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
+     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
+     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
+     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
+     * this repository already has twice, in its command-executor and GUI generations.
+     * <p>
+     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
+     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
+     */
+    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
+            Collections.unmodifiableMap(buildInboundHandlers());
+
+    /**
+     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
+     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
+     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
+     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
+     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
+     * ever hitting this warning at runtime.
+     */
+    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
+
+    // Both fields above are declared here — rather than at their original, method-adjacent
+    // positions — so that all field declarations precede all methods (PMD
+    // FieldDeclarationsShouldBeAtStartOfClass). Both initializers are static-method-call /
+    // literal expressions with no dependency on declaration order relative to other members
+    // (buildInboundHandlers() does not reference cloudEnabled/reinitBackoff/etc.; see the
+    // Phase 06 Codacy remediation commit for the verification).
+
+    /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
      * Registers or updates the server without needing username/password.
      * <br>
@@ -223,29 +263,6 @@ public class PluginInitiationUtils {
     /**
      * 初始化所有管理器
      */
-    /**
-     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
-     * that serves it.
-     * <p>
-     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
-     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
-     * finding). A switch multiplies independent path counts by the number of branches; a lookup
-     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
-     * rather than by how many message types exist. Built once, statically, and never mutated after
-     * construction — see {@link #buildInboundHandlers()}.
-     * <p>
-     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
-     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
-     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
-     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
-     * this repository already has twice, in its command-executor and GUI generations.
-     * <p>
-     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
-     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
-     */
-    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
-            Collections.unmodifiableMap(buildInboundHandlers());
-
     /**
      * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
      * before it runs (D-10), and with which side records that decision's verdict in the
@@ -735,6 +752,13 @@ public class PluginInitiationUtils {
      * @param throwable the throwable to describe
      * @return a human-readable description, never {@code null}
      */
+    // PMD.CompareObjectsWithEquals: deliberate reference-identity check, not a false economy.
+    // This walks a cause chain looking for a self-referential cycle (getCause() returning the
+    // same instance) — reference identity is precisely what must be tested here, and
+    // Throwable does not override equals(), so .equals() would behave identically while
+    // *saying* something the code does not mean (value equality, not "is this the same object
+    // I started from").
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static String rootCauseMessage(Throwable throwable) {
         Throwable deepest = throwable;
         while (deepest.getCause() != null && deepest.getCause() != deepest) {
@@ -797,16 +821,6 @@ public class PluginInitiationUtils {
                 "[PanelMessageEvent] Failed to publish event for type " + type, e);
         }
     }
-
-    /**
-     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
-     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
-     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
-     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
-     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
-     * ever hitting this warning at runtime.
-     */
-    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
 
     /**
      * The single enforcement point for every inbound capability (D-10). Resolves the entry's
