@@ -9,6 +9,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
@@ -357,6 +359,56 @@ class AbstractConfigEntityTest {
         public void setNonAnnotatedField(String nonAnnotatedField) {
             this.nonAnnotatedField = nonAnnotatedField;
         }
+    }
+
+    /**
+     * 测试携带 {@code Map} 字段的配置实体 —— Phase 06 UAT 发现的
+     * {@code InaccessibleObjectException} 复现载体：{@code save()} 对该字段值调用的
+     * {@code DefaultConfigParser}（默认解析器）在 Java 16+ 上会因为反射进入
+     * {@code LinkedHashMap} 自身的实现字段而抛出该异常。
+     */
+    private static class TestConfigEntityWithMap extends AbstractConfigEntity {
+        @ConfigEntry(path = "settings", comment = "Arbitrary key-value settings")
+        private Map<String, String> settings = new LinkedHashMap<>();
+
+        public TestConfigEntityWithMap(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public Map<String, String> getSettings() {
+            return settings;
+        }
+
+        public void setSettings(Map<String, String> settings) {
+            this.settings = settings;
+        }
+    }
+
+    @Test
+    @DisplayName("Should save and reload a Map-typed config field without reflecting into JDK internals")
+    void testSaveMapTypedFieldSurvivesRoundTrip() throws IOException {
+        TestConfigEntityWithMap entity = new TestConfigEntityWithMap("map-config.yml");
+        entity.init(mockPlugin);
+
+        Map<String, String> populated = new LinkedHashMap<>();
+        populated.put("alpha", "one");
+        populated.put("beta", "two");
+        entity.setSettings(populated);
+
+        // Exactly the call chain UltiTools.onDisable() -> ConfigManager.saveAll() ->
+        // AbstractConfigEntity.save() exercises for every module config on shutdown.
+        assertThatCode(entity::save).doesNotThrowAnyException();
+
+        File savedFile = new File(tempDir.toFile(), "map-config.yml");
+        YamlConfiguration config = YamlConfiguration.loadConfiguration(savedFile);
+        assertThat(config.getString("settings.alpha")).isEqualTo("one");
+        assertThat(config.getString("settings.beta")).isEqualTo("two");
+
+        // Round trip: what save() wrote, a fresh init() must read back as an equal map -
+        // not just "no exception".
+        TestConfigEntityWithMap reloaded = new TestConfigEntityWithMap("map-config.yml");
+        reloaded.init(mockPlugin);
+        assertThat(reloaded.getSettings()).isEqualTo(populated);
     }
 
     // ==================== 四个遍历方法必须对得上 ====================
