@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -12,11 +14,13 @@ import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -27,6 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.ArgumentCaptor;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -341,6 +346,114 @@ class PanelMessageEventDispatchTest {
             invokeHandleInboundMessage(notificationMessage("hi"));
 
             assertThatCode(() -> server.getScheduler().performOneTick()).doesNotThrowAnyException();
+        }
+    }
+
+    /**
+     * Task 3 — naming a slow subscriber, because the main-thread hop {@link PublishBridge} wires
+     * up is what makes a slow subscriber able to cost tick rate at all. Kept as its own nested
+     * group with its own MockBukkit/EventBus setup, mirroring {@link PublishBridge}, rather than
+     * folded into it — the elapsed-time assertions here need control over which subscribers are
+     * slow per test, which would otherwise interact with {@code PublishBridge}'s shared {@code
+     * received} list.
+     */
+    @Nested
+    @DisplayName("慢处理器告警")
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    class SlowHandlerWarning {
+
+        private ServerMock server;
+        private EventBus eventBus;
+        private Logger mockLogger;
+        private UltiPanelWebSocketClient mockPanelWs;
+        private Object previousPanelWs;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            MockBukkitHelper.ensureCleanState();
+            server = MockBukkit.mock();
+            MockBukkit.createMockPlugin();
+
+            eventBus = new EventBus();
+
+            mockLogger = mock(Logger.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(emptyConfig());
+                lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
+            });
+
+            mockPanelWs = mock(UltiPanelWebSocketClient.class);
+            lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
+            previousPanelWs = setPanelWs(mockPanelWs);
+        }
+
+        @AfterEach
+        void tearDown() throws Exception {
+            setPanelWs(previousPanelWs);
+            eventBus.shutdown();
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+            MockBukkitHelper.safeUnmock();
+        }
+
+        /** Every {@code [PanelMessageEvent]}-tagged WARNING line logged so far. */
+        private List<String> slowHandlerWarnings() {
+            ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+            verify(mockLogger, atLeast(0)).log(eq(Level.WARNING), captor.capture());
+            List<String> tagged = new ArrayList<>();
+            for (String line : captor.getAllValues()) {
+                if (line.contains("[PanelMessageEvent]")) {
+                    tagged.add(line);
+                }
+            }
+            return tagged;
+        }
+
+        /** Sleeps comfortably past the threshold without hard-coding its exact value here. */
+        private void sleepPastThreshold() {
+            try {
+                Thread.sleep(30);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Test
+        @DisplayName("快速订阅者：不记录任何告警")
+        void fastSubscriberLogsNoWarning() throws Exception {
+            eventBus.subscribe(PanelMessageEvent.class, event -> { /* fast — does nothing */ });
+
+            invokeHandleInboundMessage(notificationMessage("hi"));
+            server.getScheduler().performOneTick();
+
+            assertThat(slowHandlerWarnings()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("慢订阅者：恰好记一条告警，命名消息类型")
+        void slowSubscriberLogsExactlyOneWarningNamingType() throws Exception {
+            eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
+
+            invokeHandleInboundMessage(notificationMessage("hi"));
+            server.getScheduler().performOneTick();
+
+            List<String> warnings = slowHandlerWarnings();
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0)).contains("notification");
+        }
+
+        @Test
+        @DisplayName("两个慢订阅者：只记一条告警，不是每个订阅者一条")
+        void twoSlowSubscribersLogExactlyOneWarning() throws Exception {
+            eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
+            eventBus.subscribe(PanelMessageEvent.class, event -> sleepPastThreshold());
+
+            invokeHandleInboundMessage(notificationMessage("hi"));
+            server.getScheduler().performOneTick();
+
+            assertThat(slowHandlerWarnings()).hasSize(1);
         }
     }
 
