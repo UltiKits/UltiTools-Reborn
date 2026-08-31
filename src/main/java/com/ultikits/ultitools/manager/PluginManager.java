@@ -61,6 +61,7 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -394,6 +395,14 @@ public class PluginManager {
         EventBus eventBus = UltiTools.getInstance().getEventBus();
         if (eventBus != null) {
             eventBus.unregisterAll(plugin.getPluginName());
+        }
+        // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08 Task
+        // 3) — mirrors the EventBus.unregisterAll call immediately above; a responder left behind
+        // by an unloaded module would go on answering panel requests with code whose classloader
+        // is gone.
+        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.unregisterAll(plugin.getPluginName());
         }
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
@@ -2442,6 +2451,15 @@ public class PluginManager {
         EventBus eventBus = UltiTools.getInstance().getEventBus();
         if (eventBus != null) {
             eventBus.unregisterAll(pluginName);
+        }
+
+        // Unregister this external plugin's panel message responders (WIRE-16, D-26/D-27, Plan
+        // 06-08 Task 3) — the second of the two existing unload call sites; EventBus.unregisterAll
+        // itself is called from both, and a responder left behind here would go on answering panel
+        // requests with code whose classloader is gone, exactly like the in-process path above.
+        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.unregisterAll(pluginName);
         }
 
         // Unregister commands and listeners
