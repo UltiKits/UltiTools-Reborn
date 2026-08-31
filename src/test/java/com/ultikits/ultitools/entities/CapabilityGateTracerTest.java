@@ -180,7 +180,8 @@ class CapabilityGateTracerTest {
         }
 
         @Test
-        @DisplayName("commands 启用时：handler 被调用一次，记一条 ALLOWED，不发送拒绝消息")
+        @DisplayName("commands 启用时：handler 被调用一次，网关自身不再记录（CR-01：execute_command"
+                + " 由处理器自己的 AccessDecision 检查记录裁决），不发送拒绝消息")
         void allowedWhenCommandsEnabled() throws Exception {
             lenient().when(UltiTools.getInstance().getConfig())
                     .thenReturn(configWith("ultipanel.capabilities.commands", true));
@@ -190,14 +191,13 @@ class CapabilityGateTracerTest {
             verify(mockCommandExecutionManager, times(1)).executeCommand(any());
             verify(mockPanelWs, never()).sendMessage(any());
 
-            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
-            RemoteActionLog.Entry entry = entryCaptor.getValue();
-            assertThat(entry.getCapability()).isEqualTo("COMMANDS");
-            assertThat(entry.getAction()).isEqualTo("execute_command");
-            assertThat(entry.getTarget()).isEqualTo("say hi");
-            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
-            assertThat(entry.getReason()).isNull();
+            // CR-01 (06-REVIEW.md): execute_command declares VerdictRecorder.HANDLER — the real
+            // CommandExecutionManager.executeCommand() records its own ALLOWED/DENIED verdict from
+            // its own isCommandAllowed() check, so dispatchWithCapabilityGate must not also record
+            // one here. This mock never calls record() itself, so zero interactions is exactly the
+            // fixed behaviour; see CapabilityGateRealCollaboratorsTest for the real-collaborators
+            // proof that only one entry (the handler's) survives.
+            verify(mockRemoteActionLog, never()).record(any());
         }
     }
 
@@ -241,17 +241,18 @@ class CapabilityGateTracerTest {
         }
 
         @Test
-        @DisplayName("operation=read 解析为 FILE_READ（默认开启 -> 放行）")
+        @DisplayName("operation=read 解析为 FILE_READ（默认开启 -> 放行），网关自身不再记录"
+                + "（CR-01：file_operation 由处理器自己的 recordFileDecision 记录裁决）")
         void readResolvesToFileReadAndIsAllowedByDefault() throws Exception {
             invokeHandleInboundMessage(fileOperationMessage("read", "x"));
 
             verify(mockFileOperationManager, times(1)).handleFileOperation(any());
 
-            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
-            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
-            RemoteActionLog.Entry entry = entryCaptor.getValue();
-            assertThat(entry.getCapability()).isEqualTo("FILE_READ");
-            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            // CR-01 (06-REVIEW.md): file_operation declares VerdictRecorder.HANDLER — the real
+            // FileOperationManager.handleFileOperation() records its own verdict via
+            // recordFileDecision() from its own isPathAllowed() check, so
+            // dispatchWithCapabilityGate must not also record one here.
+            verify(mockRemoteActionLog, never()).record(any());
         }
     }
 

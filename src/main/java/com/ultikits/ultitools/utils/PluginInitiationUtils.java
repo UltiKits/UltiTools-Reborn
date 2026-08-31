@@ -248,44 +248,57 @@ public class PluginInitiationUtils {
 
     /**
      * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
-     * before it runs (D-10).
+     * before it runs (D-10), and with which side records that decision's verdict in the
+     * {@link RemoteActionLog} (CR-01, 06-REVIEW.md).
      * <p>
-     * Exposes exactly two static factories and no capability-free construction path — this is the
-     * whole point of D-10: adding a message type to {@link #INBOUND_HANDLERS} without declaring a
-     * capability must fail to compile, so no single-argument overload, default, or null-tolerant
-     * constructor is ever added here. {@link #of(Capability, BiConsumer)} covers the 23 entries whose
-     * capability is fixed by the message {@code type} alone; {@link #resolved(Function, BiConsumer)}
-     * covers {@code file_operation}, the one entry whose capability depends on the message's
-     * {@code operation} field rather than its {@code type}.
+     * Exposes exactly two static factories and no capability-free, verdict-recorder-free
+     * construction path — this is the whole point of D-10: adding a message type to
+     * {@link #INBOUND_HANDLERS} without declaring a capability, or without declaring which side
+     * records its verdict, fails to compile, so no two-argument overload, default, or
+     * null-tolerant constructor is ever added here. {@link #of(Capability, VerdictRecorder,
+     * BiConsumer)} covers the 23 entries whose capability is fixed by the message {@code type}
+     * alone; {@link #resolved(Function, VerdictRecorder, BiConsumer)} covers {@code
+     * file_operation}, the one entry whose capability depends on the message's {@code operation}
+     * field rather than its {@code type}.
      * <p>
-     * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability} 绑在一起（D-10）。只
-     * 暴露两个静态工厂，没有任何绕开能力声明的构造路径——新增消息类型若不声明能力就无法编译。
+     * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability}、以及「由哪一侧记录裁决」
+     * 绑在一起（D-10, CR-01）。只暴露两个静态工厂，没有任何绕开能力声明或记录方声明的构造路径——
+     * 新增消息类型若不声明这两者就无法编译。
      */
     static final class InboundHandlerEntry {
         private final Capability capability;
         private final Function<JsonObject, Capability> resolver;
+        private final VerdictRecorder verdictRecorder;
         private final BiConsumer<JsonObject, JsonObject> handler;
 
         private InboundHandlerEntry(Capability capability, Function<JsonObject, Capability> resolver,
-                                     BiConsumer<JsonObject, JsonObject> handler) {
+                                     VerdictRecorder verdictRecorder, BiConsumer<JsonObject, JsonObject> handler) {
             this.capability = capability;
             this.resolver = resolver;
+            this.verdictRecorder = verdictRecorder;
             this.handler = handler;
         }
 
         /**
          * An entry whose capability is a fixed constant.
          *
-         * @param capability the required capability — use {@link Capability#NONE} for protocol-level
-         *                   and echo messages that carry no operator-facing policy
-         * @param handler    the handler to invoke once the gate clears
+         * @param capability      the required capability — use {@link Capability#NONE} for
+         *                        protocol-level and echo messages that carry no operator-facing
+         *                        policy
+         * @param verdictRecorder which side records the enabled-branch verdict — see
+         *                        {@link VerdictRecorder}
+         * @param handler         the handler to invoke once the gate clears
          * @return the entry
          */
-        static InboundHandlerEntry of(Capability capability, BiConsumer<JsonObject, JsonObject> handler) {
+        static InboundHandlerEntry of(Capability capability, VerdictRecorder verdictRecorder,
+                                       BiConsumer<JsonObject, JsonObject> handler) {
             if (capability == null) {
                 throw new IllegalArgumentException("capability must not be null — declare Capability.NONE explicitly");
             }
-            return new InboundHandlerEntry(capability, null, handler);
+            if (verdictRecorder == null) {
+                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
+            }
+            return new InboundHandlerEntry(capability, null, verdictRecorder, handler);
         }
 
         /**
@@ -293,16 +306,23 @@ public class PluginInitiationUtils {
          * {@code file_operation} case, whose true capability depends on the {@code operation} field
          * (D-10's resolver case, D-09).
          *
-         * @param resolver a function from the message's {@code data} to the {@link Capability} it requires
-         * @param handler  the handler to invoke once the gate clears
+         * @param resolver        a function from the message's {@code data} to the
+         *                        {@link Capability} it requires
+         * @param verdictRecorder which side records the enabled-branch verdict — see
+         *                        {@link VerdictRecorder}
+         * @param handler         the handler to invoke once the gate clears
          * @return the entry
          */
-        static InboundHandlerEntry
-                resolved(Function<JsonObject, Capability> resolver, BiConsumer<JsonObject, JsonObject> handler) {
+        static InboundHandlerEntry resolved(Function<JsonObject, Capability> resolver,
+                                             VerdictRecorder verdictRecorder,
+                                             BiConsumer<JsonObject, JsonObject> handler) {
             if (resolver == null) {
                 throw new IllegalArgumentException("resolver must not be null — declare a Capability.of(...) entry instead");
             }
-            return new InboundHandlerEntry(null, resolver, handler);
+            if (verdictRecorder == null) {
+                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
+            }
+            return new InboundHandlerEntry(null, resolver, verdictRecorder, handler);
         }
 
         /**
@@ -318,6 +338,49 @@ public class PluginInitiationUtils {
         BiConsumer<JsonObject, JsonObject> getHandler() {
             return handler;
         }
+
+        /**
+         * Whether this entry's own handler already records its {@link RemoteActionLog} verdict —
+         * see {@link VerdictRecorder#HANDLER}.
+         *
+         * @return {@code true} if the handler records its own verdict, so
+         *         {@link #dispatchWithCapabilityGate} must not record a second, blanket entry
+         */
+        boolean recordsOwnVerdict() {
+            return verdictRecorder == VerdictRecorder.HANDLER;
+        }
+    }
+
+    /**
+     * Which side of a capability-gated dispatch records the {@link RemoteActionLog} verdict for
+     * the enabled branch (CR-01, 06-REVIEW.md).
+     * <p>
+     * Exactly two entries — {@code execute_command} and {@code file_operation} — invoke a handler
+     * that performs its own, independent, finer-grained {@code AccessDecision} check
+     * ({@code CommandExecutionManager#isCommandAllowed}/{@code FileOperationManager#isPathAllowed})
+     * and records its own verdict from that check; every other capability-gated entry has no
+     * second policy layer to conflict with. Before this enum existed,
+     * {@code dispatchWithCapabilityGate} recorded a blanket {@code ALLOWED} entry on every enabled
+     * branch regardless of which case it was, producing a contradictory second log line — a real
+     * {@code DENIED} from the handler's own check immediately followed by a false {@code ALLOWED}
+     * from the gate — for every blocklisted command and every credential/out-of-root file request.
+     * A required, compile-forced field (verified by inspecting every entry's handler for its own
+     * {@link RemoteActionLog} write) is what stops a newly added entry from silently repeating that
+     * mistake, rather than a defaulted or inferred value.
+     */
+    enum VerdictRecorder {
+        /**
+         * {@link #dispatchWithCapabilityGate} records the {@link RemoteActionLog.Verdict#ALLOWED}
+         * entry on the enabled branch — the default shape for an entry with no second policy
+         * layer.
+         */
+        GATE,
+        /**
+         * The handler records its own verdict from its own, finer-grained {@code AccessDecision}
+         * check — {@link #dispatchWithCapabilityGate} must not also record one, or the log gets
+         * two contradictory lines for one request.
+         */
+        HANDLER
     }
 
     /**
@@ -332,70 +395,84 @@ public class PluginInitiationUtils {
         Map<String, InboundHandlerEntry> handlers = new HashMap<>();
 
         // 系统基础消息 —— 协议层/回声消息，显式声明 Capability.NONE（D-10）：从不拦截，从不记录。
-        handlers.put("ping", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handlePing(message)));
-        handlers.put("pong", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handlePong(data)));
-        handlers.put("subscribe", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleSubscribe(data)));
-        handlers.put("unsubscribe", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleUnsubscribe(data)));
-        handlers.put("notification", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleNotification(data)));
-        handlers.put("error", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleError(data)));
+        // NONE 分支从不到达 recordAction，VerdictRecorder 的取值在此不生效，统一声明 GATE。
+        handlers.put("ping",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePing(message)));
+        handlers.put("pong",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePong(data)));
+        handlers.put("subscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleSubscribe(data)));
+        handlers.put("unsubscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleUnsubscribe(data)));
+        handlers.put("notification", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleNotification(data)));
+        handlers.put("error",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handleError(data)));
 
-        // 服务器监控消息
-        handlers.put("server_status",
-                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handleServerStatusRequest(data)));
-        handlers.put("plugin_list",
-                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handlePluginListRequest(data)));
-        handlers.put("player_event",
-                InboundHandlerEntry.of(Capability.PLAYER_EVENTS, (message, data) -> handlePlayerEvent(data)));
-        handlers.put("metrics_data",
-                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handleMetricsRequest(data)));
+        // 服务器监控消息 —— 处理器不做第二层裁决，网关记录 ALLOWED（VerdictRecorder.GATE）。
+        handlers.put("server_status", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handleServerStatusRequest(data)));
+        handlers.put("plugin_list", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handlePluginListRequest(data)));
+        handlers.put("player_event", InboundHandlerEntry.of(Capability.PLAYER_EVENTS, VerdictRecorder.GATE,
+                (message, data) -> handlePlayerEvent(data)));
+        handlers.put("metrics_data", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handleMetricsRequest(data)));
 
-        // 操作控制消息
-        handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS,
+        // 操作控制消息 —— execute_command 的处理器自己做 isCommandAllowed() 二次裁决并自己记录
+        // 结果（CommandExecutionManager.executeCommand），因此声明 VerdictRecorder.HANDLER（CR-01）。
+        handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS, VerdictRecorder.HANDLER,
                 (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data)));
-        handlers.put("command_result",
-                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleCommandResult(data)));
+        handlers.put("command_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleCommandResult(data)));
         // file_operation 的能力取决于 data.operation，不是常量 —— D-10 的 resolver 场景（D-09）。
+        // 处理器自己做 isPathAllowed() 二次裁决并自己记录结果（FileOperationManager.recordFileDecision），
+        // 因此同样声明 VerdictRecorder.HANDLER（CR-01）。
         handlers.put("file_operation", InboundHandlerEntry.resolved(
-                PluginInitiationUtils::resolveFileOperationCapability,
+                PluginInitiationUtils::resolveFileOperationCapability, VerdictRecorder.HANDLER,
                 (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data)));
-        handlers.put("file_operation_result",
-                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleFileOperationResult(data)));
+        handlers.put("file_operation_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleFileOperationResult(data)));
 
         // 数据流消息 —— log_stream 与 log_stream_control 共享同一个处理器，
-        // 这是原先两个 case 标签之间 fall-through 的等价写法。
+        // 这是原先两个 case 标签之间 fall-through 的等价写法。处理器不做第二层裁决。
         BiConsumer<JsonObject, JsonObject> logStreamHandler =
                 (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-        handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, logStreamHandler));
-        handlers.put("log_stream_control", InboundHandlerEntry.of(Capability.LOGS, logStreamHandler));
+        handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
+        handlers.put("log_stream_control",
+                InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
         // backup_operation 是今天的纯日志占位符，但其声明意图是产出文件的操作 —— 因此按更严格
-        // 的一侧声明为 FILE_WRITE，而不是等桩实现落地时才回头改声明。
-        handlers.put("backup_operation",
-                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleBackupOperation(data)));
-        handlers.put("backup_progress",
-                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleBackupProgress(data)));
+        // 的一侧声明为 FILE_WRITE，而不是等桩实现落地时才回头改声明。处理器不做第二层裁决。
+        handlers.put("backup_operation", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleBackupOperation(data)));
+        handlers.put("backup_progress", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleBackupProgress(data)));
 
-        // 配置管理消息
-        handlers.put("upload_config",
-                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleConfigUpload(data)));
-        handlers.put("update_config",
-                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleConfigUpdate(data)));
-        handlers.put("server_properties", InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, (message, data) -> {
-            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
-            }
-        }));
-        handlers.put("server_properties_result", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
+        // 配置管理消息 —— 处理器不做第二层裁决。
+        handlers.put("upload_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleConfigUpload(data)));
+        handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleConfigUpdate(data)));
+        handlers.put("server_properties",
+                InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, VerdictRecorder.GATE, (message, data) -> {
+                    if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                        UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+                    }
+                }));
+        handlers.put("server_properties_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) ->
                 // Response from this plugin forwarded back by DO — ignore silently
                 UltiTools.getInstance().getLogger().log(Level.FINE,
                         "Received server_properties_result echo — ignoring")));
 
         // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-        handlers.put("auth_complete", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
+        handlers.put("auth_complete", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
                 UltiTools.getInstance().getLogger().log(Level.FINE,
                         "Received auth_complete message: " + (data != null ? data.toString() : "null"))));
-        handlers.put("magic_link_response", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received magic_link_response message: " + (data != null ? data.toString() : "null"))));
+        handlers.put("magic_link_response",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                                "Received magic_link_response message: " + (data != null ? data.toString() : "null"))));
 
         return handlers;
     }
@@ -716,10 +793,17 @@ public class PluginInitiationUtils {
     /**
      * The single enforcement point for every inbound capability (D-10). Resolves the entry's
      * required capability against {@code data}; {@link Capability#NONE} runs the handler with no
-     * check and no action-log entry. Otherwise: enabled runs the handler and records one
-     * {@link RemoteActionLog.Verdict#ALLOWED} entry; disabled sends one {@code capability_denied}
-     * reply and records one {@link RemoteActionLog.Verdict#DENIED} entry — the handler is never
-     * invoked on the denied path.
+     * check and no action-log entry. Otherwise: enabled runs the handler and, unless the entry's
+     * own handler already records its verdict ({@link InboundHandlerEntry#recordsOwnVerdict()},
+     * CR-01), records one {@link RemoteActionLog.Verdict#ALLOWED} entry; disabled sends one
+     * {@code capability_denied} reply and records one {@link RemoteActionLog.Verdict#DENIED} entry
+     * — the handler is never invoked on the denied path, so there is only ever one writer there.
+     * <p>
+     * {@code execute_command} and {@code file_operation} are the two entries whose handler performs
+     * its own, finer-grained {@code AccessDecision} check and records its own verdict from that
+     * check — recording a second, blanket {@code ALLOWED} entry here for those two would produce a
+     * contradictory second log line (see 06-REVIEW.md CR-01) for every blocklisted command and
+     * every credential/out-of-root file request.
      *
      * @param type    the message type, used for the action-log {@code action} and the refusal payload
      * @param message the full inbound message
@@ -739,7 +823,9 @@ public class PluginInitiationUtils {
         }
         if (capability.isEnabled()) {
             entry.getHandler().accept(message, data);
-            recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
+            if (!entry.recordsOwnVerdict()) {
+                recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
+            }
             return true;
         }
         sendCapabilityRefusal(type, data, capability);
