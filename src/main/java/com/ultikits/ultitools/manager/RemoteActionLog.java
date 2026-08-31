@@ -13,6 +13,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 
 /**
@@ -61,16 +62,18 @@ public class RemoteActionLog {
 
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
+    private volatile int maxSizeBytes = DEFAULT_MAX_SIZE_BYTES;
+    private volatile int maxFiles = DEFAULT_MAX_FILES;
+
     /**
      * Attaches the rotating {@link FileHandler} at
      * {@code <dataFolder>/security/action.log.%g}, creating the {@code security} directory if
-     * absent. Rotation limit and count are fixed at {@value #DEFAULT_MAX_SIZE_BYTES} bytes and
-     * {@value #DEFAULT_MAX_FILES} files in this task; a later task makes them operator-configurable
-     * under {@code ultipanel.logging.action-log.*}.
+     * absent. Loads the rotation knobs from config.yml first — see {@link #loadConfiguration()}.
      *
      * @param dataFolder the plugin's data folder ({@code getDataFolder()})
      */
     public void init(File dataFolder) {
+        loadConfiguration();
         try {
             File securityDir = new File(dataFolder, "security");
             if (!securityDir.exists() && !securityDir.mkdirs()) {
@@ -79,14 +82,40 @@ public class RemoteActionLog {
                 return;
             }
             File logPattern = new File(securityDir, "action.log.%g");
-            FileHandler handler = new FileHandler(logPattern.getPath(),
-                    DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES, true);
+            FileHandler handler = new FileHandler(logPattern.getPath(), maxSizeBytes, maxFiles, true);
             handler.setFormatter(new JsonLineFormatter(gson));
             handler.setLevel(Level.ALL);
             ACTION_LOG.addHandler(handler);
         } catch (IOException | SecurityException e) {
             // NEVER use Logger here — this failure is about the log itself.
             System.err.println("[UltiPanel] RemoteActionLog: failed to attach file handler: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Loads {@code ultipanel.logging.action-log.max-size-bytes} and {@code .max-files}, copying
+     * {@code ErrorReportCollector.loadConfiguration()}'s exact shape: {@link UltiTools#getInstance()}
+     * null-guard, {@code instance.getConfig().getInt(path, default)} per key, one try/catch whose
+     * failure branch prints to {@link System#err} and never to a {@link Logger} — this failure is
+     * about loading config for this very log, so it cannot log through itself. There is
+     * deliberately no {@code enabled} key here and no {@link Capability} consulted — D-32 makes
+     * this log's existence non-negotiable for the operator, a narrow exception to the D-04
+     * no-floor rule (which governs which commands may run, not whether the record of what ran
+     * survives).
+     */
+    private void loadConfiguration() {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance == null) {
+                return;
+            }
+            maxSizeBytes = instance.getConfig().getInt(
+                    "ultipanel.logging.action-log.max-size-bytes", DEFAULT_MAX_SIZE_BYTES);
+            maxFiles = instance.getConfig().getInt(
+                    "ultipanel.logging.action-log.max-files", DEFAULT_MAX_FILES);
+        } catch (Exception e) {
+            // NEVER use Logger here — this failure is about the log itself.
+            System.err.println("[UltiPanel] RemoteActionLog: failed to load config: " + e.getMessage());
         }
     }
 

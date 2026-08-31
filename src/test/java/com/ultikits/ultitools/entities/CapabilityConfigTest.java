@@ -180,9 +180,10 @@ class CapabilityConfigTest {
         }
 
         @Test
-        @DisplayName("八个键都已存在：文件完全不被写入")
-        void doesNotWriteWhenAllEightKeysAlreadyExist() throws Exception {
-            StringBuilder content = new StringBuilder("ultipanel:\n  capabilities:\n");
+        @DisplayName("本次迁移涉及的全部键都已存在：文件完全不被写入")
+        void doesNotWriteWhenEveryMigratedKeyAlreadyExists() throws Exception {
+            StringBuilder content = new StringBuilder(
+                    "ultipanel:\n  capabilities:\n");
             for (Capability capability : Capability.values()) {
                 if (capability.getConfigKey() == null) {
                     continue;
@@ -190,6 +191,11 @@ class CapabilityConfigTest {
                 content.append("    ").append(capability.getConfigKey()).append(": ")
                         .append(capability.getDefaultEnabled()).append('\n');
             }
+            content.append("  commands:\n    blocklist: []\n")
+                    .append("  files:\n    editable-roots: []\n")
+                    .append("  logging:\n    action-log:\n")
+                    .append("      max-size-bytes: 1048576\n")
+                    .append("      max-files: 5\n");
             File configFile = writeConfig(tempDir, content.toString());
             long beforeModified = configFile.lastModified();
             byte[] beforeBytes = Files.readAllBytes(configFile.toPath());

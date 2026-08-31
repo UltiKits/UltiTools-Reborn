@@ -378,16 +378,67 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * reads the option itself — plus {@code config.setComments(path, ...)} on the missing-key
      * branch. Never modifies a value the operator already set and never removes or reorders
      * existing content (04-CONTEXT D-01).
-     * <p>
-     * NOT YET IMPLEMENTED — see 06-01-PLAN.md Task 2. This stub deliberately does nothing so
-     * {@code CapabilityConfigTest}'s migration assertions fail for the right reason (RED).
      *
      * @param configFile the {@code config.yml} file to migrate
      * @param logger     where to log a load failure
      * @return {@code true} if the file was modified
      */
     private static boolean migrateCapabilitiesConfig(File configFile, Logger logger) {
-        return false;
+        YamlConfiguration config = new YamlConfiguration();
+        // D-08 (04-CONTEXT precedent, AbstractConfigEntity.init()'s technique): parseComments(true)
+        // must be set on THIS instance before load() runs — load() reads the option itself.
+        config.options().parseComments(true);
+        try {
+            config.load(configFile);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE,
+                    "Cannot load config.yml for capability migration: " + e.getMessage(), e);
+            return false;
+        }
+
+        boolean changed = false;
+        for (Capability capability : Capability.values()) {
+            if (capability.getConfigKey() == null) {
+                continue; // NONE — never written to config.yml
+            }
+            changed |= migrateKeyIfAbsent(config, capability.getConfigPath(),
+                    capability.getDefaultEnabled(), capability.getCommentLines());
+        }
+        changed |= migrateKeyIfAbsent(config, "ultipanel.commands.blocklist",
+                DEFAULT_COMMAND_BLOCKLIST, COMMAND_BLOCKLIST_COMMENT);
+        changed |= migrateKeyIfAbsent(config, "ultipanel.files.editable-roots",
+                DEFAULT_EDITABLE_ROOTS, EDITABLE_ROOTS_COMMENT);
+        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-size-bytes",
+                1_048_576, ACTION_LOG_SIZE_COMMENT);
+        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-files",
+                5, ACTION_LOG_FILES_COMMENT);
+
+        if (changed) {
+            try {
+                config.save(configFile);
+            } catch (IOException e) {
+                logger.log(Level.SEVERE,
+                        "Failed to persist capability migration: " + e.getMessage(), e);
+                return false;
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Sets {@code path} to {@code value} with {@code commentLines} only when it is absent from
+     * {@code config} — never overwrites a value the operator already set (04-CONTEXT D-01).
+     *
+     * @return {@code true} if the key was absent and was written
+     */
+    private static boolean migrateKeyIfAbsent(YamlConfiguration config, String path, Object value,
+                                                List<String> commentLines) {
+        if (config.get(path) != null) {
+            return false;
+        }
+        config.set(path, value);
+        config.setComments(path, commentLines);
+        return true;
     }
 
     private void initWebSocketManagers() {
