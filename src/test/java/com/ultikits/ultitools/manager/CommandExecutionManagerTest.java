@@ -1171,7 +1171,7 @@ class CommandExecutionManagerTest {
             assertThat(entry.getTarget()).isEqualTo("op hacker123");
             assertThat(entry.getActor()).isEqualTo("some-admin");
 
-            org.mockito.ArgumentCaptor<JsonObject> panelCaptor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            ArgumentCaptor<JsonObject> panelCaptor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
             String panelMessage = panelCaptor.getValue().getAsJsonObject("data").get("output").getAsString();
             assertThat(entry.getReason()).isEqualTo(panelMessage);
