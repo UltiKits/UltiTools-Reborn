@@ -1096,6 +1096,144 @@ class FileOperationManagerTest {
                 .isInstanceOf(SecurityException.class);
     }
 
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above.
+     * <p>
+     * Pins a phase-06 security-audit gap: a recursive delete of an ANCESTOR of the security
+     * directory (and of {@code plugins/UltiTools/data.json}) must not remove either. Before the
+     * fix, {@link com.ultikits.ultitools.manager.FileOperationManager}'s
+     * {@code isUnderSecurityDirectory} only ever ran against the exact requested path —
+     * {@code Path.startsWith} cannot make a shorter path "start with" a longer one — so a
+     * recursive delete of {@code plugins/UltiTools} or {@code plugins} consulted no policy at all
+     * about what was underneath it; {@code deleteDirectory}'s naked walk just deleted everything.
+     * Goes through the real {@link FileOperationManager#handleFileOperation} dispatch, not a
+     * reflective call into the private walker, so the assertion exercises the exact remote-API
+     * code path an operator's delete request would take, and asserts the protected files are
+     * still on disk afterward — the only assertion that actually proves the vulnerability rather
+     * than merely a refusal message.
+     */
+    @ParameterizedTest(name = "[{index}] deleting ''{0}'' recursively must not remove protected descendants")
+    @DisplayName("递归删除祖先目录不得清除其下受保护的安全目录与凭据文件")
+    @ValueSource(strings = {"plugins/UltiTools", "plugins"})
+    void recursiveDeleteOfAncestorMustNotDeleteProtectedDescendants(String ancestorPath) throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File securityDir = new File(tempDir, "plugins/UltiTools/security");
+        assertThat(securityDir.mkdirs()).isTrue();
+        File actionLog = new File(securityDir, "action.log");
+        assertThat(actionLog.createNewFile()).isTrue();
+        File dataJson = new File(tempDir, "plugins/UltiTools/data.json");
+        assertThat(dataJson.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", ancestorPath);
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "ancestor-delete-" + ancestorPath.replace('/', '-'));
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+
+        // Assert the actual filesystem effect FIRST — this is the assertion that proves the
+        // vulnerability, not merely a refusal message. Against the unfixed code these files are
+        // genuinely gone by this point (deleteDirectory already ran).
+        assertThat(actionLog)
+                .as("the remote action log must survive a recursive delete of '" + ancestorPath + "'")
+                .exists();
+        assertThat(dataJson)
+                .as("the UltiCloud credential file must survive a recursive delete of '" + ancestorPath + "'")
+                .exists();
+
+        assertThat(entryCaptor.getValue().getVerdict())
+                .as("recording exactly one DENIED entry, never an ALLOWED one, for a refused ancestor delete")
+                .isEqualTo(RemoteActionLog.Verdict.DENIED);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above. Regression guard: the
+     * pre-existing direct rule (D-23/D-31) — deleting the security directory itself — must still
+     * be refused once the ancestor gate is added alongside it.
+     */
+    @Test
+    @DisplayName("回归防护：直接递归删除 plugins/UltiTools/security 本身仍应被拒绝（既有规则）")
+    void recursiveDeleteOfSecurityDirectoryItselfStillRefused() throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File securityDir = new File(tempDir, "plugins/UltiTools/security");
+        assertThat(securityDir.mkdirs()).isTrue();
+        File actionLog = new File(securityDir, "action.log");
+        assertThat(actionLog.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", "plugins/UltiTools/security");
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "direct-security-delete");
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+        assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(actionLog).exists();
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above. Negative control: an
+     * ordinary module directory that contains nothing unconditionally protected must still be
+     * deletable through the same recursive-delete path — the ancestor gate must not become an
+     * over-broad denial of ordinary operator use.
+     */
+    @Test
+    @DisplayName("不应过度拒绝：不含受保护路径的普通模块目录仍可递归删除")
+    void recursiveDeleteOfOrdinarySiblingDirectoryStillSucceeds() throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File otherModuleDir = new File(tempDir, "plugins/SomeOtherModule");
+        assertThat(otherModuleDir.mkdirs()).isTrue();
+        File config = new File(otherModuleDir, "config.yml");
+        assertThat(config.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", "plugins/SomeOtherModule");
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "ordinary-sibling-delete");
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+        assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(otherModuleDir).doesNotExist();
+    }
+
     @Nested
     @DisplayName("不可配置的凭据拒绝层测试（D-16/D-19/D-23）")
     class CredentialDenyLayerTests {
