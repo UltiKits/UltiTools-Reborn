@@ -102,7 +102,7 @@ class ReflectionUtilTest {
     // resolveMethodOrClassAnnotation 追加任务的 fixture：class 和方法都没有 @TestAnnotation，
     // 用于确认两者都缺失时回退结果为 null。
     static class NoAnnotationAtAllFixture {
-        public void plainMethod() {}
+        public void plainMethod() { /* fixture stub: no annotation on class or method */ }
     }
 
     // WR-02 (05-REVIEW.md) fixtures for the 3-arg resolveMethodOrClassAnnotation(Method, Class,
@@ -114,7 +114,7 @@ class ReflectionUtilTest {
     // Combo 1 (the WR-02 broken case): annotation ONLY on the concrete subclass, not on the
     // declaring superclass.
     static class Wr02DeclaringBase {
-        public void sharedMethod() {}
+        public void sharedMethod() { /* fixture stub: inherited, never overridden */ }
     }
 
     @TestAnnotation("concreteSubclass")

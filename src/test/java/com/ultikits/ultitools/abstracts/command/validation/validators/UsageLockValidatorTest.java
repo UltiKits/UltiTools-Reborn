@@ -68,7 +68,6 @@ class UsageLockValidatorTest {
     private UsageLockValidator validator;
     private UUID player1UUID;
     private UUID player2UUID;
-    private UUID player3UUID;
 
     @BeforeEach
     void setUp() {
@@ -78,7 +77,10 @@ class UsageLockValidatorTest {
 
         player1UUID = UUID.randomUUID();
         player2UUID = UUID.randomUUID();
-        player3UUID = UUID.randomUUID();
+        // player3's UUID is only ever consulted here, to stub the mock's own getUniqueId() --
+        // unlike player1UUID/player2UUID it is never referenced again by any @Test method, so it
+        // stays a local rather than a field (PMD SingularField).
+        UUID player3UUID = UUID.randomUUID();
         lenient().when(mockPlayer.getUniqueId()).thenReturn(player1UUID);
         lenient().when(mockPlayer2.getUniqueId()).thenReturn(player2UUID);
         lenient().when(mockPlayer3.getUniqueId()).thenReturn(player3UUID);

@@ -156,6 +156,11 @@ class ConnectorPathRegistrationTest {
     @Test
     @DisplayName("Test 1+2: a BaseCommandExecutor registers through the connector path with no "
             + "exception, and is actually registered -- not merely a silent no-throw")
+    // The real assertThat(...).isNotNull() lives inside the withRealBukkitCommandMap(...) lambda
+    // (required so it runs while the MockedStatic<Bukkit> block is open) -- PMD's
+    // JUnitTestsShouldIncludeAssert does not look inside a lambda passed to another method call,
+    // so it misreports this method as assertion-free. Verified with local PMD 6.55.0.
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void baseCommandExecutor_registersThroughConnectorPath_withNoExceptionAndActuallyRegistered() {
         SimpleContainer container = new SimpleContainer();
         container.registerSingleton("baseCommandFixture", new BaseCommandFixture());
@@ -178,6 +183,9 @@ class ConnectorPathRegistrationTest {
     @Test
     @DisplayName("Test 3: a legacy AbstractCommandExecutor also registers through the same "
             + "connector path -- Phase 4's fix did not trade one generation for the other")
+    // Same PMD lambda-visibility limitation as the previous test -- the real
+    // assertThat(...).isNotNull() is inside withRealBukkitCommandMap(...)'s lambda argument.
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void legacyAbstractCommandExecutor_alsoRegistersThroughConnectorPath() {
         SimpleContainer container = new SimpleContainer();
         container.registerSingleton("legacyCommandFixture", new LegacyCommandFixture());
@@ -197,6 +205,9 @@ class ConnectorPathRegistrationTest {
     @Test
     @DisplayName("Test 4: a module holding one BaseCommandExecutor and one AbstractCommandExecutor "
             + "registers both through the connector path")
+    // Same PMD lambda-visibility limitation -- both assertThat(...).isNotNull() calls are inside
+    // withRealBukkitCommandMap(...)'s lambda argument.
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void moduleWithBothGenerations_registersBothThroughConnectorPath() {
         SimpleContainer container = new SimpleContainer();
         container.registerSingleton("baseCommandFixture", new BaseCommandFixture());
@@ -216,6 +227,9 @@ class ConnectorPathRegistrationTest {
     @Test
     @DisplayName("Test 5: the connector path with an empty container completes without throwing "
             + "and registers nothing")
+    // Same PMD lambda-visibility limitation -- both assertThat(...).isNull() calls are inside
+    // withRealBukkitCommandMap(...)'s lambda argument.
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void emptyContainer_completesWithoutThrowing_registersNothing() {
         SimpleContainer container = new SimpleContainer();
         UltiToolsPlugin plugin = newModulePlugin(container);

@@ -386,10 +386,12 @@ class LocalizedTest {
         private String expectedKey;
 
         /** Fixture method carrying {@code @CmdCD} so {@code CooldownValidator} treats it as
-         * cooldown-gated -- never invoked, only read for its annotation. */
+         * cooldown-gated -- never invoked directly, only read reflectively for its annotation
+         * (see the {@code getDeclaredMethod("methodWithCooldown")} lookup below), which is why
+         * PMD cannot see the call site. */
         @CmdCD(5)
-        private void methodWithCooldown() {
-        }
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
+        private void methodWithCooldown() { /* fixture stub, only its @CmdCD annotation is read */ }
 
         @BeforeEach
         void setUp() throws Exception {
