@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
@@ -629,9 +631,10 @@ class FileOperationManagerTest {
             }
 
             // Allowed files should be present
-            assertThat(listedNames).contains("config.yml", "data.json");
-            // Blocked files should NOT be present
-            assertThat(listedNames).doesNotContain("server.properties", "ops.json", "plugin.jar");
+            assertThat(listedNames).contains("config.yml");
+            // Blocked files should NOT be present — data.json is now denied unconditionally (D-16/D-19),
+            // regardless of directory, not just server.properties/ops.json/plugin.jar's older rules.
+            assertThat(listedNames).doesNotContain("server.properties", "ops.json", "plugin.jar", "data.json");
         }
 
         @Test
@@ -779,7 +782,15 @@ class FileOperationManagerTest {
             FileOperationManager manager = new FileOperationManager();
 
             assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml").isAllowed()).isTrue();
-            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json").isAllowed()).isTrue();
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/settings.yml").isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("data.json 现在无论目录如何都被拒绝——凭据模式匹配文件名，不再局限于 UltiTools 自己的目录")
+        void dataJsonIsNowDeniedRegardlessOfDirectory() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json").isAllowed()).isFalse();
         }
 
         @Test
@@ -885,6 +896,88 @@ class FileOperationManagerTest {
             String credentialMessage = fileOperationManager.isPathAllowed("server.properties").getMessage();
 
             assertThat(outsideRootsMessage).isNotEqualTo(credentialMessage);
+        }
+    }
+
+    @Nested
+    @DisplayName("不可配置的凭据拒绝层测试（D-16/D-19/D-23）")
+    class CredentialDenyLayerTests {
+
+        @ParameterizedTest(name = "[{index}] {0}")
+        @DisplayName("凭据文件无论 editable-roots 如何配置都被拒绝，且拒绝是不可配置的")
+        @ValueSource(strings = {
+            "plugins/UltiTools/data.json",
+            "foo.key",
+            "plugins/certs/foo.pem",
+            "foo.p12",
+            "foo.jks",
+            "foo.keystore",
+            "secring.gpg",
+            ".env",
+            ".env.local",
+            "access_key.txt",
+            ".dev.vars",
+            "ops.json",
+            "server.properties",
+            "whitelist.json",
+            "banned-ips.json",
+            "eula.txt"
+        })
+        void shouldRejectCredentialFilesUnconditionally(String path) {
+            AccessDecision decision = fileOperationManager.isPathAllowed(path);
+
+            assertThat(decision.isAllowed()).as("path: " + path).isFalse();
+            assertThat(decision.isConfigurable()).as("path: " + path).isFalse();
+        }
+
+        @Test
+        @DisplayName("granting 'plugins' as an editable root does not make plugins/UltiTools/data.json readable")
+        void grantingPluginsRootDoesNotUnlockDataJson() {
+            configureEditableRoots(Collections.singletonList("plugins"));
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/data.json");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isFalse();
+        }
+
+        @Test
+        @DisplayName("data.json.bak 不被 data.json 规则捕获——精确 basename 匹配，不是子串匹配")
+        void dataJsonBakIsNotCaughtByTheDataJsonRule() {
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/SomeModule/data.json.bak");
+
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("plugins/UltiTools/security/ 下的任何路径与该目录本身都被拒绝——动作日志无法通过它记录的 API 被读取或删除")
+        void securityDirectoryAndItsContentsAreRejectedUnconditionally() {
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security/action.log").isAllowed())
+                    .isFalse();
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security/action.log.0").isAllowed())
+                    .isFalse();
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("同名前缀的兄弟目录 security-backup 不被 security/ 前缀规则捕获")
+        void siblingDirectoryWithSamePrefixIsNotCaughtBySecurityRule() {
+            AccessDecision decision = fileOperationManager.isPathAllowed(
+                    "plugins/UltiTools/security-backup/note.txt");
+
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("凭据拒绝层不读取任何配置键——即便根集合为空，凭据文件的拒绝原因依旧是不可配置")
+        void denyLayerDoesNotConsultConfiguration() {
+            configureEditableRoots(Collections.emptyList());
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/data.json");
+
+            assertThat(decision.isConfigurable())
+                    .as("credential refusal must stay non-configurable even when the root set is also refusing")
+                    .isFalse();
         }
     }
 }
