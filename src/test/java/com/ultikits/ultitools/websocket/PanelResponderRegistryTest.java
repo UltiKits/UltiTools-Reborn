@@ -327,13 +327,16 @@ class PanelResponderRegistryTest {
             previousPanelWs = setPanelWs(mockPanelWs);
         }
 
+        // PMD.AvoidAccessibilityAlteration: reaches UltiTools' private static singleton field
+        // to reset it between tests — this framework's security model IS its visibility
+        // boundaries, so a test that needs to control the singleton lifecycle has no route but
+        // reflection. Annotated on the method, not the local Field variable declaration —
+        // setAccessible() is a separate statement, not a child of that declaration, so a
+        // suppression on the declaration alone does not cover it.
         @AfterEach
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void tearDown() throws Exception {
             setPanelWs(previousPanelWs);
-            // Reaches UltiTools' private static singleton field to reset it between tests —
-            // this framework's security model IS its visibility boundaries, so a test that
-            // needs to control the singleton lifecycle has no route but reflection.
-            @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
             instanceField.set(null, null);
@@ -494,6 +497,9 @@ class PanelResponderRegistryTest {
             setStaticField(Bukkit.class, "server", null);
         }
 
+        // PMD.AvoidAccessibilityAlteration: resets private static fields (UltiTools.ultiTools,
+        // Bukkit.server) between tests — same visibility-boundary rationale as tearDown() above.
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         private void setStaticField(Class<?> clazz, String fieldName, Object value) throws Exception {
             Field field = clazz.getDeclaredField(fieldName);
             field.setAccessible(true);
