@@ -6,6 +6,8 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
@@ -59,7 +61,8 @@ public class FileOperationManager {
      * D-16's basename glob patterns for credential-bearing files. Patterns, not an enumeration:
      * a credential file added later is caught without anyone remembering to edit a {@link Set} —
      * forgetting is precisely why {@code data.json} was readable before 6.3.0. Compiled once via
-     * {@link FileSystems#getPathMatcher(String)} rather than hand-rolled wildcard matching.
+     * {@code FileSystems.getDefault().getPathMatcher(String)} rather than hand-rolled wildcard
+     * matching.
      */
     private static final List<PathMatcher> DENY_GLOB_MATCHERS = buildDenyGlobMatchers();
 
@@ -559,32 +562,101 @@ public class FileOperationManager {
     /**
      * 获取安全的文件路径（防止路径遍历攻击）
      */
+    /**
+     * Resolves a requested path to a real {@link File} handle, refusing anything that does not
+     * canonically resolve inside one of the configured {@link #editableRoots} (D-21).
+     * <p>
+     * The pre-6.3.0 defect here was never the canonicalization order — {@code getCanonicalPath()}
+     * already ran before the check, and already resolved symlinks. The live bug was
+     * {@code String.startsWith} with no separator boundary: {@code "/srv/mc-evil/x"} literally
+     * starts with the characters {@code "/srv/mc"}. This rewrite compares by {@link Path} name
+     * element via {@link Path#startsWith(Path)} instead, mirroring the Zip-Slip guard already
+     * correct for the opposite direction in {@code UltiToolsPlugin.saveResources()} — it appends
+     * {@code File.separator} to its own canonical base before comparing — the same defect class,
+     * already fixed once in this repository.
+     * <p>
+     * A requested path that does not exist yet (a create/write target) resolves its nearest
+     * <em>existing</em> ancestor via {@link #resolveNearestReal(Path)} rather than throwing, so a
+     * legitimate create into an existing directory is not refused as a traversal attempt — but an
+     * ancestor that itself resolves outside every root is still refused (T-06-21).
+     *
+     * @param path the requested path, forward- or back-slash separated, with or without a
+     *             leading slash
+     * @return a {@link File} handle for the (not-yet-canonicalized) requested location — callers
+     *         operate on this handle, not on the resolved candidate used only for the check
+     * @throws SecurityException if the path is empty, unresolvable, or resolves outside every
+     *                            configured editable root
+     */
     private File getSecureFile(String path) throws SecurityException {
         if (path == null || path.trim().isEmpty()) {
             throw new SecurityException("Path cannot be empty");
         }
-        
-        // 移除开头的斜杠，使其成为相对路径
-        if (path.startsWith("/")) {
-            path = path.substring(1);
-        }
-        
-        File file = new File(serverRoot, path);
-        
+
+        String normalized = normalize(path);
+        File requestedFile = new File(serverRoot, normalized);
+        // Lexically collapse ".." before any filesystem access — the security-relevant
+        // containment check below still requires a REAL (symlink-resolved) path, but a
+        // traversal segment must not survive into the not-yet-existing-ancestor walk either.
+        Path requestedPath = requestedFile.toPath().normalize();
+
+        Path resolvedCandidate;
         try {
-            // 检查是否在服务器根目录内
-            String canonicalServerRoot = serverRoot.getCanonicalPath();
-            String canonicalFilePath = file.getCanonicalPath();
-            
-            if (!canonicalFilePath.startsWith(canonicalServerRoot)) {
-                throw new SecurityException("Path traversal attack detected: " + path);
-            }
-            
+            resolvedCandidate = resolveNearestReal(requestedPath);
         } catch (IOException e) {
-            throw new SecurityException("Invalid path: " + path);
+            throw new SecurityException("Unable to resolve path: " + path);
         }
-        
-        return file;
+
+        if (!isContainedInAnyRealRoot(resolvedCandidate)) {
+            throw new SecurityException("Path is outside the editable roots: " + path);
+        }
+
+        return requestedFile;
+    }
+
+    /**
+     * Resolves {@code candidatePath} to its real (symlink-resolved) form. If the path itself does
+     * not exist yet, walks up to the nearest existing ancestor, resolves that ancestor for real,
+     * and re-appends the unresolved trailing segments — Claude's Discretion hazard #1 in
+     * 06-RESEARCH.md: a not-yet-existing create/write target must not be refused outright.
+     *
+     * @throws IOException if no ancestor of {@code candidatePath} exists (should not happen once
+     *                      {@code serverRoot} itself exists) or the real path cannot be resolved
+     */
+    private static Path resolveNearestReal(Path candidatePath) throws IOException {
+        if (Files.exists(candidatePath)) {
+            return candidatePath.toRealPath();
+        }
+        Path parent = candidatePath.getParent();
+        if (parent == null) {
+            throw new NoSuchFileException(candidatePath.toString());
+        }
+        Path realParent = resolveNearestReal(parent);
+        Path fileName = candidatePath.getFileName();
+        return fileName == null ? realParent : realParent.resolve(fileName).normalize();
+    }
+
+    /**
+     * Checks {@code resolvedCandidate} against every configured editable root's real path.
+     * <p>
+     * A configured root that does not itself resolve (T-06-23: an operator typo) is skipped with
+     * a loud warning rather than silently narrowing the set to nothing — the remaining configured
+     * roots still apply.
+     */
+    private boolean isContainedInAnyRealRoot(Path resolvedCandidate) {
+        for (File root : editableRoots) {
+            Path realRoot;
+            try {
+                realRoot = root.toPath().toRealPath();
+            } catch (IOException e) {
+                logWarning("Configured editable root does not exist and was skipped: " + root.getPath()
+                        + " (check " + EDITABLE_ROOTS_CONFIG_KEY + " in plugins/UltiTools/config.yml)");
+                continue;
+            }
+            if (resolvedCandidate.startsWith(realRoot)) {
+                return true;
+            }
+        }
+        return false;
     }
     
     /**
