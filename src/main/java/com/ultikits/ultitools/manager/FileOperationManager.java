@@ -637,6 +637,21 @@ public class FileOperationManager {
                         recursiveDecision.getMessage(), null);
                     return recursiveDecision;
                 }
+
+                // Closes the ancestor gap a phase-06 security audit found: the path decision
+                // above (isPathAllowed -> deniedUnconditionally) only ever ran against the
+                // requested path itself, never against what is underneath it. A recursive delete
+                // of an ancestor of a protected path (e.g. plugins/UltiTools, an ancestor of
+                // plugins/UltiTools/security and of plugins/UltiTools/data.json) reached
+                // deleteDirectory() with no policy consulted for any descendant at all. Runs
+                // after the recursive-flag shape guard and strictly before deleteDirectory() is
+                // called — nothing is removed if this refuses.
+                AccessDecision ancestorDecision = deniedAsAncestorOfProtectedPath(normalize(path), file);
+                if (!ancestorDecision.isAllowed()) {
+                    sendFileOperationResult(operationId, "delete", path, false,
+                        ancestorDecision.getMessage(), null);
+                    return ancestorDecision;
+                }
             }
 
             boolean deleted = false;
@@ -689,6 +704,71 @@ public class FileOperationManager {
         }
         return AccessDecision.deniedNonConfigurable(
                 "deleting a directory requires the request's 'recursive' field to be the boolean true");
+    }
+
+    /**
+     * Refuses a recursive directory delete whose target is an ancestor of any path
+     * {@link #deniedUnconditionally} would refuse on its own. Runs after {@link
+     * #requireRecursiveFlag} and strictly before {@link #deleteDirectory}; nothing is deleted
+     * when this refuses. {@link #deleteDirectory} itself is unchanged — the walk it performs
+     * stays a naked recursive delete, and this method is the gate that decides whether it may
+     * run at all, not a per-descendant check woven into it.
+     * <p>
+     * <b>Why this walks the real directory instead of comparing paths lexically.</b> One of
+     * {@link #deniedUnconditionally}'s rules — the security-directory check — is answerable from
+     * the path alone: {@link #SECURITY_DIR_RELATIVE} is a single fixed location, so "is {@code
+     * dir} an ancestor of it" is just {@link Path#startsWith(Path)} run in the opposite
+     * direction from the existing direct check. But the credential rules ({@link
+     * #DENY_EXACT_BASENAMES}, the glob patterns, {@link #BLOCKED_FILES}, {@link
+     * #BLOCKED_EXTENSIONS}) match on a <b>basename</b>, wherever it occurs in the tree — "is
+     * {@code dir} an ancestor of some path a glob would deny" cannot be answered from {@code
+     * dir}'s own path at all; it depends on what files actually exist underneath it. A recursive
+     * delete already requires the real directory handle, and this gate runs before any deletion,
+     * so walking the real subtree is exactly as knowable at gate time as the lexical check would
+     * be for the security-directory rule alone — and it is the one approach that covers every
+     * rule {@link #deniedUnconditionally} enforces with a single method, rather than hand-listing
+     * the two paths this defect happened to be filed against. A credential pattern or protected
+     * directory added later is covered automatically; nobody has to remember to extend a second
+     * list.
+     * <p>
+     * <b>What this does not cover.</b> A symlink inside the tree whose target resolves to a
+     * protected location the link's own relative path would not itself trigger — {@code
+     * File#listFiles()} enumerates the directory's own entries, and following such a link across
+     * a policy boundary is the same lexical-vs-real-path asymmetry already tracked and
+     * deliberately not fixed this phase; this walk does not attempt to close it.
+     *
+     * @param normalizedPath the normalized path of {@code dir} (forward-slash separated, no
+     *                        leading slash), used to build each descendant's relative path
+     * @param dir             the real directory {@link #handleDeleteOperation} is about to
+     *                        recursively delete
+     * @return {@link AccessDecision#allowed()} if no descendant (at any depth) is unconditionally
+     *         denied; otherwise a denied, non-configurable decision naming the first protected
+     *         descendant found — non-configurable because every rule {@link
+     *         #deniedUnconditionally} enforces is itself non-configurable
+     */
+    private AccessDecision deniedAsAncestorOfProtectedPath(String normalizedPath, File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return AccessDecision.allowed();
+        }
+        for (File child : children) {
+            String childPath = normalizedPath.isEmpty()
+                    ? child.getName()
+                    : normalizedPath + "/" + child.getName();
+            AccessDecision childDenial = deniedUnconditionally(childPath);
+            if (childDenial != null) {
+                return AccessDecision.deniedNonConfigurable(
+                        "recursive delete of '" + normalizedPath + "' would remove '" + childPath
+                                + "', which is unconditionally protected");
+            }
+            if (child.isDirectory()) {
+                AccessDecision nested = deniedAsAncestorOfProtectedPath(childPath, child);
+                if (!nested.isAllowed()) {
+                    return nested;
+                }
+            }
+        }
+        return AccessDecision.allowed();
     }
 
     /**
