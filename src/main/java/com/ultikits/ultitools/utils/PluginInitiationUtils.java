@@ -397,16 +397,29 @@ public class PluginInitiationUtils {
 
     /**
      * Resolves {@code file_operation}'s required capability from the message's {@code operation}
-     * field (D-09, D-10's Pitfall 4). {@code list} resolves to {@link Capability#FILE_READ} —
-     * listing is reading. An unrecognised or absent operation also resolves to
-     * {@link Capability#FILE_READ}, the most-permitted of the three, so an unknown verb is still
-     * gated and still reaches {@code handleFileOperation}'s own unsupported-operation branch.
+     * field (D-09, D-10's Pitfall 4). Delegates to {@link #resolveFileOperationCapability(String)}.
      *
      * @param data the message's {@code data} object, possibly {@code null}
      * @return the required capability
      */
     private static Capability resolveFileOperationCapability(JsonObject data) {
         String operation = data != null ? readString(data, "operation") : null;
+        return resolveFileOperationCapability(operation);
+    }
+
+    /**
+     * The single {@code operation} name to {@link Capability} mapping, shared between this class's
+     * D-10 dispatch-table resolver above and {@code FileOperationManager}'s own action-log
+     * recording (D-22, Plan 06-04 Task 1) — so the two mappings cannot drift apart. {@code list}
+     * resolves to {@link Capability#FILE_READ} — listing is reading. An unrecognised or absent
+     * operation also resolves to {@link Capability#FILE_READ}, the most-permitted of the three, so
+     * an unknown verb reaching the dispatch table is still gated and still reaches
+     * {@code handleFileOperation}'s own unsupported-operation branch.
+     *
+     * @param operation the {@code operation} field's value, possibly {@code null}
+     * @return the required capability
+     */
+    public static Capability resolveFileOperationCapability(String operation) {
         if ("write".equals(operation)) {
             return Capability.FILE_WRITE;
         }

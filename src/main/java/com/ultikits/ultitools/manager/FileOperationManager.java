@@ -27,6 +27,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -86,6 +88,12 @@ public class FileOperationManager {
         }
         return Collections.unmodifiableList(matchers);
     }
+
+    /**
+     * The {@link RemoteActionLog.Entry#getAction()} literal prefix every entry this class records
+     * carries, extended with the operation itself (e.g. {@code file_operation:read}) — D-22.
+     */
+    private static final String ACTION_FILE_OPERATION_PREFIX = "file_operation:";
 
     /** D-15's config key for the operator-configured editable-root set. */
     private static final String EDITABLE_ROOTS_CONFIG_KEY = "ultipanel.files.editable-roots";
@@ -310,76 +318,133 @@ public class FileOperationManager {
 
     /**
      * 处理文件操作请求
+     * <p>
+     * Dispatches to one of the four operation handlers inside a {@link CompletableFuture#runAsync}
+     * hop, then records exactly one {@link RemoteActionLog} entry per operation (D-22) — at this
+     * single point, not inside each of the four handlers, so the log's line count means "file
+     * decisions" and not "handler entries". {@code operation}/{@code path}/{@code actor} are
+     * captured into locals <b>before</b> the async hop and never re-read from
+     * {@code operationData} afterward, following the immutable-string capture discipline
+     * {@link TriggerContext} establishes — the mutable {@link JsonObject} itself is not safe to
+     * re-read once handed to another thread.
      */
     public void handleFileOperation(JsonObject operationData) {
         try {
-            String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull() 
+            String operation = operationData.has("operation") && !operationData.get("operation").isJsonNull()
                 ? operationData.get("operation").getAsString() : null;
-            String path = operationData.has("path") && !operationData.get("path").isJsonNull() 
+            String path = operationData.has("path") && !operationData.get("path").isJsonNull()
                 ? operationData.get("path").getAsString() : null;
-            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull() 
+            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull()
                 ? operationData.get("operationId").getAsString() : null;
-            
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("处理文件操作: %s, 路径: %s (ID: %s)", operation, path, operationId));
-            
+            String actor = operationData.has("executor") && !operationData.get("executor").isJsonNull()
+                ? operationData.get("executor").getAsString() : "panel";
+
+            UltiTools.getInstance().getLogger().log(Level.INFO,
+                String.format("收到文件操作请求: %s, 路径: %s (ID: %s)", operation, path, operationId));
+
+            // Captured before the async hop — see this method's javadoc.
+            String capturedOperation = operation;
+            String capturedPath = path;
+            String capturedOperationId = operationId;
+            String capturedActor = actor;
+
             // 异步处理文件操作
             CompletableFuture.runAsync(() -> {
-                switch (operation) {
+                AccessDecision decision;
+                switch (capturedOperation) {
                     case "read":
-                        handleReadOperation(path, operationData, operationId);
+                        decision = handleReadOperation(capturedPath, operationData, capturedOperationId);
                         break;
                     case "write":
-                        handleWriteOperation(path, operationData, operationId);
+                        decision = handleWriteOperation(capturedPath, operationData, capturedOperationId);
                         break;
                     case "list":
-                        handleListOperation(path, operationData, operationId);
+                        decision = handleListOperation(capturedPath, operationData, capturedOperationId);
                         break;
                     case "delete":
-                        handleDeleteOperation(path, operationData, operationId);
+                        decision = handleDeleteOperation(capturedPath, operationData, capturedOperationId);
                         break;
                     default:
-                        sendFileOperationResult(operationId, operation, path, false, 
-                            "Unsupported operation: " + operation, null);
+                        sendFileOperationResult(capturedOperationId, capturedOperation, capturedPath, false,
+                            "Unsupported operation: " + capturedOperation, null);
+                        decision = null;
                 }
+                recordFileDecision(capturedOperation, capturedPath, capturedActor, decision);
             });
-            
+
         } catch (Exception e) {
-            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull() 
+            String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull()
                 ? operationData.get("operationId").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.WARNING, "文件操作处理失败: " + e.getMessage());
-            sendFileOperationResult(operationId, "unknown", "unknown", false, 
+            sendFileOperationResult(operationId, "unknown", "unknown", false,
                 "Error processing file operation: " + e.getMessage(), null);
+        }
+    }
+
+    /**
+     * D-22's single action-log record point for the whole remote file API — called once per
+     * operation from {@link #handleFileOperation}'s async task, after the dispatched handler has
+     * run, so a refusal decided deep inside a handler (Task 3's missing-{@code recursive}-flag
+     * case) is the decision this records, not an earlier, now-superseded verdict.
+     * <p>
+     * A {@code null} decision — the unsupported-operation branch — records nothing: an operation
+     * this manager does not recognise is not a file <em>decision</em>. A {@code null}
+     * {@link RemoteActionLog} (no live plugin, or a test harness) is also a silent no-op.
+     *
+     * @param operation the operation name as received, used verbatim to resolve the capability and
+     *                   build the action string
+     * @param path      the requested path as received — the action-log {@code target}
+     * @param actor     the inbound {@code executor} field verbatim, or the literal {@code "panel"}
+     * @param decision  the policy decision the dispatched handler reached, or {@code null} for an
+     *                  unsupported operation
+     */
+    private void recordFileDecision(String operation, String path, String actor, AccessDecision decision) {
+        if (decision == null) {
+            return;
+        }
+        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
+        if (log == null) {
+            return;
+        }
+        Capability capability = PluginInitiationUtils.resolveFileOperationCapability(operation);
+        String action = ACTION_FILE_OPERATION_PREFIX + operation;
+        if (decision.isAllowed()) {
+            log.record(RemoteActionLog.Entry.allowed(capability, action, path, actor));
+        } else {
+            log.record(RemoteActionLog.Entry.denied(capability, action, path, actor, decision.getMessage()));
         }
     }
     
     /**
      * 处理文件读取操作
+     *
+     * @return the {@link AccessDecision} that gated this read — the value
+     *         {@link #recordFileDecision} records, regardless of whether the read then succeeded
+     *         or failed for an unrelated reason (file not found, not a regular file, ...)
      */
-    private void handleReadOperation(String path, JsonObject operationData, String operationId) {
+    private AccessDecision handleReadOperation(String path, JsonObject operationData, String operationId) {
+        AccessDecision readDecision = isPathAllowed(path);
         try {
-            AccessDecision readDecision = isPathAllowed(path);
             if (!readDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "read", path, false,
-                    "Access denied: this file is protected", null);
-                return;
+                sendFileOperationResult(operationId, "read", path, false, readDecision.getMessage(), null);
+                return readDecision;
             }
 
             File file = getSecureFile(path);
             if (!file.exists()) {
                 sendFileOperationResult(operationId, "read", path, false, "File not found", null);
-                return;
+                return readDecision;
             }
-            
+
             if (!file.isFile()) {
                 sendFileOperationResult(operationId, "read", path, false, "Path is not a file", null);
-                return;
+                return readDecision;
             }
-            
-            int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull() 
+
+            int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull()
                 ? operationData.get("limit").getAsInt() : 0;
             if (limit <= 0) limit = 1000; // 默认限制1000行
-            
+
             StringBuilder content = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
                 String line;
@@ -389,31 +454,34 @@ public class FileOperationManager {
                     lineCount++;
                 }
             }
-            
+
             JsonObject resultData = new JsonObject();
             resultData.addProperty("content", content.toString().trim());
             resultData.addProperty("size", file.length());
             resultData.addProperty("lastModified", file.lastModified());
             resultData.addProperty("linesRead", content.toString().split("\n").length);
-            
+
             sendFileOperationResult(operationId, "read", path, true, "File read successfully", resultData);
-            
+            return readDecision;
+
         } catch (Exception e) {
-            sendFileOperationResult(operationId, "read", path, false, 
+            sendFileOperationResult(operationId, "read", path, false,
                 "Error reading file: " + e.getMessage(), null);
+            return readDecision;
         }
     }
-    
+
     /**
      * 处理文件写入操作
+     *
+     * @return the {@link AccessDecision} that gated this write
      */
-    private void handleWriteOperation(String path, JsonObject operationData, String operationId) {
+    private AccessDecision handleWriteOperation(String path, JsonObject operationData, String operationId) {
+        AccessDecision writeDecision = isPathAllowed(path);
         try {
-            AccessDecision writeDecision = isPathAllowed(path);
             if (!writeDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "write", path, false,
-                    "Access denied: this file is protected", null);
-                return;
+                sendFileOperationResult(operationId, "write", path, false, writeDecision.getMessage(), null);
+                return writeDecision;
             }
 
             File file = getSecureFile(path);
@@ -424,53 +492,64 @@ public class FileOperationManager {
 
             if (content == null) {
                 sendFileOperationResult(operationId, "write", path, false, "Content cannot be null", null);
-                return;
+                return writeDecision;
             }
-            
+
             // 确保父目录存在
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
             }
-            
+
             try (FileWriter writer = new FileWriter(file, append)) {
                 writer.write(content);
             }
-            
+
             JsonObject resultData = new JsonObject();
             resultData.addProperty("bytesWritten", content.getBytes().length);
             resultData.addProperty("fileSize", file.length());
-            
+
             sendFileOperationResult(operationId, "write", path, true, "File written successfully", resultData);
-            
+            return writeDecision;
+
         } catch (Exception e) {
-            sendFileOperationResult(operationId, "write", path, false, 
+            sendFileOperationResult(operationId, "write", path, false,
                 "Error writing file: " + e.getMessage(), null);
+            return writeDecision;
         }
     }
     
     /**
      * 处理目录列表操作
+     *
+     * @return the {@link AccessDecision} that gated listing the directory itself — one decision
+     *         for the whole operation, not one per returned row (see {@link #recordFileDecision})
      */
-    private void handleListOperation(String path, JsonObject operationData, String operationId) {
+    private AccessDecision handleListOperation(String path, JsonObject operationData, String operationId) {
+        AccessDecision listDecision = isPathAllowed(path);
         try {
+            if (!listDecision.isAllowed()) {
+                sendFileOperationResult(operationId, "list", path, false, listDecision.getMessage(), null);
+                return listDecision;
+            }
+
             File dir = getSecureFile(path);
             if (!dir.exists()) {
                 sendFileOperationResult(operationId, "list", path, false, "Directory not found", null);
-                return;
+                return listDecision;
             }
-            
+
             if (!dir.isDirectory()) {
                 sendFileOperationResult(operationId, "list", path, false, "Path is not a directory", null);
-                return;
+                return listDecision;
             }
-            
+
             File[] files = dir.listFiles();
             if (files == null) {
                 sendFileOperationResult(operationId, "list", path, false, "Cannot read directory", null);
-                return;
+                return listDecision;
             }
-            
+
             JsonArray fileList = new JsonArray();
             for (File file : files) {
                 // Filter out protected files from directory listings
@@ -491,37 +570,40 @@ public class FileOperationManager {
                 fileInfo.addProperty("writable", file.canWrite());
                 fileList.add(fileInfo);
             }
-            
+
             JsonObject resultData = new JsonObject();
             resultData.add("files", fileList);
             resultData.addProperty("totalCount", fileList.size());
-            
+
             sendFileOperationResult(operationId, "list", path, true, "Directory listed successfully", resultData);
-            
+            return listDecision;
+
         } catch (Exception e) {
-            sendFileOperationResult(operationId, "list", path, false, 
+            sendFileOperationResult(operationId, "list", path, false,
                 "Error listing directory: " + e.getMessage(), null);
+            return listDecision;
         }
     }
     
     /**
      * 处理文件删除操作
+     *
+     * @return the {@link AccessDecision} that gated this delete
      */
-    private void handleDeleteOperation(String path, JsonObject operationData, String operationId) {
+    private AccessDecision handleDeleteOperation(String path, JsonObject operationData, String operationId) {
+        AccessDecision deleteDecision = isPathAllowed(path);
         try {
-            AccessDecision deleteDecision = isPathAllowed(path);
             if (!deleteDecision.isAllowed()) {
-                sendFileOperationResult(operationId, "delete", path, false,
-                    "Access denied: this file is protected", null);
-                return;
+                sendFileOperationResult(operationId, "delete", path, false, deleteDecision.getMessage(), null);
+                return deleteDecision;
             }
 
             File file = getSecureFile(path);
             if (!file.exists()) {
                 sendFileOperationResult(operationId, "delete", path, false, "File not found", null);
-                return;
+                return deleteDecision;
             }
-            
+
             boolean deleted = false;
             if (file.isDirectory()) {
                 // 递归删除目录（谨慎操作）
@@ -529,16 +611,18 @@ public class FileOperationManager {
             } else {
                 deleted = file.delete();
             }
-            
+
             if (deleted) {
                 sendFileOperationResult(operationId, "delete", path, true, "File deleted successfully", null);
             } else {
                 sendFileOperationResult(operationId, "delete", path, false, "Failed to delete file", null);
             }
-            
+            return deleteDecision;
+
         } catch (Exception e) {
-            sendFileOperationResult(operationId, "delete", path, false, 
+            sendFileOperationResult(operationId, "delete", path, false,
                 "Error deleting file: " + e.getMessage(), null);
+            return deleteDecision;
         }
     }
     
