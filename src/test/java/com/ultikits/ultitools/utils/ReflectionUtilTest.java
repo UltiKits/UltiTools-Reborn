@@ -47,7 +47,9 @@ class ReflectionUtilTest {
         private String parentField;
         protected int protectedField;
 
-        public ParentClass() {}
+        public ParentClass() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
         public String getParentField() {
             return parentField;
@@ -57,7 +59,9 @@ class ReflectionUtilTest {
             this.parentField = parentField;
         }
 
-        protected void parentMethod() {}
+        protected void parentMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 测试用子类
@@ -67,7 +71,9 @@ class ReflectionUtilTest {
         private String childField;
         private double number;
 
-        public ChildClass() {}
+        public ChildClass() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
         public ChildClass(String childField) {
             this.childField = childField;
@@ -87,16 +93,22 @@ class ReflectionUtilTest {
         }
 
         @TestAnnotation("method")
-        public void annotatedMethod() {}
+        public void annotatedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
-        public void normalMethod() {}
+        public void normalMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // resolveMethodOrClassAnnotation 追加任务的 fixture：class 上没有 @TestAnnotation，
     // 方法本身携带 -- 用于 "method-level only" 场景。
     static class NoClassAnnotationFixture {
         @TestAnnotation("methodOnly")
-        public void annotatedMethod() {}
+        public void annotatedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // resolveMethodOrClassAnnotation 追加任务的 fixture：class 和方法都没有 @TestAnnotation，
@@ -126,7 +138,9 @@ class ReflectionUtilTest {
     // preserved unchanged.
     @TestAnnotation("declaringSuperclass")
     static class Wr02DeclaringBaseWithAnnotation {
-        public void sharedMethod() {}
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     static class Wr02ConcreteSubclassNoAnnotation extends Wr02DeclaringBaseWithAnnotation {
@@ -137,7 +151,9 @@ class ReflectionUtilTest {
     // with DIFFERENT values -- the concrete (most-derived) class must win.
     @TestAnnotation("declaringSuperclass")
     static class Wr02BothLevelsBase {
-        public void sharedMethod() {}
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     @TestAnnotation("concreteSubclass")
@@ -148,7 +164,9 @@ class ReflectionUtilTest {
     // Combo 4: neither level carries the annotation -- falls back to null, same as the 2-arg
     // overload.
     static class Wr02NeitherLevelBase {
-        public void sharedMethod() {}
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     static class Wr02NeitherLevelSubclass extends Wr02NeitherLevelBase {
@@ -159,7 +177,9 @@ class ReflectionUtilTest {
     // for the 3-arg overload exactly as it does for the 2-arg one.
     static class Wr02MethodLevelBase {
         @TestAnnotation("methodLevel")
-        public void sharedMethod() {}
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     @TestAnnotation("concreteSubclass")
@@ -815,7 +835,9 @@ class ReflectionUtilTest {
 
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
-        public IncompatibleClass(List<String> items) {}
+        public IncompatibleClass(List<String> items) {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 用于 getMethods 桥接方法去重测试的辅助类。实现 Comparable<T> 让编译器为
@@ -843,17 +865,31 @@ class ReflectionUtilTest {
     // member declaration inside a non-static inner class (which @Nested classes are), and
     // staticMethod() below is exactly the case this test needs to cover.
     public static class GetAllMethodsBase {
-        public void inherited() { }
-        public void overridden() { }
-        public final void finalMethod() { }
-        private void privateMethod() { }
-        public static void staticMethod() { }
+        public void inherited() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public void overridden() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public final void finalMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        private void privateMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public static void staticMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class GetAllMethodsChild extends GetAllMethodsBase {
         @Override
-        public void overridden() { }
-        public void own() { }
+        public void overridden() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public void own() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 用于 getAllMethods "不可覆盖的声明各自成槽" 用例的辅助类：父子两层各自声明同名同参数的
@@ -866,27 +902,39 @@ class ReflectionUtilTest {
     // fix. Declared at the top level for the same source-1.8 reason as GetAllMethodsBase above.
     // 参数列表不同 -> 必然不是覆盖。Used by the overrides() signature-mismatch test.
     public static class DifferentParamsBase {
-        public void slot(String value) { }
+        public void slot(String value) {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class DifferentParamsChild extends DifferentParamsBase {
-        public void slot() { }
+        public void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class PrivateSlotBase {
-        private void slot() { }
+        private void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class PrivateSlotChild extends PrivateSlotBase {
-        private void slot() { }
+        private void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class StaticSlotBase {
-        public static void slot() { }
+        public static void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class StaticSlotChild extends StaticSlotBase {
-        public static void slot() { }
+        public static void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class GetAllMethodsGenericBase<T> {
