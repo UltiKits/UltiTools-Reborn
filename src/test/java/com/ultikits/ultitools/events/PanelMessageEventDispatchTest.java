@@ -270,6 +270,11 @@ class PanelMessageEventDispatchTest {
 
         @Test
         @DisplayName("发布跑在主线程 —— 不只是被排进了调度队列")
+        // PMD.AvoidThrowingRawExceptionTypes: wraps a checked Exception thrown inside a
+        // Runnable-shaped lambda so it can cross the off-primary-thread boundary in
+        // runOffPrimaryThread() — no checked-exception-friendly functional interface exists
+        // for that boundary, so wrapping is the idiomatic adapter, not carelessness.
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void publishRunsOnMainThread() throws Exception {
             AtomicBoolean observedPrimaryThread = new AtomicBoolean(false);
             AtomicBoolean invokedBeforeTick = new AtomicBoolean(false);
@@ -338,6 +343,9 @@ class PanelMessageEventDispatchTest {
 
         @Test
         @DisplayName("订阅者抛异常不会让 handleInboundMessage 的调用路径炸掉")
+        // PMD.AvoidThrowingRawExceptionTypes: driving the subscriber's failure path IS the
+        // test — it proves handleInboundMessage's call path survives a throwing subscriber.
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         void throwingHandlerDoesNotPropagate() throws Exception {
             eventBus.subscribe(PanelMessageEvent.class, event -> {
                 throw new RuntimeException("boom — deliberately thrown by a test subscriber");
