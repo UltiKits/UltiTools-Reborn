@@ -4,13 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Map;
 import java.util.Set;
-import java.util.function.BiConsumer;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-
-import com.google.gson.JsonObject;
 
 /**
  * Parity proof for {@link PluginInitiationUtils}'s inbound dispatch table.
@@ -48,7 +45,7 @@ class PluginInitiationUtilsDispatchTableTest {
             "auth_complete", "magic_link_response"
     ));
 
-    private Map<String, BiConsumer<JsonObject, JsonObject>> table() {
+    private Map<String, PluginInitiationUtils.InboundHandlerEntry> table() {
         return PluginInitiationUtils.inboundDispatchTable();
     }
 
@@ -85,12 +82,12 @@ class PluginInitiationUtilsDispatchTableTest {
         @Test
         @DisplayName("两个 type 共享同一个处理器实例，与原先的 fall-through 等价")
         void logStreamAndLogStreamControlShareOneHandler() {
-            Map<String, BiConsumer<JsonObject, JsonObject>> table = table();
+            Map<String, PluginInitiationUtils.InboundHandlerEntry> table = table();
 
-            assertThat(table.get("log_stream"))
+            assertThat(table.get("log_stream").getHandler())
                     .as("log_stream 与 log_stream_control 原先靠 case 标签之间的 fall-through 共享"
                             + "同一段处理逻辑；查表版本必须用同一个 handler 实例复现这一点")
-                    .isSameAs(table.get("log_stream_control"));
+                    .isSameAs(table.get("log_stream_control").getHandler());
         }
     }
 }

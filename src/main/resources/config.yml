@@ -73,3 +73,32 @@ ultipanel:
       sample-after-count: 10
       # 采样率（0.1 = 10%）
       sample-rate: 0.1
+  # 远程能力开关：这些开关限定了面板能做什么；关闭某项能力时，相应请求会被拒绝，
+  # 拒绝信息会指向本文件。
+  # Capability switches: these bound what the panel may do; a disabled capability
+  # produces a refusal naming this file.
+  capabilities:
+    # Whether the panel may receive live server monitoring data (TPS, memory, world/player snapshots).
+    # 面板是否可以接收服务器实时监控数据（TPS、内存、世界/玩家快照）。
+    monitoring: true
+    # Whether the panel may stream and control the live console log.
+    # 面板是否可以接收并控制实时控制台日志流。
+    logs: true
+    # Whether the panel may receive live player join/quit/chat events.
+    # 面板是否可以接收玩家上线/下线/聊天等实时事件。
+    player-events: true
+    # Whether the panel may read and list files within the editable roots.
+    # 面板是否可以在可编辑根目录内读取与列出文件。
+    file-read: true
+    # Whether the panel may write or upload files within the editable roots.
+    # 面板是否可以在可编辑根目录内写入或上传文件。
+    file-write: false
+    # Whether the panel may delete files or directories within the editable roots.
+    # 面板是否可以在可编辑根目录内删除文件或目录。
+    file-delete: false
+    # Whether the panel may execute server commands remotely.
+    # 面板是否可以远程执行服务器命令。
+    commands: false
+    # Whether the panel may read and edit server.properties safe keys.
+    # 面板是否可以读取与编辑 server.properties 的安全白名单键。
+    server-properties: false

@@ -5,13 +5,16 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
@@ -212,7 +215,8 @@ public class PluginInitiationUtils {
      * 初始化所有管理器
      */
     /**
-     * The inbound-message dispatch table: message {@code type} string to the handler that serves it.
+     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
+     * that serves it.
      * <p>
      * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
      * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
@@ -230,8 +234,82 @@ public class PluginInitiationUtils {
      * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
      * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
      */
-    private static final Map<String, BiConsumer<JsonObject, JsonObject>> INBOUND_HANDLERS =
+    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
             Collections.unmodifiableMap(buildInboundHandlers());
+
+    /**
+     * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
+     * before it runs (D-10).
+     * <p>
+     * Exposes exactly two static factories and no capability-free construction path — this is the
+     * whole point of D-10: adding a message type to {@link #INBOUND_HANDLERS} without declaring a
+     * capability must fail to compile, so no single-argument overload, default, or null-tolerant
+     * constructor is ever added here. {@link #of(Capability, BiConsumer)} covers the 23 entries whose
+     * capability is fixed by the message {@code type} alone; {@link #resolved(Function, BiConsumer)}
+     * covers {@code file_operation}, the one entry whose capability depends on the message's
+     * {@code operation} field rather than its {@code type}.
+     * <p>
+     * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability} 绑在一起（D-10）。只
+     * 暴露两个静态工厂，没有任何绕开能力声明的构造路径——新增消息类型若不声明能力就无法编译。
+     */
+    static final class InboundHandlerEntry {
+        private final Capability capability;
+        private final Function<JsonObject, Capability> resolver;
+        private final BiConsumer<JsonObject, JsonObject> handler;
+
+        private InboundHandlerEntry(Capability capability, Function<JsonObject, Capability> resolver,
+                                     BiConsumer<JsonObject, JsonObject> handler) {
+            this.capability = capability;
+            this.resolver = resolver;
+            this.handler = handler;
+        }
+
+        /**
+         * An entry whose capability is a fixed constant.
+         *
+         * @param capability the required capability — use {@link Capability#NONE} for protocol-level
+         *                   and echo messages that carry no operator-facing policy
+         * @param handler    the handler to invoke once the gate clears
+         * @return the entry
+         */
+        static InboundHandlerEntry of(Capability capability, BiConsumer<JsonObject, JsonObject> handler) {
+            if (capability == null) {
+                throw new IllegalArgumentException("capability must not be null — declare Capability.NONE explicitly");
+            }
+            return new InboundHandlerEntry(capability, null, handler);
+        }
+
+        /**
+         * An entry whose capability depends on the inbound message's own {@code data} — the
+         * {@code file_operation} case, whose true capability depends on the {@code operation} field
+         * (D-10's resolver case, D-09).
+         *
+         * @param resolver a function from the message's {@code data} to the {@link Capability} it requires
+         * @param handler  the handler to invoke once the gate clears
+         * @return the entry
+         */
+        static InboundHandlerEntry resolved(Function<JsonObject, Capability> resolver,
+                                             BiConsumer<JsonObject, JsonObject> handler) {
+            if (resolver == null) {
+                throw new IllegalArgumentException("resolver must not be null — declare a Capability.of(...) entry instead");
+            }
+            return new InboundHandlerEntry(null, resolver, handler);
+        }
+
+        /**
+         * Resolves this entry's required capability against one message's {@code data}.
+         *
+         * @param data the message's {@code data} object, possibly {@code null}
+         * @return the required {@link Capability}
+         */
+        Capability resolveCapability(JsonObject data) {
+            return capability != null ? capability : resolver.apply(data);
+        }
+
+        BiConsumer<JsonObject, JsonObject> getHandler() {
+            return handler;
+        }
+    }
 
     /**
      * Builds {@link #INBOUND_HANDLERS}. Each entry invokes exactly the same target its former
@@ -239,64 +317,99 @@ public class PluginInitiationUtils {
      * replaces, not a redesign of it. {@code log_stream} and {@code log_stream_control} share one
      * {@link BiConsumer} instance, preserving the fall-through the two case labels used to express.
      *
-     * @return a table from message {@code type} to the handler that serves it
+     * @return a table from message {@code type} to the {@link InboundHandlerEntry} that serves it
      */
-    private static Map<String, BiConsumer<JsonObject, JsonObject>> buildInboundHandlers() {
-        Map<String, BiConsumer<JsonObject, JsonObject>> handlers = new HashMap<>();
+    private static Map<String, InboundHandlerEntry> buildInboundHandlers() {
+        Map<String, InboundHandlerEntry> handlers = new HashMap<>();
 
-        // 系统基础消息
-        handlers.put("ping", (message, data) -> handlePing(message));
-        handlers.put("pong", (message, data) -> handlePong(data));
-        handlers.put("subscribe", (message, data) -> handleSubscribe(data));
-        handlers.put("unsubscribe", (message, data) -> handleUnsubscribe(data));
-        handlers.put("notification", (message, data) -> handleNotification(data));
-        handlers.put("error", (message, data) -> handleError(data));
+        // 系统基础消息 —— 协议层/回声消息，显式声明 Capability.NONE（D-10）：从不拦截，从不记录。
+        handlers.put("ping", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handlePing(message)));
+        handlers.put("pong", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handlePong(data)));
+        handlers.put("subscribe", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleSubscribe(data)));
+        handlers.put("unsubscribe", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleUnsubscribe(data)));
+        handlers.put("notification", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleNotification(data)));
+        handlers.put("error", InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleError(data)));
 
         // 服务器监控消息
-        handlers.put("server_status", (message, data) -> handleServerStatusRequest(data));
-        handlers.put("plugin_list", (message, data) -> handlePluginListRequest(data));
-        handlers.put("player_event", (message, data) -> handlePlayerEvent(data));
-        handlers.put("metrics_data", (message, data) -> handleMetricsRequest(data));
+        handlers.put("server_status",
+                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handleServerStatusRequest(data)));
+        handlers.put("plugin_list",
+                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handlePluginListRequest(data)));
+        handlers.put("player_event",
+                InboundHandlerEntry.of(Capability.PLAYER_EVENTS, (message, data) -> handlePlayerEvent(data)));
+        handlers.put("metrics_data",
+                InboundHandlerEntry.of(Capability.MONITORING, (message, data) -> handleMetricsRequest(data)));
 
         // 操作控制消息
-        handlers.put("execute_command",
-                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data));
-        handlers.put("command_result", (message, data) -> handleCommandResult(data));
-        handlers.put("file_operation",
-                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data));
-        handlers.put("file_operation_result", (message, data) -> handleFileOperationResult(data));
+        handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS,
+                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data)));
+        handlers.put("command_result",
+                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleCommandResult(data)));
+        // file_operation 的能力取决于 data.operation，不是常量 —— D-10 的 resolver 场景（D-09）。
+        handlers.put("file_operation", InboundHandlerEntry.resolved(
+                PluginInitiationUtils::resolveFileOperationCapability,
+                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data)));
+        handlers.put("file_operation_result",
+                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleFileOperationResult(data)));
 
         // 数据流消息 —— log_stream 与 log_stream_control 共享同一个处理器，
         // 这是原先两个 case 标签之间 fall-through 的等价写法。
         BiConsumer<JsonObject, JsonObject> logStreamHandler =
                 (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-        handlers.put("log_stream", logStreamHandler);
-        handlers.put("log_stream_control", logStreamHandler);
-        handlers.put("backup_operation", (message, data) -> handleBackupOperation(data));
-        handlers.put("backup_progress", (message, data) -> handleBackupProgress(data));
+        handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, logStreamHandler));
+        handlers.put("log_stream_control", InboundHandlerEntry.of(Capability.LOGS, logStreamHandler));
+        // backup_operation 是今天的纯日志占位符，但其声明意图是产出文件的操作 —— 因此按更严格
+        // 的一侧声明为 FILE_WRITE，而不是等桩实现落地时才回头改声明。
+        handlers.put("backup_operation",
+                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleBackupOperation(data)));
+        handlers.put("backup_progress",
+                InboundHandlerEntry.of(Capability.NONE, (message, data) -> handleBackupProgress(data)));
 
         // 配置管理消息
-        handlers.put("upload_config", (message, data) -> handleConfigUpload(data));
-        handlers.put("update_config", (message, data) -> handleConfigUpdate(data));
-        handlers.put("server_properties", (message, data) -> {
+        handlers.put("upload_config",
+                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleConfigUpload(data)));
+        handlers.put("update_config",
+                InboundHandlerEntry.of(Capability.FILE_WRITE, (message, data) -> handleConfigUpdate(data)));
+        handlers.put("server_properties", InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, (message, data) -> {
             if (UltiTools.getInstance().getServerPropertiesManager() != null) {
                 UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
             }
-        });
-        handlers.put("server_properties_result", (message, data) ->
+        }));
+        handlers.put("server_properties_result", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
                 // Response from this plugin forwarded back by DO — ignore silently
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received server_properties_result echo — ignoring"));
+                        "Received server_properties_result echo — ignoring")));
 
         // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-        handlers.put("auth_complete", (message, data) ->
+        handlers.put("auth_complete", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received auth_complete message: " + (data != null ? data.toString() : "null")));
-        handlers.put("magic_link_response", (message, data) ->
+                        "Received auth_complete message: " + (data != null ? data.toString() : "null"))));
+        handlers.put("magic_link_response", InboundHandlerEntry.of(Capability.NONE, (message, data) ->
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received magic_link_response message: " + (data != null ? data.toString() : "null")));
+                        "Received magic_link_response message: " + (data != null ? data.toString() : "null"))));
 
         return handlers;
+    }
+
+    /**
+     * Resolves {@code file_operation}'s required capability from the message's {@code operation}
+     * field (D-09, D-10's Pitfall 4). {@code list} resolves to {@link Capability#FILE_READ} —
+     * listing is reading. An unrecognised or absent operation also resolves to
+     * {@link Capability#FILE_READ}, the most-permitted of the three, so an unknown verb is still
+     * gated and still reaches {@code handleFileOperation}'s own unsupported-operation branch.
+     *
+     * @param data the message's {@code data} object, possibly {@code null}
+     * @return the required capability
+     */
+    private static Capability resolveFileOperationCapability(JsonObject data) {
+        String operation = data != null ? readString(data, "operation") : null;
+        if ("write".equals(operation)) {
+            return Capability.FILE_WRITE;
+        }
+        if ("delete".equals(operation)) {
+            return Capability.FILE_DELETE;
+        }
+        return Capability.FILE_READ;
     }
 
     /**
@@ -309,7 +422,7 @@ public class PluginInitiationUtils {
      *
      * @return the unmodifiable inbound dispatch table
      */
-    static Map<String, BiConsumer<JsonObject, JsonObject>> inboundDispatchTable() {
+    static Map<String, InboundHandlerEntry> inboundDispatchTable() {
         return INBOUND_HANDLERS;
     }
 
@@ -369,9 +482,9 @@ public class PluginInitiationUtils {
             // Lookup replaces the former 24-case switch — see INBOUND_HANDLERS. Every entry
             // invokes the same target its former case label invoked; an absent entry is the same
             // "unknown type" outcome the former default branch produced.
-            BiConsumer<JsonObject, JsonObject> handler = INBOUND_HANDLERS.get(type);
-            if (handler != null) {
-                handler.accept(message, data);
+            InboundHandlerEntry entry = INBOUND_HANDLERS.get(type);
+            if (entry != null) {
+                entry.getHandler().accept(message, data);
             } else {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));

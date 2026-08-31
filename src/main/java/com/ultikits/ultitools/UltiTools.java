@@ -53,6 +53,7 @@ import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
@@ -148,6 +149,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private EventBus eventBus;
     @Getter
     private ErrorReportCollector errorReportCollector;
+    @Getter
+    private RemoteActionLog remoteActionLog;
 
     /**
      * Returns the instance of the UltiTools.
@@ -330,6 +333,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         serverPropertiesManager = new ServerPropertiesManager(new File(System.getProperty("user.dir")));
         errorReportCollector = new ErrorReportCollector();
         errorReportCollector.init();
+        // Constructed unconditionally, gated by no Capability — D-32.
+        remoteActionLog = new RemoteActionLog();
+        remoteActionLog.init(getDataFolder());
     }
 
     private boolean attemptCloudLogin() {
