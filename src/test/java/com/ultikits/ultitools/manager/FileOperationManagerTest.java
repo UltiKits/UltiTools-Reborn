@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -33,8 +36,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
+
+import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -96,13 +103,24 @@ class FileOperationManagerTest {
      * the shape every Task 3 bypass behaviour is described against.
      */
     private void setServerRootAndEditableRoots(File serverRootDir, File editableRoot) throws Exception {
+        setServerRootAndEditableRoots(fileOperationManager, serverRootDir, editableRoot);
+    }
+
+    /**
+     * Manager-parameterized overload (Plan 06-04) letting a test point a freshly-constructed
+     * {@link FileOperationManager} — one built against its own mocked {@code getRemoteActionLog()}
+     * — at the shared {@code tempDir}, rather than only ever reflecting into the base
+     * {@link #fileOperationManager} field.
+     */
+    private void setServerRootAndEditableRoots(FileOperationManager manager, File serverRootDir, File editableRoot)
+            throws Exception {
         Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
         serverRootField.setAccessible(true);
-        serverRootField.set(fileOperationManager, serverRootDir);
+        serverRootField.set(manager, serverRootDir);
 
         Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
         editableRootsField.setAccessible(true);
-        editableRootsField.set(fileOperationManager, Collections.singletonList(editableRoot));
+        editableRootsField.set(manager, Collections.singletonList(editableRoot));
     }
 
     /**
@@ -1177,6 +1195,274 @@ class FileOperationManagerTest {
 
             assertThatThrownBy(() -> invokeGetSecureFile("root/../elsewhere/file.yml"))
                     .isInstanceOf(SecurityException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("拒绝理由透传给面板测试（D-17，Plan 06-04 Task 1）")
+    class ReasonCarryingRefusalTests {
+
+        @Test
+        @DisplayName("根集合之外的读取拒绝消息同时包含 ultipanel.files.editable-roots 与 plugins/UltiTools/config.yml")
+        void readRefusalOutsideRootsNamesConfigKeyAndFile() throws Exception {
+            JsonObject captured = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+
+            assertThat(captured.get("message").getAsString())
+                    .contains("ultipanel.files.editable-roots")
+                    .contains("plugins/UltiTools/config.yml");
+        }
+
+        @Test
+        @DisplayName("data.json 的读取拒绝消息与根集合之外的拒绝消息不相等，且说明该限制不可通过配置改变")
+        void readRefusalForCredentialFileDiffersFromOutsideRootsRefusal() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleReadOperation", "plugins/UltiTools/data.json");
+
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("写入拒绝消息同样区分两种原因")
+        void writeRefusalDistinguishesTwoCauses() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleWriteOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleWriteOperation", "plugins/UltiTools/data.json");
+
+            assertThat(outsideRoots.get("message").getAsString()).contains("ultipanel.files.editable-roots");
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("删除拒绝消息同样区分两种原因")
+        void deleteRefusalDistinguishesTwoCauses() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleDeleteOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleDeleteOperation", "plugins/UltiTools/data.json");
+
+            assertThat(outsideRoots.get("message").getAsString()).contains("ultipanel.files.editable-roots");
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("旧的通用 'Access denied' 文案不应再出现在拒绝消息中")
+        void refusalMessageDoesNotUseOldGenericWording() throws Exception {
+            JsonObject captured = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+
+            assertThat(captured.get("message").getAsString())
+                    .doesNotContain("Access denied: this file is protected");
+        }
+
+        /**
+         * Invokes one of the four private handlers via reflection against the base
+         * {@link #fileOperationManager} (default editable roots: {@code plugins}, {@code logs}) and
+         * returns the {@code data} object of the single captured panel message.
+         */
+        private JsonObject invokeHandlerAndCapturePanelMessage(String handlerName, String path) throws Exception {
+            org.mockito.Mockito.reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+
+            Method handler = FileOperationManager.class.getDeclaredMethod(
+                    handlerName, String.class, JsonObject.class, String.class);
+            handler.setAccessible(true);
+            handler.invoke(fileOperationManager, path, new JsonObject(), "reason-test");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+    }
+
+    @Nested
+    @DisplayName("文件操作动作日志记录测试（D-22，Plan 06-04 Task 1）")
+    class ActionLogRecordingTests {
+
+        private RemoteActionLog mockRemoteActionLog;
+
+        /**
+         * Mirrors {@code CommandExecutionManagerTest.ActionLogRecordingTests}'s pattern: publishes
+         * a fresh {@link UltiTools} mock whose {@code getRemoteActionLog()} returns a captured test
+         * double, then constructs a fresh {@link FileOperationManager} and points both its
+         * {@code serverRoot} and its single editable root at {@link #tempDir} — a full grant, so
+         * the only way to reach a DENIED decision in these tests is the unconditional credential
+         * deny layer, which ignores root configuration entirely.
+         */
+        private FileOperationManager createManagerWithMockedActionLog() throws Exception {
+            mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+            return manager;
+        }
+
+        @Test
+        @DisplayName("read：拒绝时恰好记录一条 DENIED，原因与面板消息一致，能力为 FILE_READ")
+        void deniedReadRecordsExactlyOneDeniedEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "read");
+            operationData.addProperty("path", "plugins/UltiTools/data.json");
+            operationData.addProperty("operationId", "al-read-denied");
+            operationData.addProperty("executor", "some-admin");
+
+            manager.handleFileOperation(operationData);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.FILE_READ.name());
+            assertThat(entry.getAction()).isEqualTo("file_operation:read");
+            assertThat(entry.getTarget()).isEqualTo("plugins/UltiTools/data.json");
+            assertThat(entry.getActor()).isEqualTo("some-admin");
+            assertThat(entry.getReason()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("read：允许时恰好记录一条 ALLOWED，actor 缺省回退为 'panel'")
+        void allowedReadRecordsExactlyOneAllowedEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "read");
+            operationData.addProperty("path", "somefile.txt");
+            operationData.addProperty("operationId", "al-read-allowed");
+
+            manager.handleFileOperation(operationData);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.FILE_READ.name());
+            assertThat(entry.getActor()).isEqualTo("panel");
+        }
+
+        @Test
+        @DisplayName("write：拒绝与允许各记录恰好一条")
+        void writeRecordsExactlyOneEntryPerOutcome() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "write");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-write-denied");
+            denied.addProperty("content", "x");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "write");
+            allowed.addProperty("path", "newfile.txt");
+            allowed.addProperty("operationId", "al-write-allowed");
+            allowed.addProperty("content", "x");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("delete：拒绝与允许各记录恰好一条")
+        void deleteRecordsExactlyOneEntryPerOutcome() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "delete");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-delete-denied");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            File toDelete = new File(tempDir, "al-delete-me.txt");
+            assertThat(toDelete.createNewFile()).isTrue();
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "delete");
+            allowed.addProperty("path", "al-delete-me.txt");
+            allowed.addProperty("operationId", "al-delete-allowed");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("list：拒绝记录恰好一条；允许时即便有三个子项，也只记录一条——决策记录的是操作本身而非每一行")
+        void listRecordsExactlyOneEntryRegardlessOfChildCount() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "list");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-list-denied");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            File listDir = new File(tempDir, "al-listdir");
+            listDir.mkdirs();
+            new File(listDir, "a.txt").createNewFile();
+            new File(listDir, "b.txt").createNewFile();
+            new File(listDir, "c.txt").createNewFile();
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "list");
+            allowed.addProperty("path", "al-listdir");
+            allowed.addProperty("operationId", "al-list-allowed");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("不支持的操作不产生任何动作日志记录")
+        void unsupportedOperationRecordsNoEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "unsupported");
+            data.addProperty("path", "whatever.txt");
+            data.addProperty("operationId", "al-unsupported");
+
+            manager.handleFileOperation(data);
+
+            verify(mockWebSocketClient, timeout(2000).times(1)).sendMessage(ArgumentMatchers.any(JsonObject.class));
+            verify(mockRemoteActionLog, after(300).never()).record(ArgumentMatchers.any());
+        }
+
+        @Test
+        @DisplayName("RemoteActionLog 为 null 时记录是静默 no-op")
+        void nullRemoteActionLogIsSilentNoOp() throws Exception {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "read");
+            data.addProperty("path", "somefile.txt");
+            data.addProperty("operationId", "al-null-log");
+
+            manager.handleFileOperation(data);
+
+            verify(mockWebSocketClient, timeout(2000).times(1)).sendMessage(ArgumentMatchers.any(JsonObject.class));
         }
     }
 }
