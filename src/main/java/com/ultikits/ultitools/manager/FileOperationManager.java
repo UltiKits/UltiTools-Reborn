@@ -626,6 +626,18 @@ public class FileOperationManager {
                 return deleteDecision;
             }
 
+            if (file.isDirectory()) {
+                // D-20: a recursive delete requires the caller to say so — the shape guard, not
+                // the walk. deleteDirectory() itself stays unchanged; this gate runs in front of
+                // it, after the path decision and the existence check, before any deletion.
+                AccessDecision recursiveDecision = requireRecursiveFlag(operationData);
+                if (!recursiveDecision.isAllowed()) {
+                    sendFileOperationResult(operationId, "delete", path, false,
+                        recursiveDecision.getMessage(), null);
+                    return recursiveDecision;
+                }
+            }
+
             boolean deleted = false;
             if (file.isDirectory()) {
                 // 递归删除目录（谨慎操作）
@@ -647,7 +659,37 @@ public class FileOperationManager {
             return deleteDecision;
         }
     }
-    
+
+    /**
+     * D-20's shape guard: deleting a directory requires the request's data to carry a
+     * {@code recursive} member that is a JSON boolean primitive with value {@code true}.
+     * <p>
+     * A present-but-non-boolean {@code recursive} (e.g. the string {@code "false"}) is treated as
+     * absent rather than coerced — Gson's {@code JsonPrimitive.getAsBoolean()} is lenient on a
+     * string primitive, and a request carrying the string {@code "false"} must not delete a world
+     * tree. The missing field is never defaulted to {@code true} for backward compatibility: D-20
+     * accepts the break because {@code file-delete} defaults off, so a caller already reaching
+     * this code had the capability turned on deliberately, and fails here with a clear reason
+     * rather than silently.
+     *
+     * @param operationData the inbound request's data object
+     * @return {@link AccessDecision#allowed()} when {@code recursive} is present and {@code true};
+     *         otherwise a denied, non-configurable decision naming the missing/invalid field — no
+     *         configuration makes an unflagged recursive delete valid
+     */
+    private static AccessDecision requireRecursiveFlag(JsonObject operationData) {
+        com.google.gson.JsonElement recursive = operationData.get("recursive");
+        boolean explicitlyTrue = recursive != null
+                && recursive.isJsonPrimitive()
+                && recursive.getAsJsonPrimitive().isBoolean()
+                && recursive.getAsBoolean();
+        if (explicitlyTrue) {
+            return AccessDecision.allowed();
+        }
+        return AccessDecision.deniedNonConfigurable(
+                "deleting a directory requires the request's 'recursive' field to be the boolean true");
+    }
+
     /**
      * 递归删除目录
      */
