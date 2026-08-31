@@ -51,8 +51,16 @@ public final class AccessDecision {
      * @param reason    why access was refused
      * @param configKey the full dotted config path that would flip this refusal — never blank
      * @return a denied, configurable {@link AccessDecision}
+     * @throws IllegalArgumentException if {@code configKey} is {@code null} or blank — a
+     *                                   configurable refusal naming no key is exactly the silent
+     *                                   shape D-17 exists to remove
      */
     public static AccessDecision deniedConfigurable(String reason, String configKey) {
+        if (configKey == null || configKey.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "deniedConfigurable requires a non-blank configKey — a configurable refusal "
+                            + "naming no key is the silent shape D-17 exists to remove");
+        }
         return new AccessDecision(false, reason, true, configKey);
     }
 
@@ -83,13 +91,20 @@ public final class AccessDecision {
     }
 
     /**
-     * NOT YET IMPLEMENTED — see 06-01-PLAN.md Task 3. Deliberately returns the empty string
-     * unconditionally so {@code AccessDecisionTest}'s message assertions fail for the right reason
-     * (RED).
+     * The human-readable refusal message — empty when allowed. Routes both denied shapes through
+     * {@link Capability}'s two shared refusal statics rather than formatting a sentence of its own
+     * — this is what keeps the whole phase to one refusal vocabulary instead of three managers each
+     * formatting their own (D-05, D-13, D-17).
      *
-     * @return the empty string, always, until GREEN
+     * @return the empty string when allowed; otherwise the refusal sentence
      */
     public String getMessage() {
-        return "";
+        if (allowed) {
+            return "";
+        }
+        if (configurable) {
+            return reason + " — " + Capability.configurableRefusal(configKey);
+        }
+        return Capability.nonConfigurableRefusal(reason);
     }
 }
