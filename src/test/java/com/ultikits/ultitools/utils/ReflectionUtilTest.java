@@ -835,6 +835,8 @@ class ReflectionUtilTest {
 
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
+        // the unused parameter IS the fixture: this constructor exists so a signature-match test has an incompatible candidate to reject.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
         public IncompatibleClass(List<String> items) {
             // Intentionally empty: reflection fixture, never invoked for behaviour.
         }
@@ -874,6 +876,8 @@ class ReflectionUtilTest {
         public final void finalMethod() {
             // Intentionally empty: reflection fixture, never invoked for behaviour.
         }
+        // discovered reflectively by getAllMethods; a direct caller would defeat what the test asserts.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
         private void privateMethod() {
             // Intentionally empty: reflection fixture, never invoked for behaviour.
         }
@@ -914,12 +918,16 @@ class ReflectionUtilTest {
     }
 
     public static class PrivateSlotBase {
+        // discovered reflectively; the same-name private methods in this hierarchy pin that private methods are not overridden and must not be collapsed.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
         private void slot() {
             // Intentionally empty: reflection fixture, never invoked for behaviour.
         }
     }
 
     public static class PrivateSlotChild extends PrivateSlotBase {
+        // discovered reflectively; the same-name private methods in this hierarchy pin that private methods are not overridden and must not be collapsed.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
         private void slot() {
             // Intentionally empty: reflection fixture, never invoked for behaviour.
         }
