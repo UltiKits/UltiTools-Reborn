@@ -24,10 +24,10 @@ import com.ultikits.ultitools.entities.Capability;
  * unconditionally in {@code UltiTools.initWebSocketManagers()} and is not gated by any
  * {@link Capability} — D-32.
  * <p>
- * <b>{@code setUseParentHandlers(false)} is load-bearing.</b> {@code SystemLogHandler} attaches
- * only to the root logger ({@code Logger.getLogger("")}) — the sole attachment site is
- * {@code LogStreamManager.java} line 95, {@code rootLogger.addHandler(systemLogHandler)}. A
- * non-root logger with parent handlers disabled therefore cannot reach {@code SystemLogHandler}
+ * <b>Disabling this logger's parent handlers (see the static initializer below) is load-bearing.</b>
+ * {@code SystemLogHandler} attaches only to the root logger ({@code Logger.getLogger("")}) — the
+ * sole attachment site is {@code LogStreamManager.java} line 95, {@code rootLogger.addHandler(systemLogHandler)}.
+ * A non-root logger with parent handlers disabled therefore cannot reach {@code SystemLogHandler}
  * and cannot create the feedback loop {@link ErrorReportCollector}'s class javadoc warns about
  * ("This class NEVER uses java.util.logging.Logger to prevent circular logging"). This class may
  * therefore safely use {@link Logger}/{@link FileHandler} where {@code ErrorReportCollector} may
@@ -53,7 +53,8 @@ public class RemoteActionLog {
     private static final Logger ACTION_LOG = Logger.getLogger(LOGGER_NAME);
 
     static {
-        // Load-bearing — see class javadoc. The one setUseParentHandlers call site in this class.
+        // Load-bearing — see class javadoc: this is the only call in this class that disables
+        // parent handlers, and it is what keeps this logger from ever reaching SystemLogHandler.
         ACTION_LOG.setUseParentHandlers(false);
         ACTION_LOG.setLevel(Level.ALL);
     }

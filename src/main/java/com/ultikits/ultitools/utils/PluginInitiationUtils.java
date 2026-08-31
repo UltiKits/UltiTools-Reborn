@@ -288,8 +288,8 @@ public class PluginInitiationUtils {
          * @param handler  the handler to invoke once the gate clears
          * @return the entry
          */
-        static InboundHandlerEntry resolved(Function<JsonObject, Capability> resolver,
-                                             BiConsumer<JsonObject, JsonObject> handler) {
+        static InboundHandlerEntry
+                resolved(Function<JsonObject, Capability> resolver, BiConsumer<JsonObject, JsonObject> handler) {
             if (resolver == null) {
                 throw new IllegalArgumentException("resolver must not be null — declare a Capability.of(...) entry instead");
             }
@@ -484,7 +484,7 @@ public class PluginInitiationUtils {
             // "unknown type" outcome the former default branch produced.
             InboundHandlerEntry entry = INBOUND_HANDLERS.get(type);
             if (entry != null) {
-                entry.getHandler().accept(message, data);
+                dispatchWithCapabilityGate(type, message, data, entry);
             } else {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
@@ -497,8 +497,141 @@ public class PluginInitiationUtils {
         }
         
         // 记录消息处理完成日志
-        UltiTools.getInstance().getLogger().log(Level.FINE, 
+        UltiTools.getInstance().getLogger().log(Level.FINE,
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
+    }
+
+    /**
+     * The single enforcement point for every inbound capability (D-10). Resolves the entry's
+     * required capability against {@code data}; {@link Capability#NONE} runs the handler with no
+     * check and no action-log entry. Otherwise: enabled runs the handler and records one
+     * {@link RemoteActionLog.Verdict#ALLOWED} entry; disabled sends one {@code capability_denied}
+     * reply and records one {@link RemoteActionLog.Verdict#DENIED} entry — the handler is never
+     * invoked on the denied path.
+     *
+     * @param type    the message type, used for the action-log {@code action} and the refusal payload
+     * @param message the full inbound message
+     * @param data    the message's {@code data} object, possibly {@code null}
+     * @param entry   the dispatch-table entry that serves this type
+     */
+    private static void dispatchWithCapabilityGate(String type, JsonObject message, JsonObject data,
+                                                     InboundHandlerEntry entry) {
+        Capability capability = entry.resolveCapability(data);
+        if (capability == Capability.NONE) {
+            entry.getHandler().accept(message, data);
+            return;
+        }
+        if (capability.isEnabled()) {
+            entry.getHandler().accept(message, data);
+            recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
+            return;
+        }
+        sendCapabilityRefusal(type, data, capability);
+        recordAction(capability, type, data, RemoteActionLog.Verdict.DENIED, capability.refusalMessage());
+    }
+
+    /**
+     * Sends one {@code capability_denied} outbound message naming the config key, the config file,
+     * the refusal reason, and echoing whichever correlation id the inbound message carried
+     * ({@code commandId}, {@code operationId} or {@code requestId}) so the panel can correlate the
+     * refusal with the request that caused it. Not reusing the existing {@code error} message type
+     * — see {@link #handleInboundMessage}'s own comment on why unsolicited {@code error} replies are
+     * avoided on this path. A logged no-op when no client is connected.
+     *
+     * @param type       the inbound message type that was refused
+     * @param data       the message's {@code data} object, possibly {@code null}
+     * @param capability the capability that refused it
+     */
+    private static void sendCapabilityRefusal(String type, JsonObject data, Capability capability) {
+        if (panelWS == null) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Capability refusal for " + type + " not sent — no WebSocket client connected");
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("type", type);
+        payload.addProperty("capability", capability.name());
+        payload.addProperty("configKey", capability.getConfigPath());
+        payload.addProperty("configFile", "plugins/UltiTools/config.yml");
+        payload.addProperty("reason", capability.refusalMessage());
+
+        if (data != null) {
+            copyIfPresent(data, payload, "commandId");
+            copyIfPresent(data, payload, "operationId");
+            copyIfPresent(data, payload, "requestId");
+        }
+
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "capability_denied");
+        response.add("data", payload);
+        response.addProperty("serverId", panelWS.getServerId());
+        panelWS.sendMessage(response);
+    }
+
+    /** Copies {@code field} from {@code source} to {@code target} only when present and non-null. */
+    private static void copyIfPresent(JsonObject source, JsonObject target, String field) {
+        String value = readString(source, field);
+        if (value != null) {
+            target.addProperty(field, value);
+        }
+    }
+
+    /**
+     * Records one action-log entry for a capability-gated inbound message. A {@code null}
+     * {@link UltiTools#getRemoteActionLog()} is a silent no-op — the existing inbound-message tests
+     * mock {@code UltiTools} and return null for it.
+     */
+    private static void recordAction(Capability capability, String type, JsonObject data,
+                                      RemoteActionLog.Verdict verdict, String reason) {
+        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
+        if (log == null) {
+            return;
+        }
+        String action = resolveActionLogAction(type, data);
+        String target = resolveActionLogTarget(type, data);
+        String actor = resolveActor(data);
+        RemoteActionLog.Entry entry = verdict == RemoteActionLog.Verdict.ALLOWED
+                ? RemoteActionLog.Entry.allowed(capability, action, target, actor)
+                : RemoteActionLog.Entry.denied(capability, action, target, actor, reason);
+        log.record(entry);
+    }
+
+    /** The action-log {@code action} field — the message type, extended with the resolved sub-operation for {@code file_operation}. */
+    private static String resolveActionLogAction(String type, JsonObject data) {
+        if ("file_operation".equals(type) && data != null) {
+            String operation = readString(data, "operation");
+            if (operation != null) {
+                return type + ":" + operation;
+            }
+        }
+        return type;
+    }
+
+    /** The action-log {@code target} field — the command text, file path, or message type otherwise. */
+    private static String resolveActionLogTarget(String type, JsonObject data) {
+        if (data == null) {
+            return type;
+        }
+        if ("execute_command".equals(type)) {
+            String command = readString(data, "command");
+            return command != null ? command : type;
+        }
+        if ("file_operation".equals(type)) {
+            String path = readString(data, "path");
+            return path != null ? path : type;
+        }
+        return type;
+    }
+
+    /**
+     * The action-log {@code actor} field — the inbound {@code executor} field verbatim, or the
+     * literal {@code "panel"} when absent. The framework cannot attribute a remote command to an
+     * individual panel operator today (see {@link RemoteActionLog.Entry}'s javadoc), so this never
+     * invents a per-operator identity.
+     */
+    private static String resolveActor(JsonObject data) {
+        String executor = data != null ? readString(data, "executor") : null;
+        return executor != null ? executor : "panel";
     }
 
     /**
