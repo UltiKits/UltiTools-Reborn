@@ -43,7 +43,12 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 class CapabilityGateRealCollaboratorsTest {
 
     private Logger mockLogger;
+    // PMD.SingularField: assigned in setUp() and read only by this file's single @Test method
+    // (see the class javadoc — deliberately a top-level test, not @Nested). A test-fixture
+    // field, not a design smell.
+    @SuppressWarnings("PMD.SingularField")
     private RemoteActionLog mockRemoteActionLog;
+    @SuppressWarnings("PMD.SingularField")
     private CommandExecutionManager commandExecutionManager;
     private UltiPanelWebSocketClient mockPanelWs;
     private Object previousPanelWs;
