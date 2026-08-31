@@ -252,18 +252,33 @@ public class PluginInitiationUtils {
      * {@link RemoteActionLog} (CR-01, 06-REVIEW.md).
      * <p>
      * Exposes exactly two static factories and no capability-free, verdict-recorder-free
-     * construction path — this is the whole point of D-10: adding a message type to
-     * {@link #INBOUND_HANDLERS} without declaring a capability, or without declaring which side
-     * records its verdict, fails to compile, so no two-argument overload, default, or
-     * null-tolerant constructor is ever added here. {@link #of(Capability, VerdictRecorder,
-     * BiConsumer)} covers the 23 entries whose capability is fixed by the message {@code type}
-     * alone; {@link #resolved(Function, VerdictRecorder, BiConsumer)} covers {@code
-     * file_operation}, the one entry whose capability depends on the message's {@code operation}
-     * field rather than its {@code type}.
+     * construction path — this is the whole point of D-10: {@link #of(Capability, VerdictRecorder,
+     * BiConsumer)} and {@link #resolved(Function, VerdictRecorder, BiConsumer)} are the only ways
+     * to build an entry, both take these arguments in fixed positions, and neither has a shorter
+     * overload or a default.
+     * <p>
+     * <b>Precisely stated (corrected per IN-01, 06-REVIEW.md — an earlier revision of this javadoc
+     * overstated this):</b> omitting either argument from a call site IS a genuine {@code javac}
+     * compile error — there is no shorter overload to fall back to. Passing a {@code null}
+     * capability, resolver, or {@link VerdictRecorder}, however, compiles cleanly (a
+     * reference-typed parameter accepts {@code null} at the language level) and is instead rejected
+     * by an {@link IllegalArgumentException} thrown from {@link #of}/{@link #resolved} the moment
+     * {@link #buildInboundHandlers()} runs — at class-initialization time, before the server
+     * finishes starting, not by the compiler. Together the two guarantees still mean a new message
+     * type cannot silently ship ungated or with an undeclared verdict recorder — the argument slot
+     * is mandatory (compile-time) and a {@code null} value fails immediately and loudly
+     * (class-load-time) — but the {@code null}-rejection half is not literally a compile error.
+     * <p>
+     * {@link #of(Capability, VerdictRecorder, BiConsumer)} covers the 23 entries whose capability is
+     * fixed by the message {@code type} alone; {@link #resolved(Function, VerdictRecorder,
+     * BiConsumer)} covers {@code file_operation}, the one entry whose capability depends on the
+     * message's {@code operation} field rather than its {@code type}.
      * <p>
      * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability}、以及「由哪一侧记录裁决」
      * 绑在一起（D-10, CR-01）。只暴露两个静态工厂，没有任何绕开能力声明或记录方声明的构造路径——
-     * 新增消息类型若不声明这两者就无法编译。
+     * 漏传参数是真正的编译错误；但传 {@code null} 能编译通过，只在
+     * {@link #buildInboundHandlers()} 运行时（类初始化阶段，而非编译期）被
+     * {@link IllegalArgumentException} 立即拦下（IN-01, 06-REVIEW.md 已纠正此前过度表述）。
      */
     static final class InboundHandlerEntry {
         private final Capability capability;
@@ -364,9 +379,12 @@ public class PluginInitiationUtils {
      * branch regardless of which case it was, producing a contradictory second log line — a real
      * {@code DENIED} from the handler's own check immediately followed by a false {@code ALLOWED}
      * from the gate — for every blocklisted command and every credential/out-of-root file request.
-     * A required, compile-forced field (verified by inspecting every entry's handler for its own
+     * A required field (verified by inspecting every entry's handler for its own
      * {@link RemoteActionLog} write) is what stops a newly added entry from silently repeating that
-     * mistake, rather than a defaulted or inferred value.
+     * mistake, rather than a defaulted or inferred value. Precisely: omitting the argument is a
+     * genuine compile error; a {@code null} value compiles but is rejected immediately at
+     * class-initialization time — see {@link InboundHandlerEntry}'s own javadoc for the exact
+     * boundary between the two (IN-01, 06-REVIEW.md).
      */
     enum VerdictRecorder {
         /**
