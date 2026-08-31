@@ -3,8 +3,11 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -12,9 +15,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
+import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
+
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 @DisplayName("PlayerCacheManager Tests")
 class PlayerCacheManagerTest {
@@ -64,6 +77,101 @@ class PlayerCacheManagerTest {
     static class ShadowChild extends ShadowBase {
         @PlayerCache
         protected final Map<UUID, String> cache = new HashMap<>();
+    }
+
+    static class SetCacheService {
+        @PlayerCache
+        final Set<UUID> notifiedPlayers = new HashSet<>();
+
+        final Set<UUID> notAnnotatedSet = new HashSet<>();
+    }
+
+    static class ValueMapService {
+        @PlayerCache
+        final Map<String, UUID> serverLocks = new HashMap<>();
+
+        final Map<String, UUID> notAnnotatedValueMap = new HashMap<>();
+    }
+
+    static class NestedKeyMapService {
+        @PlayerCache
+        final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
+    }
+
+    static class UnsupportedShapeService {
+        @PlayerCache
+        final Map<String, String> badShape = new HashMap<>();
+    }
+
+    static class ValidatorLikeService {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+    }
+
+    static class ExpiringService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+        int sweepCount = 0;
+
+        @Override
+        public void sweepExpired() {
+            sweepCount++;
+        }
+    }
+
+    static class NonExpiringService {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+    }
+
+    static class ThrowingExpiringService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+
+        @Override
+        public void sweepExpired() {
+            throw new IllegalStateException("boom -- this participant always fails");
+        }
+    }
+
+    static class ExpiringWithDataService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, Long> expiryTimestamps = new HashMap<>();
+
+        @Override
+        public void sweepExpired() {
+            long now = System.currentTimeMillis();
+            expiryTimestamps.values().removeIf(ts -> ts < now);
+        }
+    }
+
+    static class CountingSavingService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> state = new HashMap<>();
+        int saveCount = 0;
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            saveCount++;
+        }
+    }
+
+    /**
+     * Stubs {@link UltiTools#getInstance()} to return a mock whose
+     * {@code getPluginManager().getPlayerCacheManager()} chain resolves to the given manager.
+     * Mirrors the workaround {@code PluginManagerRegisterInstanceOrderingTest} and
+     * {@code CooldownValidatorTest} both use for the same "UltiTools is a final JavaPlugin"
+     * problem.
+     */
+    private static MockedStatic<UltiTools> stubLiveManager(PlayerCacheManager liveManager) {
+        UltiTools mockUltiTools = mock(UltiTools.class);
+        PluginManager mockPluginManager = mock(PluginManager.class);
+        when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+        when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+
+        MockedStatic<UltiTools> ultiToolsStatic = mockStatic(UltiTools.class);
+        ultiToolsStatic.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+        return ultiToolsStatic;
     }
 
     @Nested
@@ -210,6 +318,323 @@ class PlayerCacheManagerTest {
             // would not be cleaned
             assertThat(parentCache).withFailMessage("parent cache (from ShadowBase) must be cleaned").isEmpty();
             assertThat(childCache).withFailMessage("child cache (from ShadowChild) must be cleaned").isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("Field shape support (D-03)")
+    class FieldShapeSupport {
+
+        @Test
+        @DisplayName("Sweeps a @PlayerCache Set<UUID> field on quit")
+        void sweepsSetOfUuid() {
+            SetCacheService service = new SetCacheService();
+            UUID playerUuid = UUID.randomUUID();
+            UUID otherUuid = UUID.randomUUID();
+            service.notifiedPlayers.add(playerUuid);
+            service.notifiedPlayers.add(otherUuid);
+            service.notAnnotatedSet.add(playerUuid);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.notifiedPlayers).doesNotContain(playerUuid).contains(otherUuid);
+            assertThat(service.notAnnotatedSet).contains(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Sweeps a @PlayerCache value-side Map<String, UUID> field on quit, leaving other players' entries")
+        void sweepsValueSideUuidMap() {
+            ValueMapService service = new ValueMapService();
+            UUID playerUuid = UUID.randomUUID();
+            UUID otherUuid = UUID.randomUUID();
+            service.serverLocks.put("cmd.teleport", playerUuid);
+            service.serverLocks.put("cmd.home", otherUuid);
+            service.notAnnotatedValueMap.put("cmd.teleport", playerUuid);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.serverLocks).doesNotContainValue(playerUuid);
+            assertThat(service.serverLocks).containsValue(otherUuid);
+            assertThat(service.notAnnotatedValueMap).containsValue(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Existing key-side Map<UUID, ?> sweep still removes the quitting player's entry (no regression)")
+        void keepsKeySideMapBehavior() {
+            TestService service = new TestService();
+            UUID playerUuid = UUID.randomUUID();
+            service.nameCache.put(playerUuid, "Alice");
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.nameCache).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Sweeps a nested Map<UUID, Map<String, Long>> field's outer entry wholesale")
+        void sweepsNestedKeySideMap() {
+            NestedKeyMapService service = new NestedKeyMapService();
+            UUID playerUuid = UUID.randomUUID();
+            Map<String, Long> inner = new HashMap<>();
+            inner.put("cmd.home", System.currentTimeMillis() + 60_000L);
+            service.cooldowns.put(playerUuid, inner);
+
+            manager.registerBean(service);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(service.cooldowns).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Refuses registration of an unsupported @PlayerCache field shape, naming class/field/supported shapes")
+        void refusesUnsupportedFieldShape() {
+            UnsupportedShapeService service = new UnsupportedShapeService();
+
+            assertThatThrownBy(() -> manager.registerBean(service))
+                    .isInstanceOf(PluginModuleException.class)
+                    .hasMessageContaining(UnsupportedShapeService.class.getName())
+                    .hasMessageContaining("badShape")
+                    .hasMessageContaining("Map<UUID")
+                    .hasMessageContaining("Set<UUID");
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("Leaves an unannotated field untouched on quit regardless of its shape")
+        void leavesUnannotatedFieldsUntouched() {
+            SetCacheService setService = new SetCacheService();
+            ValueMapService valueMapService = new ValueMapService();
+            UUID playerUuid = UUID.randomUUID();
+            setService.notAnnotatedSet.add(playerUuid);
+            valueMapService.notAnnotatedValueMap.put("cmd.teleport", playerUuid);
+
+            manager.registerBean(setService);
+            manager.registerBean(valueMapService);
+            manager.onPlayerQuit(playerUuid);
+
+            assertThat(setService.notAnnotatedSet).contains(playerUuid);
+            assertThat(valueMapService.notAnnotatedValueMap).containsValue(playerUuid);
+        }
+    }
+
+    @Nested
+    @DisplayName("Non-bean instance registration (D-03)")
+    class NonBeanRegistration {
+
+        @Test
+        @DisplayName("tryRegister registers a new-ed, non-bean object; it is swept on quit")
+        void tryRegisterRegistersAndSweeps() {
+            ValidatorLikeService service = new ValidatorLikeService();
+            UUID playerUuid = UUID.randomUUID();
+            service.state.put(playerUuid, "value");
+
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                PlayerCacheManager.tryRegister(service);
+            }
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+            manager.onPlayerQuit(playerUuid);
+            assertThat(service.state).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("tryRegister does not throw when UltiTools.getInstance() is null; a bare new MyCommand() must not fail")
+        void tryRegisterToleratesNullCoreInstance() {
+            ValidatorLikeService service = new ValidatorLikeService();
+
+            try (MockedStatic<UltiTools> ultiToolsStatic = mockStatic(UltiTools.class)) {
+                ultiToolsStatic.when(UltiTools::getInstance).thenReturn(null);
+
+                assertThatCode(() -> PlayerCacheManager.tryRegister(service))
+                        .doesNotThrowAnyException();
+            }
+
+            // Nothing reachable from this test was touched -- the outer per-test manager was
+            // never given to the static resolver, so it must still show zero tracked beans.
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("A registration attempt made while the core plugin was unavailable succeeds on a later attempt")
+        void tryRegisterSucceedsOnLaterAttemptOnceAvailable() {
+            ValidatorLikeService service = new ValidatorLikeService();
+
+            try (MockedStatic<UltiTools> ultiToolsStatic = mockStatic(UltiTools.class)) {
+                ultiToolsStatic.when(UltiTools::getInstance).thenReturn(null);
+                PlayerCacheManager.tryRegister(service);
+            }
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(0);
+
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                PlayerCacheManager.tryRegister(service);
+            }
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Registering the same instance twice yields one tracked entry and one sweep per quit")
+        void tryRegisterIsIdempotentPerInstance() {
+            CountingSavingService service = new CountingSavingService();
+            UUID playerUuid = UUID.randomUUID();
+            service.state.put(playerUuid, "value");
+
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                PlayerCacheManager.tryRegister(service);
+                PlayerCacheManager.tryRegister(service);
+            }
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+            manager.onPlayerQuit(playerUuid);
+            assertThat(service.saveCount)
+                    .withFailMessage("savePlayerData must fire exactly once per quit, not once per duplicate registration")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("tryUnregister stops sweeping and releases the reference")
+        void tryUnregisterReleasesReference() {
+            ValidatorLikeService service = new ValidatorLikeService();
+            UUID playerUuid = UUID.randomUUID();
+            service.state.put(playerUuid, "value");
+            int baseline = manager.getTrackedBeanCount();
+
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                PlayerCacheManager.tryRegister(service);
+                assertThat(manager.getTrackedBeanCount()).isEqualTo(baseline + 1);
+
+                PlayerCacheManager.tryUnregister(service);
+            }
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(baseline);
+            manager.onPlayerQuit(playerUuid);
+            assertThat(service.state)
+                    .withFailMessage("an unregistered instance must not be swept on a later quit")
+                    .containsKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Two distinct instances of the same class are tracked and unregistered independently")
+        void distinctInstancesAreTrackedIndependently() {
+            ValidatorLikeService first = new ValidatorLikeService();
+            ValidatorLikeService second = new ValidatorLikeService();
+            UUID playerUuid = UUID.randomUUID();
+            first.state.put(playerUuid, "first");
+            second.state.put(playerUuid, "second");
+
+            try (MockedStatic<UltiTools> ignored = stubLiveManager(manager)) {
+                PlayerCacheManager.tryRegister(first);
+                PlayerCacheManager.tryRegister(second);
+                assertThat(manager.getTrackedBeanCount()).isEqualTo(2);
+
+                PlayerCacheManager.tryUnregister(first);
+            }
+
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(1);
+            manager.onPlayerQuit(playerUuid);
+            assertThat(first.state)
+                    .withFailMessage("unregistering one instance must not affect the other")
+                    .containsKey(playerUuid);
+            assertThat(second.state).doesNotContainKey(playerUuid);
+        }
+    }
+
+    @Nested
+    @DisplayName("Time-based expiry sweep on @Scheduled (D-03)")
+    class ExpirySweep {
+
+        @Test
+        @DisplayName("Invokes a registered ExpiringPlayerCache's hook with no player online and no quit event")
+        void invokesRegisteredExpiryHook() {
+            ExpiringService service = new ExpiringService();
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+
+            assertThat(service.sweepCount).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Does not disturb a registered object that exposes no expiry hook")
+        void leavesNonExpiringObjectUndisturbed() {
+            NonExpiringService service = new NonExpiringService();
+            UUID playerUuid = UUID.randomUUID();
+            service.state.put(playerUuid, "value");
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+
+            assertThat(service.state).containsKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("One participant's hook throwing does not prevent the others from running in the same pass")
+        void isolatesOneParticipantsFailure() {
+            ThrowingExpiringService failing = new ThrowingExpiringService();
+            ExpiringService healthy = new ExpiringService();
+            manager.registerBean(failing);
+            manager.registerBean(healthy);
+
+            assertThatCode(() -> manager.sweepExpiredEntries()).doesNotThrowAnyException();
+
+            assertThat(healthy.sweepCount).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Running the sweep twice with no intervening state change is idempotent")
+        void isIdempotentAcrossConsecutivePasses() {
+            ExpiringWithDataService service = new ExpiringWithDataService();
+            UUID expired = UUID.randomUUID();
+            UUID stillValid = UUID.randomUUID();
+            service.expiryTimestamps.put(expired, System.currentTimeMillis() - 60_000L);
+            service.expiryTimestamps.put(stillValid, System.currentTimeMillis() + 60_000L);
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+            assertThat(service.expiryTimestamps).doesNotContainKey(expired).containsKey(stillValid);
+
+            assertThatCode(() -> manager.sweepExpiredEntries()).doesNotThrowAnyException();
+            assertThat(service.expiryTimestamps)
+                    .withFailMessage("a second pass must remove nothing further")
+                    .doesNotContainKey(expired)
+                    .containsKey(stillValid);
+        }
+
+        @Test
+        @DisplayName("An object unregistered between two passes is not visited by the second")
+        void skipsAnObjectUnregisteredBetweenPasses() {
+            ExpiringService service = new ExpiringService();
+            manager.registerBean(service);
+
+            manager.sweepExpiredEntries();
+            assertThat(service.sweepCount).isEqualTo(1);
+
+            manager.unregisterBean(service);
+            manager.sweepExpiredEntries();
+
+            assertThat(service.sweepCount)
+                    .withFailMessage("an unregistered object must not be visited by a later pass")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("sweepExpiredEntries is a void, no-arg @Scheduled method")
+        void isProperlyScheduled() throws NoSuchMethodException {
+            Method method = PlayerCacheManager.class.getDeclaredMethod("sweepExpiredEntries");
+
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+            assertThat(method.getParameterCount()).isEqualTo(0);
+
+            Scheduled scheduled = method.getAnnotation(Scheduled.class);
+            assertThat(scheduled)
+                    .withFailMessage("sweepExpiredEntries must be driven by the framework's own @Scheduled mechanism")
+                    .isNotNull();
+            assertThat(scheduled.period())
+                    .withFailMessage("period must be a positive, repeating interval, not a one-shot delayed task")
+                    .isPositive();
         }
     }
 }

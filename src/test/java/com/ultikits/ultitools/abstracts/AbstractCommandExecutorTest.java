@@ -462,9 +462,62 @@ class AbstractCommandExecutorTest {
         ConsoleCommandSender console = server.getConsoleSender();
         boolean result = executor.onCommand(console, mockCommand, "test", new String[]{"simple"});
         server.getScheduler().performOneTick();
-        
+
         assertThat(result).isTrue();
         assertThat(executor.simpleCommandExecuted).isTrue();
+    }
+
+    // ========================================================================================
+    // UAT Fix (05-fix / SILENT-25): CommandTabCompletionDispatch.isVisible (tab completion's
+    // mapping-level permission/op filter) reused checkPermission/checkOp -- the SAME methods
+    // this class's OWN actual-dispatch path calls at :715/:718 -- which send the "no permission"
+    // / "no OP" message on every denial. Tab completion is not a command invocation: filtering a
+    // permission-gated mapping's first token silently is correct, but re-sending the rejection
+    // notice on every keystroke that re-evaluates a gated mapping is not. Real-machine UAT
+    // observed this as repeated `phase5uat.secret` spam while a player typed unrelated
+    // sub-commands. Proven on the SAME executor and the SAME mappings ("perm"/"op") both ways --
+    // completion silent, dispatch still messages -- so a one-sided assertion cannot mistake
+    // "silent completion" for "the permission check stopped running" (proof_form_rule).
+    // ========================================================================================
+
+    @Test
+    @DisplayName("UAT Fix (SILENT-25): tab completion of a permission-gated mapping does not message the sender")
+    void tabCompletionOfPermissionGatedMappingIsSilent() {
+        List<String> completions = executor.onTabComplete(player, mockCommand, "test", new String[]{""});
+
+        assertThat(completions).doesNotContain("perm");
+        assertThat(player.nextMessage()).isNull();
+    }
+
+    @Test
+    @DisplayName("UAT Fix (SILENT-25): tab completion of an op-gated mapping does not message the sender")
+    void tabCompletionOfOpGatedMappingIsSilent() {
+        List<String> completions = executor.onTabComplete(player, mockCommand, "test", new String[]{""});
+
+        assertThat(completions).doesNotContain("op");
+        assertThat(player.nextMessage()).isNull();
+    }
+
+    @Test
+    @DisplayName("UAT Fix (SILENT-25): actual dispatch of the SAME permission-gated mapping still messages the sender")
+    void dispatchOfPermissionGatedMappingStillMessages() {
+        boolean result = executor.onCommand(player, mockCommand, "test", new String[]{"perm"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        assertThat(executor.simpleCommandExecuted).isFalse();
+        assertThat(player.nextMessage()).contains("需要权限");
+    }
+
+    @Test
+    @DisplayName("UAT Fix (SILENT-25): actual dispatch of the SAME op-gated mapping still messages the sender")
+    void dispatchOfOpGatedMappingStillMessages() {
+        boolean result = executor.onCommand(player, mockCommand, "test", new String[]{"op"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        assertThat(executor.simpleCommandExecuted).isFalse();
+        assertThat(player.nextMessage()).contains("你没有权限执行这个指令");
     }
 
     // ========== Complex Executor Class ==========

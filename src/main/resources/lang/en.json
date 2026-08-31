@@ -20,6 +20,7 @@
   "请先等待上一条命令执行完毕！": "Please wait for last Command Processing!",
   "请先等待其他玩家发送的命令执行完毕！": "Please wait for last Command Processing which sent by other players!",
   "操作频繁，请稍后再试": "Frequent operations, please try again later",
+  "操作频繁，请 %d 秒后再试": "Frequent operations, please try again in %d seconds",
   "参数 '%s' 格式错误：'%s' 不是一个有效的 %s 类型": "Parameter '%s' has a formatting error: '%s' is not a valid %s type.",
   "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n/ul list 查看已加载的模块列表\n================": "=== UltiTools Commands ===\n/ul reload Reload all modules\n/ul reload <name> Reload a specific module\n/ul list Check loaded module list\n================",
   "模块 %s 已重载": "§aModule %s has been reloaded",
@@ -87,5 +88,6 @@
   "/upm check - 查看可用更新": "/upm check - View available updates",
   "/upm update [插件] - 更新插件": "/upm update [plugin] - Update a plugin",
   "/upm update all - 更新所有插件": "/upm update all - Update all plugins",
-  "有 %d 个更新可用！使用 /upm check 查看详情。": "%d update(s) available! Use /upm check for details."
+  "有 %d 个更新可用！使用 /upm check 查看详情。": "%d update(s) available! Use /upm check for details.",
+  "命令执行超时，已停止等待，命令仍在后台继续执行": "Command execution timed out; no longer waiting. The command continues running in the background."
 }

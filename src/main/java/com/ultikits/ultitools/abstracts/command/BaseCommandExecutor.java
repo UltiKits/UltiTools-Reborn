@@ -7,11 +7,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
 
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -31,6 +33,7 @@ import com.ultikits.ultitools.abstracts.command.validation.validators.Permission
 import com.ultikits.ultitools.abstracts.command.validation.validators.SenderTypeValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
 import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
+import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -39,6 +42,7 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -84,7 +88,27 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Creates a new command executor with a custom validator chain.
+     * <p>
+     * This is the other half of the construction surface {@link #createDefaultValidatorChain()}
+     * warns about: a chain supplied directly here is subject to the exact same load-time
+     * contract. If any {@code @CmdMapping} method on this class -- or the class itself -- declares
+     * {@code @CmdCD} while {@code validatorChain} holds no {@code CooldownValidator}, or
+     * declares {@code @UsageLimit} (any scope but {@code NONE}) while it holds no
+     * {@code UsageLockValidator}, the module is refused at load, naming this class and the
+     * offending mapping method (SILENT-11 / D-01, D-04; enforced by
+     * {@code PluginManager.validateCommandExecutorContract}). There is no opt-out: Phase 3 D-08's
+     * module-granularity isolation is the accepted escape hatch -- only this module fails to
+     * load, every other module still starts.
+     * <p>
      * 使用自定义验证器链创建新的命令执行器。
+     * <p>
+     * 这是 {@link #createDefaultValidatorChain()} 所警示的构造入口的另一半：这里直接传入的链
+     * 同样受相同的加载时契约约束。若本类的某个 {@code @CmdMapping} 方法——或本类本身——声明了
+     * {@code @CmdCD}，而 {@code validatorChain} 中不含 {@code CooldownValidator}；或声明了
+     * {@code @UsageLimit}（{@code NONE} 之外的任意范围），而其中不含 {@code UsageLockValidator}，
+     * 该模块会在加载时被拒绝，并指出本类与问题映射方法（SILENT-11 / D-01, D-04；由
+     * {@code PluginManager.validateCommandExecutorContract} 强制执行）。此拒绝没有开关：Phase 3
+     * D-08 的模块粒度隔离是被接受的退路——只有本模块加载失败，其余模块正常启动。
      *
      * @param validatorChain the custom validator chain
      */
@@ -99,8 +123,27 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Creates the default validator chain with standard validators.
      * Override this method to customize the validation pipeline.
+     * <p>
+     * An override that drops {@code CooldownValidator} or {@code UsageLockValidator} from the
+     * chain while a mapping on this class -- or the class itself -- declares {@code @CmdCD} or
+     * {@code @UsageLimit} (any scope but {@code NONE}) respectively IS refused at load, naming
+     * the offending class and, when known, the offending mapping method (SILENT-11 / D-01, D-04;
+     * enforced by {@code PluginManager.validateCommandExecutorContract}, hooked at the end of
+     * container assembly, before any command reaches Bukkit). There is no opt-out: no system
+     * property, config key, or annotation attribute disables this check. Phase 3 D-08's
+     * module-granularity isolation is the accepted escape hatch instead -- only the offending
+     * module fails to load, every other module still starts.
+     * <p>
      * 创建具有标准验证器的默认验证器链。
      * 重写此方法以自定义验证管道。
+     * <p>
+     * 若某次重写在本类的某映射——或本类本身——声明了 {@code @CmdCD} 或 {@code @UsageLimit}
+     * （{@code NONE} 之外的任意范围）的同时，从链中省略了对应的 {@code CooldownValidator} 或
+     * {@code UsageLockValidator}，会在加载时被拒绝，并指出问题类，以及（已知时）问题映射方法
+     * （SILENT-11 / D-01, D-04；由 {@code PluginManager.validateCommandExecutorContract} 强制
+     * 执行，挂在容器组装的最后一步，早于任何命令抵达 Bukkit）。此拒绝没有开关：没有系统属性、
+     * 配置项或注解属性可以关闭这项检查。Phase 3 D-08 的模块粒度隔离是被接受的退路——只有问题模块
+     * 加载失败，其余模块正常启动。
      *
      * @return the validator chain
      */
@@ -118,10 +161,44 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         // Add cooldown and lock validators
         builder.add(cooldownValidator);
         builder.add(lockValidator);
-        
+
         return builder.build();
     }
-    
+
+    /**
+     * Releases {@link #cooldownValidator}/{@link #lockValidator} from {@link
+     * PlayerCacheManager} tracking and bulk-clears {@link UsageLockValidator}'s locks when this
+     * executor is torn down (module unload).
+     * <p>
+     * Reached through the framework's EXISTING {@code @PreDestroy} container lifecycle --
+     * {@code PluginManager.unregister(plugin)} already calls {@code plugin.getContext().close()},
+     * which invokes every singleton bean's {@code @PreDestroy} methods -- rather than a second,
+     * purpose-built unload hook (GEN-08, D-03). {@link #cooldownValidator}/{@link #lockValidator}
+     * are registered with {@link PlayerCacheManager} SEPARATELY from this executor bean itself
+     * (their sweepable state lives on them, not on this class), so the pre-existing per-bean
+     * {@code playerCacheManager.unregisterBean(bean)} loop already in {@code
+     * PluginManager.unregister(...)} -- which only ever sees the beans a plugin's own container
+     * constructed -- never reaches them on its own; this hook is what does.
+     * <p>
+     * {@link UsageLockValidator#clearAllLocks()} has no per-player analogue and, unlike {@link
+     * UsageLockValidator#clearPlayerLocks(java.util.UUID)}/{@link
+     * CooldownValidator#clearCooldowns(java.util.UUID)}, no quit-path call site either (GEN-08)
+     * -- module unload is the correct point to bulk-release whatever this specific executor
+     * instance's locks still held at teardown.
+     *
+     * @since 6.3.0
+     */
+    // @PreDestroy methods are invoked reflectively by SimpleContainer.invokePreDestroyMethods
+    // (which calls setAccessible(true) before invoking), so PMD cannot see this private method's
+    // only call site and misreports it as unused.
+    @PreDestroy
+    @SuppressWarnings("PMD.UnusedPrivateMethod")
+    private void unregisterValidatorsFromPlayerCache() {
+        PlayerCacheManager.tryUnregister(cooldownValidator);
+        PlayerCacheManager.tryUnregister(lockValidator);
+        lockValidator.clearAllLocks();
+    }
+
     /**
      * Scans methods for command mappings.
      * 扫描方法以获取命令映射。
@@ -169,11 +246,17 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         }
         
         // Create command context
+        // WR-02 (05-REVIEW.md): this.getClass() is the concrete executor class -- the SAME class
+        // PluginManager's load-time contract gate inspects (executor.getClass()) -- captured
+        // here so CooldownValidator/UsageLockValidator can resolve a class-level @CmdCD/
+        // @UsageLimit against it instead of only Method#getDeclaringClass(), which for an
+        // inherited, unoverridden @CmdMapping method is an ancestor, not this class.
         CommandContext context = CommandContext.builder()
                 .sender(sender)
                 .command(command)
                 .alias(alias)
                 .rawArgs(args)
+                .executorClass(this.getClass())
                 .build();
         
         // Match method
@@ -216,22 +299,31 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         }
         
         // Execute command
-        executeCommand(context, method, methodParams);
-        
+        executeCommand(context, method, methodParams, validationResult);
+
         return true;
     }
-    
+
     /**
      * Executes the command method.
      * Supports both synchronous and asynchronous execution via @AsyncCommand or @RunAsync.
      * 执行命令方法。
      * 通过 @AsyncCommand 或 @RunAsync 支持同步和异步执行。
      *
-     * @param context the command context
-     * @param method  the method to execute
-     * @param params  the method parameters
+     * @param context          the command context
+     * @param method           the method to execute
+     * @param params           the method parameters
+     * @param validationResult the chain result produced by {@code onCommand}'s validation step
+     *                         for THIS invocation; its
+     *                         {@link ValidatorChain.ChainValidationResult#getPassedValidators()}
+     *                         is the sole source that drives each validator's
+     *                         {@link CommandValidator#onComplete(CommandContext, boolean)} call --
+     *                         see D-01. Never recomputed here: re-validating would run every
+     *                         validator twice and re-trigger their gates (e.g. a second lock
+     *                         acquisition attempt).
      */
-    protected void executeCommand(CommandContext context, Method method, Object[] params) {
+    protected void executeCommand(CommandContext context, Method method, Object[] params,
+                                   ValidatorChain.ChainValidationResult validationResult) {
         // Check for async annotations
         AsyncCommand asyncCommand = method.getAnnotation(AsyncCommand.class);
         boolean isAsync = asyncCommand != null || method.isAnnotationPresent(RunAsync.class);
@@ -240,79 +332,182 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         final TriggerContext triggerCtx = TriggerContext.command(context.getSender(),
                 method.getName());
 
+        // The validators that actually ran (and passed) for THIS invocation. Per D-01, "in the
+        // chain" and "has side effects" are the same fact by construction: post-actions are
+        // driven from this list instead of naming cooldownValidator/lockValidator by field, so a
+        // custom ValidatorChain that omits a validator also omits its side effect.
+        final List<CommandValidator> ranValidators = validationResult != null
+                ? validationResult.getPassedValidators()
+                : Collections.emptyList();
+
+        // WIRE-12/D-13: shared between the command body's own completion and the timeout
+        // watcher armed below. Whichever side wins the CAS is the ONLY side that reports to
+        // the sender -- the loser is a no-op. Read/set from two different threads (the async
+        // worker running the body and the delayed async watcher task), so this MUST be an
+        // atomic, not a plain boolean. Harmless when timeout() <= 0: no watcher is armed, so
+        // nothing else ever touches this flag and the body's own CAS below is a pure no-op.
+        final AtomicBoolean reported = new AtomicBoolean(false);
+
         BukkitRunnable runnable = new BukkitRunnable() {
             @Override
             public void run() {
-                // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
-                // AuditableDataEntity's audit columns is set and cleared HERE, inside the
-                // runnable that actually invokes the matched method -- not around the
-                // runTask()/runTaskAsynchronously() call below that schedules this runnable.
-                // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
-                // run on another thread entirely; a ThreadLocal write made on the scheduling
-                // thread would be invisible on whichever thread actually executes this run()
-                // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
-                // finally around the whole body so a pooled Bukkit worker thread never carries
-                // one command's user into the next, whether this command's sender was a Player
-                // or not, and whether the handler returned normally or threw.
-                if (context.isPlayer()) {
-                    AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
-                }
-                try {
-                    lockValidator.acquireLock(context);
-                    try {
-                        method.setAccessible(true);
-                        method.invoke(BaseCommandExecutor.this, params);
-                        cooldownValidator.applyCooldown(context);
-                    } catch (Exception e) {
-                        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
-                        Logger.getLogger(BaseCommandExecutor.class.getName())
-                                .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
-                        // Report to error collector
-                        try {
-                            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-                            if (erc != null) {
-                                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                                erc.reportError(cause, extractModuleName(), triggerCtx);
-                            }
-                        } catch (Exception ignored) {
-                            // Never re-enter logging from error reporting
-                        }
-                    } finally {
-                        lockValidator.releaseLock(context);
-                    }
-                } finally {
-                    AuditableDataEntity.clearCurrentUser();
-                }
+                invokeCommandBody(context, method, params, ranValidators, triggerCtx, reported);
             }
         };
-        
+
         if (isAsync) {
-            // Show processing message if enabled
-            if (asyncCommand != null && asyncCommand.showProcessing()) {
-                String processingKey = asyncCommand.processingMessageKey();
-                String processingMsg = processingKey.isEmpty() 
-                    ? "处理中..." 
-                    : UltiTools.getInstance().i18n(processingKey);
-                context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
-            }
-            
-            // Handle timeout
-            if (asyncCommand != null && asyncCommand.timeout() > 0) {
-                BukkitRunnable timeoutTask = runnable;
-                runnable = new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        timeoutTask.runTaskAsynchronously(UltiTools.getInstance());
-                    }
-                };
-            }
-            
-            runnable.runTaskAsynchronously(UltiTools.getInstance());
+            dispatchAsyncCommand(context, asyncCommand, runnable, reported);
         } else {
             runnable.runTask(UltiTools.getInstance());
         }
     }
-    
+
+    /**
+     * Runs the matched command method plus its surrounding bookkeeping (audit-user context,
+     * post-action validator hooks, error reporting, the WIRE-12 completion flag) -- the body of
+     * the {@link BukkitRunnable} {@link #executeCommand} schedules.
+     * <p>
+     * Split out of {@code executeCommand} purely to bring the enclosing method's
+     * NPathComplexity back under threshold; the control flow below, and therefore the runtime
+     * behaviour, is unchanged from before the extraction (refactor only, per D-01/D-02/T-02-REP
+     * design notes that used to live on the anonymous {@code run()} this replaces).
+     *
+     * @since 6.3.0
+     */
+    private void invokeCommandBody(CommandContext context, Method method, Object[] params,
+                                    List<CommandValidator> ranValidators, TriggerContext triggerCtx,
+                                    AtomicBoolean reported) {
+        try {
+            // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
+            // AuditableDataEntity's audit columns is set and cleared HERE, inside the
+            // runnable that actually invokes the matched method -- not around the
+            // runTask()/runTaskAsynchronously() call below that schedules this runnable.
+            // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
+            // run on another thread entirely; a ThreadLocal write made on the scheduling
+            // thread would be invisible on whichever thread actually executes this run()
+            // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
+            // finally around the whole body so a pooled Bukkit worker thread never carries
+            // one command's user into the next, whether this command's sender was a Player
+            // or not, and whether the handler returned normally or threw.
+            if (context.isPlayer()) {
+                AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
+            }
+            try {
+                boolean commandSucceeded = false;
+                try {
+                    method.setAccessible(true);
+                    method.invoke(this, params);
+                    commandSucceeded = true;
+                } catch (Exception e) {
+                    reportCommandExecutionError(context, method, e, triggerCtx);
+                } finally {
+                    // Post-actions run once per validator that passed for THIS invocation, in
+                    // chain order, whether the mapped method succeeded or threw.
+                    // UsageLockValidator's release is one of these post-actions as of D-02:
+                    // acquisition happened inside its validate() step (acquire-as-you-validate),
+                    // so it is no longer named by field here either -- lockValidator.releaseLock
+                    // is reached only via onComplete, only for a validator that actually ran.
+                    for (CommandValidator ranValidator : ranValidators) {
+                        ranValidator.onComplete(context, commandSucceeded);
+                    }
+                }
+            } finally {
+                AuditableDataEntity.clearCurrentUser();
+            }
+        } finally {
+            // WIRE-12: claim the flag so a watcher that fires later -- a stale delayed
+            // task racing a body that already finished -- becomes a no-op (Test 5/6).
+            // The body is NEVER interrupted to make this deadline; it always runs this
+            // finally exactly once, win or lose the race.
+            reported.compareAndSet(false, true);
+        }
+    }
+
+    /**
+     * Sends the user-facing failure message, logs the exception, and best-effort reports it to
+     * {@link ErrorReportCollector} for a command method that threw. Split out of
+     * {@link #invokeCommandBody} for the same NPathComplexity reason as that extraction.
+     *
+     * @since 6.3.0
+     */
+    private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
+                                              TriggerContext triggerCtx) {
+        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
+        Logger.getLogger(BaseCommandExecutor.class.getName())
+                .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
+        // Report to error collector
+        try {
+            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+            if (erc != null) {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                erc.reportError(cause, extractModuleName(), triggerCtx);
+            }
+        } catch (Exception ignored) {
+            // Never re-enter logging from error reporting
+        }
+    }
+
+    /**
+     * Sends the optional "processing" message, dispatches {@code runnable} asynchronously
+     * exactly once, and arms the timeout watcher if configured. Split out of
+     * {@link #executeCommand} for the same NPathComplexity reason as
+     * {@link #invokeCommandBody}'s extraction.
+     *
+     * @since 6.3.0
+     */
+    private void dispatchAsyncCommand(CommandContext context, AsyncCommand asyncCommand,
+                                       BukkitRunnable runnable, AtomicBoolean reported) {
+        // Show processing message if enabled
+        if (asyncCommand != null && asyncCommand.showProcessing()) {
+            String processingKey = asyncCommand.processingMessageKey();
+            String processingMsg = processingKey.isEmpty()
+                    ? "处理中..."
+                    : UltiTools.getInstance().i18n(processingKey);
+            context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
+        }
+
+        // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
+        // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
+        // this runnable in another one -- that "wrap and re-dispatch" shape is what
+        // produced the double async dispatch this replaces, on the DEFAULT path of every
+        // @AsyncCommand (timeout()'s default is 30).
+        runnable.runTaskAsynchronously(UltiTools.getInstance());
+
+        if (asyncCommand != null && asyncCommand.timeout() > 0) {
+            armTimeoutWatcher(context, asyncCommand, reported);
+        }
+    }
+
+    /**
+     * Arms the delayed watcher that reports a timeout message to the sender if the command body
+     * has not already completed by then. Split out of {@link #dispatchAsyncCommand} for the
+     * same NPathComplexity reason as its sibling extractions.
+     *
+     * @since 6.3.0
+     */
+    private void armTimeoutWatcher(CommandContext context, AsyncCommand asyncCommand, AtomicBoolean reported) {
+        // The watcher does NOT touch, cancel, or interrupt the body's task -- Bukkit's
+        // async scheduler pool is shared, and interrupting a pooled thread is unsafe
+        // (it can affect unrelated tasks). It only stops WAITING and reports, once,
+        // via the CAS above; the body keeps running to completion regardless and its
+        // result (success or exception) is discarded from the watcher's perspective.
+        BukkitRunnable watcher = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (reported.compareAndSet(false, true)) {
+                    // Paper's AsyncCatcher governs what may be touched off the main
+                    // thread; hop back through it to send the message, same mechanism
+                    // CommandExecutionManager already uses for this purpose.
+                    Bukkit.getScheduler().runTask(UltiTools.getInstance(), () ->
+                            context.getSender().sendMessage(ChatColor.RED + UltiTools.getInstance()
+                                    .i18n("命令执行超时，已停止等待，命令仍在后台继续执行")));
+                }
+            }
+        };
+        watcher.runTaskLaterAsynchronously(UltiTools.getInstance(), asyncCommand.timeout() * 20L);
+    }
+
+
     /**
      * Matches arguments to a registered method.
      * 将参数匹配到已注册的方法。
@@ -621,22 +816,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @return list of suggestions
      */
     protected List<String> suggest(Player player, Command command, String[] args) {
-        List<String> suggestions = new ArrayList<>();
-        
-        if (args.length == 1) {
-            // First argument - suggest command formats
-            for (String format : mappings.keySet()) {
-                String[] formatArgs = format.split(" ");
-                if (formatArgs.length > 0) {
-                    String firstArg = formatArgs[0];
-                    if (!isParameter(firstArg) && firstArg.toLowerCase().startsWith(args[0].toLowerCase())) {
-                        suggestions.add(firstArg);
-                    }
-                }
-            }
-        }
-        
-        return suggestions;
+        return CommandTabCompletionDispatch.suggest(mappings, player, command, args, this);
     }
     
     /**

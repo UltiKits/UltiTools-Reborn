@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.*;
 
 import java.util.*;
@@ -204,6 +205,70 @@ class UpdateManagerTest {
             updateManager.markPlayerNotified(uuid);
 
             assertThat(updateManager.isPlayerNotified(uuid)).isTrue();
+        }
+    }
+
+    /**
+     * GEN-08 / D-03: {@code notifiedPlayers} is now registered with the live {@link
+     * PlayerCacheManager} (lazy first-use, triggered from {@link UpdateManager#markPlayerNotified}),
+     * so a quitting player's UUID is pruned through the REAL quit path -- {@link
+     * PlayerCacheManager#onPlayerQuit(UUID)} -- rather than never at all. At HEAD nothing ever
+     * removes from this set (only {@code contains}/{@code add} exist), so this assertion fails
+     * on the pre-migration build.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager quit-based sweep (GEN-08, D-03)")
+    class PlayerCacheSweepTests {
+
+        private PlayerCacheManager liveManager;
+        private MockedStatic<UltiTools> ultiToolsStatic;
+
+        @BeforeEach
+        void wireLiveManager() {
+            liveManager = new PlayerCacheManager();
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+            ultiToolsStatic = mockStatic(UltiTools.class);
+            ultiToolsStatic.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+        }
+
+        @AfterEach
+        void closeStaticMock() {
+            if (ultiToolsStatic != null) {
+                ultiToolsStatic.close();
+            }
+        }
+
+        @Test
+        @DisplayName("A notified player's UUID is gone after they quit, observed through the real quit path")
+        void notifiedPlayerUuidGoneAfterRealQuitPath() {
+            UUID uuid = UUID.randomUUID();
+
+            // markPlayerNotified() both records the UUID and triggers lazy first-use
+            // registration with the live manager wired above.
+            updateManager.markPlayerNotified(uuid);
+            assertThat(updateManager.isPlayerNotified(uuid)).isTrue();
+
+            liveManager.onPlayerQuit(uuid);
+
+            assertThat(updateManager.isPlayerNotified(uuid))
+                    .withFailMessage("nothing removes from notifiedPlayers at HEAD -- this must "
+                            + "now be pruned by the real quit path, not merely still present")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Sweeping the same quitting player twice removes nothing further and throws nothing")
+        void sweepingSamePlayerTwiceIsIdempotent() {
+            UUID uuid = UUID.randomUUID();
+            updateManager.markPlayerNotified(uuid);
+
+            liveManager.onPlayerQuit(uuid);
+            assertThatCode(() -> liveManager.onPlayerQuit(uuid)).doesNotThrowAnyException();
+
+            assertThat(updateManager.isPlayerNotified(uuid)).isFalse();
         }
     }
 }

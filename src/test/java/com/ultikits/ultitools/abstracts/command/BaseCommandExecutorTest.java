@@ -1,24 +1,42 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +51,10 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.AsyncCommand;
+import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -980,6 +1002,130 @@ class BaseCommandExecutorTest {
     }
 
     @Nested
+    @DisplayName("Chain-Driven Post-Action Tests")
+    class ChainDrivenPostActionTests {
+
+        private UUID player1UUID;
+
+        @BeforeEach
+        void stubPlayerUuid() {
+            player1UUID = UUID.randomUUID();
+            lenient().when(mockPlayer.getUniqueId()).thenReturn(player1UUID);
+        }
+
+        /**
+         * Stubs {@code Bukkit.getScheduler()} so {@code BukkitRunnable#runTask} invokes the
+         * runnable synchronously instead of touching a real Bukkit scheduler, which does not
+         * exist under plain Mockito. Mirrors the pattern already used in
+         * {@code GuiSchedulerTest#testRunOnMainThread_WhenNotOnMainThread}.
+         */
+        private void stubSyncScheduler(MockedStatic<Bukkit> bukkit) {
+            BukkitScheduler scheduler = mock(BukkitScheduler.class);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable task = invocation.getArgument(1);
+                task.run();
+                return null;
+            });
+        }
+
+        @Test
+        @DisplayName("SEAM: custom chain with CooldownValidator rejects the second dispatch within the cooldown window")
+        void customChainWithCooldownValidatorRejectsSecondDispatch() {
+            ValidatorChain chain = ValidatorChain.builder().add(new CooldownValidator()).build();
+            CooldownSeamExecutor executor = new CooldownSeamExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+            }
+
+            assertEquals(1, executor.pingCount,
+                    "the second dispatch inside the cooldown window must be rejected -- the mapped method must not run");
+        }
+
+        @Test
+        @DisplayName("Negative half: custom chain WITHOUT CooldownValidator permits both dispatches and records no cooldown state")
+        void customChainWithoutCooldownValidatorRecordsNoCooldownState() throws Exception {
+            ValidatorChain chain = ValidatorChain.builder().build();
+            CooldownSeamExecutor executor = new CooldownSeamExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+                executor.onCommand(mockPlayer, mockCommand, "seam", new String[]{"ping"});
+            }
+
+            assertEquals(2, executor.pingCount,
+                    "both dispatches must proceed when the chain lacks a CooldownValidator");
+
+            Method pingMethod = CooldownSeamExecutor.class.getDeclaredMethod("doPing", Player.class);
+            long remaining = executor.getCooldownValidator().getRemainingCooldown(player1UUID, pingMethod.toString());
+            assertEquals(0, remaining,
+                    "the field-created cooldownValidator (absent from the custom chain) must record no cooldown state");
+        }
+
+        @Test
+        @DisplayName("Two passing validators each receive exactly one post-action call, in chain order")
+        void twoPassingValidatorsEachReceiveOnePostActionInOrder() {
+            List<String> completionOrder = new ArrayList<>();
+            RecordingValidator first = new RecordingValidator("first", 10, true, completionOrder);
+            RecordingValidator second = new RecordingValidator("second", 20, true, completionOrder);
+            // Added out of order to also prove the chain still sorts by getOrder().
+            ValidatorChain chain = ValidatorChain.builder().add(second).add(first).build();
+            PostActionOrderExecutor executor = new PostActionOrderExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+            }
+
+            assertEquals(1, executor.invokeCount);
+            assertEquals(1, first.completions.size());
+            assertEquals(1, second.completions.size());
+            assertTrue(first.completions.get(0));
+            assertTrue(second.completions.get(0));
+            assertEquals(Arrays.asList("first", "second"), completionOrder,
+                    "post-actions must fire in chain order (by getOrder())");
+        }
+
+        @Test
+        @DisplayName("Failure short-circuit: when the first validator fails, the second receives no post-action call")
+        void failingFirstValidatorPreventsSecondPostAction() {
+            RecordingValidator failing = new RecordingValidator("failing", 10, false, null);
+            RecordingValidator second = new RecordingValidator("second", 20, true, null);
+            ValidatorChain chain = ValidatorChain.builder().add(failing).add(second).build();
+            PostActionOrderExecutor executor = new PostActionOrderExecutor(chain);
+
+            boolean result = executor.onCommand(mockPlayer, mockCommand, "postaction", new String[]{"go"});
+
+            assertTrue(result);
+            assertEquals(0, executor.invokeCount, "the mapped method must not run when validation fails");
+            assertEquals(0, failing.completions.size());
+            assertEquals(0, second.completions.size(),
+                    "a validator the chain never reached must receive no post-action call");
+        }
+
+        @Test
+        @DisplayName("When the mapped method throws, validators that ran still receive their post-action call with success=false")
+        void throwingMappedMethodStillInvokesPostActionWithFailureFlag() {
+            RecordingValidator recorder = new RecordingValidator("recorder", 10, true, null);
+            ValidatorChain chain = ValidatorChain.builder().add(recorder).build();
+            ThrowingCommandExecutor executor = new ThrowingCommandExecutor(chain);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubSyncScheduler(bukkit);
+                assertDoesNotThrow(() ->
+                        executor.onCommand(mockPlayer, mockCommand, "throwing", new String[]{"boom"}));
+            }
+
+            assertEquals(1, recorder.completions.size());
+            assertFalse(recorder.completions.get(0), "the success flag must be false when the mapped method threw");
+        }
+    }
+
+    @Nested
     @DisplayName("Bare Command Tests")
     class BareCommandTests {
 
@@ -1022,7 +1168,370 @@ class BaseCommandExecutorTest {
         }
     }
 
+    /**
+     * GEN-08 / D-03: {@link CooldownValidator}/{@link com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator}
+     * register their per-player state with {@link PlayerCacheManager} lazily, from their own
+     * first {@code validate(CommandContext)} call -- NOT from this executor's constructor. A
+     * bare construction (the shape a unit test, or a real module's own constructor, reaches
+     * long before any command is ever dispatched) must never even attempt contact with a core
+     * plugin that may not exist yet.
+     */
+    @Nested
+    @DisplayName("PlayerCacheManager registration is lazy, not eager at construction (GEN-08, D-03)")
+    class LazyPlayerCacheRegistrationTests {
+
+        @Test
+        @DisplayName("Constructing a subclass with no core plugin available neither throws nor registers")
+        void constructionWithNoCorePluginNeitherThrowsNorRegisters() {
+            assertDoesNotThrow(() -> new BareCommandExecutor());
+        }
+
+        @Test
+        @DisplayName("Constructing a subclass does not register anything even when the core plugin IS "
+                + "available -- registration is deferred to the validators' first validate() call")
+        void constructionDoesNotRegisterEvenWhenCoreAvailable() {
+            // The class-level @BeforeEach already makes UltiTools.getInstance() resolve to
+            // mockUltiTools -- wire IT (rather than registering a second, conflicting static
+            // mock) through to a real, live PlayerCacheManager so "core available" is genuine.
+            PlayerCacheManager liveManager = new PlayerCacheManager();
+            PluginManager mockPluginManager = mock(PluginManager.class);
+            // lenient(): the whole point of this test is that construction never reaches either
+            // stub -- a strict-stubbing "unnecessary stubbing" failure here would be a false
+            // negative on the very behaviour being asserted.
+            lenient().when(mockPluginManager.getPlayerCacheManager()).thenReturn(liveManager);
+            lenient().when(mockUltiTools.getPluginManager()).thenReturn(mockPluginManager);
+
+            new BareCommandExecutor();
+
+            assertEquals(0, liveManager.getTrackedBeanCount(),
+                    "construction alone must not register the validators with PlayerCacheManager; "
+                            + "that only happens on their own first validate() call");
+        }
+    }
+
+    /**
+     * WIRE-12 / T-05-29..33 -- single async dispatch plus a timeout watcher.
+     * <p>
+     * At HEAD, {@code executeCommand}'s {@code timeout() > 0} branch wraps the already-built
+     * runnable in a second runnable whose only body calls {@code runTaskAsynchronously} again,
+     * and the outer is scheduled async too -- and {@code timeout()}'s default is 30, so the
+     * double dispatch is the DEFAULT path for every {@code @AsyncCommand} (D-13). These tests
+     * assert the fixed shape: the body is scheduled asynchronously exactly once, and a
+     * SEPARATE watcher reports a timeout to the sender without interrupting the body.
+     * <p>
+     * The scheduler seam mirrors {@code ChainDrivenPostActionTests.stubSyncScheduler}: rather
+     * than letting a real {@code BukkitScheduler} run tasks, {@code Bukkit.getScheduler()} is
+     * mocked and every call to {@code runTaskAsynchronously}/{@code runTaskLaterAsynchronously}
+     * is CAPTURED (not auto-invoked), so each test controls exactly when and on which thread
+     * the body and the watcher run -- a deterministic seam instead of a wall-clock race. Genuine
+     * concurrency (the body actually still executing when the watcher fires) is modeled with a
+     * real background {@link Thread} synchronized via {@link CountDownLatch}, never
+     * {@code Thread.sleep}.
+     */
+    @Nested
+    @DisplayName("AsyncCommand timeout watcher tests (WIRE-12)")
+    class AsyncCommandTimeoutTests {
+
+        @BeforeEach
+        void stubPlayerUuid() {
+            // TriggerContext.command() dereferences Player#getUniqueId() unconditionally for
+            // any Player sender; mockPlayer otherwise returns null here under plain Mockito.
+            lenient().when(mockPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
+        }
+
+        /**
+         * Stubs {@code Bukkit.getScheduler()} so every dispatch is captured rather than run.
+         * {@code runTask} (main-thread hop, used by the timeout report) still runs synchronously
+         * in place, mirroring {@code ChainDrivenPostActionTests.stubSyncScheduler}.
+         */
+        private void stubCapturingAsyncScheduler(MockedStatic<Bukkit> bukkit,
+                                                  List<Runnable> asyncDispatches,
+                                                  List<Runnable> delayedAsyncDispatches) {
+            BukkitScheduler scheduler = mock(BukkitScheduler.class);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            lenient().when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class)))
+                    .thenAnswer(invocation -> {
+                        asyncDispatches.add(invocation.getArgument(1));
+                        return null;
+                    });
+            lenient().when(scheduler.runTaskLaterAsynchronously(any(Plugin.class), any(Runnable.class), anyLong()))
+                    .thenAnswer(invocation -> {
+                        delayedAsyncDispatches.add(invocation.getArgument(1));
+                        return null;
+                    });
+            lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable task = invocation.getArgument(1);
+                task.run();
+                return null;
+            });
+        }
+
+        @Test
+        @DisplayName("Test 1: the DEFAULT timeout() schedules the body asynchronously exactly once")
+        void defaultTimeoutSchedulesBodyExactlyOnce() {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+            List<Runnable> asyncDispatches = new ArrayList<>();
+            List<Runnable> delayedDispatches = new ArrayList<>();
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"defaultTimeout"});
+                // Run whatever the initial dispatch captured -- on the pre-fix build this is the
+                // outer wrapping runnable, and running it triggers a SECOND
+                // runTaskAsynchronously call from inside its own run() body.
+                for (Runnable r : new ArrayList<>(asyncDispatches)) {
+                    r.run();
+                }
+            }
+
+            assertEquals(1, asyncDispatches.size(),
+                    "the command body must be scheduled asynchronously exactly once, even on the "
+                            + "default timeout() path -- this fails on the pre-fix build, which schedules twice");
+        }
+
+        @Test
+        @DisplayName("Test 2: timeout()=0 schedules once and arms no watcher")
+        void zeroTimeoutSchedulesOnceAndArmsNoWatcher() {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+            List<Runnable> asyncDispatches = new ArrayList<>();
+            List<Runnable> delayedDispatches = new ArrayList<>();
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"noTimeout"});
+                for (Runnable r : new ArrayList<>(asyncDispatches)) {
+                    r.run();
+                }
+            }
+
+            assertEquals(1, asyncDispatches.size(), "timeout()=0 must still schedule the body exactly once");
+            assertEquals(0, delayedDispatches.size(), "timeout()=0 must arm no watcher task");
+            assertEquals(1, executor.syncInvocations.get());
+        }
+
+        @Test
+        @DisplayName("Test 3+4: a timeout report fires while the body is still running, "
+                + "and the body still runs to completion, unharmed")
+        void timeoutReportsWithoutInterruptingTheStillRunningBody() throws InterruptedException {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+            List<Runnable> asyncDispatches = new ArrayList<>();
+            List<Runnable> delayedDispatches = new ArrayList<>();
+            Thread bodyThread;
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"slow"});
+
+                assertEquals(1, asyncDispatches.size(),
+                        "the body must be scheduled exactly once even with an explicit timeout");
+                assertEquals(1, delayedDispatches.size(),
+                        "a non-zero timeout must arm exactly one watcher task");
+
+                // Run the body on a REAL background thread so it is genuinely still in flight
+                // -- not merely simulated -- when the watcher fires below.
+                bodyThread = new Thread(asyncDispatches.get(0), "async-body-test-thread");
+                bodyThread.start();
+
+                assertTrue(executor.bodyStarted.await(5, TimeUnit.SECONDS),
+                        "the body must actually start running before the watcher fires");
+
+                // The watcher firing while the body is still blocked on bodyContinue models
+                // "the deadline passed with the body still running" without any real sleep.
+                delayedDispatches.get(0).run();
+            }
+
+            // Match on the timeout-specific message content rather than "any string" -- the
+            // default @AsyncCommand also sends a "processing" message before dispatch, which is
+            // expected and orthogonal to the timeout report being asserted here.
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+
+            // Release the body and confirm it is NOT interrupted and runs to completion.
+            executor.bodyContinue.countDown();
+            bodyThread.join(5000);
+            assertFalse(bodyThread.isAlive(), "the body thread must finish on its own after being released");
+            assertTrue(executor.bodyCompleted.get(),
+                    "the body must run to completion after the timeout report fires");
+            assertFalse(executor.bodyInterrupted.get(),
+                    "the body must NOT be interrupted when the timeout fires");
+
+            // Test 5 (first half): completing after the timeout must not produce a SECOND
+            // timeout report.
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+        }
+
+        @Test
+        @DisplayName("Test 5 (second half): a body completing before the deadline produces no timeout report")
+        void bodyCompletingBeforeDeadlineProducesNoTimeoutReport() {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+            List<Runnable> asyncDispatches = new ArrayList<>();
+            List<Runnable> delayedDispatches = new ArrayList<>();
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"fast"});
+
+                assertEquals(1, asyncDispatches.size());
+                assertEquals(1, delayedDispatches.size());
+
+                // The body completes well before any deadline.
+                asyncDispatches.get(0).run();
+
+                // Simulate the scheduler eventually firing the already-armed watcher AFTER the
+                // body has already completed -- the race the "already reported" flag guards.
+                delayedDispatches.get(0).run();
+            }
+
+            assertEquals(1, executor.fastInvocations.get());
+            // The default @AsyncCommand still sends its "processing" message; only the
+            // TIMEOUT-specific report must be absent.
+            verify(mockPlayer, never()).sendMessage(contains("命令执行超时"));
+        }
+
+        @Test
+        @DisplayName("Test 6: a body that throws after the deadline produces no second report "
+                + "and no exception escaping the scheduler")
+        void bodyThrowingAfterDeadlineProducesNoSecondReportOrEscape() throws InterruptedException {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+            List<Runnable> asyncDispatches = new ArrayList<>();
+            List<Runnable> delayedDispatches = new ArrayList<>();
+            Thread bodyThread;
+            AtomicReference<Throwable> escaped = new AtomicReference<>();
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                stubCapturingAsyncScheduler(bukkit, asyncDispatches, delayedDispatches);
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"slowThrow"});
+
+                assertEquals(1, asyncDispatches.size());
+                assertEquals(1, delayedDispatches.size());
+
+                bodyThread = new Thread(() -> {
+                    try {
+                        asyncDispatches.get(0).run();
+                    } catch (Throwable t) {
+                        escaped.set(t);
+                    }
+                }, "async-throwing-body-test-thread");
+                bodyThread.start();
+
+                assertTrue(executor.bodyStarted.await(5, TimeUnit.SECONDS));
+                delayedDispatches.get(0).run();
+            }
+
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+
+            executor.bodyContinue.countDown();
+            bodyThread.join(5000);
+            assertFalse(bodyThread.isAlive());
+            assertNull(escaped.get(),
+                    "an exception thrown by the mapped method after the deadline must not escape "
+                            + "the scheduled runnable");
+            // Still exactly one report from the WATCHER -- the framework's own generic
+            // "command execution failed" handler (unrelated to this task) may additionally
+            // message the sender for the thrown exception itself, so this asserts no SECOND
+            // timeout-shaped report rather than a total message count.
+            verify(mockPlayer, times(1)).sendMessage(contains("命令执行超时"));
+        }
+
+        @Test
+        @DisplayName("Test 7: a synchronous mapping is unaffected -- deferred by one tick, arms no watcher")
+        void synchronousMappingUnaffectedAndArmsNoWatcher() {
+            AsyncCommandExecutor executor = new AsyncCommandExecutor();
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
+                    Runnable task = invocation.getArgument(1);
+                    task.run();
+                    return null;
+                });
+
+                executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"sync"});
+
+                verify(scheduler, never()).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
+                verify(scheduler, never()).runTaskLaterAsynchronously(
+                        any(Plugin.class), any(Runnable.class), anyLong());
+            }
+
+            assertEquals(1, executor.syncInvocations.get());
+        }
+    }
+
+
     // Test implementations
+
+    /**
+     * Fixture for {@link AsyncCommandTimeoutTests}. {@code doSlow}/{@code doSlowThrow} block on
+     * {@code bodyContinue} so a test can hold them "still running" across a real background
+     * thread boundary without any {@code Thread.sleep} -- the test releases the latch itself
+     * once it has observed the timeout-fired state it wants to assert against.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"asynctest"})
+    static class AsyncCommandExecutor extends BaseCommandExecutor {
+        final AtomicInteger syncInvocations = new AtomicInteger();
+        final AtomicInteger fastInvocations = new AtomicInteger();
+        final CountDownLatch bodyStarted = new CountDownLatch(1);
+        final CountDownLatch bodyContinue = new CountDownLatch(1);
+        final AtomicBoolean bodyCompleted = new AtomicBoolean(false);
+        final AtomicBoolean bodyInterrupted = new AtomicBoolean(false);
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in these tests
+        }
+
+        @CmdMapping(format = "defaultTimeout")
+        @AsyncCommand
+        public void doDefaultTimeout(Player player) {
+            syncInvocations.incrementAndGet();
+        }
+
+        @CmdMapping(format = "noTimeout")
+        @AsyncCommand(timeout = 0)
+        public void doNoTimeout(Player player) {
+            syncInvocations.incrementAndGet();
+        }
+
+        @CmdMapping(format = "slow")
+        @AsyncCommand(timeout = 5)
+        public void doSlow(Player player) {
+            bodyStarted.countDown();
+            try {
+                bodyContinue.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                bodyInterrupted.set(true);
+                Thread.currentThread().interrupt();
+                return;
+            }
+            bodyCompleted.set(true);
+        }
+
+        @CmdMapping(format = "fast")
+        @AsyncCommand(timeout = 5)
+        public void doFast(Player player) {
+            fastInvocations.incrementAndGet();
+        }
+
+        @CmdMapping(format = "slowThrow")
+        @AsyncCommand(timeout = 5)
+        public void doSlowThrow(Player player) {
+            bodyStarted.countDown();
+            try {
+                bodyContinue.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            throw new IllegalStateException("boom-after-deadline");
+        }
+
+        @CmdMapping(format = "sync")
+        public void doSync(Player player) {
+            syncInvocations.incrementAndGet();
+        }
+    }
+
     
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"test"})
@@ -1073,7 +1582,8 @@ class BaseCommandExecutorTest {
         }
 
         @Override
-        protected void executeCommand(CommandContext context, Method method, Object[] params) {
+        protected void executeCommand(CommandContext context, Method method, Object[] params,
+                                       ValidatorChain.ChainValidationResult validationResult) {
             // No setAccessible here: the invocation happens inside this class on its own
             // public methods, so the access check already passes.
             try {
@@ -1112,17 +1622,134 @@ class BaseCommandExecutorTest {
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"custom"})
     static class CustomChainExecutor extends BaseCommandExecutor {
-        
+
         public CustomChainExecutor(ValidatorChain chain) {
             super(chain);
         }
-        
+
         @Override
         protected void handleHelp(CommandSender sender) {
             // Test stub - help handler not used in tests
         }
     }
-    
+
+    /**
+     * Fixture for the SILENT-11 seam assertion: constructed via the custom-{@link ValidatorChain}
+     * constructor, carries a {@code @CmdCD}-annotated mapping so enforcement can be observed
+     * through a real dispatch.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"seam"})
+    static class CooldownSeamExecutor extends BaseCommandExecutor {
+        int pingCount = 0;
+
+        CooldownSeamExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "ping")
+        @CmdCD(5)
+        public void doPing(Player player) {
+            pingCount++;
+        }
+    }
+
+    /**
+     * Fixture for the post-action order/arity/failure-short-circuit tests. Carries no
+     * cooldown/lock annotation so only the {@link RecordingValidator}s injected via the custom
+     * chain gate and receive post-actions.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"postaction"})
+    static class PostActionOrderExecutor extends BaseCommandExecutor {
+        int invokeCount = 0;
+
+        PostActionOrderExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "go")
+        public void doGo(Player player) {
+            invokeCount++;
+        }
+    }
+
+    /**
+     * Fixture whose mapped method always throws, for asserting that post-actions still fire
+     * with a false success flag.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"throwing"})
+    static class ThrowingCommandExecutor extends BaseCommandExecutor {
+
+        ThrowingCommandExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - help handler not used in tests
+        }
+
+        @CmdMapping(format = "boom")
+        public void doBoom(Player player) {
+            throw new IllegalStateException("boom");
+        }
+    }
+
+    /**
+     * A {@link CommandValidator} test double that records each {@code onComplete} invocation's
+     * success flag and, optionally, appends its name to a shared log so relative call order
+     * across multiple validators can be asserted.
+     */
+    static class RecordingValidator implements CommandValidator {
+        private final String name;
+        private final int order;
+        private final boolean succeeds;
+        private final List<String> sharedLog;
+        final List<Boolean> completions = new ArrayList<>();
+
+        RecordingValidator(String name, int order, boolean succeeds, List<String> sharedLog) {
+            this.name = name;
+            this.order = order;
+            this.succeeds = succeeds;
+            this.sharedLog = sharedLog;
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return succeeds ? ValidationResult.success() : ValidationResult.failure("forced failure: " + name);
+        }
+
+        @Override
+        public void onComplete(CommandContext context, boolean commandSucceeded) {
+            completions.add(commandSucceeded);
+            if (sharedLog != null) {
+                sharedLog.add(name);
+            }
+        }
+
+        @Override
+        public int getOrder() {
+            return order;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+    }
+
     @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
     @CmdExecutor(alias = {"consoleonly"})
     static class ConsoleOnlyExecutor extends BaseCommandExecutor {

@@ -47,7 +47,9 @@ class ReflectionUtilTest {
         private String parentField;
         protected int protectedField;
 
-        public ParentClass() {}
+        public ParentClass() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
         public String getParentField() {
             return parentField;
@@ -57,7 +59,9 @@ class ReflectionUtilTest {
             this.parentField = parentField;
         }
 
-        protected void parentMethod() {}
+        protected void parentMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 测试用子类
@@ -67,7 +71,9 @@ class ReflectionUtilTest {
         private String childField;
         private double number;
 
-        public ChildClass() {}
+        public ChildClass() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
         public ChildClass(String childField) {
             this.childField = childField;
@@ -87,12 +93,102 @@ class ReflectionUtilTest {
         }
 
         @TestAnnotation("method")
-        public void annotatedMethod() {}
+        public void annotatedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
 
-        public void normalMethod() {}
+        public void normalMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
-    // 测试用的没有无参构造函数的类
+    // resolveMethodOrClassAnnotation 追加任务的 fixture：class 上没有 @TestAnnotation，
+    // 方法本身携带 -- 用于 "method-level only" 场景。
+    static class NoClassAnnotationFixture {
+        @TestAnnotation("methodOnly")
+        public void annotatedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    // resolveMethodOrClassAnnotation 追加任务的 fixture：class 和方法都没有 @TestAnnotation，
+    // 用于确认两者都缺失时回退结果为 null。
+    static class NoAnnotationAtAllFixture {
+        public void plainMethod() { /* fixture stub: no annotation on class or method */ }
+    }
+
+    // WR-02 (05-REVIEW.md) fixtures for the 3-arg resolveMethodOrClassAnnotation(Method, Class,
+    // Class) overload -- a concrete SUBCLASS inheriting an unoverridden method from a
+    // superclass, exercising the class-vs-declaring-class divergence the 2-arg overload cannot
+    // see. sharedMethod() is inherited, never overridden, so Method#getDeclaringClass() is
+    // always the *Base class below, regardless of which concrete subclass is queried.
+
+    // Combo 1 (the WR-02 broken case): annotation ONLY on the concrete subclass, not on the
+    // declaring superclass.
+    static class Wr02DeclaringBase {
+        public void sharedMethod() { /* fixture stub: inherited, never overridden */ }
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02ConcreteSubclassOnly extends Wr02DeclaringBase {
+        // inherits sharedMethod() -- does not override it
+    }
+
+    // Combo 2: annotation ONLY on the declaring superclass -- the pre-WR-02 behaviour, must be
+    // preserved unchanged.
+    @TestAnnotation("declaringSuperclass")
+    static class Wr02DeclaringBaseWithAnnotation {
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    static class Wr02ConcreteSubclassNoAnnotation extends Wr02DeclaringBaseWithAnnotation {
+        // inherits sharedMethod(); carries no annotation of its own
+    }
+
+    // Combo 3: BOTH the concrete subclass and its declaring superclass carry the annotation,
+    // with DIFFERENT values -- the concrete (most-derived) class must win.
+    @TestAnnotation("declaringSuperclass")
+    static class Wr02BothLevelsBase {
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02BothLevelsConcreteSubclass extends Wr02BothLevelsBase {
+        // inherits sharedMethod(); both this class and its superclass carry @TestAnnotation
+    }
+
+    // Combo 4: neither level carries the annotation -- falls back to null, same as the 2-arg
+    // overload.
+    static class Wr02NeitherLevelBase {
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    static class Wr02NeitherLevelSubclass extends Wr02NeitherLevelBase {
+        // inherits sharedMethod(); no annotation anywhere in the hierarchy
+    }
+
+    // Method-level still wins over the concrete executor class -- most-derived-wins must hold
+    // for the 3-arg overload exactly as it does for the 2-arg one.
+    static class Wr02MethodLevelBase {
+        @TestAnnotation("methodLevel")
+        public void sharedMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    @TestAnnotation("concreteSubclass")
+    static class Wr02MethodLevelWinsSubclass extends Wr02MethodLevelBase {
+        // inherits sharedMethod(), whose OWN method-level annotation must still win over this
+        // subclass's class-level one
+    }
+
+        // 测试用的没有无参构造函数的类
     static class NoDefaultConstructor {
         private final String value;
 
@@ -337,6 +433,150 @@ class ReflectionUtilTest {
 
             assertThat(ReflectionUtil.hasAnnotation(annotatedField, TestAnnotation.class)).isTrue();
             assertThat(ReflectionUtil.hasAnnotation(normalField, TestAnnotation.class)).isFalse();
+        }
+    }
+
+    /**
+     * resolveMethodOrClassAnnotation -- the shared most-derived-wins resolution helper the
+     * maintainer required after the 05-02 follow-up: PluginManager's load-time refusal already
+     * treated a class-level @CmdCD/@UsageLimit as satisfying the contract, but CooldownValidator
+     * and UsageLockValidator only ever read the method -- so a class-level-only declaration
+     * passed the load-time check yet enforced nothing at runtime. This helper is the single
+     * primitive both validators now call, so "the load-time check accepts this" and "the runtime
+     * validator reads this" are provably the same fact.
+     * <p>
+     * Three required cases (method-only, class-only, both-present) plus the neither-present
+     * null case.
+     */
+    @Nested
+    @DisplayName("resolveMethodOrClassAnnotation 方法测试（most-derived-wins，D-01 追加任务）")
+    class ResolveMethodOrClassAnnotationTests {
+
+        @Test
+        @DisplayName("方法级注解存在、类级不存在时：返回方法级注解（行为不变）")
+        void methodLevelOnly_unchanged() throws Exception {
+            Method method = NoClassAnnotationFixture.class.getDeclaredMethod("annotatedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("methodOnly");
+        }
+
+        @Test
+        @DisplayName("方法级注解不存在、类级存在时：回退到类级注解（新增行为）")
+        void classLevelOnly_newFallbackBehavior() throws Exception {
+            Method method = ChildClass.class.getDeclaredMethod("normalMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("child");
+        }
+
+        @Test
+        @DisplayName("方法级与类级注解都存在时：方法级优先（most-derived-wins）")
+        void bothPresent_methodLevelWins() throws Exception {
+            Method method = ChildClass.class.getDeclaredMethod("annotatedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("method");
+        }
+
+        @Test
+        @DisplayName("两者都不存在时：返回 null")
+        void neitherPresent_returnsNull() throws Exception {
+            Method method = NoAnnotationAtAllFixture.class.getDeclaredMethod("plainMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, TestAnnotation.class);
+
+            assertThat(resolved).isNull();
+        }
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): the 3-arg {@code resolveMethodOrClassAnnotation(Method, Class,
+     * Class)} overload -- resolves against the CONCRETE executor class (the same class {@code
+     * PluginManager}'s load-time gate inspects via {@code executor.getClass()}), not just the
+     * matched method's declaring class. All four class-vs-method-annotation combinations from
+     * the review's proof-form rule, plus a most-derived-wins pin.
+     */
+    @Nested
+    @DisplayName("resolveMethodOrClassAnnotation(Method, Class, Class) 三参数重载测试（WR-02）")
+    class ResolveWithExecutorClassTests {
+
+        @Test
+        @DisplayName("类级注解仅在具体子类上：解析出子类的注解（WR-02 修复前会失败）")
+        void concreteSubclassOnly_resolvesSubclassAnnotation() throws Exception {
+            Method method = Wr02ConcreteSubclassOnly.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02ConcreteSubclassOnly.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("concreteSubclass");
+        }
+
+        @Test
+        @DisplayName("类级注解仅在声明超类上：仍解析出超类的注解（回归钉子，行为不变）")
+        void declaringSuperclassOnly_stillResolvesSuperclassAnnotation() throws Exception {
+            Method method = Wr02ConcreteSubclassNoAnnotation.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02ConcreteSubclassNoAnnotation.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("declaringSuperclass");
+        }
+
+        @Test
+        @DisplayName("具体子类与声明超类都有类级注解：具体子类（更派生）的注解胜出")
+        void bothLevelsPresent_concreteSubclassWins() throws Exception {
+            Method method = Wr02BothLevelsConcreteSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02BothLevelsConcreteSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("concreteSubclass");
+        }
+
+        @Test
+        @DisplayName("层级中任何位置都没有注解：返回 null")
+        void neitherLevelPresent_returnsNull() throws Exception {
+            Method method = Wr02NeitherLevelSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02NeitherLevelSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNull();
+        }
+
+        @Test
+        @DisplayName("方法级注解仍然胜过具体执行器类的类级注解（most-derived-wins 对三参数重载同样成立）")
+        void methodLevelStillWinsOverExecutorClass() throws Exception {
+            Method method = Wr02MethodLevelWinsSubclass.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, Wr02MethodLevelWinsSubclass.class, TestAnnotation.class);
+
+            assertThat(resolved).isNotNull();
+            assertThat(resolved.value()).isEqualTo("methodLevel");
+        }
+
+        @Test
+        @DisplayName("executorClass 为 null 时：等价于两参数重载（声明类回退）")
+        void nullExecutorClass_fallsBackToTwoArgBehavior() throws Exception {
+            Method method = Wr02ConcreteSubclassOnly.class.getMethod("sharedMethod");
+
+            TestAnnotation resolved = ReflectionUtil.resolveMethodOrClassAnnotation(
+                    method, null, TestAnnotation.class);
+
+            // Wr02DeclaringBase (the declaring class) carries no @TestAnnotation of its own --
+            // only the concrete subclass does, which a null executorClass cannot see.
+            assertThat(resolved).isNull();
         }
     }
 
@@ -595,7 +835,11 @@ class ReflectionUtilTest {
 
     // 用于类型不匹配测试的辅助类
     static class IncompatibleClass {
-        public IncompatibleClass(List<String> items) {}
+        // the unused parameter IS the fixture: this constructor exists so a signature-match test has an incompatible candidate to reject.
+        @SuppressWarnings("PMD.UnusedFormalParameter")
+        public IncompatibleClass(List<String> items) {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 用于 getMethods 桥接方法去重测试的辅助类。实现 Comparable<T> 让编译器为
@@ -623,17 +867,33 @@ class ReflectionUtilTest {
     // member declaration inside a non-static inner class (which @Nested classes are), and
     // staticMethod() below is exactly the case this test needs to cover.
     public static class GetAllMethodsBase {
-        public void inherited() { }
-        public void overridden() { }
-        public final void finalMethod() { }
-        private void privateMethod() { }
-        public static void staticMethod() { }
+        public void inherited() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public void overridden() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public final void finalMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        // discovered reflectively by getAllMethods; a direct caller would defeat what the test asserts.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
+        private void privateMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public static void staticMethod() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class GetAllMethodsChild extends GetAllMethodsBase {
         @Override
-        public void overridden() { }
-        public void own() { }
+        public void overridden() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+        public void own() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     // 用于 getAllMethods "不可覆盖的声明各自成槽" 用例的辅助类：父子两层各自声明同名同参数的
@@ -646,27 +906,43 @@ class ReflectionUtilTest {
     // fix. Declared at the top level for the same source-1.8 reason as GetAllMethodsBase above.
     // 参数列表不同 -> 必然不是覆盖。Used by the overrides() signature-mismatch test.
     public static class DifferentParamsBase {
-        public void slot(String value) { }
+        public void slot(String value) {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class DifferentParamsChild extends DifferentParamsBase {
-        public void slot() { }
+        public void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class PrivateSlotBase {
-        private void slot() { }
+        // discovered reflectively; the same-name private methods in this hierarchy pin that private methods are not overridden and must not be collapsed.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
+        private void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class PrivateSlotChild extends PrivateSlotBase {
-        private void slot() { }
+        // discovered reflectively; the same-name private methods in this hierarchy pin that private methods are not overridden and must not be collapsed.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
+        private void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class StaticSlotBase {
-        public static void slot() { }
+        public static void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class StaticSlotChild extends StaticSlotBase {
-        public static void slot() { }
+        public static void slot() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
     }
 
     public static class GetAllMethodsGenericBase<T> {

@@ -1195,6 +1195,256 @@ contradicts the documentation": a declared attribute that the framework accepts,
 silently never reads is a self-contradicting contract regardless of whether it happens to have
 zero current users.
 
+### Recorded instance: command-validator side effects move into the chain, and an unenforceable `@CmdCD`/`@UsageLimit` now refuses to load (SILENT-11, 6.3.0)
+
+Before 6.3.0, `BaseCommandExecutor.executeCommand` called `cooldownValidator.applyCooldown` /
+`lockValidator.acquireLock` / `lockValidator.releaseLock` by field reference, unconditionally —
+regardless of whether those validators were actually present in the executor's validator chain.
+An executor built through the single-argument `BaseCommandExecutor(ValidatorChain)` constructor
+stored a custom chain as given, without adding `CooldownValidator`/`UsageLockValidator` unless the
+caller did so explicitly. `@CmdCD` and `@UsageLimit` looked declared and appeared to be recording
+state (`getRemainingCooldown()` returned plausible values) while enforcing nothing — no invocation
+was ever rejected (#312).
+
+6.3.0 closes the gap two ways:
+
+- `CommandValidator` gains a `default void onComplete(CommandContext, boolean)` post-action hook;
+  `ValidatorChain.ChainValidationResult#getPassedValidators()` is now the single ordered source of
+  truth for which validators actually ran a given invocation. `executeCommand` drives every
+  validator's side effect exclusively from that list — "in the chain" and "has side effects" are
+  the same fact by construction, so no construction path can desync them.
+- At plugin load, `PluginManager.validateCommandExecutorContracts` refuses any class or
+  `@CmdMapping` method carrying `@CmdCD` or `@UsageLimit(SENDER|ALL)` whose validator chain has no
+  matching validator, naming the offending class and, when known, the offending method
+  (`ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE`, 4006). `@UsageLimit(NONE)` is exempt, since it
+  declares no limit to enforce. `@CmdCD`/`@UsageLimit`'s `@Target` is additionally widened from
+  `{METHOD}` to `{METHOD, TYPE}` so the same check can also apply to a class-level declaration —
+  purely additive; no previously-annotated site changes shape.
+
+**No opt-out exists for the load-time refusal.** Phase 3's module-granularity isolation is the
+accepted escape hatch: the offending module alone fails to load, every other module still starts.
+Delivered by plan 05-01 (`BaseCommandExecutorTest$ChainDrivenPostActionTests`) and plan 05-02
+(`PluginManagerCommandContractTest`).
+
+**Bucket.** The refusal is "moving from silent degradation to failure" and would ordinarily need
+the two-step warning period, but ships without one under the same reasoning as this document's
+`del()` entry above: a declared `@CmdCD`/`@UsageLimit` that enforces nothing is always a
+module-author bug, not a case a louder log line meaningfully helps — cooldowns are abuse
+protection on a Minecraft server (`UltiBackup.BackupCommand` carries `@CmdCD(30)` on
+`/backup start`; losing it silently means a player can spam full-server backups). Measured **zero**
+downstream custom-`ValidatorChain` construction sites in the monorepo (control: `extends
+BaseCommandExecutor`, 19 files), so no known module hits this refusal today.
+
+`japicmp` cannot detect any of this. `CommandValidator#onComplete` is a source- and
+binary-compatible default-method addition — confirmed via `javap` against the released 6.2.0
+through 6.2.5 jars, whose existing shape is 1 abstract method plus 3 default methods; adding a 4th
+default continues that convention rather than overturning it. The load-time refusal and the
+`@Target` widening are behavioural changes only; no existing method signature changed.
+
+### Recorded instance: `@UsageLimit` now actually serialises what its name promises, and `ContainConsole()`'s default flips to `true` (GEN-09, 6.3.0)
+
+Before 6.3.0, `UsageLockValidator.acquireLock`'s boolean return value was discarded by its only
+caller — a bare statement at `BaseCommandExecutor.java:261` — so a failed acquisition never blocked
+execution. `releaseLock`'s `ALL`-scope branch removed the server-wide lock unconditionally
+(`serverLocks.remove(methodKey)`, no ownership check), so any sender's completion could release a
+lock a *different* sender was still holding (Pitfall 5 / T-05-03). `@UsageLimit` recorded a lock
+and released it on the wrong owner's schedule; it did not serialise anything.
+
+6.3.0 fixes both defects as part of the same rewrite as the entry above: acquisition now happens
+inside `validate()` itself (acquire-as-you-validate), so a failed acquisition is an ordinary
+validation rejection and the mapped method is never invoked; `releaseLock`'s `ALL`-scope branch is
+now ownership-gated via an atomic `Map#remove(key, ownerUuid)`. `UsageLimit.ContainConsole()`'s
+default additionally flips from `false` to `true` — a console sender is now subject to a limit
+unless a mapping opts out explicitly. Delivered by plan 05-01,
+`UsageLockValidatorTest$SerializationGuaranteeTests` (8 tests).
+
+**Bucket.** The acquisition-gate and ownership-gated-release fixes are "correcting behaviour that
+plainly contradicts the documentation" — the annotation's own name always promised serialisation
+and single-owner release (#209) — no migration period. `ContainConsole()`'s default flip is a
+documented-default flip and would ordinarily need the two-step warning period, but is bundled at
+zero measured cost: **zero** production `@UsageLimit` use sites monorepo-wide (control: `@CmdCD`,
+8 sites across 3 modules), so no known caller observes the flip.
+
+`japicmp` cannot detect any of this — no method signature changed on `UsageLimit` or
+`UsageLockValidator`'s public surface.
+
+### Recorded instance: `@CmdParam.suggest`'s resolution contract widens from three steps to four, and an unknown `@key` now refuses to load (WIRE-01, 6.3.0)
+
+Before 6.3.0, `suggest()` resolved in three steps — own-class method name, `@CmdSuggest`-referenced
+class method name, i18n hint-text fallback. The four built-in completers the released jar ships
+(`MaterialsCompleter`, `OnlinePlayersCompleter`, `WorldsCompleter`, `StaticSuggestionsCompleter`)
+had no declarative entry point at all; five downstream modules hand-rolled equivalents instead
+(`suggestWorlds` × 11 sites, `suggestOnlinePlayers` × 2 sites, plus `suggestBooleans`), because
+there was no way to declare them.
+
+6.3.0 adds a new first step: a value starting with `@` (for example `"@players"`) resolves through
+a registered `TabCompleter` — one of the four built-ins, or a key a module registered at runtime.
+`@` is not a legal Java identifier start, so no existing method-name value can collide; all 24
+measured downstream `@CmdParam(suggest=)` sites need zero change. An **unknown** `@key` refuses the
+declaring module to load, at the same load-time validation pass the entry above introduces, naming
+the class, the method and the key — it does **not** fall through to the i18n hint fallback. The
+three previously-existing steps, including the method-not-found → i18n hint fallback, are
+otherwise unchanged. Delivered by plan 05-06,
+`BaseCommandExecutorTabCompletionTest$SuggestKeyNotationTests` (dual notation) and
+`PluginManagerCommandContractTest$UnknownSuggestKeyTests` (8 tests, load-time refusal).
+
+**Bucket.** The additive resolution step needs no migration period on its own — it is gated behind
+a syntax (`@`) no existing value can produce. The **refusal** half is "moving from silent
+degradation to failure" and ships without a warning period under the same D-04 reasoning as the
+entry above: measured **zero** existing `@key`-notation sites anywhere in the monorepo (all 24
+measured sites use plain method names), so the refusal has no known site to warn.
+
+`japicmp` cannot detect this — `CmdParam.suggest()`'s signature is unchanged; only the runtime
+resolution of its `String` value changes.
+
+### Recorded instance: tab completion now filters a `@CmdMapping` by permission before it can contribute a suggestion or be reflectively invoked (SILENT-25, 6.3.0)
+
+Before 6.3.0, `BaseCommandExecutor.suggest` ran with **zero** permission checks. Every `@CmdMapping`
+on a command class was offered to `TAB` regardless of the sender's `@CmdMapping(permission=)` or
+`requireOp()` value — on the first-token literal list, on the multi-token literal-sibling scan, and
+on the `<param>` slot for a mapping the sender could never invoke. That last path is not merely
+information disclosure: a resolved `<param>` slot is handed to
+`commands/tabcomplete/MethodInvocationCompleter`, which **reflectively invokes** the method behind
+`@CmdParam(suggest = "methodName")` to produce its suggestions. With no permission gate, a sender
+pressing `TAB` on a permission-gated mapping's parameter could cause that method to be invoked
+before ever attempting to run the command itself. The deprecated
+`abstracts.AbstractCommandExecutor.suggest` already carried an equivalent guard on its first-token
+and parameter-slot branches, but not on its multi-token literal-sibling branch — so migrating a
+command onto the then-current `BaseCommandExecutor` generation silently widened the exposure rather
+than narrowing it.
+
+6.3.0 closes this as part of the same WIRE-01 rewrite that unifies tab completion onto one dispatch
+implementation for both command-executor generations (see the entry above):
+`abstracts.command.CommandTabCompletionDispatch.isVisible(CommandSender, Method)` — the mapping's
+declared permission checked, then its `requireOp()` — gates every one of the three dispatch paths
+(first-token, `<param>`-slot, and the multi-token literal-sibling scan) before a mapping can
+contribute anything, on both command-executor generations. Delivered by plan 05-05,
+`BaseCommandExecutorTabCompletionTest$PermissionFilterTests` (6 tests) plus
+`$ArgumentPositionResolutionTests#permissionFilterHoldsOnMultiTokenPath` and
+`$ShellAndParityTests` (agreement between both generations, including withholding a
+permission-gated mapping).
+
+**What a module author should check.** A `@CmdMapping` carrying a `permission` its players do not
+hold will now stop appearing in tab completion for them — this is the intended fix, not a defect,
+but it is a visible behaviour change: a sender who previously saw (and could trigger reflective
+invocation for) every sub-command now sees only the ones they are permitted to run.
+
+**Bucket.** This is recorded as a **security fix**, not a neutral behaviour tidy-up, for the same
+reason as the GUI click-dispatch entry below: a sender who could previously see a permission-gated
+mapping's suggestions, or trigger its suggestion method's reflective invocation, was exploiting a
+missing check, not relying on a documented contract. Per
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)
+above, security fixes may land without prior notice; no warning period applies here.
+
+`suggest(Player, Command, String[])`'s public signature is unchanged, so `japicmp` cannot detect
+this — the entry exists precisely because this document's criterion requires recording what a
+signature diff cannot show.
+
+### Recorded instance: tab completion's permission filter now filters silently, dispatch's rejection message is unchanged (SILENT-25 follow-up, 6.3.0)
+
+Real-machine UAT on a built 6.3.0 snapshot found a second defect in the same mechanism the entry
+above describes: `CommandTabCompletionDispatch.isVisible` — the predicate gating a permission- or
+`requireOp()`-restricted `@CmdMapping` out of tab completion — called `checkPermission`/`checkOp`
+directly, and those methods `sendMessage` the "no permission" / "no OP" notice on every denial.
+Tab completion evaluates every mapping's visibility on every keystroke, so a player without
+permission typing anywhere near a gated sub-command received the rejection message repeatedly,
+not once per attempted invocation.
+
+`isVisible` now consults silent predicates (`isPermissionSatisfied`/`isOpSatisfied`) that carry
+the exact same permission/`requireOp()` logic without messaging. `checkPermission` and `checkOp`
+themselves are unchanged — they remain the actual-dispatch guard for the deprecated
+`AbstractCommandExecutor.onCommand`, and continue to message on denial exactly as before.
+
+**What a module author should check.** A player without permission for a gated sub-command no
+longer receives a chat message while merely tab-completing near it; they still receive the
+rejection message when they actually attempt to run the command. A module or test that asserted a
+message was sent during tab completion (as opposed to on actual dispatch) will need updating — this
+is expected to be rare, since messaging during completion was itself the defect.
+
+**Bucket.** Recorded as a **security-adjacent fix** under the same no-migration-period rule as the
+entry above: the messaging was a side effect of the permission check UAT found, not a documented
+contract a module could have been relying on.
+
+`checkPermission(CommandSender, Method)` and `checkOp(CommandSender, Method)`'s public signatures
+and behaviour are unchanged, so `japicmp` cannot detect this either — same reasoning as the entry
+above.
+
+### Recorded instance: `@AsyncCommand.timeout()` is now honoured, and the default-path double async dispatch is removed (WIRE-12, 6.3.0)
+
+Before 6.3.0, `timeout() > 0` — the default, since `timeout()` defaults to `30` — wrapped the
+command's runnable in a *second* runnable whose entire body was to schedule the **original**
+runnable async a second time: a double dispatch that enforced no deadline whatsoever and never
+reported anything to the sender. This was worse than inert, and it was the default path for every
+`@AsyncCommand`. The javadoc claimed the async operation would be "cancelled" on timeout; nothing
+was ever cancelled, or even timed (#322).
+
+6.3.0 schedules the command body asynchronously exactly once, unconditionally. When
+`timeout() > 0`, a wholly separate watcher task is armed via `runTaskLaterAsynchronously`; if the
+deadline passes with the body still running, the sender receives exactly one timeout message,
+delivered via the main thread. The body is **never** interrupted — it always runs to completion on
+its own; the timeout report and the body's own eventual effects are independent and race-free via
+a shared `AtomicBoolean` CAS guard. `timeout() = 0` is unaffected (already single-dispatch, no
+watcher, before and after); `@RunAsync` is unaffected (a different, untouched branch). The javadoc
+is rewritten to state exactly this — a deadline on how long the framework *waits*, never a
+cancellation of the command body — matching the register Phase 2 D-10 already established for
+`@Transactional#timeout()`'s structurally identical case. Delivered by plan 05-07,
+`BaseCommandExecutorTest$AsyncCommandTimeoutTests` (6 tests).
+
+**Bucket.** "Moving from silent degradation to failure" plus a return-semantics change: a sender
+who previously received no timeout-related message under any circumstance may now receive one.
+Ships without the two-step warning period under this document's own proven-non-functional
+reasoning, reproduced directly rather than argued: reading `BaseCommandExecutor.java:385-409` at
+the pre-fix HEAD confirmed the outer runnable's entire body was a second `runTaskAsynchronously`
+call with no deadline tracked anywhere. **Measured blast radius: zero** `@AsyncCommand` downstream
+use sites across `Modules/`, `Plugins/`, `Libraries/`, `Tooling/` (control: `@CmdMapping`, 71
+files); the six real async-command sites in the workspace (`UltiBackup` × 3, `UltiWorlds` × 2,
+`UltiEssentials` × 1) all use the older `@RunAsync` annotation, which takes the `asyncCommand ==
+null` branch and never entered the double-dispatch path, pre- or post-fix. This is a workspace
+measurement, not a claim about consumers on Maven Central, who are unobservable from here.
+
+`japicmp` cannot detect this — confirmed empirically, not merely by inspection: `japicmp`'s own
+`clean verify` run reports `AsyncCommand` as `UNCHANGED ANNOTATION` and `BaseCommandExecutor`'s
+public constructors as `UNCHANGED CONSTRUCTOR`.
+
+### Recorded instance: `.filter(x).build().register()` now actually filters, and four confusable `SimpleTempListener` constructors are deprecated (SILENT-12 / SILENT-13, 6.3.0)
+
+Before 6.3.0, `TempListener.DefaultTempListenerBuilder.build()` called the
+`(Class, TempEventHandler, EventPriority)` `SimpleTempListener` constructor — the one three-argument
+overload with **no** filter parameter — so a filter set via `.filter(...)` was silently discarded
+and `build()` always produced a listener that delivered every event, filter or not (#313). Its
+sibling `listen()`, three lines below, already called the correct four-argument overload. The root
+design defect: the released jar's two three-argument overloads differ only in whether the *last*
+parameter is `EventPriority` or `Function<E, Boolean>` — same arity, no compile-time signal for
+picking the wrong one.
+
+6.3.0 makes `build()` call the same four-argument `(Class, EventPriority, TempEventHandler,
+Function)` constructor `listen()` already used. `.filter(p).build().register()` now genuinely drops
+a rejected event and delivers an accepted one. Because `TempListener`'s interface already carries
+both `register()` and `unregister()`, this single change also closes a second, related issue (#324)
+as a derivation rather than separate work: one `.filter(p).build()` call now yields one instance
+that both filters *and* can be unregistered, with no separate mechanism needed. The four confusable
+constructors — no-argument, `(Class, TempEventHandler)`, `(Class, TempEventHandler, Function)`,
+`(Class, TempEventHandler, EventPriority)` — are marked `@Deprecated(since = "6.3.0", forRemoval =
+true)`; the four-argument all-args constructor is the one kept, unchanged. These four automatically
+enrol in the [removal list](#removal-list-for-630) above — generated from the annotation, per this
+document's own policy — and are scheduled for deletion in Phase 7; they are not listed by hand.
+Delivered by plan 05-08, `TempListenerTest$DefaultTempListenerBuilderTests` and
+`TempListenerTest$UnregisterTests`.
+
+**Bucket.** Security-fix / "correcting behaviour that plainly contradicts the documentation"
+channel — `build()`'s own contract (a builder whose `.filter(...)` method exists specifically to be
+applied) was silently violated. Worth noting explicitly: `interfaces.impl.PlayerTempListener` is
+itself `@Deprecated`, with javadoc recommending `TempListener#common(Class)` filtered by player as
+the replacement — meaning the framework's own documented migration path was steering callers onto
+the exact broken filter this fixes. No warning period: measured **zero** `TempListener` downstream
+use sites monorepo-wide (control: `extends UltiToolsPlugin` 20 hits, `registerSelf` 30 hits,
+`@EventListener` 46 hits — confirming the search mechanism works), so no known caller currently
+depends on the silently-inert filter.
+
+`japicmp` cannot detect the `build()` behaviour change — no signature changed. The four constructor
+deprecations do surface, as `japicmp`'s own `"Annotation deprecated added"` classification,
+confirmed non-breaking by this plan's own `mvn clean verify` run.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
@@ -2249,6 +2499,191 @@ MINOR：6.3.0 正是那个首个发布，所以最早也要到 6.4.0 才有资�
 `AbstractMethodError` 或 `NoSuchMethodError`。`japicmp` 这个保守的分类，对这个具体变换（抽象
 变默认、签名不变、返回类型不变）来说，看起来比 JVM 实际的二进制兼容保证更严格——记在这里是为了
 不让只看 `japicmp` 原始报告的读者被误导，同时也不让本文件自己的兼容性承诺说得比实际更满。
+
+### 已记录的实例：指令校验器的副作用移入链本身，无法被链强制执行的 `@CmdCD`/`@UsageLimit` 现在会拒绝加载（SILENT-11，6.3.0）
+
+6.3.0 之前，`BaseCommandExecutor.executeCommand` 无条件地按字段引用调用
+`cooldownValidator.applyCooldown` / `lockValidator.acquireLock` / `lockValidator.releaseLock`——
+无论这些校验器是否真的出现在执行器自己的校验链里。通过单参数构造器
+`BaseCommandExecutor(ValidatorChain)` 构建的执行器会原样存下传入的链，除非调用方自己显式添加，
+否则 `CooldownValidator`/`UsageLockValidator` 不会被加入。`@CmdCD` 与 `@UsageLimit` 看起来已经
+声明、状态也在正常记录（`getRemainingCooldown()` 返回看似合理的值），实际上却拦不住任何一次
+调用（#312）。
+
+6.3.0 从两个方向关闭这个缺口：
+
+- `CommandValidator` 新增一个 `default void onComplete(CommandContext, boolean)` 后置动作钩子；
+  `ValidatorChain.ChainValidationResult#getPassedValidators()` 现在是「这次调用到底跑过哪些
+  校验器」的唯一有序事实来源。`executeCommand` 的每一个校验器副作用都只从这份列表驱动——
+  「在链里」与「有副作用」在结构上就是同一件事，不存在能让两者失步的构造路径。
+- 在插件加载时，`PluginManager.validateCommandExecutorContracts` 会拒绝任何标注了 `@CmdCD` 或
+  `@UsageLimit(SENDER|ALL)`、而其校验链中缺少对应校验器的类或 `@CmdMapping` 方法，并指出问题类
+  与（已知时）问题方法（`ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE`，4006）。
+  `@UsageLimit(NONE)` 豁免，因为它本就没有声明任何限制。`@CmdCD`/`@UsageLimit` 的 `@Target` 也
+  从 `{METHOD}` 拓宽为 `{METHOD, TYPE}`，使同一检查也能应用于类级声明——纯增量变更，不改变任何
+  已有标注位置的语义。
+
+**加载时拒绝没有开关。** Phase 3 的模块粒度隔离是被接受的退路：只有问题模块本身加载失败，其余
+模块照常启动。由 plan 05-01（`BaseCommandExecutorTest$ChainDrivenPostActionTests`）与 plan 05-02
+（`PluginManagerCommandContractTest`）交付。
+
+**归类。** 这次拒绝属于「从静默降级变为失败」，按惯例应当经过两步警告期，但基于与本文档
+`del()` 条目相同的理由跳过了警告期：一个已声明却拦不住任何调用的 `@CmdCD`/`@UsageLimit` 永远
+是模块作者的缺陷，而不是一条更响的日志能真正解决的问题——冷却时间是 Minecraft 服务器上的滥用
+防护（`UltiBackup.BackupCommand` 的 `/backup start` 就标注了 `@CmdCD(30)`；静默失去它意味着
+玩家可以刷屏触发整服备份）。经测量，整个仓库中**零**个下游自定义 `ValidatorChain` 构造点（对照组：
+`extends BaseCommandExecutor`，19 个文件），因此目前没有已知模块会命中这次拒绝。
+
+`japicmp` 无法检测到这一切。`CommandValidator#onComplete` 是源码级与二进制级都兼容的 default
+方法新增——已通过对已发布 6.2.0 至 6.2.5 jar 运行 `javap` 确认，其既有形状是 1 个抽象方法加 3 个
+default 方法；新增第 4 个 default 方法延续了这个既有约定，而非推翻它。加载时拒绝与 `@Target`
+拓宽都只是行为变化，没有任何既有方法签名改变。
+
+### 已记录的实例：`@UsageLimit` 现在真正实现了名字所承诺的串行化，`ContainConsole()` 默认值改为 `true`（GEN-09，6.3.0）
+
+6.3.0 之前，`UsageLockValidator.acquireLock` 的布尔返回值被其唯一调用方丢弃——
+`BaseCommandExecutor.java:261` 处只是一条裸语句——所以获取失败从未阻止过执行。`releaseLock` 的
+`ALL` 范围分支无条件移除服务器级锁（`serverLocks.remove(methodKey)`，没有所有权检查），因此任意
+发送者的调用完成都可能释放**另一个**发送者仍持有的锁（Pitfall 5 / T-05-03）。`@UsageLimit`
+记录了一把锁，却按错误的所有者节奏释放它——它没有真正串行化任何东西。
+
+6.3.0 在与上一条相同的改写中修复了这两个缺陷：获取现在发生在 `validate()` 内部本身
+（验证即获取），因此获取失败就是一次普通的验证拒绝，映射方法永远不会被调用；`releaseLock` 的
+`ALL` 范围分支现在通过原子的 `Map#remove(key, ownerUuid)` 做所有权门控。`UsageLimit.ContainConsole()`
+的默认值同时从 `false` 改为 `true`——除非某个映射显式排除，否则控制台发送者现在也受此限制约束。
+由 plan 05-01 交付，`UsageLockValidatorTest$SerializationGuaranteeTests`（8 个测试）。
+
+**归类。** 获取门槛与所有权门控释放这两处修复属于「纠正与文档明显矛盾的行为」——该注解的名字
+本身就一直在承诺串行化与单一所有者释放（#209）——不需要迁移期。`ContainConsole()` 的默认值翻转
+属于已文档化默认值的翻转，按惯例需要两步警告期，但以零测量成本随同上面的修复一并发布：整个
+仓库中**零**个生产环境 `@UsageLimit` 使用点（对照组：`@CmdCD`，3 个模块共 8 处），因此没有已知
+调用方会观察到这次翻转。
+
+`japicmp` 无法检测到这一切——`UsageLimit` 或 `UsageLockValidator` 的公开签名均未改变。
+
+### 已记录的实例：`@CmdParam.suggest` 的解析契约从三步拓宽为四步，未知的 `@key` 现在会拒绝加载（WIRE-01，6.3.0）
+
+6.3.0 之前，`suggest()` 按三步解析——本类方法名、`@CmdSuggest` 指向类的方法名、i18n 提示文本
+兜底。已发布 jar 自带的四个内置补全器（`MaterialsCompleter`、`OnlinePlayersCompleter`、
+`WorldsCompleter`、`StaticSuggestionsCompleter`）根本没有声明式入口；五个下游模块因此各自手写了
+等价实现（`suggestWorlds` 11 处、`suggestOnlinePlayers` 2 处，加上 `suggestBooleans`），因为没有
+办法声明它们。
+
+6.3.0 新增了第一步：以 `@` 开头的值（例如 `"@players"`）会通过一个已注册的 `TabCompleter`
+解析——可以是四个内置之一，也可以是模块在运行时注册的键。`@` 不是合法的 Java 标识符起始字符，
+因此任何既有方法名值都不会与之冲突；实测的全部 24 个下游 `@CmdParam(suggest=)` 使用点都不需要
+任何改动。**未知**的 `@key` 会在上一条引入的同一次加载时校验中拒绝声明它的模块加载，并指明类、
+方法与键——它**不会**退回到 i18n 提示兜底。原有三步（包括方法未找到时的 i18n 提示兜底）保持不变。
+由 plan 05-06 交付，`BaseCommandExecutorTabCompletionTest$SuggestKeyNotationTests`（双记法）与
+`PluginManagerCommandContractTest$UnknownSuggestKeyTests`（8 个测试，加载时拒绝）。
+
+**归类。** 新增的解析步骤本身不需要迁移期——它被限定在一个任何既有值都无法产生的语法（`@`）
+之后才触发。**拒绝**这一半属于「从静默降级变为失败」，基于与上一条相同的 D-04 理由跳过了警告期：
+整个仓库中实测**零**个既有的 `@key` 记法使用点（全部 24 个实测点都是普通方法名），因此这次拒绝
+没有任何已知位置需要警告。
+
+`japicmp` 无法检测到这一点——`CmdParam.suggest()` 的签名没有变化，只是其 `String` 值的运行时
+解析方式变了。
+
+### 已记录的实例：Tab 补全现在会在一个 `@CmdMapping` 能贡献建议或被反射调用之前先按权限过滤它（SILENT-25，6.3.0）
+
+6.3.0 之前，`BaseCommandExecutor.suggest` **完全没有**权限检查。命令类上的每一个 `@CmdMapping`
+都会不加区分地提供给 `TAB` 补全，无论发送者是否持有其 `@CmdMapping(permission=)` 或
+`requireOp()` 所要求的权限——首个 token 的字面量列表、多 token 的同级字面量扫描、以及为某个
+发送者永远无法调用的映射所解析出的 `<param>` 槽位，都不例外。最后这一条不仅是信息泄露：一个
+已解析的 `<param>` 槽位会被交给 `commands/tabcomplete/MethodInvocationCompleter`，后者会
+**反射调用** `@CmdParam(suggest = "methodName")` 背后的方法来产出建议。在没有权限门控的情况下，
+发送者只需对一个受权限限制的映射的参数按下 `TAB`，就可能在他们真正尝试执行该命令之前触发那个
+方法被调用。已废弃的 `abstracts.AbstractCommandExecutor.suggest` 在其首 token 与参数槽位分支上
+已经带有等价的守卫，但在其多 token 同级字面量分支上没有——因此把一条命令迁移到当时的
+`BaseCommandExecutor` 世代上，实际上是静默地扩大了暴露面，而不是缩小它。
+
+作为把两代命令执行器的 Tab 补全统一到同一个分发实现的这次 WIRE-01 重写（见上一条记录）的
+一部分，6.3.0 关闭了这个口子：`abstracts.command.CommandTabCompletionDispatch.isVisible(CommandSender,
+Method)`——先检查映射声明的权限，再检查其 `requireOp()`——在一个映射能贡献任何内容之前，
+为三条分发路径（首 token、`<param>` 槽位、以及多 token 同级字面量扫描）中的每一条设防，两代
+命令执行器均如此。由 plan 05-05 交付，`BaseCommandExecutorTabCompletionTest$PermissionFilterTests`
+（6 个测试），加上 `$ArgumentPositionResolutionTests#permissionFilterHoldsOnMultiTokenPath` 与
+`$ShellAndParityTests`（两代之间的一致性，包括对受权限限制的映射保持隐藏）。
+
+**模块作者应该检查什么。** 一个携带了玩家不持有的 `permission` 的 `@CmdMapping`，现在将不再
+出现在这些玩家的 Tab 补全结果中——这是预期的修复，不是缺陷，但它是一次可见的行为变化：此前能
+看到（并可能触发其建议方法被反射调用的）每一个子命令的发送者，现在只能看到他们被允许执行的
+那些。
+
+**归类。** 与下文的 GUI 点击派发条目出于相同的理由，这一条被记录为一次**安全修复**，而不是一次
+中性的行为整理：此前能够看到受权限限制映射的补全建议、或触发其建议方法反射调用的发送者，利用
+的是一个缺失的检查，而不是在依赖某项被文档记载的契约。依据上面的
+[无需迁移期的行为变更](#哪些行为变更可以在-minor-直接做)，安全修复可以不经事先通知直接落地；
+这里同样不设警告期。
+
+`suggest(Player, Command, String[])` 的公开签名未变，所以 `japicmp` 无法检测到这一点——这条记录
+正是为了写下签名差异写不出来的东西而存在。
+
+### 已记录的实例：`@AsyncCommand.timeout()` 现在真正生效，默认路径上的双重异步派发被移除（WIRE-12，6.3.0）
+
+6.3.0 之前，`timeout() > 0`——由于 `timeout()` 默认值为 `30`，这是默认路径——会把命令的可运行体
+包进**第二个**可运行体，而这个外层可运行体的全部内容就是再把**原始**可运行体异步调度一次：一次
+没有强制任何截止时间、也从不向发送者报告任何信息的双重派发。这比彻底不生效更糟，而且它正是每个
+`@AsyncCommand` 的默认路径。javadoc 却声称超时后异步操作会被"取消"；实际上什么都没有被取消，
+甚至没有被计时（#322）。
+
+6.3.0 让命令体无条件地、恰好一次被异步调度。当 `timeout() > 0` 时，一个完全独立的监视任务通过
+`runTaskLaterAsynchronously` 被排入；如果截止时间到达而命令体仍在运行，发送者会收到恰好一条
+超时消息，通过主线程送达。命令体**永远不会**被中断——它总会自行运行至完成；超时报告与命令体
+自身最终产生的效果彼此独立，通过一个共享的 `AtomicBoolean` CAS 守卫做到无竞争。`timeout() = 0`
+不受影响（此前与此后都是单次派发、无监视器）；`@RunAsync` 不受影响（走的是另一条未被触及的
+分支）。javadoc 被重写为精确陈述这一点——这是框架"等待多久"的截止时间，绝非对命令体的取消——
+与 Phase 2 D-10 已为结构相同的 `@Transactional#timeout()` 建立的措辞口径保持一致。由 plan 05-07
+交付，`BaseCommandExecutorTest$AsyncCommandTimeoutTests`（6 个测试）。
+
+**归类。** 这是「从静默降级变为失败」，外加返回语义的变化：此前在任何情况下都不会收到超时相关
+消息的发送者，现在可能会收到一条。基于本文档自己的"已证明不可用"理由跳过了两步警告期，且这个
+理由是直接复现出来的，而非论证出来的：在修复前的 HEAD 上阅读 `BaseCommandExecutor.java:385-409`
+证实了外层可运行体的全部内容就是再一次调用 `runTaskAsynchronously`，没有任何地方在追踪截止
+时间。**实测影响面为零**——`Modules/`、`Plugins/`、`Libraries/`、`Tooling/` 中 `@AsyncCommand`
+下游使用点为零（对照组：`@CmdMapping`，71 个文件）；工作区中六个真实的异步命令使用点
+（`UltiBackup` 3 处、`UltiWorlds` 2 处、`UltiEssentials` 1 处）全部使用更老的 `@RunAsync` 注解，
+走的是 `asyncCommand == null` 分支，修复前后都从未进入过双重派发路径。这是一次工作区测量，不是
+对 Maven Central 使用者的断言——他们在这里是不可观测的。
+
+`japicmp` 无法检测到这一点——不仅是推断，而是实测确认：`japicmp` 自己的 `clean verify` 运行把
+`AsyncCommand` 报告为 `UNCHANGED ANNOTATION`，把 `BaseCommandExecutor` 的公开构造器报告为
+`UNCHANGED CONSTRUCTOR`。
+
+### 已记录的实例：`.filter(x).build().register()` 现在真正生效过滤，四个易混淆的 `SimpleTempListener` 构造器被标记废弃（SILENT-12 / SILENT-13，6.3.0）
+
+6.3.0 之前，`TempListener.DefaultTempListenerBuilder.build()` 调用的是
+`(Class, TempEventHandler, EventPriority)` 这个 `SimpleTempListener` 构造器——三个三参数重载中
+**唯一没有** filter 参数的那个——所以通过 `.filter(...)` 设置的过滤器被静默丢弃，`build()` 
+生成的监听器永远放行所有事件，不论是否设置了过滤器（#313）。仅三行之后的姊妹方法 `listen()`
+早已正确调用了四参数重载。根本设计缺陷在于：已发布 jar 的两个三参数重载仅在**最后一个**参数是
+`EventPriority` 还是 `Function<E, Boolean>` 上不同——同样的参数个数，编译期没有任何信号能提醒
+选错了哪一个。
+
+6.3.0 让 `build()` 调用与 `listen()` 相同的四参数构造器
+`(Class, EventPriority, TempEventHandler, Function)`。`.filter(p).build().register()` 现在会
+真正丢弃被拒绝的事件、放行被接受的事件。由于 `TempListener` 接口本就同时具备 `register()` 与
+`unregister()`，这一处改动同时以派生方式（而非独立工作）关闭了另一个相关问题（#324）：一次
+`.filter(p).build()` 调用现在就能得到一个既能过滤、又能被注销的实例，不需要任何额外机制。四个
+易混淆的构造器——无参、`(Class, TempEventHandler)`、`(Class, TempEventHandler, Function)`、
+`(Class, TempEventHandler, EventPriority)`——被标记为 `@Deprecated(since = "6.3.0", forRemoval =
+true)`；保留的是那个四参数的全参构造器，未做改动。这四个构造器会自动登记进上面的
+[移除清单](#630-的移除清单)——按本文档自己的策略由该标注生成——计划在 Phase 7 中删除；它们不会
+被手工列出。由 plan 05-08 交付，`TempListenerTest$DefaultTempListenerBuilderTests` 与
+`TempListenerTest$UnregisterTests`。
+
+**归类。** 走安全修复 /「纠正与文档明显矛盾的行为」通道——`build()` 自己的契约（一个专门为了
+被应用而存在 `.filter(...)` 方法的构建器）被静默违反了。值得明确指出：`interfaces.impl.PlayerTempListener`
+本身已 `@Deprecated`，其 javadoc 推荐用按玩家过滤的 `TempListener#common(Class)` 作为替代——也
+就是说，框架自己文档记载的迁移路径，此前一直在把调用方引向这个被静默失效的过滤器。不设警告期：
+整个仓库中实测**零**个 `TempListener` 下游使用点（对照组：`extends UltiToolsPlugin` 20 处、
+`registerSelf` 30 处、`@EventListener` 46 处——确认搜索机制本身有效），因此没有已知调用方依赖
+这个静默失效的过滤器。
+
+`japicmp` 无法检测到 `build()` 的行为变化——没有任何签名改变。四个构造器的废弃标注确实会被
+`japicmp` 自己的 `"Annotation deprecated added"` 分类捕捉到，本 plan 自己的 `mvn clean verify`
+运行已确认这不构成破坏性变更。
 
 ## 移除清单覆盖不到的二进制不兼容
 

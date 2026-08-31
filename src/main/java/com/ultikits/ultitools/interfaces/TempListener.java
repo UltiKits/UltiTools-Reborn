@@ -159,7 +159,7 @@ public interface TempListener extends Listener {
          * 监听器
          */
         public TempListener build() {
-            return new SimpleTempListener<>(eventClass,eventHandler, priority);
+            return new SimpleTempListener<>(eventClass, priority, eventHandler, filter);
         }
 
         /**

@@ -11,6 +11,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.annotation.Nullable;
+
 /**
  * 反射工具类
  * <p>
@@ -303,7 +305,115 @@ public final class ReflectionUtil {
     public static boolean hasAnnotation(Field field, Class<? extends Annotation> annotationClass) {
         return field.isAnnotationPresent(annotationClass);
     }
-    
+
+    /**
+     * Resolves {@code annotationType} for {@code method}, preferring a declaration on the
+     * method itself and falling back to one on the method's declaring class -- most-derived
+     * wins, the same precedence {@code SenderTypeValidator} already applies for
+     * {@code @CmdTarget} inside this same validator chain, and the precedent Spring's
+     * {@code @Transactional} and Spring Security's {@code @PreAuthorize} both document for a
+     * class-vs-method annotation conflict.
+     * <p>
+     * Only the method's OWN declaring class is consulted (via
+     * {@code method.getDeclaringClass().getAnnotation(...)}) -- not the class's own ancestors,
+     * since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. This matches
+     * {@link #getAllMethods(Class)}'s own hierarchy walk: a method inherited from a superclass
+     * without being overridden is returned with that superclass already as its
+     * {@code getDeclaringClass()}, so a class-level annotation on that superclass is still found
+     * without any extra ancestor walk here.
+     * <p>
+     * 解析 {@code method} 上的 {@code annotationType}：优先取方法自身的声明，若方法未声明则回退到
+     * 方法所属声明类上的声明——方法级优先，与本验证器链中 {@code SenderTypeValidator} 对
+     * {@code @CmdTarget} 已经采用的优先级完全一致，也是 Spring 的 {@code @Transactional} 与 Spring
+     * Security 的 {@code @PreAuthorize} 在类级/方法级注解冲突时共同采用的先例。
+     * <p>
+     * 只查询方法自身声明类（通过 {@code method.getDeclaringClass().getAnnotation(...)}）——不会
+     * 再向上查询该类的祖先类，因为 {@code @CmdCD} 与 {@code @UsageLimit} 均未标注
+     * {@code @Inherited}。这与 {@link #getAllMethods(Class)} 自身的层级遍历一致：一个从父类继承、
+     * 未被重写的方法，其 {@code getDeclaringClass()} 本就是该父类，因此父类上的类级注解无需额外的
+     * 祖先遍历即可在此被发现。
+     * <p>
+     * Convenience delegate to {@link #resolveMethodOrClassAnnotation(Method, Class, Class)} with
+     * {@code executorClass} as {@code null} -- kept for callers (and existing tests) that only
+     * ever had a {@code Method} to resolve against, not the dispatching executor's concrete
+     * class. Prefer the 3-argument overload when the concrete executor class is known: it also
+     * checks that class's own declaration, closing WR-02 (05-REVIEW.md) -- a class-level
+     * annotation declared on a concrete executor SUBCLASS, inherited by an unoverridden {@code
+     * @CmdMapping} method whose {@code getDeclaringClass()} is an ancestor, is invisible to this
+     * 2-argument form.
+     * <p>
+     * 委托给 {@link #resolveMethodOrClassAnnotation(Method, Class, Class)}，{@code executorClass}
+     * 传 {@code null}——为只有 {@code Method}、拿不到分发执行器具体类的调用方（及既有测试）保留。
+     * 已知具体执行器类时优先用三参数重载：它还会检查该类自身的声明，从而关闭 WR-02
+     * （05-REVIEW.md）——一个只声明在具体执行器子类上的类级注解，被一个未重写、其
+     * {@code getDeclaringClass()} 是祖先类的 {@code @CmdMapping} 方法继承时，这个双参数形式看不见它。
+     *
+     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
+     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
+     * @param <A>            the annotation type <br> 注解类型
+     * @return the method-level annotation if present, otherwise the declaring class's
+     *         annotation, or {@code null} if neither declares it <br> 方法级注解（若存在）；
+     *         否则为声明类上的注解；两者均不存在时为 {@code null}
+     * @since 6.3.0
+     */
+    public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, Class<A> annotationType) {
+        return resolveMethodOrClassAnnotation(method, null, annotationType);
+    }
+
+    /**
+     * WR-02 (05-REVIEW.md): resolves {@code annotationType} in THREE steps, most-derived-first:
+     * (1) {@code method}'s own declaration, (2) {@code executorClass}'s own class-level
+     * declaration -- the CONCRETE, most-derived executor class actually loaded, the SAME class
+     * {@code PluginManager}'s load-time gate inspects via {@code executor.getClass()} -- (3)
+     * {@code method.getDeclaringClass()}'s class-level declaration, for a shared abstract base
+     * that declares BOTH the mapping method and the annotation together.
+     * <p>
+     * Step (2) is what {@link #resolveMethodOrClassAnnotation(Method, Class)} (the 2-arg
+     * overload) cannot do: for an inherited, unoverridden {@code @CmdMapping} method, {@code
+     * method.getDeclaringClass()} is whatever ANCESTOR first declared it -- never the concrete
+     * subclass, since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. A
+     * class-level annotation declared ONLY on such a subclass previously passed {@code
+     * PluginManager}'s load-time gate (which correctly checks {@code executor.getClass()}) but
+     * was never found by {@code CooldownValidator}/{@code UsageLockValidator} at runtime -- the
+     * gate's "fine to load" was a false assurance. Step (3) is kept as a further fallback so a
+     * shared abstract base that declares both the mapping and the annotation together -- the
+     * pre-WR-02 working case -- is unaffected.
+     * <p>
+     * {@code executorClass} is checked as a DIRECT declaration only (no ancestor walk of its
+     * own): if the concrete class itself does not carry the annotation, step (3) already covers
+     * the "declared on an ancestor of the mapping method" case, and there is no third distinct
+     * class to consult for the same annotation type.
+     *
+     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
+     * @param executorClass  the concrete {@code BaseCommandExecutor} class dispatching this
+     *                       command -- the SAME class {@code PluginManager}'s load-time gate
+     *                       inspects -- or {@code null} to fall back to the pre-WR-02,
+     *                       declaring-class-only resolution <br> 分发本次命令的具体
+     *                       {@code BaseCommandExecutor} 类——与 {@code PluginManager} 加载时
+     *                       门禁检查的是同一个类——为 {@code null} 时回退到 WR-02 之前的、
+     *                       仅声明类的解析
+     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
+     * @param <A>            the annotation type <br> 注解类型
+     * @return the resolved annotation, or {@code null} if none of method, {@code executorClass},
+     *         or the method's declaring class carries one <br> 解析出的注解；方法、
+     *         {@code executorClass} 与方法声明类均未携带该注解时为 {@code null}
+     * @since 6.3.0
+     */
+    public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, @Nullable Class<?> executorClass,
+            Class<A> annotationType) {
+        A onMethod = method.getAnnotation(annotationType);
+        if (onMethod != null) {
+            return onMethod;
+        }
+        if (executorClass != null) {
+            A onExecutorClass = executorClass.getAnnotation(annotationType);
+            if (onExecutorClass != null) {
+                return onExecutorClass;
+            }
+        }
+        return method.getDeclaringClass().getAnnotation(annotationType);
+    }
+
     // ==================== 方法操作 ====================
     
     /**

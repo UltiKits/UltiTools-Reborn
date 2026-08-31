@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.interfaces.impl;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -27,6 +29,7 @@ import org.mockito.ArgumentCaptor;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.TempEventHandler;
+import com.ultikits.ultitools.interfaces.TempListener;
 
 class SimpleTempListenerTest {
 
@@ -134,5 +137,52 @@ class SimpleTempListenerTest {
         Function<Event, Boolean> filter = e -> true;
         SimpleTempListener<Event> l3 = new SimpleTempListener<>(Event.class, mockHandler, filter);
         assertEquals(filter, l3.getFilter());
+    }
+
+    @Test
+    void builderPathShouldProduceListenerWithFilterPriorityAndHandler() {
+        // Arrange
+        Function<Event, Boolean> filter = e -> true;
+        TempEventHandler<Event> handler = mock(TempEventHandler.class);
+
+        // Act - pin the .common(...).filter(...).build() construction path specifically,
+        // rather than duplicating the direct-constructor coverage above.
+        TempListener listener = TempListener.common(Event.class)
+                .priority(EventPriority.HIGH)
+                .filter(filter)
+                .eventHandler(handler)
+                .build();
+
+        // Assert
+        assertThat(listener).isInstanceOf(SimpleTempListener.class);
+        SimpleTempListener<?> simple = (SimpleTempListener<?>) listener;
+        assertThat(simple.getFilter()).isEqualTo(filter);
+        assertThat(simple.getPriority()).isEqualTo(EventPriority.HIGH);
+        assertThat(simple.getEventHandler()).isEqualTo(handler);
+    }
+
+    @Test
+    void registerWithoutEventHandlerShouldFailWithDescriptiveMessage() {
+        // Arrange - direct construction (no-arg + setters), eventHandler intentionally left null
+        SimpleTempListener<Event> listener = new SimpleTempListener<>();
+        listener.setEventClass(Event.class);
+
+        // Act + Assert
+        assertThatThrownBy(listener::register)
+                .isNotInstanceOf(NullPointerException.class)
+                .hasMessageContaining("eventHandler");
+    }
+
+    @Test
+    void registerWithoutEventClassShouldFailWithDescriptiveMessage() {
+        // Arrange - direct construction (no-arg + setters), eventClass intentionally left null
+        SimpleTempListener<Event> listener = new SimpleTempListener<>();
+        TempEventHandler<Event> handler = mock(TempEventHandler.class);
+        listener.setEventHandler(handler);
+
+        // Act + Assert
+        assertThatThrownBy(listener::register)
+                .isNotInstanceOf(NullPointerException.class)
+                .hasMessageContaining("eventClass");
     }
 }
