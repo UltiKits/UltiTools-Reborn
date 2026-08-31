@@ -42,14 +42,17 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reach package-private test seam
 class CapabilityGateRealCollaboratorsTest {
 
+    // PMD.SingularField: assigned in setUp() and read only within setUp()/by this file's single
+    // @Test method (see the class javadoc — deliberately a top-level test, not @Nested). Test-
+    // fixture fields, not a design smell. previousPanelWs is NOT annotated — it genuinely spans
+    // setUp() and tearDown(), so it does need to be a field.
+    @SuppressWarnings("PMD.SingularField")
     private Logger mockLogger;
-    // PMD.SingularField: assigned in setUp() and read only by this file's single @Test method
-    // (see the class javadoc — deliberately a top-level test, not @Nested). A test-fixture
-    // field, not a design smell.
     @SuppressWarnings("PMD.SingularField")
     private RemoteActionLog mockRemoteActionLog;
     @SuppressWarnings("PMD.SingularField")
     private CommandExecutionManager commandExecutionManager;
+    @SuppressWarnings("PMD.SingularField")
     private UltiPanelWebSocketClient mockPanelWs;
     private Object previousPanelWs;
 
