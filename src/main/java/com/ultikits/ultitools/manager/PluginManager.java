@@ -56,6 +56,8 @@ import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
+import com.ultikits.ultitools.commands.tabcomplete.MethodInvocationCompleter;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
@@ -1845,6 +1847,9 @@ public class PluginManager {
             // above rather than in a second pass over ReflectionUtil.getAllMethods, so the two
             // rules' ordering stays in one place.
             validateSuggestKeysForMethod(executorClass, method);
+            // T-05-fix Part 2: same walk, same method -- a method-name suggest() value that
+            // resolves to a signature MethodInvocationCompleter cannot invoke is refused here too.
+            validateSuggestMethodSignatureForMethod(executor, executorClass, method);
         }
     }
 
@@ -1936,6 +1941,108 @@ public class PluginManager {
                 + "under that key. Register a completer for '" + key + "' via "
                 + "TabCompletionManager.getInstance().register(...) before this module loads, or fix "
                 + "the typo -- an unknown @key does not fall back to the i18n hint text (D-07).";
+    }
+
+    /**
+     * T-05-fix Part 2's load-time half of method-name {@code @CmdParam.suggest()} resolution: a
+     * {@code suggest()} value that does NOT start with {@code @} names a method looked up EXACTLY
+     * as {@link MethodInvocationCompleter#complete(TabCompletionContext)} looks it up at
+     * completion time -- {@link MethodInvocationCompleter#getSuggestMethodsByName(Object, String)}
+     * checks the executor's own class first, then any {@code @CmdSuggest}-referenced classes.
+     * <p>
+     * A real-machine UAT run on Paper 1.21.11 caught {@code MethodInvocationCompleter
+     * .invokeSuggestMethod} falling into a final {@code else} branch that invoked ANY
+     * unrecognized signature with ZERO arguments -- silently wrong, not a failure, so it surfaced
+     * only as {@code IllegalArgumentException} the first time a player pressed Tab. 16 of 24 real
+     * downstream {@code @CmdParam(suggest=)} call sites (every UltiWorlds suggest method, shaped
+     * {@code (Player, String)}) were broken this way. This check closes the gap at its source:
+     * if the resolved suggest method's signature is not one of the five shapes {@link
+     * MethodInvocationCompleter#isInvocableSuggestSignature(Class[])} accepts, the module is
+     * refused at load -- naming the class, the mapping method and the offending signature --
+     * instead of loading cleanly and failing only on first invocation.
+     * <p>
+     * A {@code suggest()} value that resolves to NO method at all is out of scope here, exactly
+     * as it is for {@link #validateSuggestKeysForMethod(Class, Method)} -- that keeps the
+     * published i18n hint-text fallback, deliberately unchanged (D-07). {@link
+     * MethodInvocationCompleter#complete(TabCompletionContext)} only ever invokes the FIRST
+     * method {@code getSuggestMethodsByName} returns when a name resolves to more than one
+     * overload, so only that first method's signature is validated here -- validating every
+     * overload would refuse a module for an overload that is never actually called.
+     *
+     * @param executor      the already-constructed executor instance, needed for the SAME class
+     *                       hierarchy / {@code @CmdSuggest} lookup {@link
+     *                       MethodInvocationCompleter} performs at completion time <br> 已构造的
+     *                       执行器实例
+     * @param executorClass the executor class {@code method} belongs to, for the refusal message
+     *                      <br> {@code method} 所属的执行器类，用于构造拒绝信息
+     * @param method        the {@code @CmdMapping} method whose parameters are checked
+     *                      <br> 要检查其参数的 {@code @CmdMapping} 方法
+     * @throws PluginModuleException fail-closed, naming the class, the method and the offending
+     *                                signature
+     */
+    private static void validateSuggestMethodSignatureForMethod(BaseCommandExecutor executor,
+            Class<?> executorClass, Method method) {
+        for (Parameter parameter : method.getParameters()) {
+            CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+            if (cmdParam == null) {
+                continue;
+            }
+            String suggest = cmdParam.suggest();
+            if (suggest.isEmpty() || suggest.charAt(0) == '@') {
+                continue;
+            }
+            Method[] suggestMethods = MethodInvocationCompleter.getSuggestMethodsByName(executor, suggest);
+            if (suggestMethods == null || suggestMethods.length == 0) {
+                continue; // unknown method name -- D-07 keeps the i18n hint fallback, out of scope here
+            }
+            Method suggestMethod = suggestMethods[0];
+            if (!MethodInvocationCompleter.isInvocableSuggestSignature(suggestMethod.getParameterTypes())) {
+                throw new PluginModuleException(ErrorCode.COMMAND_SUGGEST_METHOD_UNINVOCABLE,
+                        uninvocableSuggestMethodMessage(executorClass, method, suggestMethod));
+            }
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateSuggestMethodSignatureForMethod(
+     * BaseCommandExecutor, Class, Method)}, naming the offending class, the mapping method and
+     * the offending suggest method's declaring class, name and parameter signature -- mirroring
+     * {@link #unknownSuggestKeyMessage(Class, Method, String)}'s message-builder shape.
+     *
+     * @param executorClass  the offending executor class <br> 问题执行器类
+     * @param mappingMethod  the offending {@code @CmdMapping} method <br> 问题映射方法
+     * @param suggestMethod  the resolved suggest method with the uninvocable signature
+     *                       <br> 签名无法调用的建议方法
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String uninvocableSuggestMethodMessage(Class<?> executorClass, Method mappingMethod,
+            Method suggestMethod) {
+        return "Command executor '" + executorClass.getName() + "' declares @CmdParam(suggest = \""
+                + suggestMethod.getName() + "\") on method '" + mappingMethod.getName() + "', but '"
+                + suggestMethod.getDeclaringClass().getName() + "#" + suggestMethod.getName()
+                + formatParameterTypes(suggestMethod.getParameterTypes()) + "' has a signature the "
+                + "tab-completion invoker cannot call. Supported signatures: (), (Player), (String), "
+                + "(Player, String), (Player, Command, String[]).";
+    }
+
+    /**
+     * Formats {@code paramTypes} as a Java-source-like parameter list, e.g. {@code "(int)"} or
+     * {@code "(Player, String)"}, for {@link #uninvocableSuggestMethodMessage(Class, Method,
+     * Method)}.
+     *
+     * @param paramTypes the parameter types to format <br> 要格式化的参数类型
+     * @return the formatted parameter list, including the enclosing parentheses <br> 格式化后的
+     *         参数列表（含括号）
+     */
+    private static String formatParameterTypes(Class<?>[] paramTypes) {
+        StringBuilder builder = new StringBuilder("(");
+        for (int i = 0; i < paramTypes.length; i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            builder.append(paramTypes[i].getSimpleName());
+        }
+        return builder.append(")").toString();
     }
 
     /**
