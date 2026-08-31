@@ -17,6 +17,7 @@ import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -34,6 +35,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
@@ -247,6 +249,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         this.versionWrapper = new DefaultVersionWrapper();
         initDataStore();
         initPluginModules();
+        migrateCapabilitiesConfig();
         initWebSocketManagers();
         new Metrics(this, 8652);
 
@@ -327,6 +330,64 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /** D-03: the ten current blocked commands, shipped as the operator-editable blocklist's default. */
+    private static final List<String> DEFAULT_COMMAND_BLOCKLIST = Collections.unmodifiableList(Arrays.asList(
+            "op", "deop", "stop", "restart", "reload", "ban-ip", "pardon-ip", "whitelist", "save-off", "save-all"));
+    private static final List<String> COMMAND_BLOCKLIST_COMMENT = Arrays.asList(
+            "Commands the panel may never execute remotely. Fully operator-editable — add or remove entries freely.",
+            "面板永远不允许远程执行的命令列表。完全由操作员编辑——可自由增删。");
+
+    /** D-15: the default editable-root set — plugin configs and historical logs. */
+    private static final List<String> DEFAULT_EDITABLE_ROOTS = Collections.unmodifiableList(
+            Arrays.asList("plugins", "logs"));
+    private static final List<String> EDITABLE_ROOTS_COMMENT = Arrays.asList(
+            "Directories the panel's file API may read/write/delete within, subject to the capability switches above.",
+            "面板文件 API 可以在其中读取/写入/删除的目录，仍受上方能力开关约束。");
+
+    private static final List<String> ACTION_LOG_SIZE_COMMENT = Arrays.asList(
+            "Rotation size (bytes) for plugins/UltiTools/security/action.log before it rolls to the next file.",
+            "action.log 单文件轮转大小（字节），超过后滚动到下一个文件。");
+    private static final List<String> ACTION_LOG_FILES_COMMENT = Arrays.asList(
+            "Number of rotated action.log files to keep.",
+            "action.log 保留的轮转文件数量。");
+
+    /**
+     * Migrates the framework's own {@code config.yml} in place, invoked from {@link #onEnable()}
+     * after {@link #saveDefaultConfig()} (called in {@link #onLoad()}) and before
+     * {@link #initWebSocketManagers()}. Reloads {@link #getConfig()} when the file changed, so
+     * every manager constructed afterward sees the merged file.
+     */
+    private void migrateCapabilitiesConfig() {
+        boolean changed = migrateCapabilitiesConfig(new File(getDataFolder(), "config.yml"), getLogger());
+        if (changed) {
+            reloadConfig();
+        }
+    }
+
+    /**
+     * The actual migration logic, taking explicit inputs rather than reading {@code this} — the
+     * same test-seam shape {@link #parsePluginVersion(String)} already uses, so this is callable
+     * from a plain JUnit test with no live Bukkit server. Never reaches for
+     * {@code AbstractConfigEntity}/{@code @ConfigEntity} — that mechanism is scoped to
+     * module-authored config POJOs and never adds a key to the framework's own existing
+     * {@code config.yml}. What transfers is the underlying Paper technique
+     * {@code AbstractConfigEntity.init()} uses: a {@link YamlConfiguration} with
+     * {@code options().parseComments(true)} set <b>before</b> {@code load()} — {@code load()}
+     * reads the option itself — plus {@code config.setComments(path, ...)} on the missing-key
+     * branch. Never modifies a value the operator already set and never removes or reorders
+     * existing content (04-CONTEXT D-01).
+     * <p>
+     * NOT YET IMPLEMENTED — see 06-01-PLAN.md Task 2. This stub deliberately does nothing so
+     * {@code CapabilityConfigTest}'s migration assertions fail for the right reason (RED).
+     *
+     * @param configFile the {@code config.yml} file to migrate
+     * @param logger     where to log a load failure
+     * @return {@code true} if the file was modified
+     */
+    private static boolean migrateCapabilitiesConfig(File configFile, Logger logger) {
+        return false;
     }
 
     private void initWebSocketManagers() {
