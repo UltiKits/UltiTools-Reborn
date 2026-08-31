@@ -31,6 +31,20 @@ public class SimpleTempListener<E extends Event> implements TempListener {
     private Function<E, Boolean> filter = (ignored) -> true;
 
     /**
+     * Tracks which listener instances are currently registered, so a second {@link #register()}
+     * call on the same instance is a no-op instead of a silent duplicate Bukkit registration.
+     * Static (not an instance field) so it does not change {@code @AllArgsConstructor}'s generated
+     * signature. Weak keys so a listener that is simply dropped (never unregistered) does not leak.
+     * <br>
+     * 追踪哪些监听器实例当前已注册，使得同一实例第二次调用 {@link #register()}
+     * 是无操作，而不是静默在 Bukkit 层面重复注册。使用静态字段（而非实例字段）
+     * 才不会改变 {@code @AllArgsConstructor} 生成的构造器签名。使用弱引用键，
+     * 这样一个被直接丢弃（从未注销）的监听器不会泄露。
+     */
+    private static final Set<SimpleTempListener<?>> REGISTERED =
+            Collections.newSetFromMap(new WeakHashMap<>());
+
+    /**
      * Hand-written rather than Lombok-generated so it can carry its own javadoc.
      * Lombok's {@code @NoArgsConstructor(onConstructor_ = @Deprecated(...))} form was
      * confirmed (via javap on the compiled class) to correctly carry
@@ -123,20 +137,6 @@ public class SimpleTempListener<E extends Event> implements TempListener {
         this.priority = priority;
         this.eventHandler = eventHandler;
     }
-
-    /**
-     * Tracks which listener instances are currently registered, so a second {@link #register()}
-     * call on the same instance is a no-op instead of a silent duplicate Bukkit registration.
-     * Static (not an instance field) so it does not change {@code @AllArgsConstructor}'s generated
-     * signature. Weak keys so a listener that is simply dropped (never unregistered) does not leak.
-     * <br>
-     * 追踪哪些监听器实例当前已注册，使得同一实例第二次调用 {@link #register()}
-     * 是无操作，而不是静默在 Bukkit 层面重复注册。使用静态字段（而非实例字段）
-     * 才不会改变 {@code @AllArgsConstructor} 生成的构造器签名。使用弱引用键，
-     * 这样一个被直接丢弃（从未注销）的监听器不会泄露。
-     */
-    private static final Set<SimpleTempListener<?>> REGISTERED =
-            Collections.newSetFromMap(new WeakHashMap<>());
 
     public void register() {
         if (eventClass == null) {
