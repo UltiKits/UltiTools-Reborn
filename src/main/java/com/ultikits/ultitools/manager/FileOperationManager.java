@@ -81,15 +81,6 @@ public class FileOperationManager {
      */
     private static final Path SECURITY_DIR_RELATIVE = Paths.get("plugins", "UltiTools", "security");
 
-    private static List<PathMatcher> buildDenyGlobMatchers() {
-        List<String> globs = Arrays.asList("*.key", "*.pem", "*.p12", "*.jks", "*.keystore", ".env*");
-        List<PathMatcher> matchers = new ArrayList<>();
-        for (String glob : globs) {
-            matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
-        }
-        return Collections.unmodifiableList(matchers);
-    }
-
     /**
      * The {@link RemoteActionLog.Entry#getAction()} literal prefix every entry this class records
      * carries, extended with the operation itself (e.g. {@code file_operation:read}) — D-22.
@@ -109,6 +100,19 @@ public class FileOperationManager {
      * without reconstructing the manager.
      */
     private List<File> editableRoots;
+
+    // All field declarations precede all methods below this point (PMD
+    // FieldDeclarationsShouldBeAtStartOfClass) — buildDenyGlobMatchers() used to sit between
+    // DENY_EXACT_BASENAMES/SECURITY_DIR_RELATIVE and the four fields above; moved here so the
+    // field block is contiguous.
+    private static List<PathMatcher> buildDenyGlobMatchers() {
+        List<String> globs = Arrays.asList("*.key", "*.pem", "*.p12", "*.jks", "*.keystore", ".env*");
+        List<PathMatcher> matchers = new ArrayList<>();
+        for (String glob : globs) {
+            matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
+        }
+        return Collections.unmodifiableList(matchers);
+    }
 
     public FileOperationManager() {
         this.serverRoot = new File(System.getProperty("user.dir"));
@@ -541,6 +545,13 @@ public class FileOperationManager {
      * @return the {@link AccessDecision} that gated listing the directory itself — one decision
      *         for the whole operation, not one per returned row (see {@link #recordFileDecision})
      */
+    // PMD.UnusedFormalParameter: operationData is deliberately kept even though this handler
+    // does not read it today. handleFileOperation()'s switch dispatches all four operation
+    // handlers — handleReadOperation, handleWriteOperation, handleListOperation,
+    // handleDeleteOperation — with the identical (String, JsonObject, String) signature; the
+    // other three do read operationData (limit, content/append, recursive flag). Keeping the
+    // family uniform is the deliberate choice, not an oversight.
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     private AccessDecision handleListOperation(String path, JsonObject operationData, String operationId) {
         AccessDecision listDecision = isPathAllowed(path);
         try {
@@ -568,30 +579,7 @@ public class FileOperationManager {
 
             JsonArray fileList = new JsonArray();
             for (File file : files) {
-                // D-18: a refused child is MARKED, not filtered out — the panel used to render
-                // "this file does not exist" for a file that exists and is protected.
-                String childPath = (path == null || path.isEmpty() || path.equals("/"))
-                    ? file.getName()
-                    : path + "/" + file.getName();
-                AccessDecision childDecision = isPathAllowed(childPath);
-                boolean refused = !file.isDirectory() && !childDecision.isAllowed();
-
-                JsonObject fileInfo = new JsonObject();
-                fileInfo.addProperty("name", file.getName());
-                fileInfo.addProperty("isDirectory", file.isDirectory());
-                if (refused) {
-                    // Deliberately withholds size/lastModified/readable/writable — marking an
-                    // entry must not leak the metadata the refusal exists to withhold (T-06-27).
-                    fileInfo.addProperty("accessible", false);
-                    fileInfo.addProperty("reason", reasonCodeFor(childDecision));
-                } else {
-                    fileInfo.addProperty("accessible", true);
-                    fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
-                    fileInfo.addProperty("lastModified", file.lastModified());
-                    fileInfo.addProperty("readable", file.canRead());
-                    fileInfo.addProperty("writable", file.canWrite());
-                }
-                fileList.add(fileInfo);
+                fileList.add(buildListEntry(path, file));
             }
 
             JsonObject resultData = new JsonObject();
@@ -607,7 +595,44 @@ public class FileOperationManager {
             return listDecision;
         }
     }
-    
+
+    /**
+     * Builds a single directory-listing row, applying D-18's mark-not-filter policy to a refused
+     * child entry. Extracted from {@link #handleListOperation(String, JsonObject, String)} to keep
+     * that method's cyclomatic/NPath complexity within the project's PMD threshold — this is the
+     * per-entry decision-and-marking step, the cohesive seam in that loop.
+     *
+     * @param basePath the directory path being listed (the parent of {@code file})
+     * @param file     one child entry returned by {@code dir.listFiles()}
+     * @return the JSON row for this entry, either full metadata or a withheld-metadata marker
+     */
+    private JsonObject buildListEntry(String basePath, File file) {
+        // D-18: a refused child is MARKED, not filtered out — the panel used to render
+        // "this file does not exist" for a file that exists and is protected.
+        String childPath = (basePath == null || basePath.isEmpty() || basePath.equals("/"))
+            ? file.getName()
+            : basePath + "/" + file.getName();
+        AccessDecision childDecision = isPathAllowed(childPath);
+        boolean refused = !file.isDirectory() && !childDecision.isAllowed();
+
+        JsonObject fileInfo = new JsonObject();
+        fileInfo.addProperty("name", file.getName());
+        fileInfo.addProperty("isDirectory", file.isDirectory());
+        if (refused) {
+            // Deliberately withholds size/lastModified/readable/writable — marking an
+            // entry must not leak the metadata the refusal exists to withhold (T-06-27).
+            fileInfo.addProperty("accessible", false);
+            fileInfo.addProperty("reason", reasonCodeFor(childDecision));
+        } else {
+            fileInfo.addProperty("accessible", true);
+            fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
+            fileInfo.addProperty("lastModified", file.lastModified());
+            fileInfo.addProperty("readable", file.canRead());
+            fileInfo.addProperty("writable", file.canWrite());
+        }
+        return fileInfo;
+    }
+
     /**
      * 处理文件删除操作
      *
