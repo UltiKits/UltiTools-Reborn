@@ -369,4 +369,36 @@ class RemoteActionLogTest {
             assertThat(json.get("reason").getAsString()).isEqualTo("not editable");
         }
     }
+
+    /**
+     * Top-level (not {@code @Nested}) — Surefire's {@code -Dtest=Class#method} filter does not
+     * descend into {@code @Nested} classes, and this is the RED test for the phase-06 UAT finding
+     * 5a: {@code ALLOWED} rows silently dropped their {@code reason} key instead of carrying it as
+     * an explicit {@code null}, which is exactly the two-object-shapes problem a consumer of the
+     * action log (the compensating control for the framework's no-floor command policy) must never
+     * have to handle. This asserts on the actual serialized JSON key set, not on which
+     * {@code Entry} factory was called.
+     */
+    @Test
+    @DisplayName("ALLOWED 与 DENIED 落盘行携带完全相同的 JSON 键集合——消费者不应因裁决不同而处理两种对象形状")
+    void allowedAndDeniedLogLinesCarryTheSameJsonKeySet(@TempDir File dataFolder) throws Exception {
+        RemoteActionLog log = new RemoteActionLog();
+        log.init(dataFolder);
+
+        log.record(RemoteActionLog.Entry.allowed(Capability.COMMANDS, "execute_command", "say hi", "panel"));
+        log.record(RemoteActionLog.Entry.denied(
+                Capability.COMMANDS, "execute_command", "say hi", "panel", "blocked by policy"));
+        flushHandlers();
+
+        List<String> lines = readAllLogLines(dataFolder);
+        assertThat(lines).hasSize(2);
+
+        JsonObject allowed = JsonParser.parseString(lines.get(0)).getAsJsonObject();
+        JsonObject denied = JsonParser.parseString(lines.get(1)).getAsJsonObject();
+
+        assertThat(allowed.keySet())
+                .as("ALLOWED and DENIED action-log rows must expose the same JSON key set — a "
+                        + "stable field set, not two shapes that differ by verdict")
+                .containsExactlyInAnyOrderElementsOf(denied.keySet());
+    }
 }
