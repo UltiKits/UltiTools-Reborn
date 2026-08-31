@@ -227,8 +227,26 @@ public final class CommandTabCompletionDispatch {
         return token != null && token.startsWith("<") && token.endsWith(">");
     }
 
+    /**
+     * Tab-completion visibility filter: silent counterpart to {@link #checkPermission(
+     * CommandSender, Method)} / {@link #checkOp(CommandSender, Method)} (T-05-fix Part 3 /
+     * SILENT-25). Real-machine UAT observed a player without permission repeatedly receiving the
+     * "no permission" message while typing unrelated sub-commands, because every mapping this
+     * class's first-token and literal-sibling-token paths evaluate for visibility went through
+     * the SAME messaging {@code checkPermission}/{@code checkOp} used by actual command dispatch
+     * (the deprecated {@code AbstractCommandExecutor.onCommand}'s call site). Tab completion is
+     * not a command invocation: filtering an unprivileged sender's candidates out silently is
+     * correct, but re-sending the rejection notice on every keystroke that happens to
+     * re-evaluate a gated mapping is not. {@link #checkPermission(CommandSender, Method)} and
+     * {@link #checkOp(CommandSender, Method)} themselves are UNCHANGED and still message -- only
+     * this tab-completion-only visibility filter switches to the silent predicates below.
+     *
+     * @param player the player requesting completion
+     * @param method the candidate {@code @CmdMapping} method
+     * @return {@code true} if the mapping is visible to {@code player}
+     */
     private static boolean isVisible(Player player, Method method) {
-        return checkPermission(player, method) && checkOp(player, method);
+        return isPermissionSatisfied(player, method) && isOpSatisfied(player, method);
     }
 
     /**
@@ -239,24 +257,20 @@ public final class CommandTabCompletionDispatch {
      * Relocated -- not copied -- from the deprecated {@code AbstractCommandExecutor}'s private
      * method of the same name and signature (T-05-20). Behaviour is byte-for-byte identical,
      * including the {@code sendMessage} on denial, which both base-class generations inherit
-     * unchanged from the pre-existing class this predicate was ported from.
+     * unchanged from the pre-existing class this predicate was ported from. This method remains
+     * the actual-dispatch guard for the deprecated {@code AbstractCommandExecutor.onCommand}
+     * (its call site is unchanged); tab completion's own visibility filter now goes through the
+     * silent {@link #isPermissionSatisfied(CommandSender, Method)} instead (T-05-fix Part 3).
      *
      * @param sender the command sender being checked
      * @param method the matched {@code @CmdMapping} method
      * @return {@code true} if the mapping declares no permission or the sender holds it
      */
     public static boolean checkPermission(CommandSender sender, Method method) {
-        if (!method.isAnnotationPresent(CmdMapping.class)) {
+        if (isPermissionSatisfied(sender, method)) {
             return true;
         }
-        CmdMapping cmdMapping = method.getAnnotation(CmdMapping.class);
-        if (cmdMapping.permission().isEmpty()) {
-            return true;
-        }
-        String permission = cmdMapping.permission();
-        if (sender.hasPermission(permission)) {
-            return true;
-        }
+        String permission = method.getAnnotation(CmdMapping.class).permission();
         sender.sendMessage(String.format(UltiTools.getInstance().i18n("需要权限"), permission));
         return false;
     }
@@ -265,20 +279,50 @@ public final class CommandTabCompletionDispatch {
      * Mapping-level OP guard, the {@code requireOp()} counterpart to {@link
      * #checkPermission(CommandSender, Method)}. Relocated -- not copied -- from the deprecated
      * {@code AbstractCommandExecutor}'s private method of the same name and signature (T-05-21).
+     * Remains the actual-dispatch guard, unchanged; tab completion's visibility filter goes
+     * through the silent {@link #isOpSatisfied(CommandSender, Method)} instead (T-05-fix Part 3).
      *
      * @param sender the command sender being checked
      * @param method the matched {@code @CmdMapping} method
      * @return {@code true} if the mapping does not require OP or the sender is an OP
      */
     public static boolean checkOp(CommandSender sender, Method method) {
+        if (isOpSatisfied(sender, method)) {
+            return true;
+        }
+        sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
+        return false;
+    }
+
+    /**
+     * The permission predicate {@link #checkPermission(CommandSender, Method)} messages on, and
+     * {@link #isVisible(Player, Method)} does not -- the single source of truth for BOTH, so the
+     * two can never independently drift into disagreeing about whether a mapping is permitted.
+     *
+     * @param sender the command sender being checked
+     * @param method the matched {@code @CmdMapping} method
+     * @return {@code true} if the mapping declares no permission or the sender holds it
+     */
+    private static boolean isPermissionSatisfied(CommandSender sender, Method method) {
         if (!method.isAnnotationPresent(CmdMapping.class)) {
             return true;
         }
-        CmdMapping cmdMapping = method.getAnnotation(CmdMapping.class);
-        if (cmdMapping.requireOp() && !sender.isOp()) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"));
-            return false;
+        String permission = method.getAnnotation(CmdMapping.class).permission();
+        return permission.isEmpty() || sender.hasPermission(permission);
+    }
+
+    /**
+     * The OP predicate {@link #checkOp(CommandSender, Method)} messages on, and {@link
+     * #isVisible(Player, Method)} does not -- the single source of truth for both.
+     *
+     * @param sender the command sender being checked
+     * @param method the matched {@code @CmdMapping} method
+     * @return {@code true} if the mapping does not require OP or the sender is an OP
+     */
+    private static boolean isOpSatisfied(CommandSender sender, Method method) {
+        if (!method.isAnnotationPresent(CmdMapping.class)) {
+            return true;
         }
-        return true;
+        return !method.getAnnotation(CmdMapping.class).requireOp() || sender.isOp();
     }
 }
