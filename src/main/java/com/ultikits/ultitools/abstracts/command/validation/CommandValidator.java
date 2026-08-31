@@ -82,6 +82,10 @@ public interface CommandValidator {
      *                         {@code false} if it threw
      * @since 6.3.0
      */
+    // The empty body IS the design: it is what keeps this default method source- and
+    // binary-compatible with every pre-6.3.0 CommandValidator implementation, per the javadoc
+    // above ("existing validators that only gate ... require no change").
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
     default void onComplete(CommandContext context, boolean commandSucceeded) {
     }
 
