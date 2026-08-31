@@ -12,9 +12,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +25,10 @@ import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
+import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.java.JavaPlugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,8 +39,14 @@ import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
+import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -414,5 +427,152 @@ class PanelResponderRegistryTest {
         Object previous = field.get(null);
         field.set(null, value);
         return previous;
+    }
+
+    /**
+     * A module's responders die with it, at both existing unload sites (Task 3) —
+     * {@code PluginManager.unregister} (in-process) and {@code PluginManager.unregisterExternal}
+     * (external Bukkit plugin). Mirrors the minimal stubbing shape
+     * {@code PluginManagerTest.UnregisterTests}/{@code ExternalPluginIntegrationTest} already use
+     * for the same two methods, extended with {@code getPanelResponderRegistry()}.
+     */
+    @Nested
+    @DisplayName("模块卸载时其 responder 一并消失（两个既有卸载点）")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reflection to reset UltiTools.ultiTools, same pattern as sibling nested groups
+    class Unload {
+
+        private Logger mockLogger;
+        private EventBus eventBus;
+        private ListenerManager listenerManager;
+        private CommandManager commandManager;
+        private PanelResponderRegistry registry;
+        private PluginManager pluginManager;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            registry = new PanelResponderRegistry();
+            mockLogger = mock(Logger.class);
+            eventBus = new EventBus();
+            listenerManager = new ListenerManager();
+            commandManager = new CommandManager();
+
+            // unregisterExternal's trailing log line calls the static Bukkit.getLogger(), which
+            // needs Bukkit.getServer() to be non-null -- mirrors ExternalPluginIntegrationTest's
+            // own setUp rather than pulling in full MockBukkit for one log line.
+            Server mockServer = mock(Server.class);
+            lenient().when(mockServer.getLogger()).thenReturn(Logger.getLogger("MockServer"));
+            setStaticField(Bukkit.class, "server", mockServer);
+
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getEventBus()).thenReturn(eventBus);
+                lenient().when(ultiTools.getListenerManager()).thenReturn(listenerManager);
+                lenient().when(ultiTools.getCommandManager()).thenReturn(commandManager);
+                lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
+            });
+            pluginManager = new PluginManager();
+        }
+
+        @AfterEach
+        void tearDown() throws Exception {
+            eventBus.shutdown();
+            setStaticField(UltiTools.class, "ultiTools", null);
+            setStaticField(Bukkit.class, "server", null);
+        }
+
+        private void setStaticField(Class<?> clazz, String fieldName, Object value) throws Exception {
+            Field field = clazz.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(null, value);
+        }
+
+        @Test
+        @DisplayName("卸载一个注册了两个 responder 的内部模块会全部移除，释放的类型可以被别的模块注册")
+        void unregisteringInProcessModuleRemovesBothResponders() {
+            registry.registerResponder("type-a", echoResponder(), "ModuleOne");
+            registry.registerResponder("type-b", echoResponder(), "ModuleOne");
+
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("ModuleOne");
+
+            pluginManager.unregister(plugin);
+
+            assertThat(registry.hasResponder("type-a")).isFalse();
+            assertThat(registry.hasResponder("type-b")).isFalse();
+            assertThatCode(() -> registry.registerResponder("type-a", echoResponder(), "ModuleTwo"))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("卸载没有注册任何 responder 的内部模块正常完成，不抛出异常")
+        void unregisteringInProcessModuleWithNoResponderCompletesNormally() {
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("ModuleWithNoResponders");
+
+            assertThatCode(() -> pluginManager.unregister(plugin)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("卸载一个模块不影响另一个仍在加载的模块的 responder")
+        void unrelatedModuleResponderSurvivesUnload() {
+            registry.registerResponder("type-a", echoResponder(), "ModuleOne");
+            registry.registerResponder("type-c", echoResponder(), "ModuleTwo");
+
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("ModuleOne");
+
+            pluginManager.unregister(plugin);
+
+            assertThat(registry.hasResponder("type-c")).isTrue();
+        }
+
+        @Test
+        @DisplayName("卸载后再收到该类型的入站消息会重新落回未知类型分支（一条告警，不回复）")
+        void afterUnloadInboundMessageTakesUnknownTypeBranchAgain() throws Exception {
+            registry.registerResponder("type-a", echoResponder(), "ModuleOne");
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("ModuleOne");
+            pluginManager.unregister(plugin);
+
+            UltiPanelWebSocketClient mockPanelWs = mock(UltiPanelWebSocketClient.class);
+            Object previous = setPanelWs(mockPanelWs);
+            try {
+                JsonObject message = new JsonObject();
+                message.addProperty("type", "type-a");
+
+                invokeHandleInboundMessage(message);
+
+                verify(mockLogger, atLeastOnce()).log(eq(Level.WARNING), anyString());
+                verify(mockPanelWs, never()).sendMessage(any());
+            } finally {
+                setPanelWs(previous);
+            }
+        }
+
+        @Test
+        @DisplayName("外部插件卸载通过第二个既有调用点移除它的 responder")
+        void unregisteringExternalPluginRemovesItsResponder() {
+            registry.registerResponder("type-ext", echoResponder(), "ExtPlugin");
+
+            JavaPlugin javaPlugin = createMockJavaPlugin("ExtPlugin");
+            ExternalPluginAdapter adapter = new ExternalPluginAdapter(javaPlugin);
+
+            pluginManager.unregisterExternal(adapter);
+
+            assertThat(registry.hasResponder("type-ext")).isFalse();
+        }
+
+        private JavaPlugin createMockJavaPlugin(String name) {
+            JavaPlugin plugin = mock(JavaPlugin.class);
+            PluginDescriptionFile desc = mock(PluginDescriptionFile.class);
+            when(plugin.getName()).thenReturn(name);
+            when(plugin.getDescription()).thenReturn(desc);
+            when(desc.getVersion()).thenReturn("1.0.0");
+            when(desc.getAuthors()).thenReturn(Arrays.asList("Author"));
+            when(desc.getMain()).thenReturn("com.example." + name + ".Main");
+            when(plugin.getDataFolder()).thenReturn(new File("/tmp/" + name));
+            when(plugin.getLogger()).thenReturn(Logger.getLogger(name));
+            return plugin;
+        }
     }
 }
