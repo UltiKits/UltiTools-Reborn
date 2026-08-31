@@ -578,8 +578,8 @@ public class PluginInitiationUtils {
 
     /**
      * Records one action-log entry for a capability-gated inbound message. A {@code null}
-     * {@link UltiTools#getRemoteActionLog()} is a silent no-op — the existing inbound-message tests
-     * mock {@code UltiTools} and return null for it.
+     * {@code UltiTools.getInstance().getRemoteActionLog()} is a silent no-op — the existing
+     * inbound-message tests mock {@code UltiTools} and return null for it.
      */
     private static void recordAction(Capability capability, String type, JsonObject data,
                                       RemoteActionLog.Verdict verdict, String reason) {
