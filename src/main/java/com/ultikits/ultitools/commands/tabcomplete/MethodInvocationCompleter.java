@@ -283,19 +283,45 @@ public class MethodInvocationCompleter implements TabCompleter {
      * @return the matching shape, or {@link SuggestSignatureShape#UNSUPPORTED} if none match
      */
     private static SuggestSignatureShape classifySuggestSignature(Class<?>[] paramTypes) {
-        if (paramTypes.length == 0) {
-            return SuggestSignatureShape.NO_ARGS;
+        // Dispatch on arity FIRST (mirrors invokeSuggestMethod's own switch on the resulting
+        // shape) rather than a flat chain of five independent length-and-type guards -- PMD's
+        // NPathComplexity multiplies the path counts of sequential guard clauses even though
+        // they are mutually exclusive by construction, which is what pushed the flat form to
+        // 360 against a threshold of 200 for a method that is, in cyclomatic terms, just five
+        // straight-line comparisons. Splitting by arity turns that multiplication into a sum.
+        switch (paramTypes.length) {
+            case 0:
+                return SuggestSignatureShape.NO_ARGS;
+            case 1:
+                return classifySingleParamShape(paramTypes[0]);
+            case 2:
+                return classifyPlayerAndStringShape(paramTypes);
+            case 3:
+                return classifyPlayerCommandArgsShape(paramTypes);
+            default:
+                return SuggestSignatureShape.UNSUPPORTED;
         }
-        if (paramTypes.length == 1 && paramTypes[0] == Player.class) {
+    }
+
+    private static SuggestSignatureShape classifySingleParamShape(Class<?> paramType) {
+        if (paramType == Player.class) {
             return SuggestSignatureShape.PLAYER_ONLY;
         }
-        if (paramTypes.length == 1 && paramTypes[0] == String.class) {
+        if (paramType == String.class) {
             return SuggestSignatureShape.STRING_ONLY;
         }
-        if (paramTypes.length == 2 && paramTypes[0] == Player.class && paramTypes[1] == String.class) {
+        return SuggestSignatureShape.UNSUPPORTED;
+    }
+
+    private static SuggestSignatureShape classifyPlayerAndStringShape(Class<?>[] paramTypes) {
+        if (paramTypes[0] == Player.class && paramTypes[1] == String.class) {
             return SuggestSignatureShape.PLAYER_AND_STRING;
         }
-        if (paramTypes.length == 3 && paramTypes[0] == Player.class && paramTypes[1] == Command.class
+        return SuggestSignatureShape.UNSUPPORTED;
+    }
+
+    private static SuggestSignatureShape classifyPlayerCommandArgsShape(Class<?>[] paramTypes) {
+        if (paramTypes[0] == Player.class && paramTypes[1] == Command.class
                 && paramTypes[2] == String[].class) {
             return SuggestSignatureShape.PLAYER_COMMAND_ARGS;
         }
