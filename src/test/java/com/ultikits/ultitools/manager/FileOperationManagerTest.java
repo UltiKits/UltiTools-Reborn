@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -8,9 +9,12 @@ import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +25,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -65,6 +71,42 @@ class FileOperationManagerTest {
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * Points both {@code serverRoot} and the new {@code editableRoots} field at the same
+     * directory, so that a handler test built around {@code @TempDir} still clears the D-15
+     * editable-root gate. Reflecting {@code serverRoot} alone (the file's pre-existing pattern)
+     * is no longer sufficient once {@code editableRoots} is resolved independently at
+     * construction time — see Task 1's read_first notes.
+     */
+    private void setServerRootAndEditableRoots(File root) throws Exception {
+        Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+        serverRootField.setAccessible(true);
+        serverRootField.set(fileOperationManager, root);
+
+        Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
+        editableRootsField.setAccessible(true);
+        editableRootsField.set(fileOperationManager, Collections.singletonList(root));
+    }
+
+    /**
+     * Publishes a fresh {@link UltiTools} mock whose {@code getConfig()} returns a real,
+     * standalone {@link YamlConfiguration} carrying only {@code ultipanel.files.editable-roots}
+     * (or nothing, for {@code roots == null}, to pin the absent-key default), then re-reads it
+     * into {@link #fileOperationManager} via the public {@code reloadRootsFromConfig()} seam —
+     * exactly the reload path the plan calls out as the reason that method is public.
+     */
+    private void configureEditableRoots(List<String> roots) {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            YamlConfiguration config = new YamlConfiguration();
+            if (roots != null) {
+                config.set("ultipanel.files.editable-roots", roots);
+            }
+            lenient().when(ultiTools.getConfig()).thenReturn(config);
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
+        fileOperationManager.reloadRootsFromConfig();
     }
 
     @Nested
@@ -307,9 +349,7 @@ class FileOperationManagerTest {
             }
 
             // 设置 serverRoot 为 tempDir
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleRead = FileOperationManager.class.getDeclaredMethod(
                 "handleReadOperation", String.class, JsonObject.class, String.class);
@@ -334,9 +374,7 @@ class FileOperationManagerTest {
         @DisplayName("content 为 null 时应该返回错误")
         void shouldReturnErrorWhenContentIsNull() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
                 "handleWriteOperation", String.class, JsonObject.class, String.class);
@@ -356,9 +394,7 @@ class FileOperationManagerTest {
         @DisplayName("应该创建父目录")
         void shouldCreateParentDirectories() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
                 "handleWriteOperation", String.class, JsonObject.class, String.class);
@@ -380,9 +416,7 @@ class FileOperationManagerTest {
         @DisplayName("append 模式应该追加内容")
         void appendModeShouldAppendContent() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             // 创建初始文件
             File testFile = new File(tempDir, "append.txt");
@@ -415,9 +449,7 @@ class FileOperationManagerTest {
         @DisplayName("目录不存在时应该返回错误")
         void shouldReturnErrorWhenDirectoryNotFound() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleList = FileOperationManager.class.getDeclaredMethod(
                 "handleListOperation", String.class, JsonObject.class, String.class);
@@ -434,9 +466,7 @@ class FileOperationManagerTest {
         @DisplayName("路径不是目录时应该返回错误")
         void shouldReturnErrorWhenPathIsNotDirectory() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testFile = new File(tempDir, "notdir.txt");
             testFile.createNewFile();
@@ -456,9 +486,7 @@ class FileOperationManagerTest {
         @DisplayName("应该列出目录内容")
         void shouldListDirectoryContents() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File subDir = new File(tempDir, "listdir");
             subDir.mkdirs();
@@ -486,9 +514,7 @@ class FileOperationManagerTest {
         @DisplayName("文件不存在时应该返回错误")
         void shouldReturnErrorWhenFileNotFound() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleDelete = FileOperationManager.class.getDeclaredMethod(
                 "handleDeleteOperation", String.class, JsonObject.class, String.class);
@@ -505,9 +531,7 @@ class FileOperationManagerTest {
         @DisplayName("应该删除文件")
         void shouldDeleteFile() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testFile = new File(tempDir, "todelete.txt");
             testFile.createNewFile();
@@ -527,9 +551,7 @@ class FileOperationManagerTest {
         @DisplayName("应该递归删除目录")
         void shouldDeleteDirectoryRecursively() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "todeleteDir");
             testDir.mkdirs();
@@ -574,9 +596,7 @@ class FileOperationManagerTest {
         @DisplayName("should exclude blocked files from directory listing")
         void shouldExcludeBlockedFilesFromListing() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             // Create a subdirectory with a mix of allowed and blocked files
             File testDir = new File(tempDir, "serverdir");
@@ -618,9 +638,7 @@ class FileOperationManagerTest {
         @DisplayName("should still include directories in listing")
         void shouldIncludeDirectoriesInListing() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "dirtest");
             testDir.mkdirs();
@@ -656,9 +674,7 @@ class FileOperationManagerTest {
         @DisplayName("should exclude all blocked extensions from listing")
         void shouldExcludeAllBlockedExtensions() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "extdir");
             testDir.mkdirs();
@@ -696,9 +712,7 @@ class FileOperationManagerTest {
         @DisplayName("should exclude all blocked filenames from listing")
         void shouldExcludeAllBlockedFilenames() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "allblocked");
             testDir.mkdirs();
@@ -751,12 +765,12 @@ class FileOperationManagerTest {
         void shouldBlockSensitiveFiles() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("server.properties")).isFalse();
-            assertThat(manager.isPathAllowed("ops.json")).isFalse();
-            assertThat(manager.isPathAllowed("whitelist.json")).isFalse();
-            assertThat(manager.isPathAllowed("banned-ips.json")).isFalse();
-            assertThat(manager.isPathAllowed("banned-players.json")).isFalse();
-            assertThat(manager.isPathAllowed("eula.txt")).isFalse();
+            assertThat(manager.isPathAllowed("server.properties").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("ops.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("whitelist.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("banned-ips.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("banned-players.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("eula.txt").isAllowed()).isFalse();
         }
 
         @Test
@@ -764,8 +778,8 @@ class FileOperationManagerTest {
         void shouldAllowPluginConfigs() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml")).isTrue();
-            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json")).isTrue();
+            assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml").isAllowed()).isTrue();
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json").isAllowed()).isTrue();
         }
 
         @Test
@@ -773,8 +787,8 @@ class FileOperationManagerTest {
         void shouldBlockJarWrites() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("plugins/evil.jar")).isFalse();
-            assertThat(manager.isPathAllowed("server.jar")).isFalse();
+            assertThat(manager.isPathAllowed("plugins/evil.jar").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("server.jar").isAllowed()).isFalse();
         }
 
         @Test
@@ -782,9 +796,95 @@ class FileOperationManagerTest {
         void shouldBlockNullAndEmptyPaths() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed(null)).isFalse();
-            assertThat(manager.isPathAllowed("")).isFalse();
-            assertThat(manager.isPathAllowed("  ")).isFalse();
+            assertThat(manager.isPathAllowed(null).isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("  ").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("null/empty/whitespace 路径的拒绝是不可配置的")
+        void nullEmptyAndWhitespacePathsAreDeniedNonConfigurably() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed(null).isConfigurable()).isFalse();
+            assertThat(manager.isPathAllowed("").isConfigurable()).isFalse();
+            assertThat(manager.isPathAllowed("   ").isConfigurable()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("可编辑根目录集合测试（D-14/D-15/D-17）")
+    class EditableRootSetTests {
+
+        @Test
+        @DisplayName("缺省情况下根集合恰好是 plugins 和 logs")
+        void defaultRootsArePluginsAndLogs() {
+            AccessDecision pluginsDecision = fileOperationManager.isPathAllowed("plugins/SomeModule/config.yml");
+            AccessDecision logsDecision = fileOperationManager.isPathAllowed("logs/latest.log");
+            AccessDecision worldDecision = fileOperationManager.isPathAllowed("world/level.dat");
+
+            assertThat(pluginsDecision.isAllowed()).isTrue();
+            assertThat(logsDecision.isAllowed()).isTrue();
+            assertThat(worldDecision.isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("world/level.dat 与 server.properties 均被拒绝")
+        void worldAndServerPropertiesAreRefused() {
+            assertThat(fileOperationManager.isPathAllowed("world/level.dat").isAllowed()).isFalse();
+            assertThat(fileOperationManager.isPathAllowed("server.properties").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("根集合之外的路径给出可配置拒绝，命名 ultipanel.files.editable-roots 与 config.yml")
+        void pathOutsideRootsReportsConfigurableRefusalNamingKeyAndFile() {
+            AccessDecision decision = fileOperationManager.isPathAllowed("world/level.dat");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isTrue();
+            assertThat(decision.getConfigKey()).isEqualTo("ultipanel.files.editable-roots");
+            assertThat(decision.getMessage())
+                    .contains("ultipanel.files.editable-roots")
+                    .contains("plugins/UltiTools/config.yml");
+        }
+
+        @Test
+        @DisplayName("单根不变量：配置为单一目录时，服务器根下其它路径被拒绝——若整服务器根边界回归，此用例必须变红")
+        void singleConfiguredRootRefusesEverythingElseUnderServerRoot() {
+            configureEditableRoots(Collections.singletonList("onlyroot"));
+
+            assertThat(fileOperationManager.isPathAllowed("onlyroot/config.yml").isAllowed()).isTrue();
+            assertThat(fileOperationManager.isPathAllowed("elsewhere/config.yml").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("根集合为空列表时，一切路径被拒绝，且拒绝是可配置的")
+        void emptyRootListRefusesEverythingConfigurably() {
+            configureEditableRoots(Collections.emptyList());
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/config.yml");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("缺失键回退到出厂默认值，与显式空列表（故意不授予任何目录）不同")
+        void absentKeyFallsBackToDefaultsDistinctFromExplicitEmptyList() {
+            configureEditableRoots(null);
+            assertThat(fileOperationManager.isPathAllowed("plugins/x.yml").isAllowed()).isTrue();
+
+            configureEditableRoots(Collections.emptyList());
+            assertThat(fileOperationManager.isPathAllowed("plugins/x.yml").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("同一段 outside-roots 原因文本，可配置与不可配置两条消息不相等")
+        void configurableAndNonConfigurableRefusalMessagesDiffer() {
+            String outsideRootsMessage = fileOperationManager.isPathAllowed("world/level.dat").getMessage();
+            String credentialMessage = fileOperationManager.isPathAllowed("server.properties").getMessage();
+
+            assertThat(outsideRootsMessage).isNotEqualTo(credentialMessage);
         }
     }
 }
