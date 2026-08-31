@@ -1465,4 +1465,163 @@ class FileOperationManagerTest {
             verify(mockWebSocketClient, timeout(2000).times(1)).sendMessage(ArgumentMatchers.any(JsonObject.class));
         }
     }
+
+    /**
+     * Top-level for the same Surefire filtering reason established by Plan 06-03 —
+     * 06-VALIDATION.md's automated command is the bare
+     * {@code FileOperationManagerTest#shouldMarkInaccessibleEntriesInList} with no
+     * {@code $NestedClass} qualifier.
+     * <p>
+     * Pins D-18: listing a directory containing one permitted file and one credential file (D-16)
+     * returns <b>both</b> entries — the permitted one {@code accessible: true} with all six
+     * pre-6.3.0 fields intact, the credential one {@code accessible: false} with reason
+     * {@code PROTECTED_CREDENTIAL} and none of the four withheld fields (size, lastModified,
+     * readable, writable). Today's behaviour (pre-Task-2) would silently drop the credential entry
+     * from the result — this is the silent shape D-17/D-18 exist to remove.
+     */
+    @Test
+    @DisplayName("目录列表标记不可访问的项，而不是省略它们（D-18）")
+    void shouldMarkInaccessibleEntriesInList() throws Exception {
+        setServerRootAndEditableRoots(tempDir);
+
+        File dir = new File(tempDir, "marklist");
+        dir.mkdirs();
+        new File(dir, "allowed.txt").createNewFile();
+        new File(dir, "data.json").createNewFile(); // unconditionally denied credential file (D-16)
+
+        com.google.gson.JsonArray files = invokeListAndCaptureFiles("marklist");
+
+        assertThat(files.size()).isEqualTo(2);
+
+        JsonObject allowed = findEntryByName(files, "allowed.txt");
+        assertThat(allowed.get("accessible").getAsBoolean()).isTrue();
+        assertThat(allowed.has("reason")).isFalse();
+        assertThat(allowed.has("size")).isTrue();
+        assertThat(allowed.has("lastModified")).isTrue();
+        assertThat(allowed.has("readable")).isTrue();
+        assertThat(allowed.has("writable")).isTrue();
+
+        JsonObject credential = findEntryByName(files, "data.json");
+        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
+        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
+        assertThat(credential.has("size")).isFalse();
+        assertThat(credential.has("lastModified")).isFalse();
+        assertThat(credential.has("readable")).isFalse();
+        assertThat(credential.has("writable")).isFalse();
+    }
+
+    @Nested
+    @DisplayName("目录列表标记的补充覆盖测试（D-18，Plan 06-04 Task 2）")
+    class ListMarkingTests {
+
+        @Test
+        @DisplayName("totalCount 等于返回数组长度，即便目录内含被拒绝的项")
+        void totalCountMatchesArrayLengthWithRefusedEntry() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "totalcount");
+            dir.mkdirs();
+            new File(dir, "ok.txt").createNewFile();
+            new File(dir, "data.json").createNewFile();
+
+            JsonObject data = invokeListAndCaptureData("totalcount");
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+
+            assertThat(data.get("totalCount").getAsInt()).isEqualTo(files.size());
+            assertThat(files.size()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("子目录继续被列出——目录条目从不应用逐项检查，始终标记为可访问")
+        void subdirectoriesRemainListedAndAccessible() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "subdirtest");
+            dir.mkdirs();
+            new File(dir, "childdir").mkdirs();
+
+            com.google.gson.JsonArray files = invokeListAndCaptureFiles("subdirtest");
+
+            JsonObject childDir = findEntryByName(files, "childdir");
+            assertThat(childDir.get("isDirectory").getAsBoolean()).isTrue();
+            assertThat(childDir.get("accessible").getAsBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("旧版消费者只读取六个既有字段，看到的值与今天完全一致")
+        void olderConsumerFieldsUnchangedForAccessibleEntries() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "legacyfields");
+            dir.mkdirs();
+            File f = new File(dir, "plain.txt");
+            f.createNewFile();
+
+            com.google.gson.JsonArray files = invokeListAndCaptureFiles("legacyfields");
+            JsonObject entry = findEntryByName(files, "plain.txt");
+
+            assertThat(entry.get("name").getAsString()).isEqualTo("plain.txt");
+            assertThat(entry.get("isDirectory").getAsBoolean()).isFalse();
+            assertThat(entry.get("size").getAsLong()).isEqualTo(f.length());
+            assertThat(entry.get("lastModified").getAsLong()).isEqualTo(f.lastModified());
+            assertThat(entry.get("readable").getAsBoolean()).isEqualTo(f.canRead());
+            assertThat(entry.get("writable").getAsBoolean()).isEqualTo(f.canWrite());
+        }
+
+        /**
+         * Unit-tests the reason-code derivation directly (D-18's two codes): a configurable
+         * {@link AccessDecision} maps to {@code OUTSIDE_ROOTS}, a non-configurable one maps to
+         * {@code PROTECTED_CREDENTIAL}.
+         * <p>
+         * End-to-end, a listed child can only ever be marked {@code OUTSIDE_ROOTS} when the listed
+         * directory itself is an ancestor of an editable root rather than a descendant of one — a
+         * shape {@code getSecureFile}'s containment check (unchanged by this plan; see its
+         * prohibitions) never admits for the top-level directory, since {@code Path.startsWith}
+         * containment is monotonic under path extension: if the listed directory itself passed
+         * containment, every one of its children does too. This method pins the mapping directly,
+         * independent of whether today's concrete configuration surface can reach it for
+         * {@code list} specifically.
+         */
+        @Test
+        @DisplayName("原因码派生：可配置拒绝映射为 OUTSIDE_ROOTS，不可配置拒绝映射为 PROTECTED_CREDENTIAL")
+        void reasonCodeDerivationMapsBothCauses() throws Exception {
+            Method reasonCodeFor =
+                    FileOperationManager.class.getDeclaredMethod("reasonCodeFor", AccessDecision.class);
+            reasonCodeFor.setAccessible(true);
+
+            String outsideRoots = (String) reasonCodeFor.invoke(null,
+                    AccessDecision.deniedConfigurable("outside", "ultipanel.files.editable-roots"));
+            String protectedCredential = (String) reasonCodeFor.invoke(null,
+                    AccessDecision.deniedNonConfigurable("credential"));
+
+            assertThat(outsideRoots).isEqualTo("OUTSIDE_ROOTS");
+            assertThat(protectedCredential).isEqualTo("PROTECTED_CREDENTIAL");
+        }
+    }
+
+    private com.google.gson.JsonArray invokeListAndCaptureFiles(String path) throws Exception {
+        return invokeListAndCaptureData(path).getAsJsonArray("files");
+    }
+
+    private JsonObject invokeListAndCaptureData(String path) throws Exception {
+        org.mockito.Mockito.reset(mockWebSocketClient);
+        when(mockWebSocketClient.isConnected()).thenReturn(true);
+        when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+
+        Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+        handleList.setAccessible(true);
+        handleList.invoke(fileOperationManager, path, new JsonObject(), "list-marking-test");
+
+        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+        verify(mockWebSocketClient).sendMessage(captor.capture());
+        return captor.getValue().getAsJsonObject("data");
+    }
+
+    private JsonObject findEntryByName(com.google.gson.JsonArray files, String name) {
+        for (int i = 0; i < files.size(); i++) {
+            JsonObject entry = files.get(i).getAsJsonObject();
+            if (name.equals(entry.get("name").getAsString())) {
+                return entry;
+            }
+        }
+        throw new AssertionError("No entry named '" + name + "' in list result: " + files);
+    }
 }
