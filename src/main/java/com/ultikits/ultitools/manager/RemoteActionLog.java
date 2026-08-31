@@ -93,6 +93,19 @@ public class RemoteActionLog {
     }
 
     /**
+     * Releases what {@link #init(File)} attached (WR-01, 06-REVIEW.md).
+     * <p>
+     * <b>RED placeholder</b> — intentionally a no-op so the paired failing test proves the
+     * duplication defect via an assertion rather than a compile error. The GREEN commit replaces
+     * this body with the real fix: remove and close the {@link FileHandler} this instance
+     * attached to the shared static {@link #ACTION_LOG}, so a later {@code /reload}'s second
+     * {@link #init(File)} call does not accumulate a second handler on top of this one.
+     */
+    public void shutdown() {
+        // Filled in by the paired GREEN commit.
+    }
+
+    /**
      * Loads {@code ultipanel.logging.action-log.max-size-bytes} and {@code .max-files}, copying
      * {@code ErrorReportCollector.loadConfiguration()}'s exact shape: {@link UltiTools#getInstance()}
      * null-guard, {@code instance.getConfig().getInt(path, default)} per key, one try/catch whose

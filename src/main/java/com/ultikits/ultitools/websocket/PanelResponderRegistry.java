@@ -231,6 +231,30 @@ public class PanelResponderRegistry {
         return timeoutScheduler.getQueue().size();
     }
 
+    /**
+     * Test-only accessor for whether {@link #timeoutScheduler} has been shut down — proves
+     * {@link #shutdown()} actually stops the dedicated timeout thread (WR-01), rather than merely
+     * proving the method exists and does not throw.
+     *
+     * @return {@code true} if {@link #timeoutScheduler} has been shut down
+     */
+    boolean isTimeoutSchedulerShutdownForTesting() {
+        return timeoutScheduler.isShutdown();
+    }
+
+    /**
+     * Releases {@link #timeoutScheduler} (WR-01, 06-REVIEW.md).
+     * <p>
+     * <b>RED placeholder</b> — intentionally a no-op so the paired failing test proves the leak via
+     * an assertion rather than a compile error. The GREEN commit replaces this body with the real
+     * fix: {@link ScheduledThreadPoolExecutor#shutdownNow()} on {@link #timeoutScheduler}, so a
+     * plugin {@code /reload} does not leak one more {@code UltiTools-PanelResponderRegistry-Timeout}
+     * thread per cycle.
+     */
+    public void shutdown() {
+        // Filled in by the paired GREEN commit.
+    }
+
     /** An immutable pairing of a responder function and the module name that registered it. */
     private static final class ResponderEntry {
         private final Function<JsonObject, CompletableFuture<JsonObject>> responder;

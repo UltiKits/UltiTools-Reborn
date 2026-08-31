@@ -288,6 +288,45 @@ class RemoteActionLogTest {
     }
 
     @Nested
+    @DisplayName("WR-01: shutdown 后重新 init 不得重复挂载 handler")
+    class ShutdownTests {
+
+        @TempDir
+        File dataFolder;
+
+        @Test
+        @DisplayName("construct→shutdown→再次 construct+init：只挂一个 handler，一条记录只落一行")
+        void reInitAfterShutdownAttachesExactlyOneHandlerAndWritesExactlyOneLinePerRecord() throws Exception {
+            // Mirrors a Bukkit /reload: UltiTools.onDisable() calls shutdown() on the instance
+            // from the enable that is ending, then the next onEnable constructs a brand new
+            // RemoteActionLog and calls init() again — same static ACTION_LOG logger, same
+            // dataFolder. Before WR-01's fix, shutdown() is a no-op, so the first instance's
+            // FileHandler is never removed and the second init() adds a second one.
+            RemoteActionLog first = new RemoteActionLog();
+            first.init(dataFolder);
+            first.shutdown();
+
+            RemoteActionLog second = new RemoteActionLog();
+            second.init(dataFolder);
+
+            assertThat(actionLogger().getHandlers())
+                    .as("shutdown() must remove the handler the first instance attached, so the "
+                            + "second init() (the next onEnable after a /reload) ends up with "
+                            + "exactly one handler attached to the shared static logger, not two")
+                    .hasSize(1);
+
+            second.record(RemoteActionLog.Entry.allowed(Capability.COMMANDS, "execute_command", "say hi", "panel"));
+            flushHandlers();
+
+            List<String> lines = readAllLogLines(dataFolder);
+            assertThat(lines)
+                    .as("two attached handlers would each independently write their own copy of "
+                            + "the same entry, duplicating every action-log line from that point on")
+                    .hasSize(1);
+        }
+    }
+
+    @Nested
     @DisplayName("record(null) 与线程安全")
     class NullAndThreadSafetyTests {
 

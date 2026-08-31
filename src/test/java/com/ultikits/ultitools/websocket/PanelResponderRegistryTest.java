@@ -575,4 +575,23 @@ class PanelResponderRegistryTest {
             return plugin;
         }
     }
+
+    @Nested
+    @DisplayName("WR-01: shutdown 必须真正终止 timeoutScheduler")
+    class Shutdown {
+
+        @Test
+        @DisplayName("shutdown() 之后 timeoutScheduler 已终止 —— 而不仅仅是方法存在且不抛异常")
+        void shutdownTerminatesTimeoutScheduler() {
+            PanelResponderRegistry registry = new PanelResponderRegistry();
+
+            registry.shutdown();
+
+            assertThat(registry.isTimeoutSchedulerShutdownForTesting())
+                    .as("shutdown() must stop the dedicated timeout scheduler thread, or every "
+                            + "plugin /reload leaks one more UltiTools-PanelResponderRegistry-Timeout "
+                            + "thread for the life of the process (06-REVIEW.md WR-01)")
+                    .isTrue();
+        }
+    }
 }
