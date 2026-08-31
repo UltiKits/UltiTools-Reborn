@@ -270,6 +270,79 @@ class BaseCommandExecutorTabCompletionTest {
     }
 
     // ========================================================================================
+    // UAT Fix (05-fix): every downstream @CmdParam.suggest method-name signature shape is
+    // actually invocable through the real onTabComplete entry point. Real-machine UAT on Paper
+    // 1.21.11 caught this after phase 05 made commands/tabcomplete/ live:
+    // MethodInvocationCompleter.invokeSuggestMethod fell into a final `else` that invoked ANY
+    // unrecognized signature with ZERO arguments, throwing IllegalArgumentException at Tab-press
+    // time for 16 of 24 real downstream call sites (every UltiWorlds `(Player, String)`-shaped
+    // suggest method). 5233 unit tests missed it because MethodInvocationCompleterTest drove
+    // invokeSuggestMethod in isolation -- exactly what this class exists to stop doing.
+    // ========================================================================================
+
+    @Nested
+    @DisplayName("UAT Fix: every downstream suggest-method signature shape is invocable through onTabComplete")
+    class SuggestMethodSignatureShapeTests {
+
+        @Test
+        @DisplayName("() zero-arg suggest method returns its suggestions")
+        void zeroArgSignatureWorks() {
+            SignatureShapeExecutor executor = new SignatureShapeExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"zero", ""});
+
+            assertThat(completions).containsExactly("zeroResult");
+        }
+
+        @Test
+        @DisplayName("(Player) single-arg suggest method receives the requesting player")
+        void playerOnlySignatureWorks() {
+            SignatureShapeExecutor executor = new SignatureShapeExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"playeronly", ""});
+
+            assertThat(completions).containsExactly("playerOnlyResult:" + player.getName());
+        }
+
+        @Test
+        @DisplayName("(String) single-arg suggest method receives the current input -- one of the 3 "
+                + "downstream (String prefix) methods verified during this fix")
+        void stringOnlySignatureWorks() {
+            SignatureShapeExecutor executor = new SignatureShapeExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"stringonly", "ab"});
+
+            assertThat(completions).containsExactly("abResult");
+        }
+
+        @Test
+        @DisplayName("(Player, String) two-arg suggest method -- the shape 16 of 24 real downstream "
+                + "call sites use -- receives both the player and the current input")
+        void playerAndStringSignatureWorks() {
+            SignatureShapeExecutor executor = new SignatureShapeExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"playerstring", "ab"});
+
+            assertThat(completions).containsExactly("abResult:" + player.getName());
+        }
+
+        @Test
+        @DisplayName("(Player, Command, String[]) three-arg suggest method still works unchanged")
+        void playerCommandArgsSignatureStillWorks() {
+            SignatureShapeExecutor executor = new SignatureShapeExecutor();
+
+            List<String> completions = executor.onTabComplete(
+                    player, mockCommand, "fixture", new String[]{"playercommandargs", ""});
+
+            assertThat(completions).containsExactly("threeArgResult");
+        }
+    }
+
+    // ========================================================================================
     // Task 3: the old base class becomes a shell -- the parity condition is pinned
     // ========================================================================================
 
@@ -477,6 +550,71 @@ class BaseCommandExecutorTabCompletionTest {
     // ========================================================================================
     // Shared fixture command classes
     // ========================================================================================
+
+    /**
+     * UAT Fix (05-fix) fixture: one mapping per suggest-method signature shape
+     * {@code MethodInvocationCompleter.invokeSuggestMethod} supports. {@code suggestStringOnly}
+     * and {@code suggestPlayerString} mirror the two real downstream shapes UAT found broken --
+     * {@code (String)} (UltiEssentials' {@code BaseEssentialsCommand}) and {@code (Player,
+     * String)} (16 of UltiWorlds' 24 downstream call sites).
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class SignatureShapeExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub
+        }
+
+        @CmdMapping(format = "zero <target>")
+        public void zeroCommand(@CmdSender CommandSender sender,
+                                 @CmdParam(value = "target", suggest = "suggestZero") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestZero() {
+            return Arrays.asList("zeroResult");
+        }
+
+        @CmdMapping(format = "playeronly <target>")
+        public void playerOnlyCommand(@CmdSender CommandSender sender,
+                                       @CmdParam(value = "target", suggest = "suggestPlayerOnly") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestPlayerOnly(Player player) {
+            return Arrays.asList("playerOnlyResult:" + player.getName());
+        }
+
+        @CmdMapping(format = "stringonly <target>")
+        public void stringOnlyCommand(@CmdSender CommandSender sender,
+                                       @CmdParam(value = "target", suggest = "suggestStringOnly") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestStringOnly(String input) {
+            return Arrays.asList(input + "Result");
+        }
+
+        @CmdMapping(format = "playerstring <target>")
+        public void playerStringCommand(@CmdSender CommandSender sender,
+                                         @CmdParam(value = "target", suggest = "suggestPlayerString") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestPlayerString(Player player, String input) {
+            return Arrays.asList(input + "Result:" + player.getName());
+        }
+
+        @CmdMapping(format = "playercommandargs <target>")
+        public void playerCommandArgsCommand(@CmdSender CommandSender sender,
+                @CmdParam(value = "target", suggest = "suggestPlayerCommandArgs") String target) {
+            // Test stub
+        }
+
+        public List<String> suggestPlayerCommandArgs(Player player, Command command, String[] args) {
+            return Arrays.asList("threeArgResult");
+        }
+    }
 
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     static class PermissionAwareExecutor extends BaseCommandExecutor {
