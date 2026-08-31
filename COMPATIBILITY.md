@@ -1340,6 +1340,35 @@ above, security fixes may land without prior notice; no warning period applies h
 this — the entry exists precisely because this document's criterion requires recording what a
 signature diff cannot show.
 
+### Recorded instance: tab completion's permission filter now filters silently, dispatch's rejection message is unchanged (SILENT-25 follow-up, 6.3.0)
+
+Real-machine UAT on a built 6.3.0 snapshot found a second defect in the same mechanism the entry
+above describes: `CommandTabCompletionDispatch.isVisible` — the predicate gating a permission- or
+`requireOp()`-restricted `@CmdMapping` out of tab completion — called `checkPermission`/`checkOp`
+directly, and those methods `sendMessage` the "no permission" / "no OP" notice on every denial.
+Tab completion evaluates every mapping's visibility on every keystroke, so a player without
+permission typing anywhere near a gated sub-command received the rejection message repeatedly,
+not once per attempted invocation.
+
+`isVisible` now consults silent predicates (`isPermissionSatisfied`/`isOpSatisfied`) that carry
+the exact same permission/`requireOp()` logic without messaging. `checkPermission` and `checkOp`
+themselves are unchanged — they remain the actual-dispatch guard for the deprecated
+`AbstractCommandExecutor.onCommand`, and continue to message on denial exactly as before.
+
+**What a module author should check.** A player without permission for a gated sub-command no
+longer receives a chat message while merely tab-completing near it; they still receive the
+rejection message when they actually attempt to run the command. A module or test that asserted a
+message was sent during tab completion (as opposed to on actual dispatch) will need updating — this
+is expected to be rare, since messaging during completion was itself the defect.
+
+**Bucket.** Recorded as a **security-adjacent fix** under the same no-migration-period rule as the
+entry above: the messaging was a side effect of the permission check UAT found, not a documented
+contract a module could have been relying on.
+
+`checkPermission(CommandSender, Method)` and `checkOp(CommandSender, Method)`'s public signatures
+and behaviour are unchanged, so `japicmp` cannot detect this either — same reasoning as the entry
+above.
+
 ### Recorded instance: `@AsyncCommand.timeout()` is now honoured, and the default-path double async dispatch is removed (WIRE-12, 6.3.0)
 
 Before 6.3.0, `timeout() > 0` — the default, since `timeout()` defaults to `30` — wrapped the
