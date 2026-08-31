@@ -1025,7 +1025,11 @@ class CommandExecutionManagerTest {
 
             JsonObject data = result.getAsJsonObject("data");
             assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString()).contains("blocked", "security");
+            // D-05: the refusal now names its cause and remedy — the config key and the file —
+            // instead of the old bare "blocked by security policy" text.
+            assertThat(data.get("output").getAsString())
+                    .contains("ultipanel.commands.blocklist")
+                    .contains("plugins/UltiTools/config.yml");
         }
 
         @Test
@@ -1115,7 +1119,134 @@ class CommandExecutionManagerTest {
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");
             assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString()).contains("blocked");
+            assertThat(data.get("output").getAsString()).contains("blocklist");
+        }
+    }
+
+    @Nested
+    @DisplayName("Action-Log Recording Tests")
+    class ActionLogRecordingTests {
+
+        private RemoteActionLog mockRemoteActionLog;
+
+        /**
+         * Publishes a fresh {@link com.ultikits.ultitools.UltiTools} mock whose
+         * {@code getRemoteActionLog()} returns a captured {@link RemoteActionLog} test double —
+         * this is what keeps these tests sub-second and filesystem-independent, mirroring
+         * {@code CapabilityGateTracerTest}'s pattern — then constructs a fresh
+         * {@link CommandExecutionManager} against it.
+         */
+        private CommandExecutionManager createManagerWithMockedActionLog() {
+            mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            newManager.setWebSocketClient(mockWebSocketClient);
+            return newManager;
+        }
+
+        @Test
+        @DisplayName("a blocklisted command should record exactly one DENIED entry whose reason matches the panel message")
+        void deniedCommandShouldRecordExactlyOneDeniedActionLogEntry() {
+            // Arrange
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "op hacker123");
+            commandData.addProperty("executor", "some-admin");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "action-log-denied-test");
+
+            // Act
+            newManager.executeCommand(commandData);
+
+            // Assert — exactly one entry, DENIED, and its reason equals what was sent to the panel
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(entry.getAction()).isEqualTo("execute_command");
+            assertThat(entry.getTarget()).isEqualTo("op hacker123");
+            assertThat(entry.getActor()).isEqualTo("some-admin");
+
+            org.mockito.ArgumentCaptor<JsonObject> panelCaptor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
+            String panelMessage = panelCaptor.getValue().getAsJsonObject("data").get("output").getAsString();
+            assertThat(entry.getReason()).isEqualTo(panelMessage);
+        }
+
+        @Test
+        @DisplayName("an allowed command should record exactly one ALLOWED entry before dispatch")
+        void allowedCommandShouldRecordExactlyOneAllowedActionLogEntry() {
+            // Arrange
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "say hello");
+            commandData.addProperty("commandId", "action-log-allowed-test");
+            // No "executor" field — actor should fall back to the literal "panel"
+
+            // Act
+            newManager.executeCommand(commandData);
+
+            // Assert
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(entry.getAction()).isEqualTo("execute_command");
+            assertThat(entry.getTarget()).isEqualTo("say hello");
+            assertThat(entry.getActor()).isEqualTo("panel");
+        }
+
+        @Test
+        @DisplayName("an allowed command whose dispatch fails should still yield exactly one ALLOWED entry")
+        void allowedCommandWhoseDispatchFailsShouldStillYieldExactlyOneAllowedEntry() {
+            // Arrange — a command no registered handler will accept, so Bukkit.dispatchCommand
+            // returns false once the scheduled task actually runs
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "definitely-not-a-real-command-xyz");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "action-log-dispatch-fail-test");
+
+            // Act — record the decision, then let the scheduled dispatch actually run and fail
+            newManager.executeCommand(commandData);
+            server.getScheduler().performOneTick();
+
+            // Assert — the policy decision, not the execution result, drives the log: still
+            // exactly one entry, still ALLOWED
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        }
+
+        @Test
+        @DisplayName("a null RemoteActionLog should make every record call a silent no-op")
+        void nullRemoteActionLogShouldBeSilentNoOp() {
+            // Arrange — getRemoteActionLog() returns null (Mockito's unstubbed default)
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            });
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            newManager.setWebSocketClient(mockWebSocketClient);
+
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "op hacker");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "null-action-log-test");
+
+            // Act & Assert — no exception, command still refused normally
+            assertDoesNotThrow(() -> newManager.executeCommand(commandData));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
         }
     }
 
