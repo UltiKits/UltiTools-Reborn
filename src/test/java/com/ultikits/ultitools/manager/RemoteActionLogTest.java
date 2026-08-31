@@ -188,10 +188,12 @@ class RemoteActionLogTest {
 
                 @Override
                 public void flush() {
+                    // Intentionally empty — this fixture only needs publish() to count records.
                 }
 
                 @Override
                 public void close() {
+                    // Intentionally empty — no resources to release in this counting stub.
                 }
             };
             countBefore = 0;
