@@ -48,7 +48,6 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class GridViewTest {
 
-    private ServerMock server;
     private Plugin mockPlugin;
     private Player player;
     private BuildContext rootContext;
@@ -56,7 +55,10 @@ public class GridViewTest {
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        // The ServerMock itself is only needed here, to spawn the test player -- unlike
+        // mockPlugin/player/rootContext it is never referenced again by any @Test method, so it
+        // stays a local rather than a field (PMD SingularField).
+        ServerMock server = MockBukkit.mock();
         mockPlugin = MockBukkit.createMockPlugin();
         player = server.addPlayer();
         rootContext = BuildContext.root(player, "test-gui", 6);
@@ -109,12 +111,10 @@ public class GridViewTest {
         }
 
         @Override
-        public void flush() {
-        }
+        public void flush() { /* nothing buffered -- records are added synchronously in publish() */ }
 
         @Override
-        public void close() {
-        }
+        public void close() { /* no resources to release -- this handler owns nothing but the list */ }
     }
 
     private CapturingHandler attachCapturingHandler() {

@@ -49,13 +49,15 @@ class GuiClickDispatchTest {
     /** A one-row GUI's size, per {@code Gui}'s {@code rows * 9} convention. */
     private static final int GUI_SIZE = 9;
 
-    private ServerMock server;
     private Player player;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        // The ServerMock itself is only needed here, to spawn the test player -- unlike player
+        // it is never referenced again by any @Test method, so it stays a local rather than a
+        // field (PMD SingularField).
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
         player = server.addPlayer();
         TestHelper.mockUltiToolsInstance();
