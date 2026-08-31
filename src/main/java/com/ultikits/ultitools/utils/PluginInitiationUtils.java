@@ -207,8 +207,12 @@ public class PluginInitiationUtils {
         // 上传配置
         uploadConfig(client);
 
-        // 上传服务器属性到云端
-        uploadServerProperties(client);
+        // 上传服务器属性到云端 —— 由 SERVER_PROPERTIES 能力开关决定（D-11/D-12）
+        if (Capability.SERVER_PROPERTIES.isEnabled()) {
+            uploadServerProperties(client);
+        } else {
+            logSkippedCapability(Capability.SERVER_PROPERTIES);
+        }
     }
     
     /**
@@ -661,17 +665,30 @@ public class PluginInitiationUtils {
         }
     }
 
-    /** {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
+    /**
+     * {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。
+     * <p>
+     * D-11/D-12：四个出站能力（{@code monitoring}/{@code logs}/{@code player-events}/
+     * {@code server-properties}）在这里由 {@link Capability#isEnabled()} 决定是否<b>开始采集</b>，
+     * 而不是采集之后在发送出口丢弃——后者会让数据已经被收集进内存，只是没被传走，D-12 明确否决
+     * 这种「exposed but not transmitted」的形状。每一处 client 引用装配调用都刻意保持无条件：
+     * 装一个 client 引用本身不启动任何采集，让它无条件执行才能保证每个管理器 getter
+     * 永远非空、每个管理器永远存在（D-11）——分发表里有两处对管理器 getter 的解引用没有空判断。
+     */
     private static void wireManagers() {
         try {
-            // 初始化服务器监控管理器
+            // 初始化服务器监控管理器 —— 引用装配与「是否开始监控」分离，见方法javadoc
             UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(panelWS);
-            // 启动监控（会立即发送状态并开始定期发送）
-            UltiTools.getInstance().getServerMonitorManager().startMonitoring();
-            
+            if (Capability.MONITORING.isEnabled()) {
+                // 启动监控（会立即发送状态并开始定期发送）
+                UltiTools.getInstance().getServerMonitorManager().startMonitoring();
+            } else {
+                logSkippedCapability(Capability.MONITORING);
+            }
+
             // 初始化命令执行管理器
             UltiTools.getInstance().getCommandExecutionManager().setWebSocketClient(panelWS);
-            
+
             // 初始化文件操作管理器
             UltiTools.getInstance().getFileOperationManager().setWebSocketClient(panelWS);
 
@@ -679,21 +696,45 @@ public class PluginInitiationUtils {
             if (UltiTools.getInstance().getServerPropertiesManager() != null) {
                 UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(panelWS);
             }
-            
-            // 初始化日志流管理器
+
+            // 初始化日志流管理器 —— logs 关闭时 SystemLogHandler 从不挂上根 logger
             if (UltiTools.getInstance().getLogStreamManager() != null) {
-                UltiTools.getInstance().getLogStreamManager().initialize(panelWS);
+                if (Capability.LOGS.isEnabled()) {
+                    UltiTools.getInstance().getLogStreamManager().initialize(panelWS);
+                } else {
+                    logSkippedCapability(Capability.LOGS);
+                }
             }
-            
-            // 初始化玩家事件管理器
+
+            // 初始化玩家事件管理器 —— player-events 关闭时 Bukkit 监听器从不被注册
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
-                UltiTools.getInstance().getPlayerEventManager().initialize(panelWS);
+                if (Capability.PLAYER_EVENTS.isEnabled()) {
+                    UltiTools.getInstance().getPlayerEventManager().initialize(panelWS);
+                } else {
+                    logSkippedCapability(Capability.PLAYER_EVENTS);
+                }
             }
-            
+
             UltiTools.getInstance().getLogger().log(Level.FINE, "所有WebSocket管理器已初始化并启动监控");
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "初始化管理器时出错: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 为一个被跳过的出站能力记一条 INFO，说明是哪个能力、哪个配置键导致的跳过。
+     * <p>
+     * 这一条日志尤其对 {@link Capability#MONITORING} 重要：{@code sendBatchUpdate} 每 5 秒一次是
+     * 面板判断「服务器是否在线」的唯一依据，关掉 monitoring 会让升级后的服务器在面板上显示为离线
+     * ——这是最糟的失败形状，症状指向了错误的方向（运维会去查网络和令牌，而不是配置）。D-08 已经
+     * 把 monitoring 的出厂默认设为开启作为第一层缓解，这条日志是第二层。
+     *
+     * @param capability 被跳过的能力
+     */
+    private static void logSkippedCapability(Capability capability) {
+        UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
+                "[UltiPanel] Skipped %s wiring — capability disabled (%s)",
+                capability.name(), capability.getConfigPath()));
     }
     
     /**
