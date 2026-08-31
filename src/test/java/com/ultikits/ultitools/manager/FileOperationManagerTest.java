@@ -899,36 +899,43 @@ class FileOperationManagerTest {
         }
     }
 
+    /**
+     * Top-level, NOT nested under a {@code @Nested} class: 06-VALIDATION.md's automated command
+     * is the bare {@code mvn -B -o test -Dtest=FileOperationManagerTest#shouldRejectCredentialFilesUnconditionally}
+     * with no {@code $NestedClass} qualifier, and Surefire's method-name filter does not descend
+     * into {@code @Nested} classes for that syntax — verified empirically: the identical method
+     * nested one level down ran 0 tests under that exact command.
+     */
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("凭据文件无论 editable-roots 如何配置都被拒绝，且拒绝是不可配置的")
+    @ValueSource(strings = {
+        "plugins/UltiTools/data.json",
+        "foo.key",
+        "plugins/certs/foo.pem",
+        "foo.p12",
+        "foo.jks",
+        "foo.keystore",
+        "secring.gpg",
+        ".env",
+        ".env.local",
+        "access_key.txt",
+        ".dev.vars",
+        "ops.json",
+        "server.properties",
+        "whitelist.json",
+        "banned-ips.json",
+        "eula.txt"
+    })
+    void shouldRejectCredentialFilesUnconditionally(String path) {
+        AccessDecision decision = fileOperationManager.isPathAllowed(path);
+
+        assertThat(decision.isAllowed()).as("path: " + path).isFalse();
+        assertThat(decision.isConfigurable()).as("path: " + path).isFalse();
+    }
+
     @Nested
     @DisplayName("不可配置的凭据拒绝层测试（D-16/D-19/D-23）")
     class CredentialDenyLayerTests {
-
-        @ParameterizedTest(name = "[{index}] {0}")
-        @DisplayName("凭据文件无论 editable-roots 如何配置都被拒绝，且拒绝是不可配置的")
-        @ValueSource(strings = {
-            "plugins/UltiTools/data.json",
-            "foo.key",
-            "plugins/certs/foo.pem",
-            "foo.p12",
-            "foo.jks",
-            "foo.keystore",
-            "secring.gpg",
-            ".env",
-            ".env.local",
-            "access_key.txt",
-            ".dev.vars",
-            "ops.json",
-            "server.properties",
-            "whitelist.json",
-            "banned-ips.json",
-            "eula.txt"
-        })
-        void shouldRejectCredentialFilesUnconditionally(String path) {
-            AccessDecision decision = fileOperationManager.isPathAllowed(path);
-
-            assertThat(decision.isAllowed()).as("path: " + path).isFalse();
-            assertThat(decision.isConfigurable()).as("path: " + path).isFalse();
-        }
 
         @Test
         @DisplayName("granting 'plugins' as an editable root does not make plugins/UltiTools/data.json readable")

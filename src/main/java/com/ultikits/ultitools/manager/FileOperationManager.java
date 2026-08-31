@@ -5,7 +5,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -52,6 +54,35 @@ public class FileOperationManager {
     private static final Set<String> BLOCKED_EXTENSIONS = new HashSet<String>(Arrays.asList(
         ".jar", ".sh", ".bat", ".exe", ".class"
     ));
+
+    /**
+     * D-16's basename glob patterns for credential-bearing files. Patterns, not an enumeration:
+     * a credential file added later is caught without anyone remembering to edit a {@link Set} —
+     * forgetting is precisely why {@code data.json} was readable before 6.3.0. Compiled once via
+     * {@link FileSystems#getPathMatcher(String)} rather than hand-rolled wildcard matching.
+     */
+    private static final List<PathMatcher> DENY_GLOB_MATCHERS = buildDenyGlobMatchers();
+
+    /** D-16's exact-basename credential set — matched case-insensitively, see {@link #basenameOf}. */
+    private static final Set<String> DENY_EXACT_BASENAMES = new HashSet<String>(Arrays.asList(
+        "data.json", "secring.gpg", "access_key.txt", ".dev.vars"
+    ));
+
+    /**
+     * The relative location of the remote action log's own directory (D-23/D-31), expressed as a
+     * lexical {@link Path} so containment is checked by name element rather than string prefix —
+     * a sibling directory named {@code security-backup} must not be caught by it.
+     */
+    private static final Path SECURITY_DIR_RELATIVE = Paths.get("plugins", "UltiTools", "security");
+
+    private static List<PathMatcher> buildDenyGlobMatchers() {
+        List<String> globs = Arrays.asList("*.key", "*.pem", "*.p12", "*.jks", "*.keystore", ".env*");
+        List<PathMatcher> matchers = new ArrayList<>();
+        for (String glob : globs) {
+            matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
+        }
+        return Collections.unmodifiableList(matchers);
+    }
 
     /** D-15's config key for the operator-configured editable-root set. */
     private static final String EDITABLE_ROOTS_CONFIG_KEY = "ultipanel.files.editable-roots";
@@ -170,10 +201,35 @@ public class FileOperationManager {
     }
 
     /**
-     * The unconditional deny layer (D-16): checks that no configuration can lift. Reads no
-     * config key and consults no {@code Capability}. Currently folds in the pre-6.3.0
-     * {@link #BLOCKED_FILES}/{@link #BLOCKED_EXTENSIONS} sets; the credential-pattern layer
-     * (D-16/D-19/D-23) is added on top of this same method.
+     * The unconditional deny layer (D-16). Reads no config key and consults no
+     * {@code Capability} — nothing here can be configured open.
+     * <p>
+     * <b>Why this layer cannot be configured open:</b> authorizing the panel to manage files is
+     * not authorizing it to hand out the key to the panel itself (D-01). A stolen refresh token
+     * is persistent access an operator cannot revoke by changing a password, unlike a compromised
+     * editable-root grant, which a config edit closes immediately.
+     * <p>
+     * <b>{@code plugins/UltiTools/data.json}</b> holds the live UltiCloud access and refresh
+     * tokens ({@code CloudAuthManager}) and was readable through this API before 6.3.0 — this is
+     * the concrete defect D-19 closes. It is matched by exact basename below, not merely by the
+     * literal {@code plugins/UltiTools} prefix, so a credential file with the same name anywhere
+     * else is caught too.
+     * <p>
+     * <b>The {@code plugins/UltiTools/security/} rule</b> is what lets the remote action log
+     * ({@code RemoteActionLog}) live inside {@code getDataFolder()} — Bukkit convention intact —
+     * instead of being physically relocated (D-23/D-31). Accepted cost: the log and the
+     * credential files now share one trust anchor; a defect in this layer loses both.
+     * <p>
+     * Folds in the pre-6.3.0 {@link #BLOCKED_FILES}/{@link #BLOCKED_EXTENSIONS} sets so every
+     * unconditional refusal produces the same non-configurable decision shape.
+     * <p>
+     * 本层是不可配置的拒绝层（D-16），不读取任何配置键，也不查询任何 {@code Capability}——这里的
+     * 任何一条规则都不能被配置打开。授权面板管理文件，不等于授权它拿走面板自己的钥匙（D-01）：
+     * 被窃取的刷新令牌是持久性访问权限，操作员无法通过改密码撤销；而一次误配置的可编辑根目录，
+     * 一次配置修改就能立即关闭。{@code plugins/UltiTools/data.json} 保存着 UltiCloud
+     * 的实时访问与刷新令牌，在 6.3.0 之前可以通过该 API 读取。{@code plugins/UltiTools/security/}
+     * 规则使远程动作日志得以留在 {@code getDataFolder()} 内、符合 Bukkit 约定，而不必物理迁移；
+     * 代价是日志与凭据文件现在共享同一个信任锚点。
      *
      * @param normalizedPath the path already stripped of a leading slash, forward-slash separated
      * @return a denied, non-configurable {@link AccessDecision} if this layer refuses the path;
@@ -192,8 +248,33 @@ public class FileOperationManager {
                 return AccessDecision.deniedNonConfigurable("'" + fileName + "' has a protected extension");
             }
         }
+        if (DENY_EXACT_BASENAMES.contains(fileNameLower)) {
+            return AccessDecision.deniedNonConfigurable("'" + fileName + "' is a protected credential file");
+        }
+        if (matchesDenyGlob(fileNameLower)) {
+            return AccessDecision.deniedNonConfigurable("'" + fileName + "' matches a protected credential pattern");
+        }
+        if (isUnderSecurityDirectory(normalizedPath)) {
+            return AccessDecision.deniedNonConfigurable(
+                    "path is inside the remote action log's own directory");
+        }
 
         return null;
+    }
+
+    private static boolean matchesDenyGlob(String fileNameLower) {
+        Path fileNamePath = Paths.get(fileNameLower);
+        for (PathMatcher matcher : DENY_GLOB_MATCHERS) {
+            if (matcher.matches(fileNamePath)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isUnderSecurityDirectory(String normalizedPath) {
+        Path candidate = Paths.get(normalizedPath).normalize();
+        return candidate.startsWith(SECURITY_DIR_RELATIVE);
     }
 
     private static String basenameOf(String normalizedPath) {
