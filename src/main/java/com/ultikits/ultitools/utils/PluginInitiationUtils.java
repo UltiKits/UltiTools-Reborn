@@ -448,6 +448,25 @@ public class PluginInitiationUtils {
     }
 
     /**
+     * Whether {@code messageType} is one of the framework's own {@link #INBOUND_HANDLERS} entries
+     * — the single source {@code PanelResponderRegistry.registerResponder} consults before letting
+     * a module claim a message type (D-26, WIRE-16, Plan 06-08 Task 1). Deliberately a separate,
+     * narrower predicate rather than widening {@link #inboundDispatchTable()}'s visibility: that
+     * accessor's own javadoc says it is test-only and not a registration point, and a boolean
+     * membership check is exactly the narrower thing a registration point actually needs — it
+     * cannot read, mutate, or iterate the table itself.
+     * <p>
+     * Exact {@code String} key membership, matching {@link #INBOUND_HANDLERS}'s own
+     * {@code HashMap} key semantics: no case folding, no Unicode normalization.
+     *
+     * @param messageType the message type to check, possibly {@code null}
+     * @return {@code true} if the framework's own dispatch table already serves this exact type
+     */
+    public static boolean isFrameworkOwnedType(String messageType) {
+        return messageType != null && INBOUND_HANDLERS.containsKey(messageType);
+    }
+
+    /**
      * 处理面板下发的入站 WebSocket 消息。
      * <p>
      * 从 {@code initWebsocket()} 的 lambda 中提取出来，唯一目的是让它可以被单元测试直接调用：

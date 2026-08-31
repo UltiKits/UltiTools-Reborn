@@ -27,6 +27,25 @@ class PanelResponderRegistryTest {
         return data -> CompletableFuture.completedFuture(data != null ? data : new JsonObject());
     }
 
+    /**
+     * Kept at the top level, not nested under {@link Registration}: Surefire's bare
+     * {@code -Dtest=Class#method} filter does not descend into {@code @Nested} classes, and
+     * 06-VALIDATION.md's automated command names this method exactly.
+     */
+    @Test
+    @DisplayName("注册框架已占用的类型抛出 PluginModuleException，命名类型并说明是框架占用")
+    void shouldRefuseFrameworkOwnedType() {
+        PanelResponderRegistry registry = new PanelResponderRegistry();
+
+        assertThatThrownBy(() -> registry.registerResponder("execute_command", echoResponder(), "module-a"))
+                .isInstanceOfSatisfying(PluginModuleException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK);
+                    assertThat(e.getMessage())
+                            .contains("execute_command")
+                            .containsIgnoringCase("framework");
+                });
+    }
+
     @Nested
     @DisplayName("registerResponder 的单一所有者语义")
     class Registration {
@@ -39,20 +58,6 @@ class PanelResponderRegistryTest {
             registry.registerResponder("my_module_stats", echoResponder(), "module-a");
 
             assertThat(registry.hasResponder("my_module_stats")).isTrue();
-        }
-
-        @Test
-        @DisplayName("注册框架已占用的类型抛出 PluginModuleException，命名类型并说明是框架占用")
-        void shouldRefuseFrameworkOwnedType() {
-            PanelResponderRegistry registry = new PanelResponderRegistry();
-
-            assertThatThrownBy(() -> registry.registerResponder("execute_command", echoResponder(), "module-a"))
-                    .isInstanceOfSatisfying(PluginModuleException.class, e -> {
-                        assertThat(e.getErrorCode()).isEqualTo(ErrorCode.WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK);
-                        assertThat(e.getMessage())
-                                .contains("execute_command")
-                                .containsIgnoringCase("framework");
-                    });
         }
 
         @Test
