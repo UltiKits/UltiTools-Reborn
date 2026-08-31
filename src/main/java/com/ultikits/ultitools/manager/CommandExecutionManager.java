@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -89,7 +90,7 @@ public class CommandExecutionManager {
             Set<String> normalized = new HashSet<>();
             for (String entry : configured) {
                 if (entry != null) {
-                    normalized.add(entry.trim().toLowerCase());
+                    normalized.add(entry.trim().toLowerCase(Locale.ROOT));
                 }
             }
             setBlockedCommands(normalized);
@@ -150,7 +151,7 @@ public class CommandExecutionManager {
         }
 
         // Extract base command (first word before space)
-        String baseCommand = trimmed.split("\\s+")[0].toLowerCase();
+        String baseCommand = trimmed.split("\\s+")[0].toLowerCase(Locale.ROOT);
 
         // Strip namespace prefix (e.g., "bukkit:op" -> "op", "minecraft:stop" -> "stop")
         int colonIndex = baseCommand.indexOf(':');
