@@ -60,7 +60,15 @@ public class RemoteActionLog {
         ACTION_LOG.setLevel(Level.ALL);
     }
 
-    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    // serializeNulls() is required for a stable field set: without it, Gson's JsonWriter drops any
+    // member whose value is JsonNull — including one added explicitly via
+    // JsonObject.addProperty(name, null) — so an ALLOWED entry's "reason" key would still vanish
+    // from the serialized line even after JsonLineFormatter stops special-casing null. This Gson
+    // instance is private to RemoteActionLog and used for nothing but this one JSON line per
+    // record() call (see JsonLineFormatter below) — no other class or output shares it, so
+    // serializeNulls()'s effect is confined to this log's own lines and does not reach the
+    // WebSocket managers' separately-constructed Gson instances that build the same way.
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
 
     private volatile int maxSizeBytes = DEFAULT_MAX_SIZE_BYTES;
     private volatile int maxFiles = DEFAULT_MAX_FILES;
@@ -295,9 +303,12 @@ public class RemoteActionLog {
             json.addProperty("target", entry.target);
             json.addProperty("actor", entry.actor);
             json.addProperty("verdict", entry.verdict.name());
-            if (entry.reason != null) {
-                json.addProperty("reason", entry.reason);
-            }
+            // Always emit "reason" — even when null — so ALLOWED and DENIED rows carry the same
+            // key set. JsonObject.addProperty(String, String) stores JsonNull.INSTANCE for a null
+            // value rather than omitting the member, which is exactly the stable-shape property a
+            // consumer of this log (the compensating control for the framework's no-floor command
+            // policy) needs: it must never have to branch on verdict to know which fields exist.
+            json.addProperty("reason", entry.reason);
             return formatterGson.toJson(json) + System.lineSeparator();
         }
     }

@@ -142,8 +142,8 @@ class RemoteActionLogTest {
         }
 
         @Test
-        @DisplayName("ALLOWED 条目没有 reason 成员；DENIED 条目的 reason 非空")
-        void allowedEntryHasNoReasonMemberDeniedEntryHasNonEmptyReason() throws Exception {
+        @DisplayName("ALLOWED 条目携带值为 JSON null 的 reason 成员；DENIED 条目的 reason 非空——两者字段集合相同")
+        void allowedEntryHasNullReasonDeniedEntryHasNonEmptyReasonSameKeySet() throws Exception {
             RemoteActionLog log = new RemoteActionLog();
             log.init(dataFolder);
 
@@ -157,7 +157,8 @@ class RemoteActionLogTest {
 
             JsonObject allowed = JsonParser.parseString(lines.get(0)).getAsJsonObject();
             assertThat(allowed.get("verdict").getAsString()).isEqualTo("ALLOWED");
-            assertThat(allowed.has("reason")).as("ALLOWED 条目不应有 reason 成员").isFalse();
+            assertThat(allowed.has("reason")).as("ALLOWED 条目必须携带 reason 成员——字段集合必须与 DENIED 一致").isTrue();
+            assertThat(allowed.get("reason").isJsonNull()).as("ALLOWED 条目的 reason 取值应为 JSON null").isTrue();
 
             JsonObject denied = JsonParser.parseString(lines.get(1)).getAsJsonObject();
             assertThat(denied.get("verdict").getAsString()).isEqualTo("DENIED");
