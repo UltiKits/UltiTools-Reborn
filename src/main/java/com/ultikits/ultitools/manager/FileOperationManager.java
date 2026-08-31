@@ -61,8 +61,9 @@ public class FileOperationManager {
 
     /**
      * D-16's basename glob patterns for credential-bearing files. Patterns, not an enumeration:
-     * a credential file added later is caught without anyone remembering to edit a {@link Set} —
-     * forgetting is precisely why {@code data.json} was readable before 6.3.0. Compiled once via
+     * a credential file added later is caught without anyone remembering to edit a {@link Set}.
+     * An exact-name set is only ever as complete as the last person who thought about it; a
+     * pattern does not depend on that. Compiled once via
      * {@code FileSystems.getDefault().getPathMatcher(String)} rather than hand-rolled wildcard
      * matching.
      */
@@ -221,8 +222,8 @@ public class FileOperationManager {
      * editable-root grant, which a config edit closes immediately.
      * <p>
      * <b>{@code plugins/UltiTools/data.json}</b> holds the live UltiCloud access and refresh
-     * tokens ({@code CloudAuthManager}) and was readable through this API before 6.3.0 — this is
-     * the concrete defect D-19 closes. It is matched by exact basename below, not merely by the
+     * tokens ({@code CloudAuthManager}), which is why D-19 names it explicitly rather than leaving
+     * it to the glob patterns. It is matched by exact basename below, not merely by the
      * literal {@code plugins/UltiTools} prefix, so a credential file with the same name anywhere
      * else is caught too.
      * <p>
@@ -238,7 +239,7 @@ public class FileOperationManager {
      * 任何一条规则都不能被配置打开。授权面板管理文件，不等于授权它拿走面板自己的钥匙（D-01）：
      * 被窃取的刷新令牌是持久性访问权限，操作员无法通过改密码撤销；而一次误配置的可编辑根目录，
      * 一次配置修改就能立即关闭。{@code plugins/UltiTools/data.json} 保存着 UltiCloud
-     * 的实时访问与刷新令牌，在 6.3.0 之前可以通过该 API 读取。{@code plugins/UltiTools/security/}
+     * 的实时访问与刷新令牌，D-19 因此显式点名了它，而不是交给通配模式兜底。{@code plugins/UltiTools/security/}
      * 规则使远程动作日志得以留在 {@code getDataFolder()} 内、符合 Bukkit 约定，而不必物理迁移；
      * 代价是日志与凭据文件现在共享同一个信任锚点。
      *
