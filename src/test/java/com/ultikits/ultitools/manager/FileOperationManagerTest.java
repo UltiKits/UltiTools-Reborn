@@ -606,7 +606,7 @@ class FileOperationManagerTest {
         }
 
         @Test
-        @DisplayName("应该递归删除目录")
+        @DisplayName("recursive: true 时应该递归删除目录（D-20 起需要显式请求）")
         void shouldDeleteDirectoryRecursively() throws Exception {
             // Arrange
             setServerRootAndEditableRoots(tempDir);
@@ -619,8 +619,12 @@ class FileOperationManagerTest {
                 "handleDeleteOperation", String.class, JsonObject.class, String.class);
             handleDelete.setAccessible(true);
 
+            // D-20: a directory delete now requires an explicit recursive:true opt-in.
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", true);
+
             // Act
-            handleDelete.invoke(fileOperationManager, "todeleteDir", new JsonObject(), "op-11");
+            handleDelete.invoke(fileOperationManager, "todeleteDir", operationData, "op-11");
 
             // Assert
             assertThat(testDir.exists()).isFalse();
@@ -1642,5 +1646,181 @@ class FileOperationManagerTest {
             }
         }
         throw new AssertionError("No entry named '" + name + "' in list result: " + files);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason established by Plan 06-03/06-04 Task 2 —
+     * 06-VALIDATION.md's automated command is the bare
+     * {@code FileOperationManagerTest#shouldRefuseRecursiveDeleteWithoutFlag} with no
+     * {@code $NestedClass} qualifier.
+     * <p>
+     * Pins D-20: a delete request naming a directory with no {@code recursive} member is refused
+     * — and, the assertion that matters, nothing is deleted. Today
+     * {@code {"operation":"delete","path":"world"}} recursively destroys the directory with no
+     * confirmation.
+     */
+    @Test
+    @DisplayName("目录删除缺少 recursive 标志时被拒绝，且什么都不删除（D-20）")
+    void shouldRefuseRecursiveDeleteWithoutFlag() throws Exception {
+        setServerRootAndEditableRoots(tempDir);
+
+        File dir = new File(tempDir, "world");
+        dir.mkdirs();
+        File child = new File(dir, "level.dat");
+        assertThat(child.createNewFile()).isTrue();
+
+        Method handleDelete = FileOperationManager.class.getDeclaredMethod(
+                "handleDeleteOperation", String.class, JsonObject.class, String.class);
+        handleDelete.setAccessible(true);
+
+        JsonObject operationData = new JsonObject();
+        // no "recursive" field
+
+        handleDelete.invoke(fileOperationManager, "world", operationData, "no-flag-test");
+
+        assertThat(dir.exists()).isTrue();
+        assertThat(child.exists()).isTrue();
+    }
+
+    @Nested
+    @DisplayName("递归删除标志的补充覆盖测试（D-20，Plan 06-04 Task 3）")
+    class RecursiveDeleteFlagTests {
+
+        private AccessDecision invokeDelete(String path, JsonObject operationData) throws Exception {
+            Method handleDelete = FileOperationManager.class.getDeclaredMethod(
+                    "handleDeleteOperation", String.class, JsonObject.class, String.class);
+            handleDelete.setAccessible(true);
+            return (AccessDecision) handleDelete.invoke(
+                    fileOperationManager, path, operationData, "recursive-flag-test");
+        }
+
+        @Test
+        @DisplayName("recursive: false 与缺失标志给出相同的拒绝，什么都不删除")
+        void recursiveFalseIsRefusedSameAsAbsent() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "falseflag");
+            dir.mkdirs();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", false);
+
+            AccessDecision decision = invokeDelete("falseflag", operationData);
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("recursive: true 时按今天的方式递归删除")
+        void recursiveTrueDeletesRecursively() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "trueflag");
+            dir.mkdirs();
+            new File(dir, "child.txt").createNewFile();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", true);
+
+            AccessDecision decision = invokeDelete("trueflag", operationData);
+
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(dir.exists()).isFalse();
+        }
+
+        @Test
+        @DisplayName("recursive 存在但不是布尔值（字符串 'false'）时被拒绝，而不是被强制转换")
+        void nonBooleanRecursiveIsRefusedRatherThanCoerced() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "stringflag");
+            dir.mkdirs();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", "false");
+
+            AccessDecision decision = invokeDelete("stringflag", operationData);
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("删除普通文件不受 recursive 标志影响，缺失时依然成功")
+        void regularFileDeleteSucceedsWithoutFlag() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File file = new File(tempDir, "plain.txt");
+            assertThat(file.createNewFile()).isTrue();
+
+            AccessDecision decision = invokeDelete("plain.txt", new JsonObject());
+
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(file.exists()).isFalse();
+        }
+
+        @Test
+        @DisplayName("空目录同样需要该标志——守卫针对操作的形状，而非目录内容多少")
+        void emptyDirectoryIsRefusedWithoutFlag() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "emptynoflag");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("emptynoflag", new JsonObject());
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝与路径策略拒绝可区分——不可配置，不命名任何配置键")
+        void missingFlagRefusalIsDistinguishableFromPathPolicyRefusal() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "distinguishtest");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("distinguishtest", new JsonObject());
+
+            assertThat(decision.isConfigurable()).isFalse();
+            assertThat(decision.getConfigKey()).isNull();
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝原因命名了 'recursive' 字段")
+        void missingFlagRefusalNamesTheField() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "namesfieldtest");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("namesfieldtest", new JsonObject());
+
+            assertThat(decision.getMessage()).contains("recursive");
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝也会记录到动作日志——恰好一条 DENIED")
+        void missingFlagRefusalIsRecordedInActionLog() throws Exception {
+            RemoteActionLog mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+            File dir = new File(tempDir, "actionlogflagtest");
+            dir.mkdirs();
+
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "delete");
+            data.addProperty("path", "actionlogflagtest");
+            data.addProperty("operationId", "action-log-flag-test");
+
+            manager.handleFileOperation(data);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(dir.exists()).isTrue();
+        }
     }
 }
