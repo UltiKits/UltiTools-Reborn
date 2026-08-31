@@ -148,10 +148,13 @@ public abstract class DeclarativeGui extends Gui {
     @Override
     public final void onOpen(@NotNull InventoryOpenEvent event) {
         if (!initialized) {
-            // 初始化渲染器
+            // 初始化渲染器。传入的是一个 Supplier，而不是构建好的 Widget——
+            // GuiRenderer 会在每一帧的开头重新调用 build(context)，这样状态变化才能
+            // 真正重新派生出 Widget 树（D-09 item 1；GuiRenderer 的这半改动来自 05-11
+            // 计划的 Task 1，这里的调用点更新属于 Task 2 的范围，为了保持编译通过
+            // 提前完成）。
             BuildContext context = BuildContext.root(player, getId(), getSize() / 9);
-            Widget rootWidget = build(context);
-            renderer.initialize(rootWidget, context);
+            renderer.initialize(() -> build(context), context);
             initialized = true;
         }
 
@@ -169,9 +172,29 @@ public abstract class DeclarativeGui extends Gui {
         initialized = false;
     }
 
+    /**
+     * This is the framework's own bounds-check site (D-09 item 4), not a post-filter hook. A
+     * subclass overriding this method needs to know that obliviate-invs' {@code InvListener}
+     * calls this method unconditionally, BEFORE it applies any bounds check of its own — so
+     * every click reaches here, including a click in the player's own inventory. The actual
+     * check happens one call down, in {@link GuiRenderer#handleClick}: it rejects (returns
+     * without dispatching) any click whose raw slot falls outside the GUI's own inventory, so
+     * a click on the player's own inventory can never reach a GUI handler here.
+     * <p>
+     * 这是框架自己做越界检查的地方（D-09 item 4），不是一个"后置过滤"的钩子。子类如果重写这个
+     * 方法，需要知道 obliviate-invs 的 {@code InvListener} 是无条件调用这个方法的——在它自己做
+     * 任何过滤之前——所以每一次点击都会到达这里，包括玩家点击自己背包的情形。真正的越界检查
+     * 在下一层，{@link GuiRenderer#handleClick} 里：它会拒绝（直接返回、不派发）任何原始槽位
+     * 落在 GUI 自身 Inventory 范围之外的点击，所以玩家点击自己背包永远不会在这里触发 GUI 的
+     * 处理器。
+     *
+     * @param event 点击事件
+     * @return 见 {@link #onGuiClick(InventoryClickEvent)}
+     */
     @Override
     public final boolean onClick(@NotNull InventoryClickEvent event) {
-        // 传递给渲染器处理
+        // 传递给渲染器处理——渲染器自己做越界检查，见上面的 javadoc 和
+        // GuiRenderer.handleClick。
         renderer.handleClick(event);
 
         // 调用子类的钩子

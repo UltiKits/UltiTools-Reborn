@@ -10,6 +10,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * GuiRenderer 负责协调 Widget 树的构建、diff 和 Inventory 更新。
@@ -45,8 +46,14 @@ public class GuiRenderer {
     private Element rootElement;
     @Nullable
     private List<RenderNode> lastRenderNodes;
+    @Nullable
+    private Supplier<Widget> widgetSupplier;
+    @Nullable
+    private BuildContext rootContext;
 
-    // 槽位到点击处理器的映射
+    // 槽位到点击处理器的映射——键是"顶部 GUI 内的槽位索引"，与 handleClick() 里
+    // event.getRawSlot() 越界检查通过后使用的键是同一个空间（D-09 item 4）。这是槽位归属的
+    // 唯一记录：不存在第二份用 event.getSlot() 直接查、可能与这里漂移的映射。
     private final Map<Integer, Consumer<InventoryClickEvent>> clickHandlers = new HashMap<>();
 
     /**
@@ -74,22 +81,21 @@ public class GuiRenderer {
     }
 
     /**
-     * 初始化渲染器，创建根 Element。
+     * 初始化渲染器。
+     * <p>
+     * D-09 item 1：不再接受一次性构建好的 Widget，而是接受一个 {@link Supplier}，
+     * 在每一帧的开头重新调用它，从当前状态重新派生 Widget 树——这是
+     * {@code UI = f(state)} 这句框架宣言第一次真正成立的地方。根 Element 的创建被
+     * 推迟到第一次 {@link #performBuild()} 内部完成，这样 supplier 在首帧也只会被
+     * 调用一次，而不是这里调一次、performBuild() 里再调一次。
      *
-     * @param rootWidget 根 Widget
-     * @param context    构建上下文
+     * @param widgetSupplier 每帧重新求值的 Widget 树来源
+     * @param context        构建上下文（根 Element 使用；后续帧的重建/重新挂载复用同一个）
      */
-    public void initialize(@NotNull Widget rootWidget, @NotNull BuildContext context) {
-        scheduler.runOnMainThread(() -> {
-            // 创建根 Element
-            rootElement = rootWidget.createElement();
-
-            rootElement.assignContext(context);
-            rootElement.mount(null);
-
-            // 执行初始构建
-            performBuild();
-        });
+    public void initialize(@NotNull Supplier<Widget> widgetSupplier, @NotNull BuildContext context) {
+        this.widgetSupplier = widgetSupplier;
+        this.rootContext = context;
+        scheduler.runOnMainThread(this::performBuild);
     }
 
     /**
@@ -103,6 +109,10 @@ public class GuiRenderer {
 
     /**
      * 立即执行重建（必须在主线程调用）。
+     * <p>
+     * D-09 item 1：每一帧的开头都会重新调用 {@link #widgetSupplier}，把结果喂给
+     * 已挂载的根 Element（{@link Element#update}，其基类实现现在会标记 dirty——见
+     * D-09 item 2），而不是只在 {@link #initialize} 时构建一次、之后再也不重新派生。
      */
     private void performBuild() {
         if (!scheduler.isOnMainThread()) {
@@ -110,14 +120,29 @@ public class GuiRenderer {
             return;
         }
 
-        if (rootElement == null) {
+        if (widgetSupplier == null) {
             return;
         }
 
-        // 重建 Element 树
+        // 重新从当前状态派生 Widget 树——每帧恰好调用一次
+        Widget widget = widgetSupplier.get();
+
+        if (rootElement == null) {
+            mountRoot(widget);
+        } else if (rootElement.canUpdate(widget)) {
+            rootElement.update(widget);
+        } else {
+            // supplier 返回了与已挂载根类型不兼容的 Widget（T-05-52）：显式重新挂载，
+            // 不能让 Element.update() 的 IllegalArgumentException 逃逸到被调度的帧里，
+            // 那会把 Inventory 半途写坏。
+            rootElement.unmount();
+            mountRoot(widget);
+        }
+
+        // 重建 Element 树（仅重建 dirty 的子树）
         rebuildElement(rootElement);
 
-        // 收集 RenderNode
+        // 收集 RenderNode——快照，而不是活引用，见 collectRenderNodesRecursive
         List<RenderNode> newRenderNodes = collectRenderNodes(rootElement);
 
         // Diff
@@ -127,11 +152,33 @@ public class GuiRenderer {
         // 应用变更
         applyDiff(diffResult);
 
-        // 保存当前状态
+        // 保存当前状态（快照，不会被下一帧对活 RenderNode 的原地修改追溯性改变）
         lastRenderNodes = newRenderNodes;
 
         // 更新点击处理器
         updateClickHandlers(newRenderNodes);
+    }
+
+    /**
+     * 创建并挂载根 Element。
+     * <p>
+     * 供首次构建与"supplier 返回了不兼容类型"两种情况共用。
+     *
+     * @param widget 根 Widget
+     */
+    private void mountRoot(@NotNull Widget widget) {
+        BuildContext context = Objects.requireNonNull(rootContext,
+                "rootContext must be assigned by initialize() before performBuild() can mount a root");
+        rootElement = widget.createElement();
+        rootElement.assignContext(context);
+        // The root Element's markNeedsBuild()/markChildNeedsBuild() bubbling terminates
+        // in a no-op once it reaches an Element with no parent — that IS the mounted root.
+        // Without this registration, State.setState() on a nested StatefulWidget mutates
+        // its field and marks the tree dirty, but nothing ever calls scheduleBuild(), so
+        // the mutation never reaches the Inventory. This is what closes the "setState ->
+        // automatic repaint" half of D-09/WIRE-02 for the documented CounterButton shape.
+        rootElement.setRootBuildScheduler(this::scheduleBuild);
+        rootElement.mount(null);
     }
 
     /**
@@ -168,11 +215,18 @@ public class GuiRenderer {
             collectRenderNodesRecursive(child, nodes);
         }
 
-        // 如果是 RenderObjectElement，收集其 RenderNode
+        // 如果是 RenderObjectElement，收集其 RenderNode 的快照
+        //
+        // D-09 item 3：getRenderNode() 对同一个 Element 永远返回同一个实例
+        // （RenderObjectElement 只在第一次访问时创建它，此后原地修改）。如果这里直接
+        // 把这个活引用塞进 lastRenderNodes，下一帧 RenderNodeDiffer.diff() 拿到的
+        // “旧节点”和“新节点”会是同一个对象——比较永远等于自身，diff 永远看不到变化。
+        // .copy()（RenderNode.java 里早就写好、此前零调用方的方法）在这里把这次帧的
+        // 状态拍成快照，后续帧对活节点的原地修改不会追溯性地改写这份快照。
         if (element instanceof RenderObjectElement) {
             RenderNode node = ((RenderObjectElement) element).getRenderNode();
             if (node != null) {
-                nodes.add(node);
+                nodes.add(node.copy());
             }
         }
     }
@@ -230,12 +284,36 @@ public class GuiRenderer {
 
     /**
      * 处理点击事件。
+     * <p>
+     * D-09 item 4：obliviate-invs 的 {@code InvListener.onClick} 在应用它自己的
+     * {@code getRawSlot()} 判断之前，就无条件调用了 {@code Gui.onClick(event)}（即
+     * {@link DeclarativeGui#onClick}，它转发到这里）——这是从 jar 的字节码里确认的，不是推测。
+     * 也就是说这个方法会看到<b>每一次</b>点击，包括玩家点击自己背包的情形，不能假设库已经
+     * 帮忙过滤过了。
+     * <p>
+     * 这里使用 {@link InventoryClickEvent#getRawSlot()} 而不是 {@link InventoryClickEvent#getSlot()}
+     * 做越界检查：{@code getRawSlot()} 是相对于整个组合视图（顶部 GUI + 玩家背包）的绝对索引，
+     * 顶部 GUI 占据 {@code [0, gui.getSize())}，玩家自己的背包则从 {@code gui.getSize()} 开始；
+     * 而 {@code getSlot()} 是相对于"被点击的那个 Inventory"各自独立编号的——顶部 GUI 和玩家背包
+     * 会各自从 0 开始计数，于是同一个数值（比如 4）可能同时是 GUI 的第 4 格、也是玩家背包的第 4
+     * 格。点击窗口外部（比如把物品丢在窗口外）时，Bukkit 报告的 rawSlot 是 -999，同样会被这里
+     * 的越界检查拒绝，不会抛异常。
+     * <p>
+     * {@link #clickHandlers} 是这次点击路由的唯一记录——它由 {@link #updateClickHandlers} 用
+     * {@code RenderNode.getSlotIndex()}（同一个"顶部 GUI 内的槽位"编号空间）填充，这里用同一个
+     * 空间去查，不存在第二份可能漂移的记录。
      *
      * @param event 点击事件
      */
     public void handleClick(@NotNull InventoryClickEvent event) {
-        int slot = event.getSlot();
-        Consumer<InventoryClickEvent> handler = clickHandlers.get(slot);
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= gui.getSize()) {
+            // 越界：玩家点击了自己的背包，或者点在了整个窗口外面（rawSlot == -999）。
+            // 两种情况都不派发，也不抛异常。
+            return;
+        }
+
+        Consumer<InventoryClickEvent> handler = clickHandlers.get(rawSlot);
         if (handler != null) {
             handler.accept(event);
         }
@@ -276,12 +354,15 @@ public class GuiRenderer {
         scheduler.cancelAll();
 
         if (rootElement != null) {
+            rootElement.setRootBuildScheduler(null);
             rootElement.unmount();
             rootElement = null;
         }
 
         lastRenderNodes = null;
         clickHandlers.clear();
+        widgetSupplier = null;
+        rootContext = null;
     }
 
     /**

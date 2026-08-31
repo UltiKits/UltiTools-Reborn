@@ -124,13 +124,56 @@ public class RenderNodeTest {
         Icon icon = new Icon(item);
         RenderNode original = new RenderNode(key, 10, icon);
         original.setMetadata("meta", "value");
+        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handler = event -> { };
+        original.setClickHandler(handler);
 
         RenderNode copy = original.copy();
 
+        // 05-11 plan Task 3: extends the plan's original assertions (key, slotIndex,
+        // icon-not-null, metadata value) with click handler coverage — copy() has a
+        // production caller for the first time as of this plan (GuiRenderer.
+        // collectRenderNodesRecursive), so its full field coverage matters now in a way
+        // it didn't when it was dead code.
         assertEquals(original.getKey(), copy.getKey());
         assertEquals(original.getSlotIndex(), copy.getSlotIndex());
         assertNotNull(copy.getIcon());
         assertEquals("value", copy.getMetadata("meta"));
+        assertSame(handler, copy.getClickHandler(),
+                "copy() must carry the click handler — GuiRenderer.updateClickHandlers() reads "
+                        + "it off the collected (copied) nodes, not the live ones");
+    }
+
+    @Test
+    void testCopyIsIndependentOfLaterMutationOnTheOriginal() {
+        // This is the exact property GuiRenderer.collectRenderNodesRecursive relies on:
+        // a snapshot taken this frame must not be retroactively altered by next frame's
+        // in-place mutation of the ORIGINAL (live) RenderNode via its setters — see
+        // ItemDisplayElement.updateRenderNode(), which reassigns slotIndex/icon on the
+        // SAME cached RenderNode instance every rebuild.
+        SlotKey key = SlotKey.of("original");
+        RenderNode original = new RenderNode(key, 0, new Icon(new ItemStack(Material.DIAMOND)));
+        original.setMetadata("meta", "before");
+        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handlerBefore = event -> { };
+        original.setClickHandler(handlerBefore);
+
+        RenderNode copy = original.copy();
+
+        // Mutate every copyable field on the ORIGINAL after the copy was taken.
+        Icon newIcon = new Icon(new ItemStack(Material.GOLD_INGOT));
+        original.setIcon(newIcon);
+        original.setSlotIndex(5);
+        original.setMetadata("meta", "after");
+        java.util.function.Consumer<org.bukkit.event.inventory.InventoryClickEvent> handlerAfter = event -> { };
+        original.setClickHandler(handlerAfter);
+
+        assertNotSame(newIcon, copy.getIcon(),
+                "the copy's icon must not change when the original's icon reference is reassigned");
+        assertEquals(0, copy.getSlotIndex(),
+                "the copy's slotIndex must not change when the original's is reassigned");
+        assertEquals("before", copy.getMetadata("meta"),
+                "the copy's metadata must not change when the original's is reassigned");
+        assertSame(handlerBefore, copy.getClickHandler(),
+                "the copy's click handler must not change when the original's is reassigned");
     }
 
     @Test

@@ -43,6 +43,8 @@ public abstract class Element {
     private boolean _mounted = false;
     @Nullable
     private BuildContext _context;
+    @Nullable
+    private Runnable _rootBuildScheduler;
 
     protected Element(@NotNull Widget widget) {
         this._widget = widget;
@@ -91,6 +93,11 @@ public abstract class Element {
                     "Cannot update " + this + " with " + newWidget);
         }
         _widget = newWidget;
+        // D-09 item 2: mark dirty here, in the BASE class, so StatefulElement and
+        // StatelessElement (which both call super.update() before their own logic)
+        // pick this up "for free" and move in step. Before this, only markNeedsBuild()
+        // ever set _dirty, so a Widget swap via update() never scheduled a rebuild.
+        _dirty = true;
     }
 
     /**
@@ -136,9 +143,17 @@ public abstract class Element {
         }
         _dirty = true;
 
-        // 通知父 Element 或渲染器
+        // 通知父 Element 或渲染器。
+        //
+        // 这是 State.setState() -> Element.markNeedsBuild() 这条链路唯一的出口：如果这个
+        // Element 就是挂载的根（_parent == null），冒泡到这里就到头了——在
+        // GuiRenderer 注册 _rootBuildScheduler 之前，setState() 修改了 State 的字段、
+        // 把这个 Element 标记为 dirty，但从来没有安排任何一帧真正执行
+        // performBuild()，Inventory 永远不会反映新状态。
         if (_parent != null) {
             _parent.markChildNeedsBuild(this);
+        } else if (_rootBuildScheduler != null) {
+            _rootBuildScheduler.run();
         }
     }
 
@@ -148,10 +163,29 @@ public abstract class Element {
      * @param child 子 Element
      */
     public void markChildNeedsBuild(@NotNull Element child) {
-        // 默认实现：传递给父 Element
+        // 默认实现：传递给父 Element；到达挂载的根（_parent == null）时，
+        // 交给 GuiRenderer 注册的调度回调——见上面 markNeedsBuild() 的说明，
+        // 同一个"冒泡到根即终止"的缺口在这里。
         if (_parent != null) {
             _parent.markChildNeedsBuild(child);
+        } else if (_rootBuildScheduler != null) {
+            _rootBuildScheduler.run();
         }
+    }
+
+    /**
+     * 注册挂载的根 Element 用来把"需要重建"的冒泡通知转交给
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer} 的回调。
+     * <p>
+     * 框架内部方法——只有 GuiRenderer 在挂载/重新挂载根 Element 时调用它，模块作者不需要
+     * （也不应该）自己调用。非根 Element 上这个字段永远是 null，因为冒泡在遇到第一个
+     * {@code _parent != null} 的祖先时就会转发给那个祖先，不会走到这个分支。
+     *
+     * @param scheduler 根需要重建时调用的回调，通常是 {@code GuiRenderer::scheduleBuild}；
+     *                  传 {@code null} 取消注册（渲染器销毁时）
+     */
+    public void setRootBuildScheduler(@Nullable Runnable scheduler) {
+        this._rootBuildScheduler = scheduler;
     }
 
     /**
@@ -283,6 +317,66 @@ public abstract class Element {
         Element newChild = newWidget.createElement();
         newChild.mount(this);
         return newChild;
+    }
+
+    /**
+     * Reconciles a list of old child Elements against a list of new Widgets, pairing by
+     * {@link SlotKey} where a Widget declares one and falling back to positional (index)
+     * pairing where it does not -- so a caller that never supplies a key sees exactly the
+     * same index-based behaviour this method replaces.
+     * <p>
+     * This is the shared implementation D-09 item 5 asks for:
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.ContainerElement} and
+     * {@link com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridViewElement} were
+     * literal twins, each hand-rolling the same
+     * {@code Math.min(size)} index pairing and never reading {@link Widget#getKey()}. Both
+     * now call this method instead of maintaining their own copy, so the two classes cannot
+     * drift apart the way they did before this plan.
+     * <p>
+     * <b>算法（中文补充）：</b>先把旧子 Element 按"有 key"与"无 key"分两组；遍历新 Widget
+     * 列表，有 key 的按 key 查找旧组中的匹配项，没有 key 的按顺序从"无 key 旧组"里取一个——
+     * 找到匹配就调用 {@link #updateChild(Widget, Element)} 复用（或在类型不匹配时替换），
+     * 找不到就新建。遍历结束后，两组里还剩下的旧 Element（没有被任何新 Widget 认领）全部
+     * unmount。
+     *
+     * @param oldChildren the previously-mounted child Elements, in their current order
+     * @param newWidgets  the new child Widgets, in their desired order
+     * @return the reconciled child Elements, in {@code newWidgets}' order
+     */
+    @NotNull
+    protected List<Element> updateChildren(@NotNull List<Element> oldChildren, @NotNull List<Widget> newWidgets) {
+        List<Element> newChildren = new ArrayList<>(newWidgets.size());
+
+        Map<SlotKey, Element> keyedOld = new HashMap<>();
+        Deque<Element> unkeyedOld = new ArrayDeque<>();
+        for (Element old : oldChildren) {
+            SlotKey key = old.getWidget().getKey();
+            if (key != null) {
+                keyedOld.put(key, old);
+            } else {
+                unkeyedOld.addLast(old);
+            }
+        }
+
+        for (Widget newWidget : newWidgets) {
+            SlotKey key = newWidget.getKey();
+            Element oldChild = key != null ? keyedOld.remove(key)
+                    : (unkeyedOld.isEmpty() ? null : unkeyedOld.pollFirst());
+            Element updated = updateChild(newWidget, oldChild);
+            if (updated != null) {
+                newChildren.add(updated);
+            }
+        }
+
+        // Anything left in either group was not claimed by any new Widget -- unmount it.
+        for (Element leftover : keyedOld.values()) {
+            leftover.unmount();
+        }
+        for (Element leftover : unkeyedOld) {
+            leftover.unmount();
+        }
+
+        return newChildren;
     }
 
     @Override
