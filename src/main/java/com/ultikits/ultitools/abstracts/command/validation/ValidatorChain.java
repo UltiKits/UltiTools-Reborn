@@ -99,23 +99,26 @@ public final class ValidatorChain {
      */
     public ChainValidationResult validate(CommandContext context) {
         ensureSorted();
-        
+
         List<CommandValidator.ValidationResult> results = new ArrayList<>();
-        
+        List<CommandValidator> passedValidators = new ArrayList<>();
+
         for (CommandValidator validator : validators) {
             if (!validator.shouldValidate(context)) {
                 continue;
             }
-            
+
             CommandValidator.ValidationResult result = validator.validate(context);
             results.add(result);
-            
+
             if (!result.isValid()) {
-                return ChainValidationResult.failure(validator, result, results);
+                return ChainValidationResult.failure(validator, result, results, passedValidators);
             }
+
+            passedValidators.add(validator);
         }
-        
-        return ChainValidationResult.success(results);
+
+        return ChainValidationResult.success(results, passedValidators);
     }
     
     /**
@@ -129,27 +132,30 @@ public final class ValidatorChain {
      */
     public ChainValidationResult validateAll(CommandContext context) {
         ensureSorted();
-        
+
         List<CommandValidator.ValidationResult> results = new ArrayList<>();
         List<CommandValidator> failedValidators = new ArrayList<>();
-        
+        List<CommandValidator> passedValidators = new ArrayList<>();
+
         for (CommandValidator validator : validators) {
             if (!validator.shouldValidate(context)) {
                 continue;
             }
-            
+
             CommandValidator.ValidationResult result = validator.validate(context);
             results.add(result);
-            
+
             if (!result.isValid()) {
                 failedValidators.add(validator);
+            } else {
+                passedValidators.add(validator);
             }
         }
-        
+
         if (failedValidators.isEmpty()) {
-            return ChainValidationResult.success(results);
+            return ChainValidationResult.success(results, passedValidators);
         } else {
-            return ChainValidationResult.multipleFailures(failedValidators, results);
+            return ChainValidationResult.multipleFailures(failedValidators, results, passedValidators);
         }
     }
     
@@ -205,38 +211,47 @@ public final class ValidatorChain {
         private final List<CommandValidator> allFailedValidators;
         private final CommandValidator.ValidationResult failedResult;
         private final List<CommandValidator.ValidationResult> allResults;
-        
+        private final List<CommandValidator> passedValidators;
+
         private ChainValidationResult(boolean valid,
                                       CommandValidator failedValidator,
                                       List<CommandValidator> allFailedValidators,
                                       CommandValidator.ValidationResult failedResult,
-                                      List<CommandValidator.ValidationResult> allResults) {
+                                      List<CommandValidator.ValidationResult> allResults,
+                                      List<CommandValidator> passedValidators) {
             this.valid = valid;
             this.failedValidator = failedValidator;
-            this.allFailedValidators = allFailedValidators != null ? 
+            this.allFailedValidators = allFailedValidators != null ?
                     Collections.unmodifiableList(allFailedValidators) : Collections.emptyList();
             this.failedResult = failedResult;
             this.allResults = Collections.unmodifiableList(allResults);
+            this.passedValidators = passedValidators != null
+                    ? Collections.unmodifiableList(new ArrayList<>(passedValidators))
+                    : Collections.emptyList();
         }
-        
-        static ChainValidationResult success(List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(true, null, null, null, allResults);
+
+        static ChainValidationResult success(List<CommandValidator.ValidationResult> allResults,
+                                              List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(true, null, null, null, allResults, passedValidators);
         }
-        
+
         static ChainValidationResult failure(CommandValidator failedValidator,
                                              CommandValidator.ValidationResult failedResult,
-                                             List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(false, failedValidator, 
-                    Collections.singletonList(failedValidator), failedResult, allResults);
+                                             List<CommandValidator.ValidationResult> allResults,
+                                             List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(false, failedValidator,
+                    Collections.singletonList(failedValidator), failedResult, allResults, passedValidators);
         }
-        
+
         static ChainValidationResult multipleFailures(List<CommandValidator> failedValidators,
-                                                      List<CommandValidator.ValidationResult> allResults) {
-            return new ChainValidationResult(false, 
+                                                      List<CommandValidator.ValidationResult> allResults,
+                                                      List<CommandValidator> passedValidators) {
+            return new ChainValidationResult(false,
                     failedValidators.isEmpty() ? null : failedValidators.get(0),
-                    failedValidators, 
-                    null, 
-                    allResults);
+                    failedValidators,
+                    null,
+                    allResults,
+                    passedValidators);
         }
         
         /**
@@ -289,6 +304,24 @@ public final class ValidatorChain {
             return allResults;
         }
         
+        /**
+         * Gets the ordered list of validators whose {@link CommandValidator#validate(CommandContext)}
+         * succeeded during this chain run. This is the single source of truth {@code executeCommand}
+         * drives {@link CommandValidator#onComplete(CommandContext, boolean)} from -- a validator
+         * absent from this list receives no post-action call, whether because it was skipped, never
+         * reached, or failed.
+         * <p>
+         * 获取本次链验证中 {@link CommandValidator#validate(CommandContext)} 成功的验证器的有序列表。
+         * 这是 {@code executeCommand} 驱动 {@link CommandValidator#onComplete(CommandContext, boolean)}
+         * 的唯一数据源——不在此列表中的验证器不会收到后置调用，无论是被跳过、从未到达，还是验证失败。
+         *
+         * @return unmodifiable, ordered list of validators that passed during this chain run
+         * @since 6.3.0
+         */
+        public List<CommandValidator> getPassedValidators() {
+            return passedValidators;
+        }
+
         /**
          * Gets the error message from the first failure.
          * 获取第一个失败的错误消息。

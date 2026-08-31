@@ -2,9 +2,11 @@ package com.ultikits.ultitools.manager;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -23,6 +25,7 @@ import java.util.logging.Level;
 import javax.sql.DataSource;
 
 import org.bukkit.Bukkit;
+import org.bukkit.command.CommandExecutor;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -31,6 +34,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
+import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ContextEntry;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
@@ -38,6 +45,10 @@ import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
+import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
@@ -45,6 +56,9 @@ import com.ultikits.ultitools.aop.ExceptionInterceptor;
 import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
+import com.ultikits.ultitools.commands.tabcomplete.MethodInvocationCompleter;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -61,6 +75,7 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
 import lombok.Getter;
@@ -370,6 +385,11 @@ public class PluginManager {
                 playerCacheManager.unregisterBean(bean);
             }
         }
+        // Bulk-unregister this module's tab-completion completers so the singleton does not
+        // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
+        // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
+        // return 0 and throw nothing).
+        TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
         // Unregister @ModuleEventHandler handlers from EventBus
         EventBus eventBus = UltiTools.getInstance().getEventBus();
         if (eventBus != null) {
@@ -1683,7 +1703,19 @@ public class PluginManager {
         registerEntityOwnership(scope);
         plugin.setDataScope(scope);
         wireAop(pluginContext, scope);
-        pluginContext.refresh();
+        // T-05-24 / D-08: attribute any TabCompletionManager.register(...) call made during
+        // this plugin's own @PostConstruct (which runs synchronously inside refresh()) to this
+        // plugin, so unregister(UltiToolsPlugin) can sweep it on unload without pinning the
+        // module's ClassLoader. ClassLoader-derived ownership does not work here: every internal
+        // module shares ONE URLClassLoader (see init(ClassLoader) and validateAdditionalEntity's
+        // identical D-19 finding above) -- an explicit scope is the only mechanism that still
+        // separates two modules' completers.
+        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName());
+        try {
+            pluginContext.refresh();
+        } finally {
+            TabCompletionManager.getInstance().endRegistrationScope();
+        }
 
         // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
         // already fully assembles its argument unconditionally (D-14), so there is nothing left
@@ -1704,8 +1736,315 @@ public class PluginManager {
             }
             pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
+
+        // SILENT-11 half 2 (D-01, D-04): every CommandExecutor bean this container just fully
+        // assembled -- autowired, @PostConstruct'd, refresh()'d -- is checked here, before
+        // registerBukkit() ever hands one to Bukkit's CommandMap. See
+        // validateCommandExecutorContracts's own javadoc for the fail-closed contract; both
+        // callers of assemblePluginContainer already wrap it in a try/catch that routes any
+        // PluginModuleException through logPluginInitializationFailure, so this refusal is
+        // module-granular for free -- no new try/catch is added here.
+        validateCommandExecutorContracts(pluginContext);
     }
-    
+
+    /**
+     * Refuses to load a module whose {@link BaseCommandExecutor} bean declares {@code @CmdCD} or
+     * {@code @UsageLimit} -- on a {@code @CmdMapping} method or on the executor class itself --
+     * while its OWN validator chain (the exact chain {@code onCommand} dispatches through, not a
+     * freshly built default one) holds no instance of the corresponding validator type
+     * (SILENT-11 / D-01 half 2, D-04). Every {@link CommandExecutor} bean in {@code pluginContext}
+     * is checked; a bean that is not a {@link BaseCommandExecutor} (the legacy
+     * {@code AbstractCommandExecutor} generation has no {@link
+     * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} at all) is skipped.
+     * <p>
+     * This is a STRUCTURAL check only -- it asks whether the required validator TYPE is present
+     * in the chain, never whether a given invocation would actually be blocked. No opt-out exists
+     * (D-04): a declared cooldown or usage limit that cannot be enforced is always a module-author
+     * bug, and Phase 3 D-08's module-granularity isolation -- this refusal alone fails the
+     * offending module, every other module in the same load pass still completes -- is the
+     * accepted escape hatch.
+     * <p>
+     * 拒绝加载：某个 {@link BaseCommandExecutor} bean 在 {@code @CmdMapping} 方法上或执行器类本身
+     * 声明了 {@code @CmdCD} 或 {@code @UsageLimit}，而它自己的验证器链（{@code onCommand} 实际派发
+     * 所经过的那一条，而不是重新构建的默认链）中不包含对应验证器类型的实例
+     * （SILENT-11 / D-01 第二部分, D-04）。{@code pluginContext} 中每一个 {@link CommandExecutor}
+     * bean 都会被检查；不是 {@link BaseCommandExecutor} 的 bean（旧一代
+     * {@code AbstractCommandExecutor} 根本没有 {@link
+     * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain}）会被跳过。
+     * <p>
+     * 这只是一个结构性检查——只问链中是否存在所需验证器的类型，从不问某次具体调用是否真的会被
+     * 拦下。此拒绝没有开关（D-04）：一个无法生效的冷却或使用限制声明永远是模块作者的错误，
+     * Phase 3 D-08 的模块粒度隔离——只有问题模块本身加载失败，同一次加载中的其余模块仍会完成——
+     * 是被接受的退路。
+     *
+     * @param pluginContext the just-assembled, just-{@code refresh()}ed container to scan for
+     *                       {@link CommandExecutor} beans <br> 刚组装、刚 refresh() 的容器，
+     *                       扫描其中的 {@link CommandExecutor} bean
+     * @throws PluginModuleException fail-closed (D-01, D-04), naming the offending class and,
+     *                                when known, the offending mapping method
+     */
+    static void validateCommandExecutorContracts(SimpleContainer pluginContext) {
+        for (String beanName : pluginContext.getBeanNamesForType(CommandExecutor.class)) {
+            CommandExecutor commandExecutor = pluginContext.getBean(beanName, CommandExecutor.class);
+            if (commandExecutor instanceof BaseCommandExecutor) {
+                validateCommandExecutorContract((BaseCommandExecutor) commandExecutor);
+            }
+        }
+    }
+
+    /**
+     * The per-executor half of {@link #validateCommandExecutorContracts(SimpleContainer)} --
+     * package-private, not private, so {@code PluginManagerCommandContractTest} (same package)
+     * can drive it directly with a hand-built fixture, without reflection or
+     * {@code setAccessible(true)}. Mirrors the test-seam rationale already used for
+     * {@link #logPluginInitializationFailure(String, Throwable)}: this is not {@code public}, so
+     * it never enters the published surface.
+     * <p>
+     * {@code @UsageLimit(LimitType.NONE)} is exempt -- it declares no limit to enforce, so
+     * requiring {@code UsageLockValidator} for it would refuse a legitimate no-op declaration.
+     *
+     * @param executor the already-constructed executor instance <br> 已经构造好的执行器实例
+     * @throws PluginModuleException fail-closed (D-01, D-04), naming the offending class and,
+     *                                when known, the offending mapping method
+     */
+    static void validateCommandExecutorContract(BaseCommandExecutor executor) {
+        List<CommandValidator> validators = executor.getValidatorChain().getValidators();
+        boolean hasCooldownValidator = false;
+        boolean hasUsageLockValidator = false;
+        for (CommandValidator validator : validators) {
+            hasCooldownValidator |= validator instanceof CooldownValidator;
+            hasUsageLockValidator |= validator instanceof UsageLockValidator;
+        }
+
+        Class<?> executorClass = executor.getClass();
+
+        if (executorClass.isAnnotationPresent(CmdCD.class) && !hasCooldownValidator) {
+            throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                    unenforceableCommandAnnotationMessage(executorClass, null, CmdCD.class, CooldownValidator.class));
+        }
+        UsageLimit classLevelUsageLimit = executorClass.getAnnotation(UsageLimit.class);
+        if (classLevelUsageLimit != null && classLevelUsageLimit.value() != UsageLimit.LimitType.NONE
+                && !hasUsageLockValidator) {
+            throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                    unenforceableCommandAnnotationMessage(executorClass, null, UsageLimit.class, UsageLockValidator.class));
+        }
+
+        for (Method method : ReflectionUtil.getAllMethods(executorClass)) {
+            if (!method.isAnnotationPresent(CmdMapping.class)) {
+                continue;
+            }
+            if (method.isAnnotationPresent(CmdCD.class) && !hasCooldownValidator) {
+                throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                        unenforceableCommandAnnotationMessage(executorClass, method, CmdCD.class, CooldownValidator.class));
+            }
+            UsageLimit methodUsageLimit = method.getAnnotation(UsageLimit.class);
+            if (methodUsageLimit != null && methodUsageLimit.value() != UsageLimit.LimitType.NONE
+                    && !hasUsageLockValidator) {
+                throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE,
+                        unenforceableCommandAnnotationMessage(executorClass, method, UsageLimit.class, UsageLockValidator.class));
+            }
+            // D-07 / 05-06 Task 2: same walk, same method -- checked alongside the two rules
+            // above rather than in a second pass over ReflectionUtil.getAllMethods, so the two
+            // rules' ordering stays in one place.
+            validateSuggestKeysForMethod(executorClass, method);
+            // T-05-fix Part 2: same walk, same method -- a method-name suggest() value that
+            // resolves to a signature MethodInvocationCompleter cannot invoke is refused here too.
+            validateSuggestMethodSignatureForMethod(executor, executorClass, method);
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateCommandExecutorContract(BaseCommandExecutor)},
+     * naming the offending class and, when {@code method} is non-null, the offending mapping
+     * method -- mirroring {@link #additionalEntityRefusalMessage(String, Class, String)}'s
+     * message-builder shape.
+     *
+     * @param executorClass          the offending executor class <br> 问题执行器类
+     * @param method                 the offending mapping method, or {@code null} for a
+     *                                class-level declaration <br> 问题映射方法；类级声明时为
+     *                                {@code null}
+     * @param annotationType         the declared annotation ({@code @CmdCD} or
+     *                                {@code @UsageLimit}) <br> 声明的注解
+     * @param requiredValidatorType  the validator type the chain is missing <br> 链中缺失的验证器类型
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String unenforceableCommandAnnotationMessage(Class<?> executorClass, Method method,
+            Class<? extends Annotation> annotationType, Class<? extends CommandValidator> requiredValidatorType) {
+        String location = method != null ? "on method '" + method.getName() + "'" : "at the class level";
+        return "Command executor '" + executorClass.getName() + "' declares @" + annotationType.getSimpleName()
+                + " " + location + ", but its validator chain contains no "
+                + requiredValidatorType.getSimpleName() + " -- the annotation would be silently unenforced. "
+                + "Add " + requiredValidatorType.getSimpleName()
+                + " to createDefaultValidatorChain() or the ValidatorChain passed to the constructor.";
+    }
+
+    /**
+     * Validate constructor arguments for security.
+    /**
+     * D-07's load-time half of {@code @CmdParam.suggest} (05-06 Task 2) -- for {@code method}'s
+     * {@code @CmdParam} parameters, a {@code suggest()} value beginning with {@code @} must name a
+     * key already registered in {@link TabCompletionManager} at the moment this check runs, i.e.
+     * AFTER the module's own {@code pluginContext.refresh()} (and therefore after any completer the
+     * module registers during its own {@code @PostConstruct}). Called from inside {@link
+     * #validateCommandExecutorContract(BaseCommandExecutor)}'s existing {@code @CmdMapping} method
+     * walk -- not a second pass -- so the two checks' ordering stays in one place (D-01, D-04, D-07).
+     * <p>
+     * A {@code suggest()} value that does NOT start with {@code @} is out of scope here entirely --
+     * including one naming a method that does not exist -- because that case keeps the published
+     * i18n hint-text fallback ({@code CmdParam.java}'s javadoc), which D-07 leaves deliberately
+     * unchanged. No opt-out (D-04): an unknown {@code @key} is always a module-author bug, and
+     * module-granularity isolation -- this refusal alone fails the offending module, every other
+     * module in the same load pass still completes -- is the accepted escape hatch.
+     * <p>
+     * D-07 拒绝加载：
+     * 对 {@code method} 的每个 {@code @CmdParam} 参数，如果 {@code suggest()} 以 {@code @} 开头，
+     * 就要求该键此刻已在 {@link TabCompletionManager} 中注册——即在模块自身的
+     * {@code pluginContext.refresh()} 之后（因此也在模块自己 {@code @PostConstruct} 期间注册的任何
+     * 补全器之后）。
+     *
+     * @param executorClass the executor class {@code method} belongs to, for the refusal message
+     *                      <br> {@code method} 所属的执行器类，用于构造拒绝信息
+     * @param method        the {@code @CmdMapping} method whose parameters are checked
+     *                      <br> 要检查其参数的 {@code @CmdMapping} 方法
+     * @throws PluginModuleException fail-closed (D-07), naming the class, the method and the key
+     */
+    private static void validateSuggestKeysForMethod(Class<?> executorClass, Method method) {
+        for (Parameter parameter : method.getParameters()) {
+            CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+            if (cmdParam == null) {
+                continue;
+            }
+            String suggest = cmdParam.suggest();
+            if (suggest.isEmpty() || suggest.charAt(0) != '@') {
+                continue;
+            }
+            if (TabCompletionManager.getInstance().getCompleter(suggest) == null) {
+                throw new PluginModuleException(ErrorCode.COMMAND_SUGGEST_KEY_UNKNOWN,
+                        unknownSuggestKeyMessage(executorClass, method, suggest));
+            }
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateSuggestKeysForMethod(Class, Method)}, naming
+     * the offending class, method and key -- mirroring {@link
+     * #unenforceableCommandAnnotationMessage(Class, Method, Class, Class)}'s message-builder shape.
+     *
+     * @param executorClass the offending executor class <br> 问题执行器类
+     * @param method        the offending mapping method <br> 问题映射方法
+     * @param key           the unknown {@code @key} <br> 未知的 {@code @key}
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String unknownSuggestKeyMessage(Class<?> executorClass, Method method, String key) {
+        return "Command executor '" + executorClass.getName() + "' declares @CmdParam(suggest = \""
+                + key + "\") on method '" + method.getName() + "', but no completer is registered "
+                + "under that key. Register a completer for '" + key + "' via "
+                + "TabCompletionManager.getInstance().register(...) before this module loads, or fix "
+                + "the typo -- an unknown @key does not fall back to the i18n hint text (D-07).";
+    }
+
+    /**
+     * T-05-fix Part 2's load-time half of method-name {@code @CmdParam.suggest()} resolution: a
+     * {@code suggest()} value that does NOT start with {@code @} names a method looked up EXACTLY
+     * as {@link MethodInvocationCompleter#complete(TabCompletionContext)} looks it up at
+     * completion time -- {@link MethodInvocationCompleter#getSuggestMethodsByName(Object, String)}
+     * checks the executor's own class first, then any {@code @CmdSuggest}-referenced classes.
+     * <p>
+     * A real-machine UAT run on Paper 1.21.11 caught {@code MethodInvocationCompleter
+     * .invokeSuggestMethod} falling into a final {@code else} branch that invoked ANY
+     * unrecognized signature with ZERO arguments -- silently wrong, not a failure, so it surfaced
+     * only as {@code IllegalArgumentException} the first time a player pressed Tab. 16 of 24 real
+     * downstream {@code @CmdParam(suggest=)} call sites (every UltiWorlds suggest method, shaped
+     * {@code (Player, String)}) were broken this way. This check closes the gap at its source:
+     * if the resolved suggest method's signature is not one of the five shapes {@link
+     * MethodInvocationCompleter#isInvocableSuggestSignature(Class[])} accepts, the module is
+     * refused at load -- naming the class, the mapping method and the offending signature --
+     * instead of loading cleanly and failing only on first invocation.
+     * <p>
+     * A {@code suggest()} value that resolves to NO method at all is out of scope here, exactly
+     * as it is for {@link #validateSuggestKeysForMethod(Class, Method)} -- that keeps the
+     * published i18n hint-text fallback, deliberately unchanged (D-07). {@link
+     * MethodInvocationCompleter#complete(TabCompletionContext)} only ever invokes the FIRST
+     * method {@code getSuggestMethodsByName} returns when a name resolves to more than one
+     * overload, so only that first method's signature is validated here -- validating every
+     * overload would refuse a module for an overload that is never actually called.
+     *
+     * @param executor      the already-constructed executor instance, needed for the SAME class
+     *                       hierarchy / {@code @CmdSuggest} lookup {@link
+     *                       MethodInvocationCompleter} performs at completion time <br> 已构造的
+     *                       执行器实例
+     * @param executorClass the executor class {@code method} belongs to, for the refusal message
+     *                      <br> {@code method} 所属的执行器类，用于构造拒绝信息
+     * @param method        the {@code @CmdMapping} method whose parameters are checked
+     *                      <br> 要检查其参数的 {@code @CmdMapping} 方法
+     * @throws PluginModuleException fail-closed, naming the class, the method and the offending
+     *                                signature
+     */
+    private static void validateSuggestMethodSignatureForMethod(BaseCommandExecutor executor,
+            Class<?> executorClass, Method method) {
+        for (Parameter parameter : method.getParameters()) {
+            CmdParam cmdParam = parameter.getAnnotation(CmdParam.class);
+            if (cmdParam == null) {
+                continue;
+            }
+            String suggest = cmdParam.suggest();
+            if (suggest.isEmpty() || suggest.charAt(0) == '@') {
+                continue;
+            }
+            Method[] suggestMethods = MethodInvocationCompleter.getSuggestMethodsByName(executor, suggest);
+            if (suggestMethods == null || suggestMethods.length == 0) {
+                continue; // unknown method name -- D-07 keeps the i18n hint fallback, out of scope here
+            }
+            Method suggestMethod = suggestMethods[0];
+            if (!MethodInvocationCompleter.isInvocableSuggestSignature(suggestMethod.getParameterTypes())) {
+                throw new PluginModuleException(ErrorCode.COMMAND_SUGGEST_METHOD_UNINVOCABLE,
+                        uninvocableSuggestMethodMessage(executorClass, method, suggestMethod));
+            }
+        }
+    }
+
+    /**
+     * Builds the refusal message for {@link #validateSuggestMethodSignatureForMethod(
+     * BaseCommandExecutor, Class, Method)}, naming the offending class, the mapping method and
+     * the offending suggest method's declaring class, name and parameter signature -- mirroring
+     * {@link #unknownSuggestKeyMessage(Class, Method, String)}'s message-builder shape.
+     *
+     * @param executorClass  the offending executor class <br> 问题执行器类
+     * @param mappingMethod  the offending {@code @CmdMapping} method <br> 问题映射方法
+     * @param suggestMethod  the resolved suggest method with the uninvocable signature
+     *                       <br> 签名无法调用的建议方法
+     * @return the refusal message <br> 拒绝信息
+     */
+    private static String uninvocableSuggestMethodMessage(Class<?> executorClass, Method mappingMethod,
+            Method suggestMethod) {
+        return "Command executor '" + executorClass.getName() + "' declares @CmdParam(suggest = \""
+                + suggestMethod.getName() + "\") on method '" + mappingMethod.getName() + "', but '"
+                + suggestMethod.getDeclaringClass().getName() + "#" + suggestMethod.getName()
+                + formatParameterTypes(suggestMethod.getParameterTypes()) + "' has a signature the "
+                + "tab-completion invoker cannot call. Supported signatures: (), (Player), (String), "
+                + "(Player, String), (Player, Command, String[]).";
+    }
+
+    /**
+     * Formats {@code paramTypes} as a Java-source-like parameter list, e.g. {@code "(int)"} or
+     * {@code "(Player, String)"}, for {@link #uninvocableSuggestMethodMessage(Class, Method,
+     * Method)}.
+     *
+     * @param paramTypes the parameter types to format <br> 要格式化的参数类型
+     * @return the formatted parameter list, including the enclosing parentheses <br> 格式化后的
+     *         参数列表（含括号）
+     */
+    private static String formatParameterTypes(Class<?>[] paramTypes) {
+        StringBuilder builder = new StringBuilder("(");
+        for (int i = 0; i < paramTypes.length; i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            builder.append(paramTypes[i].getSimpleName());
+        }
+        return builder.append(")").toString();
+    }
+
     /**
      * Validate constructor arguments for security.
      * <br>
@@ -2000,6 +2339,17 @@ public class PluginManager {
         wireAop(context, scope);
         context.refresh();
         adapter.setContext(context);
+
+        // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
+        // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
+        // enforce it (assemblePluginContainer's own last line), but registerExternal is a
+        // separate, parallel container-assembly path that built its own SimpleContainer and
+        // skipped straight to task/listener/command registration. Placed here -- immediately
+        // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
+        // registration, EventBus wiring, command/listener registration) -- mirroring the internal
+        // path's placement as the last step of container assembly, so a refusal leaves no partial
+        // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
+        validateCommandExecutorContracts(context);
 
         String pluginName = adapter.getPluginName();
 
