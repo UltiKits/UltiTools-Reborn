@@ -560,6 +560,19 @@ public final class UltiTools extends JavaPlugin implements Localized {
             logStreamManager.shutdown();
         }
 
+        // 关闭远程操作日志（WR-01, 06-REVIEW.md）—— 摘掉本实例挂上的 FileHandler，否则
+        // /reload 之后的下一次 onEnable 会在同一个静态 logger 上再挂一个，导致每条记录都被
+        // 写两遍。
+        if (remoteActionLog != null) {
+            remoteActionLog.shutdown();
+        }
+
+        // 关闭面板 responder 注册表（WR-01, 06-REVIEW.md）—— 停掉它自己的超时调度线程池，
+        // 否则每次 /reload 都会再泄漏一条 UltiTools-PanelResponderRegistry-Timeout 线程。
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.shutdown();
+        }
+
         CloudAuthManager.stopTokenRefreshScheduler();
         CloudAuthManager.stopPolling();
         if (dependenceManagers != null) {

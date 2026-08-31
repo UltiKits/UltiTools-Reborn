@@ -243,16 +243,20 @@ public class PanelResponderRegistry {
     }
 
     /**
-     * Releases {@link #timeoutScheduler} (WR-01, 06-REVIEW.md).
+     * Shuts down {@link #timeoutScheduler} (WR-01, 06-REVIEW.md).
      * <p>
-     * <b>RED placeholder</b> — intentionally a no-op so the paired failing test proves the leak via
-     * an assertion rather than a compile error. The GREEN commit replaces this body with the real
-     * fix: {@link ScheduledThreadPoolExecutor#shutdownNow()} on {@link #timeoutScheduler}, so a
-     * plugin {@code /reload} does not leak one more {@code UltiTools-PanelResponderRegistry-Timeout}
-     * thread per cycle.
+     * {@link #timeoutScheduler} is a dedicated single-thread pool per instance — nothing else
+     * shares it and nothing else stops it, so without this call a plugin {@code /reload} (which
+     * constructs a fresh {@link PanelResponderRegistry} on every {@code onEnable} without ever
+     * disposing of the previous one) leaks one more daemon
+     * {@code UltiTools-PanelResponderRegistry-Timeout} thread per cycle for the life of the
+     * process. {@link ScheduledThreadPoolExecutor#shutdownNow()}, not the graceful
+     * {@code shutdown()}, because any timeout task still queued at this point belongs to a
+     * responder dispatch this instance is being torn down anyway — there is no in-flight work here
+     * worth draining.
      */
     public void shutdown() {
-        // Filled in by the paired GREEN commit.
+        timeoutScheduler.shutdownNow();
     }
 
     /** An immutable pairing of a responder function and the module name that registered it. */

@@ -66,6 +66,15 @@ public class RemoteActionLog {
     private volatile int maxFiles = DEFAULT_MAX_FILES;
 
     /**
+     * The {@link FileHandler} this specific instance attached to the shared static
+     * {@link #ACTION_LOG} — {@code null} until a successful {@link #init(File)}. Tracked per
+     * instance, not read back off {@link #ACTION_LOG} itself, so {@link #shutdown()} removes only
+     * the handler this instance is responsible for (WR-01) — never a sibling instance's handler,
+     * which matters if two instances are ever briefly alive at once.
+     */
+    private volatile FileHandler attachedHandler;
+
+    /**
      * Attaches the rotating {@link FileHandler} at
      * {@code <dataFolder>/security/action.log.%g}, creating the {@code security} directory if
      * absent. Loads the rotation knobs from config.yml first — see {@link #loadConfiguration()}.
@@ -86,6 +95,7 @@ public class RemoteActionLog {
             handler.setFormatter(new JsonLineFormatter(gson));
             handler.setLevel(Level.ALL);
             ACTION_LOG.addHandler(handler);
+            attachedHandler = handler;
         } catch (IOException | SecurityException e) {
             // NEVER use Logger here — this failure is about the log itself.
             System.err.println("[UltiPanel] RemoteActionLog: failed to attach file handler: " + e.getMessage());
@@ -93,16 +103,33 @@ public class RemoteActionLog {
     }
 
     /**
-     * Releases what {@link #init(File)} attached (WR-01, 06-REVIEW.md).
+     * Removes and closes the {@link FileHandler} this instance attached in {@link #init(File)}
+     * (WR-01, 06-REVIEW.md).
      * <p>
-     * <b>RED placeholder</b> — intentionally a no-op so the paired failing test proves the
-     * duplication defect via an assertion rather than a compile error. The GREEN commit replaces
-     * this body with the real fix: remove and close the {@link FileHandler} this instance
-     * attached to the shared static {@link #ACTION_LOG}, so a later {@code /reload}'s second
-     * {@link #init(File)} call does not accumulate a second handler on top of this one.
+     * A no-op if {@link #init(File)} was never called or failed to attach a handler
+     * ({@link #attachedHandler} stays {@code null}). Flushes before closing so no buffered line is
+     * lost. Load-bearing for a Bukkit {@code /reload}: {@link #ACTION_LOG} is a {@code static}
+     * {@link Logger} shared for the life of the JVM, so without this call a second
+     * {@code onEnable}'s {@link #init(File)} would attach a <em>second</em> {@link FileHandler} on
+     * top of this one, and every subsequent {@link #record(Entry)} would be delivered to both —
+     * duplicating every action-log line from that point on, exactly the defect this method exists
+     * to prevent.
      */
     public void shutdown() {
-        // Filled in by the paired GREEN commit.
+        FileHandler handler = attachedHandler;
+        if (handler == null) {
+            return;
+        }
+        try {
+            handler.flush();
+            ACTION_LOG.removeHandler(handler);
+            handler.close();
+        } catch (SecurityException e) {
+            // NEVER use Logger here — this failure is about the log itself.
+            System.err.println("[UltiPanel] RemoteActionLog: failed to detach file handler: " + e.getMessage());
+        } finally {
+            attachedHandler = null;
+        }
     }
 
     /**
