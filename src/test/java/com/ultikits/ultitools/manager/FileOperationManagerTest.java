@@ -651,7 +651,7 @@ class FileOperationManagerTest {
     class HandleListOperationFilterTests {
 
         @Test
-        @DisplayName("should exclude blocked files from directory listing")
+        @DisplayName("should mark blocked files in the listing rather than omitting them (D-18)")
         void shouldExcludeBlockedFilesFromListing() throws Exception {
             // Arrange
             setServerRootAndEditableRoots(tempDir);
@@ -672,7 +672,7 @@ class FileOperationManagerTest {
             // Act
             handleList.invoke(fileOperationManager, "serverdir", new JsonObject(), "filter-test");
 
-            // Assert - verify the WebSocket message was sent with filtered results
+            // Assert - verify the WebSocket message was sent with marked (not filtered) results
             org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
             org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
 
@@ -686,11 +686,18 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            // Allowed files should be present
-            assertThat(listedNames).contains("config.yml");
-            // Blocked files should NOT be present — data.json is now denied unconditionally (D-16/D-19),
-            // regardless of directory, not just server.properties/ops.json/plugin.jar's older rules.
-            assertThat(listedNames).doesNotContain("server.properties", "ops.json", "plugin.jar", "data.json");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "config.yml", "data.json", "server.properties", "ops.json", "plugin.jar");
+            // The allowed one carries accessible: true.
+            assertThat(findEntryByName(files, "config.yml").get("accessible").getAsBoolean()).isTrue();
+            // Blocked/credential files are marked accessible: false — data.json is now denied
+            // unconditionally (D-16/D-19), regardless of directory, not just
+            // server.properties/ops.json/plugin.jar's older rules.
+            for (String blocked : new String[] {"server.properties", "ops.json", "plugin.jar", "data.json"}) {
+                assertThat(findEntryByName(files, blocked).get("accessible").getAsBoolean())
+                        .as("entry: " + blocked).isFalse();
+            }
         }
 
         @Test
@@ -730,7 +737,7 @@ class FileOperationManagerTest {
         }
 
         @Test
-        @DisplayName("should exclude all blocked extensions from listing")
+        @DisplayName("should mark all blocked extensions in the listing rather than omitting them (D-18)")
         void shouldExcludeAllBlockedExtensions() throws Exception {
             // Arrange
             setServerRootAndEditableRoots(tempDir);
@@ -763,12 +770,18 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            assertThat(listedNames).contains("allowed.txt");
-            assertThat(listedNames).doesNotContain("script.sh", "start.bat", "malware.exe", "MyClass.class");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "allowed.txt", "script.sh", "start.bat", "malware.exe", "MyClass.class");
+            assertThat(findEntryByName(files, "allowed.txt").get("accessible").getAsBoolean()).isTrue();
+            for (String blocked : new String[] {"script.sh", "start.bat", "malware.exe", "MyClass.class"}) {
+                assertThat(findEntryByName(files, blocked).get("accessible").getAsBoolean())
+                        .as("entry: " + blocked).isFalse();
+            }
         }
 
         @Test
-        @DisplayName("should exclude all blocked filenames from listing")
+        @DisplayName("should mark all blocked filenames in the listing rather than omitting them (D-18)")
         void shouldExcludeAllBlockedFilenames() throws Exception {
             // Arrange
             setServerRootAndEditableRoots(tempDir);
@@ -811,7 +824,13 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            assertThat(listedNames).containsExactly("readme.txt");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "readme.txt", "server.properties", "ops.json", "whitelist.json", "banned-ips.json",
+                    "banned-players.json", "eula.txt", "usercache.json", "bukkit.yml", "spigot.yml",
+                    "paper.yml", "paper-global.yml", "paper-world-defaults.yml");
+            assertThat(findEntryByName(files, "readme.txt").get("accessible").getAsBoolean()).isTrue();
+            assertThat(findEntryByName(files, "server.properties").get("accessible").getAsBoolean()).isFalse();
         }
     }
 

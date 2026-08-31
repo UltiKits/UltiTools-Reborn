@@ -273,6 +273,21 @@ public class FileOperationManager {
         return null;
     }
 
+    /**
+     * D-18's two schema reason codes for a refused {@code list} entry. A configurable
+     * {@link AccessDecision} (outside every editable root — an operator can flip it) maps to
+     * {@code OUTSIDE_ROOTS}; a non-configurable one (the unconditional credential deny layer)
+     * maps to {@code PROTECTED_CREDENTIAL}. These two strings are the whole of the wire-protocol
+     * contract this plan adds to {@code file_operation_result} list entries — see the class
+     * javadoc's D-14 note and Plan 06-04's {@code artifacts_produced}.
+     *
+     * @param decision a denied {@link AccessDecision} (never {@link AccessDecision#allowed()})
+     * @return {@code "OUTSIDE_ROOTS"} or {@code "PROTECTED_CREDENTIAL"}
+     */
+    private static String reasonCodeFor(AccessDecision decision) {
+        return decision.isConfigurable() ? "OUTSIDE_ROOTS" : "PROTECTED_CREDENTIAL";
+    }
+
     private static boolean matchesDenyGlob(String fileNameLower) {
         Path fileNamePath = Paths.get(fileNameLower);
         for (PathMatcher matcher : DENY_GLOB_MATCHERS) {
@@ -552,22 +567,29 @@ public class FileOperationManager {
 
             JsonArray fileList = new JsonArray();
             for (File file : files) {
-                // Filter out protected files from directory listings
+                // D-18: a refused child is MARKED, not filtered out — the panel used to render
+                // "this file does not exist" for a file that exists and is protected.
                 String childPath = (path == null || path.isEmpty() || path.equals("/"))
                     ? file.getName()
                     : path + "/" + file.getName();
                 AccessDecision childDecision = isPathAllowed(childPath);
-                if (!file.isDirectory() && !childDecision.isAllowed()) {
-                    continue;
-                }
+                boolean refused = !file.isDirectory() && !childDecision.isAllowed();
 
                 JsonObject fileInfo = new JsonObject();
                 fileInfo.addProperty("name", file.getName());
                 fileInfo.addProperty("isDirectory", file.isDirectory());
-                fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
-                fileInfo.addProperty("lastModified", file.lastModified());
-                fileInfo.addProperty("readable", file.canRead());
-                fileInfo.addProperty("writable", file.canWrite());
+                if (refused) {
+                    // Deliberately withholds size/lastModified/readable/writable — marking an
+                    // entry must not leak the metadata the refusal exists to withhold (T-06-27).
+                    fileInfo.addProperty("accessible", false);
+                    fileInfo.addProperty("reason", reasonCodeFor(childDecision));
+                } else {
+                    fileInfo.addProperty("accessible", true);
+                    fileInfo.addProperty("size", file.isDirectory() ? 0 : file.length());
+                    fileInfo.addProperty("lastModified", file.lastModified());
+                    fileInfo.addProperty("readable", file.canRead());
+                    fileInfo.addProperty("writable", file.canWrite());
+                }
                 fileList.add(fileInfo);
             }
 
