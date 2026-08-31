@@ -8,12 +8,16 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.logging.Level;
 
+import org.bukkit.Bukkit;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.events.PanelMessageEvent;
 import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
@@ -478,6 +482,14 @@ public class PluginInitiationUtils {
         // MessageHandlerRegistry.dispatch 用的是 !isJsonNull()，那份是死代码（见 #233），
         // 这里没有照抄它的这一点。
         String type = null;
+        JsonObject data = null;
+        // Tracks whether this message should reach PanelMessageEvent subscribers (WIRE-16).
+        // Stays false — the safe default — unless the dispatch below explicitly earns it: an
+        // entry-less (unknown) type earns it after its warning, and dispatchWithCapabilityGate's
+        // return value earns it for a known type (true for Capability.NONE and for an enabled
+        // capability, false for a denied one). Carrying the gate's own outcome here means the
+        // gate and the publish can never disagree — there is no second, independent check.
+        boolean shouldPublishEvent = false;
         try {
             if (message.has("type") && message.get("type").isJsonPrimitive()) {
                 type = message.get("type").getAsString();
@@ -486,10 +498,12 @@ public class PluginInitiationUtils {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
                         new Gson().toJson(message)));
+                // Early return — the type never resolved, so there is nothing a subscriber could
+                // filter on. This also means the trailing publish call below is never reached.
                 return;
             }
 
-            JsonObject data = message.has("data") && message.get("data").isJsonObject()
+            data = message.has("data") && message.get("data").isJsonObject()
                 ? message.getAsJsonObject("data") : null;
 
             // 记录接收到的消息处理日志
@@ -501,21 +515,73 @@ public class PluginInitiationUtils {
             // "unknown type" outcome the former default branch produced.
             InboundHandlerEntry entry = INBOUND_HANDLERS.get(type);
             if (entry != null) {
-                dispatchWithCapabilityGate(type, message, data, entry);
+                shouldPublishEvent = dispatchWithCapabilityGate(type, message, data, entry);
             } else {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
                 // Don't send error responses to avoid feedback loops with server
+                // Unknown to the framework's own dispatch table is exactly the case WIRE-16
+                // exists to serve — a module's own responder for a type the framework does not
+                // own. No capability gate applies (there is no entry to resolve one from), so
+                // this is unconditionally publishable.
+                shouldPublishEvent = true;
             }
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.SEVERE,
                 String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
             // Don't send error responses to avoid feedback loops with server
+            // shouldPublishEvent stays at its default (false): an exception mid-dispatch means
+            // the framework cannot say the message was actually handled, so this conservatively
+            // does not publish rather than guessing.
         }
-        
+
         // 记录消息处理完成日志
         UltiTools.getInstance().getLogger().log(Level.FINE,
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
+
+        // One added statement at the end of the bridge (D-29, issue #237, WIRE-16). Appended
+        // rather than inserted: removing this call must leave the 24 pre-existing message types
+        // working exactly as they do today. Only reached when type resolved (the early return
+        // above skips it for a malformed type) and shouldPublishEvent was earned above.
+        if (shouldPublishEvent) {
+            publishPanelMessageEvent(type, message, data);
+        }
+    }
+
+    /**
+     * Bridges an inbound panel message the framework has already handled onto the module-facing
+     * {@link EventBus} (WIRE-16). This is the single publish site — see the dispatch-table call
+     * site in {@link #handleInboundMessage} for the only place this is invoked.
+     * <p>
+     * {@link EventBus#publishAsync} was considered and rejected: it submits to an async worker
+     * pool and never reaches the main thread, so it does not address Paper's AsyncCatcher at
+     * all — it only keeps the WebSocket I/O thread unblocked. A Minecraft module's handler
+     * touches Bukkit API by definition, so the real choice here was main-thread versus
+     * not-main-thread, not sync-dispatch versus async-dispatch; only
+     * {@code Bukkit.getScheduler().runTask(...)} puts a handler on the main thread. The whole
+     * helper body is wrapped in a catch so a missing scheduler (no Bukkit server booted, as in a
+     * plain unit test) or a missing {@link EventBus} can never break the inbound message path —
+     * both are logged no-ops.
+     *
+     * @param type    the resolved message type
+     * @param message the full inbound envelope
+     * @param data    the message's {@code data} object, possibly {@code null}
+     */
+    private static void publishPanelMessageEvent(String type, JsonObject message, JsonObject data) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance == null) {
+                return;
+            }
+            EventBus eventBus = instance.getEventBus();
+            if (eventBus == null) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(instance, () -> eventBus.publish(new PanelMessageEvent(type, data, message)));
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[PanelMessageEvent] Failed to publish event for type " + type, e);
+        }
     }
 
     /**
@@ -530,21 +596,26 @@ public class PluginInitiationUtils {
      * @param message the full inbound message
      * @param data    the message's {@code data} object, possibly {@code null}
      * @param entry   the dispatch-table entry that serves this type
+     * @return whether the message should also reach {@link PanelMessageEvent} subscribers —
+     *         {@code true} for {@link Capability#NONE} and for an enabled capability, {@code
+     *         false} for a denied one. The caller carries this straight into the publish decision
+     *         so the gate and the publish can never disagree (see {@link #handleInboundMessage}).
      */
-    private static void dispatchWithCapabilityGate(String type, JsonObject message, JsonObject data,
+    private static boolean dispatchWithCapabilityGate(String type, JsonObject message, JsonObject data,
                                                      InboundHandlerEntry entry) {
         Capability capability = entry.resolveCapability(data);
         if (capability == Capability.NONE) {
             entry.getHandler().accept(message, data);
-            return;
+            return true;
         }
         if (capability.isEnabled()) {
             entry.getHandler().accept(message, data);
             recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
-            return;
+            return true;
         }
         sendCapabilityRefusal(type, data, capability);
         recordAction(capability, type, data, RemoteActionLog.Verdict.DENIED, capability.refusalMessage());
+        return false;
     }
 
     /**
