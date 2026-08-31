@@ -1,14 +1,18 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -16,6 +20,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -83,13 +88,44 @@ class FileOperationManagerTest {
      * construction time — see Task 1's read_first notes.
      */
     private void setServerRootAndEditableRoots(File root) throws Exception {
+        setServerRootAndEditableRoots(root, root);
+    }
+
+    /**
+     * Overload letting a Task 3 containment test point {@code serverRoot} at the temp directory
+     * while the single editable root is a real subdirectory of it (e.g. {@code <tmp>/root}) —
+     * the shape every Task 3 bypass behaviour is described against.
+     */
+    private void setServerRootAndEditableRoots(File serverRootDir, File editableRoot) throws Exception {
         Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
         serverRootField.setAccessible(true);
-        serverRootField.set(fileOperationManager, root);
+        serverRootField.set(fileOperationManager, serverRootDir);
 
         Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
         editableRootsField.setAccessible(true);
-        editableRootsField.set(fileOperationManager, Collections.singletonList(root));
+        editableRootsField.set(fileOperationManager, Collections.singletonList(editableRoot));
+    }
+
+    /**
+     * Reflects into the private {@code getSecureFile(String)} and unwraps
+     * {@link InvocationTargetException} so callers can assert directly on the thrown
+     * {@link SecurityException} (or the returned {@link File} on success).
+     */
+    private File invokeGetSecureFile(String path) throws Exception {
+        Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
+        getSecureFile.setAccessible(true);
+        try {
+            return (File) getSecureFile.invoke(fileOperationManager, path);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw e;
+        }
     }
 
     /**
@@ -189,7 +225,10 @@ class FileOperationManagerTest {
         @Test
         @DisplayName("应该移除开头的斜杠")
         void shouldRemoveLeadingSlash() throws Exception {
-            // Arrange
+            // Arrange — getSecureFile now resolves real containment against editableRoots (Task 3);
+            // point both fields at tempDir so the default-cwd fallback (no plugins/logs on disk) is
+            // not what's under test here.
+            setServerRootAndEditableRoots(tempDir);
             Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
             getSecureFile.setAccessible(true);
 
@@ -933,6 +972,90 @@ class FileOperationManagerTest {
         assertThat(decision.isConfigurable()).as("path: " + path).isFalse();
     }
 
+    /**
+     * Top-level for the same Surefire filtering reason as
+     * {@link #shouldRejectCredentialFilesUnconditionally(String)} — 06-VALIDATION.md's automated
+     * command is the bare {@code FileOperationManagerTest#shouldRejectSiblingPrefixEscape}.
+     * <p>
+     * Pins T-06-16 (D-21): with the editable root's real path at {@code <tmp>/root}, a request
+     * resolving to the sibling {@code <tmp>/root-evil/x} must be refused. This is exactly ROADMAP
+     * criterion 4's {@code /allowed-root-evil} shape, reproduced against the editable root; the
+     * pre-6.3.0 defect was {@code String.startsWith} admitting it because {@code "/root-evil"}
+     * has {@code "/root"} as a literal character prefix.
+     */
+    @Test
+    @DisplayName("兄弟目录前缀转义（<root>-evil）必须被拒绝")
+    void shouldRejectSiblingPrefixEscape() throws Exception {
+        File root = new File(tempDir, "root");
+        root.mkdirs();
+        File siblingEvil = new File(tempDir, "root-evil");
+        siblingEvil.mkdirs();
+
+        setServerRootAndEditableRoots(tempDir, root);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("root-evil/x"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as above.
+     * <p>
+     * Pins T-06-17 (D-21): a symlink inside the editable root whose target resolves outside every
+     * root must be refused, because containment is checked against the {@code toRealPath()}
+     * result, never the requested path. Skips (does not fail) on a filesystem/user that refuses
+     * symlink creation, per Task 3's own instruction — this behaviour cannot be pinned there.
+     */
+    @Test
+    @DisplayName("根目录内指向根目录外的符号链接必须被拒绝")
+    void shouldRejectSymlinkEscape() throws Exception {
+        File root = new File(tempDir, "root");
+        root.mkdirs();
+        File outside = new File(tempDir, "outside");
+        outside.mkdirs();
+        File outsideFile = new File(outside, "somefile.txt");
+        assertThat(outsideFile.createNewFile()).isTrue();
+
+        try {
+            Files.createSymbolicLink(new File(root, "link").toPath(), outside.toPath());
+        } catch (IOException | UnsupportedOperationException e) {
+            Assumptions.assumeTrue(false,
+                    "symlink creation not permitted on this filesystem/user: " + e.getMessage());
+            return;
+        }
+
+        setServerRootAndEditableRoots(tempDir, root);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("root/link/somefile.txt"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as above.
+     * <p>
+     * Pins T-06-22 (D-21): on a case-sensitive filesystem (the CI runner), a request naming the
+     * wrong case for a real directory must be refused, not silently resolved. Guards itself with
+     * an explicit sensitivity probe (create a lowercase marker, check whether the uppercase name
+     * also resolves) and skips — rather than passing vacuously — on a case-insensitive filesystem,
+     * per Task 3's own instruction.
+     */
+    @Test
+    @DisplayName("大小写不匹配的路径在大小写敏感文件系统上必须被拒绝")
+    void shouldRejectCaseMismatchOnCaseSensitiveFs() throws Exception {
+        File pluginsDir = new File(tempDir, "plugins");
+        pluginsDir.mkdirs();
+        File fooFile = new File(pluginsDir, "foo.yml");
+        assertThat(fooFile.createNewFile()).isTrue();
+
+        boolean caseSensitiveFs = !new File(tempDir, "Plugins").exists();
+        Assumptions.assumeTrue(caseSensitiveFs,
+                "filesystem is case-insensitive; the case-mismatch refusal cannot be pinned here");
+
+        setServerRootAndEditableRoots(tempDir, pluginsDir);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("Plugins/foo.yml"))
+                .isInstanceOf(SecurityException.class);
+    }
+
     @Nested
     @DisplayName("不可配置的凭据拒绝层测试（D-16/D-19/D-23）")
     class CredentialDenyLayerTests {
@@ -985,6 +1108,76 @@ class FileOperationManagerTest {
             assertThat(decision.isConfigurable())
                     .as("credential refusal must stay non-configurable even when the root set is also refusing")
                     .isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("getSecureFile 的分段感知包含检查测试（D-21）")
+    class SegmentAwareContainmentTests {
+
+        @Test
+        @DisplayName("<root>/sub/file.yml 应被放行")
+        void requestUnderRootIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            File sub = new File(root, "sub");
+            sub.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            File result = invokeGetSecureFile("root/sub/file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("写入尚不存在的目录下的新文件——解析最近的已存在祖先而不是抛出异常")
+        void createIntoNotYetExistingDirectoryIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            // Neither "new" nor "file.yml" exist yet — only "root" does.
+            File result = invokeGetSecureFile("root/new/file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("最近已存在祖先解析到根集合之外时被拒绝——祖先松弛不能被用作逃逸手段")
+        void requestWhoseNearestExistingAncestorIsOutsideEveryRootIsRefused() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            // "nowhere" does not exist anywhere under tempDir — its nearest existing ancestor is
+            // tempDir itself, which is NOT the configured root (tempDir/root).
+            assertThatThrownBy(() -> invokeGetSecureFile("nowhere/deep/file.yml"))
+                    .isInstanceOf(SecurityException.class);
+        }
+
+        @Test
+        @DisplayName("规范化后落在根内的 .. 路径被放行")
+        void dotDotPathThatCanonicalizesInsideRootIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            File sub = new File(root, "sub");
+            sub.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            File result = invokeGetSecureFile("root/sub/../file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("规范化后落在根外的 .. 路径被拒绝")
+        void dotDotPathThatCanonicalizesOutsideEveryRootIsRefused() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            assertThatThrownBy(() -> invokeGetSecureFile("root/../elsewhere/file.yml"))
+                    .isInstanceOf(SecurityException.class);
         }
     }
 }
