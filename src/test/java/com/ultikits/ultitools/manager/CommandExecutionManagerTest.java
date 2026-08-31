@@ -1343,4 +1343,35 @@ class CommandExecutionManagerTest {
         // Assert
         assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
     }
+
+    @Test
+    @DisplayName("should deny blocklisted commands even under a Turkish default locale (dotless-i bypass)")
+    void shouldDenyBlocklistedCommandsUnderTurkishLocale() {
+        // In tr_TR, String.toLowerCase() (no Locale argument) maps 'I' to the dotless 'ı'
+        // (U+0131), not 'i' — so "BAN-IP".toLowerCase() under that locale yields "ban-ıp", which
+        // no longer matches the blocklist entry "ban-ip". Pin the fix with the real default-locale
+        // switch, not a mocked Locale, since the defect is specifically in an unqualified
+        // toLowerCase() call reading JVM global state.
+        java.util.Locale originalLocale = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(new java.util.Locale("tr", "TR"));
+
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            // Uppercase forms — these are the ones that diverge under tr_TR toLowerCase()
+            assertThat(newManager.isCommandAllowed("BAN-IP 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("WHITELIST add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("PARDON-IP 1.2.3.4").isAllowed()).isFalse();
+
+            // Lowercase forms must still be denied too, so this test cannot pass by accident
+            // (e.g. by a blocklist mutation that happens to also break the uppercase case).
+            assertThat(newManager.isCommandAllowed("ban-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("whitelist add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("pardon-ip 1.2.3.4").isAllowed()).isFalse();
+        } finally {
+            // MUST restore: a leaked default locale corrupts every later test in the 5340-test
+            // suite, not just this class.
+            java.util.Locale.setDefault(originalLocale);
+        }
+    }
 }
