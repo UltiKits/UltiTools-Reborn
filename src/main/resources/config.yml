@@ -75,11 +75,13 @@ ultipanel:
       sample-rate: 0.1
     # Rotation knobs for the remote action-log — no key here can disable the log itself (D-32).
     action-log:
-      # Rotation size (bytes) for plugins/UltiTools/security/action.log before it rolls to the next file.
-      # action.log 单文件轮转大小（字节），超过后滚动到下一个文件。
+      # Rotation size (bytes) for the active file, plugins/UltiTools/security/action.log.0, before
+      # it rolls to the next generation.
+      # action.log.0（当前活跃文件）的单文件轮转大小（字节），超过后滚动到下一代。
       max-size-bytes: 1048576
-      # Number of rotated action.log files to keep. There is no key to disable this log.
-      # action.log 保留的轮转文件数量。没有可以关闭这份日志的配置项。
+      # Number of rotated action.log.<generation> files to keep (generation 0 is always active).
+      # There is no key to disable this log.
+      # 保留的 action.log.<代数> 文件数量（代数 0 始终是当前活跃文件）。没有可以关闭这份日志的配置项。
       max-files: 5
   # 远程能力开关：这些开关限定了面板能做什么；关闭某项能力时，相应请求会被拒绝，
   # 拒绝信息会指向本文件。

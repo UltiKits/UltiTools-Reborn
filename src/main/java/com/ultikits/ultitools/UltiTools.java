@@ -360,11 +360,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
             "面板文件 API 可以在其中读取/写入/删除的目录，仍受上方能力开关约束。");
 
     private static final List<String> ACTION_LOG_SIZE_COMMENT = Arrays.asList(
-            "Rotation size (bytes) for plugins/UltiTools/security/action.log before it rolls to the next file.",
-            "action.log 单文件轮转大小（字节），超过后滚动到下一个文件。");
+            "Rotation size (bytes) for the active file, "
+                    + "plugins/UltiTools/security/action.log.0, before it rolls to the next generation.",
+            "action.log.0（当前活跃文件）的单文件轮转大小（字节），超过后滚动到下一代。");
     private static final List<String> ACTION_LOG_FILES_COMMENT = Arrays.asList(
-            "Number of rotated action.log files to keep.",
-            "action.log 保留的轮转文件数量。");
+            "Number of rotated action.log.<generation> files to keep (generation 0 is always active).",
+            "保留的 action.log.<代数> 文件数量（代数 0 始终是当前活跃文件）。");
 
     /**
      * Migrates the framework's own {@code config.yml} in place, invoked from {@link #onEnable()}

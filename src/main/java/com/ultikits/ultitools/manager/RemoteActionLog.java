@@ -18,7 +18,10 @@ import com.ultikits.ultitools.entities.Capability;
 
 /**
  * The framework's own durable record of what the panel actually did — every capability-gate
- * decision, allowed or denied, as one JSON line in {@code plugins/UltiTools/security/action.log}.
+ * decision, allowed or denied, as one JSON line in the active file under
+ * {@code plugins/UltiTools/security/action.log.<generation>}. Generation {@code 0} is always the
+ * currently-active file — see {@link #init(File)} for why the literal, suffix-free
+ * {@code action.log} never exists on disk.
  * <p>
  * Replaces the audit/enforce mode ROADMAP originally asked for (D-22): there is only one policy
  * tier, so there is nothing to simulate, only something to record. This class is constructed
@@ -39,8 +42,9 @@ import com.ultikits.ultitools.entities.Capability;
  * in the thing that logs must not try to log itself.
  * <p>
  * 本框架自身对面板实际行为的持久化记录——每一次能力网关的裁决，无论放行还是拒绝，都作为一行
- * JSON 写入 {@code plugins/UltiTools/security/action.log}。它在 {@code UltiTools.initWebSocketManagers()}
- * 中被无条件构造，不受任何 {@link Capability} 拦截（D-32）。
+ * JSON 写入 {@code plugins/UltiTools/security/action.log.<代数>} 中当前活跃的那个文件——代数 0
+ * 始终是当前活跃文件，磁盘上不存在不带后缀的 {@code action.log}，见 {@link #init(File)}。它在
+ * {@code UltiTools.initWebSocketManagers()} 中被无条件构造，不受任何 {@link Capability} 拦截（D-32）。
  *
  * @since 6.3.0
  */
@@ -86,6 +90,19 @@ public class RemoteActionLog {
      * Attaches the rotating {@link FileHandler} at
      * {@code <dataFolder>/security/action.log.%g}, creating the {@code security} directory if
      * absent. Loads the rotation knobs from config.yml first — see {@link #loadConfiguration()}.
+     * <p>
+     * <b>The file on disk is never literally {@code action.log}.</b> {@link FileHandler} always
+     * substitutes {@code %g} with the current generation number when the pattern contains it, and
+     * — confirmed empirically against this JDK's {@link FileHandler}, not merely inferred from its
+     * javadoc — it auto-appends the same suffix even if {@code %g} were removed from the pattern,
+     * because {@code max-files} defaults to {@value #DEFAULT_MAX_FILES} ({@code count > 1}): a
+     * generation suffix is unavoidable at any rotation-enabled setting, and only an operator
+     * setting {@code max-files} to {@code 1} (disabling rotation entirely) would remove it.
+     * Generation {@code 0} is always the currently-active file that new records append to;
+     * {@code action.log.1}, {@code action.log.2}, … are older rotated generations, oldest evicted
+     * first once {@code max-files} is reached. Every operator-facing reference to this file's path
+     * must say {@code action.log.0} (the active file), not the bare, never-existing
+     * {@code action.log} — see UAT finding 5b.
      *
      * @param dataFolder the plugin's data folder ({@code getDataFolder()})
      */

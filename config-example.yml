@@ -67,13 +67,15 @@ ultipanel:
     # 关闭该日志的配置项：关闭「面板做过什么」的记录，等同于删除它；该日志存在的意义之一
     # 正是「面板账号被盗后」的取证——而能改到这里的攻击者，本就已经拿到了运营者的身份。
     action-log:
-      # ultipanel.logging.action-log.max-size-bytes — rotation size (bytes) for
-      # plugins/UltiTools/security/action.log before it rolls to the next file.
-      # ultipanel.logging.action-log.max-size-bytes —— action.log 单文件轮转大小（字节），
-      # 超过后滚动到下一个文件。
+      # ultipanel.logging.action-log.max-size-bytes — rotation size (bytes) for the active file,
+      # plugins/UltiTools/security/action.log.0, before it rolls to the next generation.
+      # ultipanel.logging.action-log.max-size-bytes —— action.log.0（当前活跃文件）的单文件
+      # 轮转大小（字节），超过后滚动到下一代。
       max-size-bytes: 1048576
-      # ultipanel.logging.action-log.max-files — number of rotated action.log files to keep.
-      # ultipanel.logging.action-log.max-files —— action.log 保留的轮转文件数量。
+      # ultipanel.logging.action-log.max-files — number of rotated action.log.<generation> files
+      # to keep (generation 0 is always the active file).
+      # ultipanel.logging.action-log.max-files —— 保留的 action.log.<代数> 文件数量
+      # （代数 0 始终是当前活跃文件）。
       max-files: 5
 
   # Capability switches: these bound what the panel may do. A disabled capability produces a
