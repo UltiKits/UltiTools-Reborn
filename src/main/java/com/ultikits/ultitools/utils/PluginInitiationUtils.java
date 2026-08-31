@@ -577,12 +577,41 @@ public class PluginInitiationUtils {
             if (eventBus == null) {
                 return;
             }
-            Bukkit.getScheduler().runTask(instance, () -> eventBus.publish(new PanelMessageEvent(type, data, message)));
+            Bukkit.getScheduler().runTask(instance, () -> {
+                // Two long reads and a comparison on the fast path — no allocation, no logging,
+                // until the slow branch below is actually taken.
+                long startNanos = System.nanoTime();
+                eventBus.publish(new PanelMessageEvent(type, data, message));
+                long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+                if (elapsedMillis > SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS) {
+                    // Times the whole publish, not an individual handler: EventBus.publish
+                    // iterates its subscriber list internally and this bridge cannot see inside
+                    // that loop without changing EventBus, a shared class this plan does not
+                    // touch. This warning can therefore only say that some subscriber to this
+                    // event type is slow — never which one, and it fires once per slow publish
+                    // regardless of how many subscribers contributed to the elapsed time.
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        String.format("[PanelMessageEvent] Subscriber(s) to type '%s' took %dms "
+                            + "to run (threshold %dms) — a slow handler on the main thread can "
+                            + "drag server tick rate",
+                            type, elapsedMillis, SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS));
+                }
+            });
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "[PanelMessageEvent] Failed to publish event for type " + type, e);
         }
     }
+
+    /**
+     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
+     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
+     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
+     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
+     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
+     * ever hitting this warning at runtime.
+     */
+    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
 
     /**
      * The single enforcement point for every inbound capability (D-10). Resolves the entry's
