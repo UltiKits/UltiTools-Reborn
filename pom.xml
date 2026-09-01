@@ -270,11 +270,22 @@
                     </excludes>
                 </configuration>
             </plugin>
-            <!-- japicmp binary-compatibility gate (GATE-01, stage 1 of 3). Report-only: it never
-                 breaks the build. Diffs against the last released 6.2.5 artifact, watching only
-                 com.ultikits.ultitools itself.
-                 japicmp 二进制兼容性门（GATE-01，阶段 1/3）。仅报告，不阻断构建。
-                 对比对象是上一个已发布的 6.2.5，比较范围仅限 com.ultikits.ultitools 本身。 -->
+            <!-- japicmp binary-compatibility gate (GATE-01, stage 2 of 3). Build-breaking as of
+                 6.3.0: any binary-incompatible change to a public or protected member of
+                 com.ultikits.ultitools fails `mvn verify` unless the exact symbol is named in the
+                 <excludes> list below. accessModifier is `protected`, not `public`, because
+                 BaseCommandExecutor#handleHelp is itself `protected abstract` - the framework
+                 already requires every downstream command class to bind to a protected member,
+                 so protected is part of the public contract by construction. The <excludes> list
+                 is Phase 7's authored removal record, one entry per symbol this milestone removes;
+                 Phase 8 deletes the whole list and locks the gate to zero tolerance.
+                 japicmp 二进制兼容性门（GATE-01，阶段 2/3）。自 6.3.0 起阻断构建：
+                 com.ultikits.ultitools 中任何公共或受保护成员的二进制不兼容变更都会导致
+                 `mvn verify` 失败，除非该符号已在下方 <excludes> 中列出。accessModifier 取
+                 `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp 本身就是
+                 `protected abstract`——框架已经要求每个下游命令类绑定到一个受保护成员，所以
+                 protected 本就是公共契约的一部分。下方 <excludes> 列表是 Phase 7 逐条记录的删除
+                 清单，Phase 8 会整体删除该列表并将门禁收紧为零容忍。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
@@ -294,7 +305,7 @@
                         </file>
                     </newVersion>
                     <parameter>
-                        <accessModifier>public</accessModifier>
+                        <accessModifier>protected</accessModifier>
                         <!-- The 6.2.5 baseline jar predates several planned removals; without this flag
                              japicmp fails outright instead of reporting a clean diff for any symbol that
                              genuinely did not exist on the old side. -->
@@ -309,9 +320,61 @@
                              reporting a diff; this is a classpath-resolution gap for the comparison
                              tool itself, not a build or gate defect. -->
                         <ignoreMissingClasses>true</ignoreMissingClasses>
+                        <!-- Absent by default (=false). Flipping this to true (D-03) makes
+                             every binary-incompatible change to a member NOT named below fail
+                             `mvn verify` - the merge blocker that gives the excludes list below
+                             its teeth (proven by Task 2's delete-one-entry transcript). -->
+                        <breakBuildOnBinaryIncompatibleModifications>true</breakBuildOnBinaryIncompatibleModifications>
                         <includes>
                             <include>com.ultikits.ultitools</include>
                         </includes>
+                        <!-- Pre-existing Phases 2-6 breaks (D-04), authored member by member -
+                             measured at HEAD under accessModifier=protected: 13 classes / 20
+                             members. No entry here is package-wide (criterion 3 forbids it):
+                             every entry is either a bare fully-qualified class name (a whole-
+                             class removal - japicmp's class filter appends (\$.*)? internally,
+                             so nested/inner classes need no separate entry) or a
+                             Class#member(paramTypes) key naming one member removed from a class
+                             that otherwise survives. Full justification per entry, and the
+                             delete-one-entry proof transcript, are in
+                             .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. -->
+                        <excludes>
+                            <!-- Whole-class removals: one entry covers the class and every one
+                                 of its members. -->
+                            <exclude>com.ultikits.ultitools.aop.AopProxyBeanPostProcessor</exclude>
+                            <exclude>com.ultikits.ultitools.aop.CglibProxyFactory</exclude>
+                            <!-- Members removed from a class that otherwise survives: fully-
+                                 qualified parameter types are required by japicmp's own filter
+                                 parser (JApiCmpException otherwise). -->
+                            <exclude>com.ultikits.ultitools.abstracts.command.BaseCommandExecutor#executeCommand(com.ultikits.ultitools.abstracts.command.CommandContext, java.lang.reflect.Method, java.lang.Object[])</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer#initialize(com.ultikits.ultitools.abstracts.gui.declarative.core.Widget, com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext)</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container#getBackground()</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container$Builder#background(com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper)</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView#getMaxRows()</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView$Builder#rows(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#isCommandAllowed(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.FileOperationManager#isPathAllowed(java.lang.String)</exclude>
+                            <!-- Field removed from a surviving class: japicmp's field-filter
+                                 syntax is Class#fieldName with no parameter list at all -
+                                 confirmed via javap decompilation of japicmp's own
+                                 JavadocLikeFieldFilter, which splits only on '#' and requires
+                                 exactly two parts (Options.createFilterList routes any '#'
+                                 entry containing '(' to the behavior filter, everything else to
+                                 the field filter - confirmed in japicmp-0.26.1.jar). -->
+                            <exclude>com.ultikits.ultitools.annotations.Propagation#NESTED</exclude>
+                            <!-- D-02 allowlist (D-21's mechanical clause): the only reported
+                                 change here is METHOD_NOW_STATIC, and japicmp's own report shows
+                                 the old-side modifier as PRIVATE (<modifier oldValue="PRIVATE">
+                                 in target/japicmp/japicmp.xml) - no downstream binary can hold a
+                                 reference to a private member, so this is excluded but
+                                 deliberately NOT recorded in COMPATIBILITY.md; recording it would
+                                 tell third-party authors something will break them when nothing
+                                 can. -->
+                            <exclude>com.ultikits.ultitools.commands.tabcomplete.MethodInvocationCompleter#getSuggestMethodsByName(java.lang.Object, java.lang.String)</exclude>
+                        </excludes>
                     </parameter>
                 </configuration>
                 <executions>
