@@ -611,8 +611,9 @@ public class PluginInitiationUtils {
         // 的 type 和缺字段、JSON null、空串属于同一类畸形，应当走同一条 WARNING 分支，
         // 而不是被当成「处理消息时发生错误」记成 SEVERE。
         //
-        // MessageHandlerRegistry.dispatch 用的是 !isJsonNull()，那份是死代码（见 #233），
-        // 这里没有照抄它的这一点。
+        // The superseded WIRE-17 dispatch cluster (deleted in 6.3.0, GEN-11) used !isJsonNull()
+        // for this same check, which only guards a JSON null and not a non-primitive type — this
+        // path deliberately does not repeat that gap.
         String type = null;
         JsonObject data = null;
         // Tracks whether this message should reach PanelMessageEvent subscribers (WIRE-16).

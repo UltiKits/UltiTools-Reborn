@@ -21,9 +21,9 @@ import com.ultikits.ultitools.utils.TestHelper;
 /**
  * 心跳路径上的存活判定与延迟测量（issue #235）。
  *
- * <p>这三样能力原先只存在于 {@code websocket.handlers.PongHandler} —— 一个从未接线的死类
- * （见 #233）。搬进客户端之前，连接健康的唯一判据是 socket 有没有断，而一条 TCP 连接完全
- * 可以在不产生 {@code onClose} 的情况下静默失效。
+ * <p>这三样能力原先只存在于 WIRE-17 那批处理器类中一个从未接线的死类里（见 #233；该类已随
+ * GEN-11 于 6.3.0 一并删除）。搬进客户端之前，连接健康的唯一判据是 socket 有没有断，而一条
+ * TCP 连接完全可以在不产生 {@code onClose} 的情况下静默失效。
  *
  * <p>全部用假时钟推进，不用 {@code Thread.sleep} —— 真等两个心跳周期是 120 秒。
  */
