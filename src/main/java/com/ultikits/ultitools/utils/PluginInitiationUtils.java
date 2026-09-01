@@ -5,16 +5,24 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.logging.Level;
+
+import org.bukkit.Bukkit;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.events.PanelMessageEvent;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
@@ -78,6 +86,46 @@ public class PluginInitiationUtils {
      */
     private static final ExponentialBackoffStrategy reinitBackoff =
             ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
+
+    /**
+     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
+     * that serves it.
+     * <p>
+     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
+     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
+     * finding). A switch multiplies independent path counts by the number of branches; a lookup
+     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
+     * rather than by how many message types exist. Built once, statically, and never mutated after
+     * construction — see {@link #buildInboundHandlers()}.
+     * <p>
+     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
+     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
+     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
+     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
+     * this repository already has twice, in its command-executor and GUI generations.
+     * <p>
+     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
+     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
+     */
+    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
+            Collections.unmodifiableMap(buildInboundHandlers());
+
+    /**
+     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
+     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
+     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
+     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
+     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
+     * ever hitting this warning at runtime.
+     */
+    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
+
+    // Both fields above are declared here — rather than at their original, method-adjacent
+    // positions — so that all field declarations precede all methods (PMD
+    // FieldDeclarationsShouldBeAtStartOfClass). Both initializers are static-method-call /
+    // literal expressions with no dependency on declaration order relative to other members
+    // (buildInboundHandlers() does not reference cloudEnabled/reinitBackoff/etc.; see the
+    // Phase 06 Codacy remediation commit for the verification).
 
     /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
@@ -204,34 +252,171 @@ public class PluginInitiationUtils {
         // 上传配置
         uploadConfig(client);
 
-        // 上传服务器属性到云端
-        uploadServerProperties(client);
+        // 上传服务器属性到云端 —— 由 SERVER_PROPERTIES 能力开关决定（D-11/D-12）
+        if (Capability.SERVER_PROPERTIES.isEnabled()) {
+            uploadServerProperties(client);
+        } else {
+            logSkippedCapability(Capability.SERVER_PROPERTIES);
+        }
     }
     
     /**
      * 初始化所有管理器
      */
     /**
-     * The inbound-message dispatch table: message {@code type} string to the handler that serves it.
+     * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
+     * before it runs (D-10), and with which side records that decision's verdict in the
+     * {@link RemoteActionLog} (CR-01, 06-REVIEW.md).
      * <p>
-     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
-     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
-     * finding). A switch multiplies independent path counts by the number of branches; a lookup
-     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
-     * rather than by how many message types exist. Built once, statically, and never mutated after
-     * construction — see {@link #buildInboundHandlers()}.
+     * Exposes exactly two static factories and no capability-free, verdict-recorder-free
+     * construction path — this is the whole point of D-10: {@link #of(Capability, VerdictRecorder,
+     * BiConsumer)} and {@link #resolved(Function, VerdictRecorder, BiConsumer)} are the only ways
+     * to build an entry, both take these arguments in fixed positions, and neither has a shorter
+     * overload or a default.
      * <p>
-     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
-     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
-     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
-     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
-     * this repository already has twice, in its command-executor and GUI generations.
+     * <b>Precisely stated (corrected per IN-01, 06-REVIEW.md — an earlier revision of this javadoc
+     * overstated this):</b> omitting either argument from a call site IS a genuine {@code javac}
+     * compile error — there is no shorter overload to fall back to. Passing a {@code null}
+     * capability, resolver, or {@link VerdictRecorder}, however, compiles cleanly (a
+     * reference-typed parameter accepts {@code null} at the language level) and is instead rejected
+     * by an {@link IllegalArgumentException} thrown from {@link #of}/{@link #resolved} the moment
+     * {@link #buildInboundHandlers()} runs — at class-initialization time, before the server
+     * finishes starting, not by the compiler. Together the two guarantees still mean a new message
+     * type cannot silently ship ungated or with an undeclared verdict recorder — the argument slot
+     * is mandatory (compile-time) and a {@code null} value fails immediately and loudly
+     * (class-load-time) — but the {@code null}-rejection half is not literally a compile error.
      * <p>
-     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
-     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
+     * {@link #of(Capability, VerdictRecorder, BiConsumer)} covers the 23 entries whose capability is
+     * fixed by the message {@code type} alone; {@link #resolved(Function, VerdictRecorder,
+     * BiConsumer)} covers {@code file_operation}, the one entry whose capability depends on the
+     * message's {@code operation} field rather than its {@code type}.
+     * <p>
+     * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability}、以及「由哪一侧记录裁决」
+     * 绑在一起（D-10, CR-01）。只暴露两个静态工厂，没有任何绕开能力声明或记录方声明的构造路径——
+     * 漏传参数是真正的编译错误；但传 {@code null} 能编译通过，只在
+     * {@link #buildInboundHandlers()} 运行时（类初始化阶段，而非编译期）被
+     * {@link IllegalArgumentException} 立即拦下（IN-01, 06-REVIEW.md 已纠正此前过度表述）。
      */
-    private static final Map<String, BiConsumer<JsonObject, JsonObject>> INBOUND_HANDLERS =
-            Collections.unmodifiableMap(buildInboundHandlers());
+    static final class InboundHandlerEntry {
+        private final Capability capability;
+        private final Function<JsonObject, Capability> resolver;
+        private final VerdictRecorder verdictRecorder;
+        private final BiConsumer<JsonObject, JsonObject> handler;
+
+        private InboundHandlerEntry(Capability capability, Function<JsonObject, Capability> resolver,
+                                     VerdictRecorder verdictRecorder, BiConsumer<JsonObject, JsonObject> handler) {
+            this.capability = capability;
+            this.resolver = resolver;
+            this.verdictRecorder = verdictRecorder;
+            this.handler = handler;
+        }
+
+        /**
+         * An entry whose capability is a fixed constant.
+         *
+         * @param capability      the required capability — use {@link Capability#NONE} for
+         *                        protocol-level and echo messages that carry no operator-facing
+         *                        policy
+         * @param verdictRecorder which side records the enabled-branch verdict — see
+         *                        {@link VerdictRecorder}
+         * @param handler         the handler to invoke once the gate clears
+         * @return the entry
+         */
+        static InboundHandlerEntry of(Capability capability, VerdictRecorder verdictRecorder,
+                                       BiConsumer<JsonObject, JsonObject> handler) {
+            if (capability == null) {
+                throw new IllegalArgumentException("capability must not be null — declare Capability.NONE explicitly");
+            }
+            if (verdictRecorder == null) {
+                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
+            }
+            return new InboundHandlerEntry(capability, null, verdictRecorder, handler);
+        }
+
+        /**
+         * An entry whose capability depends on the inbound message's own {@code data} — the
+         * {@code file_operation} case, whose true capability depends on the {@code operation} field
+         * (D-10's resolver case, D-09).
+         *
+         * @param resolver        a function from the message's {@code data} to the
+         *                        {@link Capability} it requires
+         * @param verdictRecorder which side records the enabled-branch verdict — see
+         *                        {@link VerdictRecorder}
+         * @param handler         the handler to invoke once the gate clears
+         * @return the entry
+         */
+        static InboundHandlerEntry resolved(Function<JsonObject, Capability> resolver,
+                                             VerdictRecorder verdictRecorder,
+                                             BiConsumer<JsonObject, JsonObject> handler) {
+            if (resolver == null) {
+                throw new IllegalArgumentException("resolver must not be null — declare a Capability.of(...) entry instead");
+            }
+            if (verdictRecorder == null) {
+                throw new IllegalArgumentException("verdictRecorder must not be null — declare GATE or HANDLER");
+            }
+            return new InboundHandlerEntry(null, resolver, verdictRecorder, handler);
+        }
+
+        /**
+         * Resolves this entry's required capability against one message's {@code data}.
+         *
+         * @param data the message's {@code data} object, possibly {@code null}
+         * @return the required {@link Capability}
+         */
+        Capability resolveCapability(JsonObject data) {
+            return capability != null ? capability : resolver.apply(data);
+        }
+
+        BiConsumer<JsonObject, JsonObject> getHandler() {
+            return handler;
+        }
+
+        /**
+         * Whether this entry's own handler already records its {@link RemoteActionLog} verdict —
+         * see {@link VerdictRecorder#HANDLER}.
+         *
+         * @return {@code true} if the handler records its own verdict, so
+         *         {@link #dispatchWithCapabilityGate} must not record a second, blanket entry
+         */
+        boolean recordsOwnVerdict() {
+            return verdictRecorder == VerdictRecorder.HANDLER;
+        }
+    }
+
+    /**
+     * Which side of a capability-gated dispatch records the {@link RemoteActionLog} verdict for
+     * the enabled branch (CR-01, 06-REVIEW.md).
+     * <p>
+     * Exactly two entries — {@code execute_command} and {@code file_operation} — invoke a handler
+     * that performs its own, independent, finer-grained {@code AccessDecision} check
+     * ({@code CommandExecutionManager#isCommandAllowed}/{@code FileOperationManager#isPathAllowed})
+     * and records its own verdict from that check; every other capability-gated entry has no
+     * second policy layer to conflict with. Before this enum existed,
+     * {@code dispatchWithCapabilityGate} recorded a blanket {@code ALLOWED} entry on every enabled
+     * branch regardless of which case it was, producing a contradictory second log line — a real
+     * {@code DENIED} from the handler's own check immediately followed by a false {@code ALLOWED}
+     * from the gate — for every blocklisted command and every credential/out-of-root file request.
+     * A required field (verified by inspecting every entry's handler for its own
+     * {@link RemoteActionLog} write) is what stops a newly added entry from silently repeating that
+     * mistake, rather than a defaulted or inferred value. Precisely: omitting the argument is a
+     * genuine compile error; a {@code null} value compiles but is rejected immediately at
+     * class-initialization time — see {@link InboundHandlerEntry}'s own javadoc for the exact
+     * boundary between the two (IN-01, 06-REVIEW.md).
+     */
+    enum VerdictRecorder {
+        /**
+         * {@link #dispatchWithCapabilityGate} records the {@link RemoteActionLog.Verdict#ALLOWED}
+         * entry on the enabled branch — the default shape for an entry with no second policy
+         * layer.
+         */
+        GATE,
+        /**
+         * The handler records its own verdict from its own, finer-grained {@code AccessDecision}
+         * check — {@link #dispatchWithCapabilityGate} must not also record one, or the log gets
+         * two contradictory lines for one request.
+         */
+        HANDLER
+    }
 
     /**
      * Builds {@link #INBOUND_HANDLERS}. Each entry invokes exactly the same target its former
@@ -239,64 +424,126 @@ public class PluginInitiationUtils {
      * replaces, not a redesign of it. {@code log_stream} and {@code log_stream_control} share one
      * {@link BiConsumer} instance, preserving the fall-through the two case labels used to express.
      *
-     * @return a table from message {@code type} to the handler that serves it
+     * @return a table from message {@code type} to the {@link InboundHandlerEntry} that serves it
      */
-    private static Map<String, BiConsumer<JsonObject, JsonObject>> buildInboundHandlers() {
-        Map<String, BiConsumer<JsonObject, JsonObject>> handlers = new HashMap<>();
+    private static Map<String, InboundHandlerEntry> buildInboundHandlers() {
+        Map<String, InboundHandlerEntry> handlers = new HashMap<>();
 
-        // 系统基础消息
-        handlers.put("ping", (message, data) -> handlePing(message));
-        handlers.put("pong", (message, data) -> handlePong(data));
-        handlers.put("subscribe", (message, data) -> handleSubscribe(data));
-        handlers.put("unsubscribe", (message, data) -> handleUnsubscribe(data));
-        handlers.put("notification", (message, data) -> handleNotification(data));
-        handlers.put("error", (message, data) -> handleError(data));
+        // 系统基础消息 —— 协议层/回声消息，显式声明 Capability.NONE（D-10）：从不拦截，从不记录。
+        // NONE 分支从不到达 recordAction，VerdictRecorder 的取值在此不生效，统一声明 GATE。
+        handlers.put("ping",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePing(message)));
+        handlers.put("pong",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePong(data)));
+        handlers.put("subscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleSubscribe(data)));
+        handlers.put("unsubscribe", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleUnsubscribe(data)));
+        handlers.put("notification", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleNotification(data)));
+        handlers.put("error",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handleError(data)));
 
-        // 服务器监控消息
-        handlers.put("server_status", (message, data) -> handleServerStatusRequest(data));
-        handlers.put("plugin_list", (message, data) -> handlePluginListRequest(data));
-        handlers.put("player_event", (message, data) -> handlePlayerEvent(data));
-        handlers.put("metrics_data", (message, data) -> handleMetricsRequest(data));
+        // 服务器监控消息 —— 处理器不做第二层裁决，网关记录 ALLOWED（VerdictRecorder.GATE）。
+        handlers.put("server_status", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handleServerStatusRequest(data)));
+        handlers.put("plugin_list", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handlePluginListRequest(data)));
+        handlers.put("player_event", InboundHandlerEntry.of(Capability.PLAYER_EVENTS, VerdictRecorder.GATE,
+                (message, data) -> handlePlayerEvent(data)));
+        handlers.put("metrics_data", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
+                (message, data) -> handleMetricsRequest(data)));
 
-        // 操作控制消息
-        handlers.put("execute_command",
-                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data));
-        handlers.put("command_result", (message, data) -> handleCommandResult(data));
-        handlers.put("file_operation",
-                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data));
-        handlers.put("file_operation_result", (message, data) -> handleFileOperationResult(data));
+        // 操作控制消息 —— execute_command 的处理器自己做 isCommandAllowed() 二次裁决并自己记录
+        // 结果（CommandExecutionManager.executeCommand），因此声明 VerdictRecorder.HANDLER（CR-01）。
+        handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS, VerdictRecorder.HANDLER,
+                (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data)));
+        handlers.put("command_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleCommandResult(data)));
+        // file_operation 的能力取决于 data.operation，不是常量 —— D-10 的 resolver 场景（D-09）。
+        // 处理器自己做 isPathAllowed() 二次裁决并自己记录结果（FileOperationManager.recordFileDecision），
+        // 因此同样声明 VerdictRecorder.HANDLER（CR-01）。
+        handlers.put("file_operation", InboundHandlerEntry.resolved(
+                PluginInitiationUtils::resolveFileOperationCapability, VerdictRecorder.HANDLER,
+                (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data)));
+        handlers.put("file_operation_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleFileOperationResult(data)));
 
         // 数据流消息 —— log_stream 与 log_stream_control 共享同一个处理器，
-        // 这是原先两个 case 标签之间 fall-through 的等价写法。
+        // 这是原先两个 case 标签之间 fall-through 的等价写法。处理器不做第二层裁决。
         BiConsumer<JsonObject, JsonObject> logStreamHandler =
                 (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
-        handlers.put("log_stream", logStreamHandler);
-        handlers.put("log_stream_control", logStreamHandler);
-        handlers.put("backup_operation", (message, data) -> handleBackupOperation(data));
-        handlers.put("backup_progress", (message, data) -> handleBackupProgress(data));
+        handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
+        handlers.put("log_stream_control",
+                InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
+        // backup_operation 是今天的纯日志占位符，但其声明意图是产出文件的操作 —— 因此按更严格
+        // 的一侧声明为 FILE_WRITE，而不是等桩实现落地时才回头改声明。处理器不做第二层裁决。
+        handlers.put("backup_operation", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleBackupOperation(data)));
+        handlers.put("backup_progress", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) -> handleBackupProgress(data)));
 
-        // 配置管理消息
-        handlers.put("upload_config", (message, data) -> handleConfigUpload(data));
-        handlers.put("update_config", (message, data) -> handleConfigUpdate(data));
-        handlers.put("server_properties", (message, data) -> {
-            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
-                UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
-            }
-        });
-        handlers.put("server_properties_result", (message, data) ->
+        // 配置管理消息 —— 处理器不做第二层裁决。
+        handlers.put("upload_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleConfigUpload(data)));
+        handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+                (message, data) -> handleConfigUpdate(data)));
+        handlers.put("server_properties",
+                InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, VerdictRecorder.GATE, (message, data) -> {
+                    if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                        UltiTools.getInstance().getServerPropertiesManager().handleServerProperties(data);
+                    }
+                }));
+        handlers.put("server_properties_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
+                (message, data) ->
                 // Response from this plugin forwarded back by DO — ignore silently
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received server_properties_result echo — ignoring"));
+                        "Received server_properties_result echo — ignoring")));
 
         // Magic link auth messages (completion handled by HTTP polling in UltiLogin)
-        handlers.put("auth_complete", (message, data) ->
+        handlers.put("auth_complete", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received auth_complete message: " + (data != null ? data.toString() : "null")));
-        handlers.put("magic_link_response", (message, data) ->
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "Received magic_link_response message: " + (data != null ? data.toString() : "null")));
+                        "Received auth_complete message: " + (data != null ? data.toString() : "null"))));
+        handlers.put("magic_link_response",
+                InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) ->
+                        UltiTools.getInstance().getLogger().log(Level.FINE,
+                                "Received magic_link_response message: " + (data != null ? data.toString() : "null"))));
 
         return handlers;
+    }
+
+    /**
+     * Resolves {@code file_operation}'s required capability from the message's {@code operation}
+     * field (D-09, D-10's Pitfall 4). Delegates to {@link #resolveFileOperationCapability(String)}.
+     *
+     * @param data the message's {@code data} object, possibly {@code null}
+     * @return the required capability
+     */
+    private static Capability resolveFileOperationCapability(JsonObject data) {
+        String operation = data != null ? readString(data, "operation") : null;
+        return resolveFileOperationCapability(operation);
+    }
+
+    /**
+     * The single {@code operation} name to {@link Capability} mapping, shared between this class's
+     * D-10 dispatch-table resolver above and {@code FileOperationManager}'s own action-log
+     * recording (D-22, Plan 06-04 Task 1) — so the two mappings cannot drift apart. {@code list}
+     * resolves to {@link Capability#FILE_READ} — listing is reading. An unrecognised or absent
+     * operation also resolves to {@link Capability#FILE_READ}, the most-permitted of the three, so
+     * an unknown verb reaching the dispatch table is still gated and still reaches
+     * {@code handleFileOperation}'s own unsupported-operation branch.
+     *
+     * @param operation the {@code operation} field's value, possibly {@code null}
+     * @return the required capability
+     */
+    public static Capability resolveFileOperationCapability(String operation) {
+        if ("write".equals(operation)) {
+            return Capability.FILE_WRITE;
+        }
+        if ("delete".equals(operation)) {
+            return Capability.FILE_DELETE;
+        }
+        return Capability.FILE_READ;
     }
 
     /**
@@ -309,8 +556,27 @@ public class PluginInitiationUtils {
      *
      * @return the unmodifiable inbound dispatch table
      */
-    static Map<String, BiConsumer<JsonObject, JsonObject>> inboundDispatchTable() {
+    static Map<String, InboundHandlerEntry> inboundDispatchTable() {
         return INBOUND_HANDLERS;
+    }
+
+    /**
+     * Whether {@code messageType} is one of the framework's own {@link #INBOUND_HANDLERS} entries
+     * — the single source {@code PanelResponderRegistry.registerResponder} consults before letting
+     * a module claim a message type (D-26, WIRE-16, Plan 06-08 Task 1). Deliberately a separate,
+     * narrower predicate rather than widening {@link #inboundDispatchTable()}'s visibility: that
+     * accessor's own javadoc says it is test-only and not a registration point, and a boolean
+     * membership check is exactly the narrower thing a registration point actually needs — it
+     * cannot read, mutate, or iterate the table itself.
+     * <p>
+     * Exact {@code String} key membership, matching {@link #INBOUND_HANDLERS}'s own
+     * {@code HashMap} key semantics: no case folding, no Unicode normalization.
+     *
+     * @param messageType the message type to check, possibly {@code null}
+     * @return {@code true} if the framework's own dispatch table already serves this exact type
+     */
+    public static boolean isFrameworkOwnedType(String messageType) {
+        return messageType != null && INBOUND_HANDLERS.containsKey(messageType);
     }
 
     /**
@@ -348,6 +614,14 @@ public class PluginInitiationUtils {
         // MessageHandlerRegistry.dispatch 用的是 !isJsonNull()，那份是死代码（见 #233），
         // 这里没有照抄它的这一点。
         String type = null;
+        JsonObject data = null;
+        // Tracks whether this message should reach PanelMessageEvent subscribers (WIRE-16).
+        // Stays false — the safe default — unless the dispatch below explicitly earns it: an
+        // entry-less (unknown) type earns it after its warning, and dispatchWithCapabilityGate's
+        // return value earns it for a known type (true for Capability.NONE and for an enabled
+        // capability, false for a denied one). Carrying the gate's own outcome here means the
+        // gate and the publish can never disagree — there is no second, independent check.
+        boolean shouldPublishEvent = false;
         try {
             if (message.has("type") && message.get("type").isJsonPrimitive()) {
                 type = message.get("type").getAsString();
@@ -356,10 +630,12 @@ public class PluginInitiationUtils {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
                         new Gson().toJson(message)));
+                // Early return — the type never resolved, so there is nothing a subscriber could
+                // filter on. This also means the trailing publish call below is never reached.
                 return;
             }
 
-            JsonObject data = message.has("data") && message.get("data").isJsonObject()
+            data = message.has("data") && message.get("data").isJsonObject()
                 ? message.getAsJsonObject("data") : null;
 
             // 记录接收到的消息处理日志
@@ -369,23 +645,328 @@ public class PluginInitiationUtils {
             // Lookup replaces the former 24-case switch — see INBOUND_HANDLERS. Every entry
             // invokes the same target its former case label invoked; an absent entry is the same
             // "unknown type" outcome the former default branch produced.
-            BiConsumer<JsonObject, JsonObject> handler = INBOUND_HANDLERS.get(type);
-            if (handler != null) {
-                handler.accept(message, data);
+            InboundHandlerEntry entry = INBOUND_HANDLERS.get(type);
+            if (entry != null) {
+                shouldPublishEvent = dispatchWithCapabilityGate(type, message, data, entry);
             } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
-                // Don't send error responses to avoid feedback loops with server
+                // Module-owned responders are served from this exact branch — the same lookup
+                // that serves the framework's own 24 types — rather than a second dispatch
+                // mechanism (01-CONTEXT D-10/D-11, WIRE-16, Plan 06-08). A registered responder
+                // earns its own dispatch and reply; a genuinely unknown type keeps today's
+                // behaviour unchanged (one warning, no reply, to avoid feedback loops with the
+                // server).
+                PanelResponderRegistry responderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+                if (responderRegistry != null && responderRegistry.hasResponder(type)) {
+                    dispatchToResponder(type, data, responderRegistry);
+                } else {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
+                    // Don't send error responses to avoid feedback loops with server
+                }
+                // Unknown to the framework's own dispatch table is exactly the case WIRE-16
+                // exists to serve — a module's own responder for a type the framework does not
+                // own. No capability gate applies (there is no entry to resolve one from), so
+                // this is unconditionally publishable, whether or not a responder actually
+                // served it.
+                shouldPublishEvent = true;
             }
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.SEVERE,
                 String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
             // Don't send error responses to avoid feedback loops with server
+            // shouldPublishEvent stays at its default (false): an exception mid-dispatch means
+            // the framework cannot say the message was actually handled, so this conservatively
+            // does not publish rather than guessing.
         }
-        
+
         // 记录消息处理完成日志
-        UltiTools.getInstance().getLogger().log(Level.FINE, 
+        UltiTools.getInstance().getLogger().log(Level.FINE,
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
+
+        // One added statement at the end of the bridge (D-29, issue #237, WIRE-16). Appended
+        // rather than inserted: removing this call must leave the 24 pre-existing message types
+        // working exactly as they do today. Only reached when type resolved (the early return
+        // above skips it for a malformed type) and shouldPublishEvent was earned above.
+        if (shouldPublishEvent) {
+            publishPanelMessageEvent(type, message, data);
+        }
+    }
+
+    /**
+     * Dispatches {@code type} to its registered responder and, once the registry's returned future
+     * settles, sends exactly one reply through the same client accessor the other outbound helpers
+     * use — {@code panelWS.sendMessage(...)}, matching {@code sendCapabilityRefusal}'s and
+     * {@code FileOperationManager#sendFileOperationResult}'s existing pattern (WIRE-16, D-27).
+     * <p>
+     * No Bukkit main-thread hop here, deliberately: unlike {@link PanelMessageEvent}'s publish
+     * (which must run on the main thread because a subscriber may touch Bukkit API), sending a
+     * reply over the WebSocket client is plain network I/O — the same off-main-thread pattern
+     * {@code CommandExecutionManager}/{@code FileOperationManager} already use for their own
+     * outbound replies.
+     * <p>
+     * The reply always carries the message type and the request's {@code requestId} (echoed from
+     * {@code data}), and either the responder's resolved {@link JsonObject} or an {@code error}
+     * member naming the failure — {@link PanelResponderRegistry#dispatch} guarantees its returned
+     * future always settles one way or the other, so this method never has to guess. When the
+     * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
+     * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
+     * reasoning for {@code commandId}/{@code operationId}.
+     *
+     * @param type     the message type, already confirmed to have a registered responder
+     * @param data     the message's {@code data} object, possibly {@code null}
+     * @param registry the registry to dispatch through
+     */
+    private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
+        String requestId = data != null ? readString(data, "requestId") : null;
+        registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
+            if (requestId == null || requestId.isEmpty()) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
+                return;
+            }
+            JsonObject payload = throwable != null ? new JsonObject() : result;
+            payload.addProperty("requestId", requestId);
+            if (throwable != null) {
+                payload.addProperty("error", rootCauseMessage(throwable));
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("type", type);
+            response.add("data", payload);
+            if (panelWS != null) {
+                response.addProperty("serverId", panelWS.getServerId());
+                panelWS.sendMessage(response);
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
+            }
+        });
+    }
+
+    /**
+     * The deepest non-null message on {@code throwable}'s cause chain, falling back to the
+     * throwable's own class name when every message is {@code null} — a bare
+     * {@code NullPointerException} carries no message at all, and an empty {@code error} field
+     * would tell the panel operator nothing.
+     *
+     * @param throwable the throwable to describe
+     * @return a human-readable description, never {@code null}
+     */
+    // PMD.CompareObjectsWithEquals: deliberate reference-identity check, not a false economy.
+    // This walks a cause chain looking for a self-referential cycle (getCause() returning the
+    // same instance) — reference identity is precisely what must be tested here, and
+    // Throwable does not override equals(), so .equals() would behave identically while
+    // *saying* something the code does not mean (value equality, not "is this the same object
+    // I started from").
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static String rootCauseMessage(Throwable throwable) {
+        Throwable deepest = throwable;
+        while (deepest.getCause() != null && deepest.getCause() != deepest) {
+            deepest = deepest.getCause();
+        }
+        return deepest.getMessage() != null ? deepest.getMessage() : deepest.getClass().getSimpleName();
+    }
+
+    /**
+     * Bridges an inbound panel message the framework has already handled onto the module-facing
+     * {@link EventBus} (WIRE-16). This is the single publish site — see the dispatch-table call
+     * site in {@link #handleInboundMessage} for the only place this is invoked.
+     * <p>
+     * {@link EventBus#publishAsync} was considered and rejected: it submits to an async worker
+     * pool and never reaches the main thread, so it does not address Paper's AsyncCatcher at
+     * all — it only keeps the WebSocket I/O thread unblocked. A Minecraft module's handler
+     * touches Bukkit API by definition, so the real choice here was main-thread versus
+     * not-main-thread, not sync-dispatch versus async-dispatch; only
+     * {@code Bukkit.getScheduler().runTask(...)} puts a handler on the main thread. The whole
+     * helper body is wrapped in a catch so a missing scheduler (no Bukkit server booted, as in a
+     * plain unit test) or a missing {@link EventBus} can never break the inbound message path —
+     * both are logged no-ops.
+     *
+     * @param type    the resolved message type
+     * @param message the full inbound envelope
+     * @param data    the message's {@code data} object, possibly {@code null}
+     */
+    private static void publishPanelMessageEvent(String type, JsonObject message, JsonObject data) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance == null) {
+                return;
+            }
+            EventBus eventBus = instance.getEventBus();
+            if (eventBus == null) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(instance, () -> {
+                // Two long reads and a comparison on the fast path — no allocation, no logging,
+                // until the slow branch below is actually taken.
+                long startNanos = System.nanoTime();
+                eventBus.publish(new PanelMessageEvent(type, data, message));
+                long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+                if (elapsedMillis > SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS) {
+                    // Times the whole publish, not an individual handler: EventBus.publish
+                    // iterates its subscriber list internally and this bridge cannot see inside
+                    // that loop without changing EventBus, a shared class this plan does not
+                    // touch. This warning can therefore only say that some subscriber to this
+                    // event type is slow — never which one, and it fires once per slow publish
+                    // regardless of how many subscribers contributed to the elapsed time.
+                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        String.format("[PanelMessageEvent] Subscriber(s) to type '%s' took %dms "
+                            + "to run (threshold %dms) — a slow handler on the main thread can "
+                            + "drag server tick rate",
+                            type, elapsedMillis, SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS));
+                }
+            });
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "[PanelMessageEvent] Failed to publish event for type " + type, e);
+        }
+    }
+
+    /**
+     * The single enforcement point for every inbound capability (D-10). Resolves the entry's
+     * required capability against {@code data}; {@link Capability#NONE} runs the handler with no
+     * check and no action-log entry. Otherwise: enabled runs the handler and, unless the entry's
+     * own handler already records its verdict ({@link InboundHandlerEntry#recordsOwnVerdict()},
+     * CR-01), records one {@link RemoteActionLog.Verdict#ALLOWED} entry; disabled sends one
+     * {@code capability_denied} reply and records one {@link RemoteActionLog.Verdict#DENIED} entry
+     * — the handler is never invoked on the denied path, so there is only ever one writer there.
+     * <p>
+     * {@code execute_command} and {@code file_operation} are the two entries whose handler performs
+     * its own, finer-grained {@code AccessDecision} check and records its own verdict from that
+     * check — recording a second, blanket {@code ALLOWED} entry here for those two would produce a
+     * contradictory second log line (see 06-REVIEW.md CR-01) for every blocklisted command and
+     * every credential/out-of-root file request.
+     *
+     * @param type    the message type, used for the action-log {@code action} and the refusal payload
+     * @param message the full inbound message
+     * @param data    the message's {@code data} object, possibly {@code null}
+     * @param entry   the dispatch-table entry that serves this type
+     * @return whether the message should also reach {@link PanelMessageEvent} subscribers —
+     *         {@code true} for {@link Capability#NONE} and for an enabled capability, {@code
+     *         false} for a denied one. The caller carries this straight into the publish decision
+     *         so the gate and the publish can never disagree (see {@link #handleInboundMessage}).
+     */
+    private static boolean dispatchWithCapabilityGate(String type, JsonObject message, JsonObject data,
+                                                     InboundHandlerEntry entry) {
+        Capability capability = entry.resolveCapability(data);
+        if (capability == Capability.NONE) {
+            entry.getHandler().accept(message, data);
+            return true;
+        }
+        if (capability.isEnabled()) {
+            entry.getHandler().accept(message, data);
+            if (!entry.recordsOwnVerdict()) {
+                recordAction(capability, type, data, RemoteActionLog.Verdict.ALLOWED, null);
+            }
+            return true;
+        }
+        sendCapabilityRefusal(type, data, capability);
+        recordAction(capability, type, data, RemoteActionLog.Verdict.DENIED, capability.refusalMessage());
+        return false;
+    }
+
+    /**
+     * Sends one {@code capability_denied} outbound message naming the config key, the config file,
+     * the refusal reason, and echoing whichever correlation id the inbound message carried
+     * ({@code commandId}, {@code operationId} or {@code requestId}) so the panel can correlate the
+     * refusal with the request that caused it. Not reusing the existing {@code error} message type
+     * — see {@link #handleInboundMessage}'s own comment on why unsolicited {@code error} replies are
+     * avoided on this path. A logged no-op when no client is connected.
+     *
+     * @param type       the inbound message type that was refused
+     * @param data       the message's {@code data} object, possibly {@code null}
+     * @param capability the capability that refused it
+     */
+    private static void sendCapabilityRefusal(String type, JsonObject data, Capability capability) {
+        if (panelWS == null) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Capability refusal for " + type + " not sent — no WebSocket client connected");
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("type", type);
+        payload.addProperty("capability", capability.name());
+        payload.addProperty("configKey", capability.getConfigPath());
+        payload.addProperty("configFile", "plugins/UltiTools/config.yml");
+        payload.addProperty("reason", capability.refusalMessage());
+
+        if (data != null) {
+            copyIfPresent(data, payload, "commandId");
+            copyIfPresent(data, payload, "operationId");
+            copyIfPresent(data, payload, "requestId");
+        }
+
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "capability_denied");
+        response.add("data", payload);
+        response.addProperty("serverId", panelWS.getServerId());
+        panelWS.sendMessage(response);
+    }
+
+    /** Copies {@code field} from {@code source} to {@code target} only when present and non-null. */
+    private static void copyIfPresent(JsonObject source, JsonObject target, String field) {
+        String value = readString(source, field);
+        if (value != null) {
+            target.addProperty(field, value);
+        }
+    }
+
+    /**
+     * Records one action-log entry for a capability-gated inbound message. A {@code null}
+     * {@code UltiTools.getInstance().getRemoteActionLog()} is a silent no-op — the existing
+     * inbound-message tests mock {@code UltiTools} and return null for it.
+     */
+    private static void recordAction(Capability capability, String type, JsonObject data,
+                                      RemoteActionLog.Verdict verdict, String reason) {
+        RemoteActionLog log = UltiTools.getInstance().getRemoteActionLog();
+        if (log == null) {
+            return;
+        }
+        String action = resolveActionLogAction(type, data);
+        String target = resolveActionLogTarget(type, data);
+        String actor = resolveActor(data);
+        RemoteActionLog.Entry entry = verdict == RemoteActionLog.Verdict.ALLOWED
+                ? RemoteActionLog.Entry.allowed(capability, action, target, actor)
+                : RemoteActionLog.Entry.denied(capability, action, target, actor, reason);
+        log.record(entry);
+    }
+
+    /** The action-log {@code action} field — the message type, extended with the resolved sub-operation for {@code file_operation}. */
+    private static String resolveActionLogAction(String type, JsonObject data) {
+        if ("file_operation".equals(type) && data != null) {
+            String operation = readString(data, "operation");
+            if (operation != null) {
+                return type + ":" + operation;
+            }
+        }
+        return type;
+    }
+
+    /** The action-log {@code target} field — the command text, file path, or message type otherwise. */
+    private static String resolveActionLogTarget(String type, JsonObject data) {
+        if (data == null) {
+            return type;
+        }
+        if ("execute_command".equals(type)) {
+            String command = readString(data, "command");
+            return command != null ? command : type;
+        }
+        if ("file_operation".equals(type)) {
+            String path = readString(data, "path");
+            return path != null ? path : type;
+        }
+        return type;
+    }
+
+    /**
+     * The action-log {@code actor} field — the inbound {@code executor} field verbatim, or the
+     * literal {@code "panel"} when absent. The framework cannot attribute a remote command to an
+     * individual panel operator today (see {@link RemoteActionLog.Entry}'s javadoc), so this never
+     * invents a per-operator identity.
+     */
+    private static String resolveActor(JsonObject data) {
+        String executor = data != null ? readString(data, "executor") : null;
+        return executor != null ? executor : "panel";
     }
 
     /**
@@ -415,17 +996,30 @@ public class PluginInitiationUtils {
         }
     }
 
-    /** {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
+    /**
+     * {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。
+     * <p>
+     * D-11/D-12：四个出站能力（{@code monitoring}/{@code logs}/{@code player-events}/
+     * {@code server-properties}）在这里由 {@link Capability#isEnabled()} 决定是否<b>开始采集</b>，
+     * 而不是采集之后在发送出口丢弃——后者会让数据已经被收集进内存，只是没被传走，D-12 明确否决
+     * 这种「exposed but not transmitted」的形状。每一处 client 引用装配调用都刻意保持无条件：
+     * 装一个 client 引用本身不启动任何采集，让它无条件执行才能保证每个管理器 getter
+     * 永远非空、每个管理器永远存在（D-11）——分发表里有两处对管理器 getter 的解引用没有空判断。
+     */
     private static void wireManagers() {
         try {
-            // 初始化服务器监控管理器
+            // 初始化服务器监控管理器 —— 引用装配与「是否开始监控」分离，见方法javadoc
             UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(panelWS);
-            // 启动监控（会立即发送状态并开始定期发送）
-            UltiTools.getInstance().getServerMonitorManager().startMonitoring();
-            
+            if (Capability.MONITORING.isEnabled()) {
+                // 启动监控（会立即发送状态并开始定期发送）
+                UltiTools.getInstance().getServerMonitorManager().startMonitoring();
+            } else {
+                logSkippedCapability(Capability.MONITORING);
+            }
+
             // 初始化命令执行管理器
             UltiTools.getInstance().getCommandExecutionManager().setWebSocketClient(panelWS);
-            
+
             // 初始化文件操作管理器
             UltiTools.getInstance().getFileOperationManager().setWebSocketClient(panelWS);
 
@@ -433,21 +1027,45 @@ public class PluginInitiationUtils {
             if (UltiTools.getInstance().getServerPropertiesManager() != null) {
                 UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(panelWS);
             }
-            
-            // 初始化日志流管理器
+
+            // 初始化日志流管理器 —— logs 关闭时 SystemLogHandler 从不挂上根 logger
             if (UltiTools.getInstance().getLogStreamManager() != null) {
-                UltiTools.getInstance().getLogStreamManager().initialize(panelWS);
+                if (Capability.LOGS.isEnabled()) {
+                    UltiTools.getInstance().getLogStreamManager().initialize(panelWS);
+                } else {
+                    logSkippedCapability(Capability.LOGS);
+                }
             }
-            
-            // 初始化玩家事件管理器
+
+            // 初始化玩家事件管理器 —— player-events 关闭时 Bukkit 监听器从不被注册
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
-                UltiTools.getInstance().getPlayerEventManager().initialize(panelWS);
+                if (Capability.PLAYER_EVENTS.isEnabled()) {
+                    UltiTools.getInstance().getPlayerEventManager().initialize(panelWS);
+                } else {
+                    logSkippedCapability(Capability.PLAYER_EVENTS);
+                }
             }
-            
+
             UltiTools.getInstance().getLogger().log(Level.FINE, "所有WebSocket管理器已初始化并启动监控");
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "初始化管理器时出错: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 为一个被跳过的出站能力记一条 INFO，说明是哪个能力、哪个配置键导致的跳过。
+     * <p>
+     * 这一条日志尤其对 {@link Capability#MONITORING} 重要：{@code sendBatchUpdate} 每 5 秒一次是
+     * 面板判断「服务器是否在线」的唯一依据，关掉 monitoring 会让升级后的服务器在面板上显示为离线
+     * ——这是最糟的失败形状，症状指向了错误的方向（运维会去查网络和令牌，而不是配置）。D-08 已经
+     * 把 monitoring 的出厂默认设为开启作为第一层缓解，这条日志是第二层。
+     *
+     * @param capability 被跳过的能力
+     */
+    private static void logSkippedCapability(Capability capability) {
+        UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
+                "[UltiPanel] Skipped %s wiring — capability disabled (%s)",
+                capability.name(), capability.getConfigPath()));
     }
     
     /**

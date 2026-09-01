@@ -3,6 +3,7 @@ package com.ultikits.ultitools.manager;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -556,16 +557,23 @@ public class ServerMonitorManager {
                 data.add("plugins", getCurrentPluginArray());
             }
 
-            // 从日志传输器排空日志
-            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
-            if (lsm != null && lsm.getLogTransmitter() != null) {
-                JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
-                if (logs.size() > 0) {
-                    data.add("logs", logs);
+            // 从日志传输器排空日志 —— 由 LOGS 能力开关决定是否排空（D-12）。
+            // 门必须挡在 drainQueue(...) 之前，而不是挡在拿到结果之后再丢：先排空再丢弃仍然是
+            // 「已经采集进内存，只是没发出去」的形状，D-12 明确否决这种半吊子的关闭方式。
+            if (Capability.LOGS.isEnabled()) {
+                LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+                if (lsm != null && lsm.getLogTransmitter() != null) {
+                    JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
+                    if (logs.size() > 0) {
+                        data.add("logs", logs);
+                    }
                 }
             }
 
-            // 从错误报告收集器排空错误
+            // 从错误报告收集器排空错误 —— 刻意不受任何 Capability 影响（D-07）：error-reporting
+            // 保留自己原有的 ultipanel.logging.error-reporting.enabled 键与原有默认值，挪到能力
+            // 开关下会悄悄改变一个运维可能已经手动设置过的键；ErrorReportCollector 自己已经在
+            // 采集层面用这把键把关，队列为空时排空到的也就是空数组。
             ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
             if (erc != null) {
                 JsonArray errors = erc.drainErrors(10);

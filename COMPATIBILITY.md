@@ -1624,6 +1624,131 @@ phase closed (repaint re-derivation, click-dispatch bounds-checking, `GridView` 
 positioning) and stating why the marker is retained: zero downstream real-server feedback on four
 rewritten core mechanisms at once. Delivered by plan 05-14.
 
+### Recorded instance: eight `ultipanel.capabilities.*` switches gate every panel-facing capability, with a split default (REMOTE-01, 6.3.0)
+
+Before 6.3.0, every remote capability the panel exposes — monitoring, logs, player events, file
+read/write/delete, remote command execution, `server.properties` editing — was reachable the moment
+a server authenticated to UltiCloud, with no per-capability switch at all. 6.3.0 adds eight config
+keys under `ultipanel.capabilities`, one per capability, each independently enforced at both the
+inbound dispatch gate and, for the four capabilities with no inbound entry point, at the point their
+collection would otherwise start.
+
+The defaults are **split, not uniform**: `monitoring`, `logs`, `player-events` and `file-read`
+default `true`; `commands`, `file-write`, `file-delete` and `server-properties` default `false`.
+`monitoring` in particular is deliberately excluded from the default-off set — `batch_update`'s
+status payload is the panel's only "server is alive" signal, and defaulting it off would make an
+upgraded server read as *offline*, sending the operator to check networking and tokens rather than
+the one config block that actually explains it. The worst failure shape a default can produce is one
+where the symptom points the reader the wrong way, and a false "offline" reading does exactly that.
+
+**The observable change:** on a server upgraded to 6.3.0 with no config edits, the panel's remote
+command execution, file writing, file deletion, and `server.properties` editing all stop working
+until an operator explicitly enables the corresponding key in `plugins/UltiTools/config.yml`. Every
+one of those refusals arrives as a message naming its own config key and the file to edit — never a
+silent no-op and never a generic "access denied." Monitoring, log streaming, player events, and file
+reading keep working exactly as before, unchanged by this release.
+
+**Bucket.** This is a documented default value flipping to a more restrictive state on four of eight
+capabilities, which would ordinarily need a migration-period warning — but it is filed under
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)
+as a security fix: narrowing an unauthenticated-by-default remote write/execute surface to
+default-deny is exactly the class of change that section already exempts from prior notice. A module
+author or operator relying on any of the four now-off capabilities sees an immediate, clearly-worded
+refusal rather than a silent behavior change, which is the outcome a migration-period warning exists
+to produce anyway.
+
+### Recorded instance: a recursive directory delete through the remote file API now requires an explicit `recursive: true` (REMOTE-03, 6.3.0)
+
+Before 6.3.0, a `delete` request naming a directory recursively removed it and everything inside,
+with no flag and no confirmation of any kind — the same shape as `rm -r` with none of `rm -r`'s
+opt-in. 6.3.0 requires the request to carry a JSON boolean `recursive: true`; a directory delete
+request that omits the field, sets it to `false`, or sets it to anything other than a real JSON
+boolean is refused before any filesystem access, naming the missing field.
+
+**The observable change:** an older panel build that does not yet send the `recursive` field has
+every directory-delete request refused with a clear reason, where it previously succeeded
+immediately. The break is accepted narrowly: `file-delete` defaults `false` (see the capability
+entry above), so a panel able to reach this code path at all has already had the capability
+deliberately enabled by an operator who can update the panel in step.
+
+**Bucket.** No migration period — filed as a security fix under
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period).
+An unconfirmed recursive delete of an arbitrary directory (including, before this release, the
+server's own world folder) is the kind of defect this document's security-fix exemption exists for,
+not a documented capability being withdrawn.
+
+### Recorded instance: the remote file `list` response now marks refused entries instead of omitting them (REMOTE-03, 6.3.0)
+
+Before 6.3.0, `file_operation_result`'s `list` payload silently dropped any child entry the caller was
+not permitted to see — a credential file or a path outside the editable-root set simply did not
+appear, and the panel had no way to distinguish "this file does not exist" from "this file is hidden
+by policy." 6.3.0 adds two fields to every entry, `accessible` (boolean) and, on a refused entry,
+`reason` (`PROTECTED_CREDENTIAL` for the unconditional credential-deny layer, `OUTSIDE_ROOTS` for the
+operator-configured editable-root boundary). A refused entry now appears in the listing with
+`accessible: false` and its `reason`, carrying no `size`/`lastModified`/`readable`/`writable`; an
+accessible entry gains `accessible: true` alongside its existing six fields, unchanged. `totalCount`
+counts the returned array's length, so it now includes refused entries too.
+
+**This is a backward-compatible schema addition, not a breaking change.** An older panel build that
+does not know about `accessible`/`reason` renders exactly what it rendered before this release, plus
+the rows that used to be hidden — nothing it already reads changes shape or meaning.
+
+**Bucket.** No migration period needed — this is a pure additive change under
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period);
+recorded here anyway because `totalCount`'s new inclusion of refused entries is a real, if narrow,
+semantic shift a panel author comparing `totalCount` against a rendered row count should know about.
+
+### Recorded instance: the remote command blocklist becomes fully operator-editable, with no unoverridable floor (REMOTE-02, 6.3.0)
+
+Before 6.3.0, the set of remote commands the panel refuses to execute was a hardcoded, unconfigurable
+list of ten entries. 6.3.0 moves it to `ultipanel.commands.blocklist`, an operator-editable YAML list
+seeded with the same ten entries, and the operator may add to it or remove from it in either
+direction — including emptying it entirely.
+
+**There is deliberately no unoverridable floor.** The panel is the operator's remote console, not an
+autonomous agent, and the party this configuration constrains is the operator, not an attacker: an
+attacker who has compromised the panel credential already holds the operator's own identity, and a
+hardcoded floor constrains only the legitimate operator's own choices while doing nothing to stop
+that attacker from reaching the same outcomes through other in-game means. The compensating control
+for an operator who empties the list is the remote action log recording every command executed
+through the panel, not a floor that would not have stopped a compromised credential in the first
+place.
+
+**Bucket.** No migration period — filed under
+[Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period).
+The ten shipped entries are unchanged from the prior hardcoded set, so no existing operator observes
+any difference in default behaviour; only the ability to edit the list is new.
+
+### Recorded instance: `CommandExecutionManager.isCommandAllowed` and `FileOperationManager.isPathAllowed` change return type from `boolean` to `AccessDecision` (REMOTE-02 / REMOTE-03, 6.3.0)
+
+Both methods now return the new `entities.AccessDecision` type instead of `boolean`, so a caller
+learns not only whether a command or a file path is permitted but, on refusal, whether the cause is
+operator-configurable (naming the config key to change) or an unconditional restriction that no
+configuration can lift — the distinction the panel's refusal messages depend on throughout this
+phase's other recorded instances.
+
+**Both `CommandExecutionManager` and `FileOperationManager` carry `@ApiStatus.Internal`**, and this
+document's own [removal-list preamble](#removal-list-for-630) states that `@ApiStatus.Internal` types
+were never public API, so a change to either is not a compatibility event by this document's own
+rule — this entry is recorded anyway. `japicmp` reads compiled bytecode; it has no visibility into
+`@ApiStatus` annotations, which are a source/IDE-level signal only, and it will report both of these
+as a `MODIFIED METHOD` / return-type change against the released 6.2.5 baseline regardless of the
+`@ApiStatus.Internal` exemption. A `japicmp`-reported break with no matching entry in this document
+leaves the next reader unable to tell whether it was deliberate — the exact gap the
+[`GuiRenderer.initialize`](#recorded-instance-the-declarative-gui-repaint-pipeline-actually-repaints-and-guirendererinitializes-signature-changes-to-carry-a-supplierwidget-d-09-items-1-3--wire-02-630)
+entry above exists to not repeat, and this entry exists for the same reason.
+
+**Measured blast radius: zero.** Downstream call sites for `isPathAllowed`, `isCommandAllowed`,
+`setBlockedCommands`, `getFileOperationManager` and `getCommandExecutionManager` across `Modules/`,
+`Plugins/`, `Libraries/` and `Tooling/`: **0**. Control group proving the search itself works:
+`UltiToolsPlugin` — the type every module extends — matches **156** downstream files in the same
+search. The 11 raw hits a bare search for `isCommandAllowed` returns are all a single unrelated
+method, `UltiLogin`'s own `LoginService.isCommandAllowed` (`LoginService.java:717`), not a caller of
+either changed method — a hit count alone is not evidence without inspecting what each hit is.
+
+**Bucket.** No migration period — both types are `@ApiStatus.Internal`, so no downstream author had a
+supported contract to migrate off in the first place; recorded for `japicmp` traceability only.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its

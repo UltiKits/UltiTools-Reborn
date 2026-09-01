@@ -68,7 +68,10 @@ public enum ErrorCode {
     // ===== WebSocket Errors (7000-7999) =====
     WEBSOCKET_ERROR(7000, "WebSocket error"),
     WEBSOCKET_CONNECTION_FAILED(7001, "WebSocket connection failed"),
-    WEBSOCKET_MESSAGE_FAILED(7002, "WebSocket message failed");
+    WEBSOCKET_MESSAGE_FAILED(7002, "WebSocket message failed"),
+    WEBSOCKET_RESPONDER_TYPE_OWNED_BY_FRAMEWORK(7003, "Panel responder message type is owned by the framework"),
+    WEBSOCKET_RESPONDER_TYPE_ALREADY_OWNED(7004, "Panel responder message type is already owned by another module"),
+    WEBSOCKET_RESPONDER_TIMEOUT(7005, "Panel responder did not complete within its timeout");
 
     private final int code;
     private final String defaultMessage;

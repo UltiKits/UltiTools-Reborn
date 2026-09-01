@@ -1,30 +1,49 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
+import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
+
 import org.mockbukkit.mockbukkit.MockBukkit;
-import org.mockbukkit.mockbukkit.ServerMock;
 
 /**
  * FileOperationManager 测试
@@ -65,6 +84,84 @@ class FileOperationManagerTest {
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * Points both {@code serverRoot} and the new {@code editableRoots} field at the same
+     * directory, so that a handler test built around {@code @TempDir} still clears the D-15
+     * editable-root gate. Reflecting {@code serverRoot} alone (the file's pre-existing pattern)
+     * is no longer sufficient once {@code editableRoots} is resolved independently at
+     * construction time — see Task 1's read_first notes.
+     */
+    private void setServerRootAndEditableRoots(File root) throws Exception {
+        setServerRootAndEditableRoots(root, root);
+    }
+
+    /**
+     * Overload letting a Task 3 containment test point {@code serverRoot} at the temp directory
+     * while the single editable root is a real subdirectory of it (e.g. {@code <tmp>/root}) —
+     * the shape every Task 3 bypass behaviour is described against.
+     */
+    private void setServerRootAndEditableRoots(File serverRootDir, File editableRoot) throws Exception {
+        setServerRootAndEditableRoots(fileOperationManager, serverRootDir, editableRoot);
+    }
+
+    /**
+     * Manager-parameterized overload (Plan 06-04) letting a test point a freshly-constructed
+     * {@link FileOperationManager} — one built against its own mocked {@code getRemoteActionLog()}
+     * — at the shared {@code tempDir}, rather than only ever reflecting into the base
+     * {@link #fileOperationManager} field.
+     */
+    private void setServerRootAndEditableRoots(FileOperationManager manager, File serverRootDir, File editableRoot)
+            throws Exception {
+        Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
+        serverRootField.setAccessible(true);
+        serverRootField.set(manager, serverRootDir);
+
+        Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
+        editableRootsField.setAccessible(true);
+        editableRootsField.set(manager, Collections.singletonList(editableRoot));
+    }
+
+    /**
+     * Reflects into the private {@code getSecureFile(String)} and unwraps
+     * {@link InvocationTargetException} so callers can assert directly on the thrown
+     * {@link SecurityException} (or the returned {@link File} on success).
+     */
+    private File invokeGetSecureFile(String path) throws Exception {
+        Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
+        getSecureFile.setAccessible(true);
+        try {
+            return (File) getSecureFile.invoke(fileOperationManager, path);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Publishes a fresh {@link UltiTools} mock whose {@code getConfig()} returns a real,
+     * standalone {@link YamlConfiguration} carrying only {@code ultipanel.files.editable-roots}
+     * (or nothing, for {@code roots == null}, to pin the absent-key default), then re-reads it
+     * into {@link #fileOperationManager} via the public {@code reloadRootsFromConfig()} seam —
+     * exactly the reload path the plan calls out as the reason that method is public.
+     */
+    private void configureEditableRoots(List<String> roots) {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            YamlConfiguration config = new YamlConfiguration();
+            if (roots != null) {
+                config.set("ultipanel.files.editable-roots", roots);
+            }
+            lenient().when(ultiTools.getConfig()).thenReturn(config);
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
+        fileOperationManager.reloadRootsFromConfig();
     }
 
     @Nested
@@ -145,7 +242,10 @@ class FileOperationManagerTest {
         @Test
         @DisplayName("应该移除开头的斜杠")
         void shouldRemoveLeadingSlash() throws Exception {
-            // Arrange
+            // Arrange — getSecureFile now resolves real containment against editableRoots (Task 3);
+            // point both fields at tempDir so the default-cwd fallback (no plugins/logs on disk) is
+            // not what's under test here.
+            setServerRootAndEditableRoots(tempDir);
             Method getSecureFile = FileOperationManager.class.getDeclaredMethod("getSecureFile", String.class);
             getSecureFile.setAccessible(true);
 
@@ -307,9 +407,7 @@ class FileOperationManagerTest {
             }
 
             // 设置 serverRoot 为 tempDir
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleRead = FileOperationManager.class.getDeclaredMethod(
                 "handleReadOperation", String.class, JsonObject.class, String.class);
@@ -334,9 +432,7 @@ class FileOperationManagerTest {
         @DisplayName("content 为 null 时应该返回错误")
         void shouldReturnErrorWhenContentIsNull() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
                 "handleWriteOperation", String.class, JsonObject.class, String.class);
@@ -356,9 +452,7 @@ class FileOperationManagerTest {
         @DisplayName("应该创建父目录")
         void shouldCreateParentDirectories() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleWrite = FileOperationManager.class.getDeclaredMethod(
                 "handleWriteOperation", String.class, JsonObject.class, String.class);
@@ -380,9 +474,7 @@ class FileOperationManagerTest {
         @DisplayName("append 模式应该追加内容")
         void appendModeShouldAppendContent() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             // 创建初始文件
             File testFile = new File(tempDir, "append.txt");
@@ -415,9 +507,7 @@ class FileOperationManagerTest {
         @DisplayName("目录不存在时应该返回错误")
         void shouldReturnErrorWhenDirectoryNotFound() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleList = FileOperationManager.class.getDeclaredMethod(
                 "handleListOperation", String.class, JsonObject.class, String.class);
@@ -434,9 +524,7 @@ class FileOperationManagerTest {
         @DisplayName("路径不是目录时应该返回错误")
         void shouldReturnErrorWhenPathIsNotDirectory() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testFile = new File(tempDir, "notdir.txt");
             testFile.createNewFile();
@@ -456,9 +544,7 @@ class FileOperationManagerTest {
         @DisplayName("应该列出目录内容")
         void shouldListDirectoryContents() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File subDir = new File(tempDir, "listdir");
             subDir.mkdirs();
@@ -486,9 +572,7 @@ class FileOperationManagerTest {
         @DisplayName("文件不存在时应该返回错误")
         void shouldReturnErrorWhenFileNotFound() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             Method handleDelete = FileOperationManager.class.getDeclaredMethod(
                 "handleDeleteOperation", String.class, JsonObject.class, String.class);
@@ -505,9 +589,7 @@ class FileOperationManagerTest {
         @DisplayName("应该删除文件")
         void shouldDeleteFile() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testFile = new File(tempDir, "todelete.txt");
             testFile.createNewFile();
@@ -524,12 +606,10 @@ class FileOperationManagerTest {
         }
 
         @Test
-        @DisplayName("应该递归删除目录")
+        @DisplayName("recursive: true 时应该递归删除目录（D-20 起需要显式请求）")
         void shouldDeleteDirectoryRecursively() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "todeleteDir");
             testDir.mkdirs();
@@ -539,8 +619,12 @@ class FileOperationManagerTest {
                 "handleDeleteOperation", String.class, JsonObject.class, String.class);
             handleDelete.setAccessible(true);
 
+            // D-20: a directory delete now requires an explicit recursive:true opt-in.
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", true);
+
             // Act
-            handleDelete.invoke(fileOperationManager, "todeleteDir", new JsonObject(), "op-11");
+            handleDelete.invoke(fileOperationManager, "todeleteDir", operationData, "op-11");
 
             // Assert
             assertThat(testDir.exists()).isFalse();
@@ -571,12 +655,10 @@ class FileOperationManagerTest {
     class HandleListOperationFilterTests {
 
         @Test
-        @DisplayName("should exclude blocked files from directory listing")
+        @DisplayName("should mark blocked files in the listing rather than omitting them (D-18)")
         void shouldExcludeBlockedFilesFromListing() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             // Create a subdirectory with a mix of allowed and blocked files
             File testDir = new File(tempDir, "serverdir");
@@ -594,7 +676,7 @@ class FileOperationManagerTest {
             // Act
             handleList.invoke(fileOperationManager, "serverdir", new JsonObject(), "filter-test");
 
-            // Assert - verify the WebSocket message was sent with filtered results
+            // Assert - verify the WebSocket message was sent with marked (not filtered) results
             org.mockito.ArgumentCaptor<JsonObject> captor = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
             org.mockito.Mockito.verify(mockWebSocketClient).sendMessage(captor.capture());
 
@@ -608,19 +690,25 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            // Allowed files should be present
-            assertThat(listedNames).contains("config.yml", "data.json");
-            // Blocked files should NOT be present
-            assertThat(listedNames).doesNotContain("server.properties", "ops.json", "plugin.jar");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "config.yml", "data.json", "server.properties", "ops.json", "plugin.jar");
+            // The allowed one carries accessible: true.
+            assertThat(findEntryByName(files, "config.yml").get("accessible").getAsBoolean()).isTrue();
+            // Blocked/credential files are marked accessible: false — data.json is now denied
+            // unconditionally (D-16/D-19), regardless of directory, not just
+            // server.properties/ops.json/plugin.jar's older rules.
+            for (String blocked : new String[] {"server.properties", "ops.json", "plugin.jar", "data.json"}) {
+                assertThat(findEntryByName(files, blocked).get("accessible").getAsBoolean())
+                        .as("entry: " + blocked).isFalse();
+            }
         }
 
         @Test
         @DisplayName("should still include directories in listing")
         void shouldIncludeDirectoriesInListing() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "dirtest");
             testDir.mkdirs();
@@ -653,12 +741,10 @@ class FileOperationManagerTest {
         }
 
         @Test
-        @DisplayName("should exclude all blocked extensions from listing")
+        @DisplayName("should mark all blocked extensions in the listing rather than omitting them (D-18)")
         void shouldExcludeAllBlockedExtensions() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "extdir");
             testDir.mkdirs();
@@ -688,17 +774,21 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            assertThat(listedNames).contains("allowed.txt");
-            assertThat(listedNames).doesNotContain("script.sh", "start.bat", "malware.exe", "MyClass.class");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "allowed.txt", "script.sh", "start.bat", "malware.exe", "MyClass.class");
+            assertThat(findEntryByName(files, "allowed.txt").get("accessible").getAsBoolean()).isTrue();
+            for (String blocked : new String[] {"script.sh", "start.bat", "malware.exe", "MyClass.class"}) {
+                assertThat(findEntryByName(files, blocked).get("accessible").getAsBoolean())
+                        .as("entry: " + blocked).isFalse();
+            }
         }
 
         @Test
-        @DisplayName("should exclude all blocked filenames from listing")
+        @DisplayName("should mark all blocked filenames in the listing rather than omitting them (D-18)")
         void shouldExcludeAllBlockedFilenames() throws Exception {
             // Arrange
-            Field serverRootField = FileOperationManager.class.getDeclaredField("serverRoot");
-            serverRootField.setAccessible(true);
-            serverRootField.set(fileOperationManager, tempDir);
+            setServerRootAndEditableRoots(tempDir);
 
             File testDir = new File(tempDir, "allblocked");
             testDir.mkdirs();
@@ -738,7 +828,13 @@ class FileOperationManagerTest {
                 listedNames.add(files.get(i).getAsJsonObject().get("name").getAsString());
             }
 
-            assertThat(listedNames).containsExactly("readme.txt");
+            // D-18: every entry is present, allowed or refused — nothing is filtered out.
+            assertThat(listedNames).containsExactlyInAnyOrder(
+                    "readme.txt", "server.properties", "ops.json", "whitelist.json", "banned-ips.json",
+                    "banned-players.json", "eula.txt", "usercache.json", "bukkit.yml", "spigot.yml",
+                    "paper.yml", "paper-global.yml", "paper-world-defaults.yml");
+            assertThat(findEntryByName(files, "readme.txt").get("accessible").getAsBoolean()).isTrue();
+            assertThat(findEntryByName(files, "server.properties").get("accessible").getAsBoolean()).isFalse();
         }
     }
 
@@ -751,12 +847,12 @@ class FileOperationManagerTest {
         void shouldBlockSensitiveFiles() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("server.properties")).isFalse();
-            assertThat(manager.isPathAllowed("ops.json")).isFalse();
-            assertThat(manager.isPathAllowed("whitelist.json")).isFalse();
-            assertThat(manager.isPathAllowed("banned-ips.json")).isFalse();
-            assertThat(manager.isPathAllowed("banned-players.json")).isFalse();
-            assertThat(manager.isPathAllowed("eula.txt")).isFalse();
+            assertThat(manager.isPathAllowed("server.properties").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("ops.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("whitelist.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("banned-ips.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("banned-players.json").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("eula.txt").isAllowed()).isFalse();
         }
 
         @Test
@@ -764,8 +860,16 @@ class FileOperationManagerTest {
         void shouldAllowPluginConfigs() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml")).isTrue();
-            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json")).isTrue();
+            assertThat(manager.isPathAllowed("plugins/UltiTools/config.yml").isAllowed()).isTrue();
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/settings.yml").isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("data.json 现在无论目录如何都被拒绝——凭据模式匹配文件名，不再局限于 UltiTools 自己的目录")
+        void dataJsonIsNowDeniedRegardlessOfDirectory() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed("plugins/MyPlugin/data.json").isAllowed()).isFalse();
         }
 
         @Test
@@ -773,8 +877,8 @@ class FileOperationManagerTest {
         void shouldBlockJarWrites() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed("plugins/evil.jar")).isFalse();
-            assertThat(manager.isPathAllowed("server.jar")).isFalse();
+            assertThat(manager.isPathAllowed("plugins/evil.jar").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("server.jar").isAllowed()).isFalse();
         }
 
         @Test
@@ -782,9 +886,1079 @@ class FileOperationManagerTest {
         void shouldBlockNullAndEmptyPaths() {
             FileOperationManager manager = new FileOperationManager();
 
-            assertThat(manager.isPathAllowed(null)).isFalse();
-            assertThat(manager.isPathAllowed("")).isFalse();
-            assertThat(manager.isPathAllowed("  ")).isFalse();
+            assertThat(manager.isPathAllowed(null).isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("").isAllowed()).isFalse();
+            assertThat(manager.isPathAllowed("  ").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("null/empty/whitespace 路径的拒绝是不可配置的")
+        void nullEmptyAndWhitespacePathsAreDeniedNonConfigurably() {
+            FileOperationManager manager = new FileOperationManager();
+
+            assertThat(manager.isPathAllowed(null).isConfigurable()).isFalse();
+            assertThat(manager.isPathAllowed("").isConfigurable()).isFalse();
+            assertThat(manager.isPathAllowed("   ").isConfigurable()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("可编辑根目录集合测试（D-14/D-15/D-17）")
+    class EditableRootSetTests {
+
+        @Test
+        @DisplayName("缺省情况下根集合恰好是 plugins 和 logs")
+        void defaultRootsArePluginsAndLogs() {
+            AccessDecision pluginsDecision = fileOperationManager.isPathAllowed("plugins/SomeModule/config.yml");
+            AccessDecision logsDecision = fileOperationManager.isPathAllowed("logs/latest.log");
+            AccessDecision worldDecision = fileOperationManager.isPathAllowed("world/level.dat");
+
+            assertThat(pluginsDecision.isAllowed()).isTrue();
+            assertThat(logsDecision.isAllowed()).isTrue();
+            assertThat(worldDecision.isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("world/level.dat 与 server.properties 均被拒绝")
+        void worldAndServerPropertiesAreRefused() {
+            assertThat(fileOperationManager.isPathAllowed("world/level.dat").isAllowed()).isFalse();
+            assertThat(fileOperationManager.isPathAllowed("server.properties").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("根集合之外的路径给出可配置拒绝，命名 ultipanel.files.editable-roots 与 config.yml")
+        void pathOutsideRootsReportsConfigurableRefusalNamingKeyAndFile() {
+            AccessDecision decision = fileOperationManager.isPathAllowed("world/level.dat");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isTrue();
+            assertThat(decision.getConfigKey()).isEqualTo("ultipanel.files.editable-roots");
+            assertThat(decision.getMessage())
+                    .contains("ultipanel.files.editable-roots")
+                    .contains("plugins/UltiTools/config.yml");
+        }
+
+        @Test
+        @DisplayName("单根不变量：配置为单一目录时，服务器根下其它路径被拒绝——若整服务器根边界回归，此用例必须变红")
+        void singleConfiguredRootRefusesEverythingElseUnderServerRoot() {
+            configureEditableRoots(Collections.singletonList("onlyroot"));
+
+            assertThat(fileOperationManager.isPathAllowed("onlyroot/config.yml").isAllowed()).isTrue();
+            assertThat(fileOperationManager.isPathAllowed("elsewhere/config.yml").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("根集合为空列表时，一切路径被拒绝，且拒绝是可配置的")
+        void emptyRootListRefusesEverythingConfigurably() {
+            configureEditableRoots(Collections.emptyList());
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/config.yml");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("缺失键回退到出厂默认值，与显式空列表（故意不授予任何目录）不同")
+        void absentKeyFallsBackToDefaultsDistinctFromExplicitEmptyList() {
+            configureEditableRoots(null);
+            assertThat(fileOperationManager.isPathAllowed("plugins/x.yml").isAllowed()).isTrue();
+
+            configureEditableRoots(Collections.emptyList());
+            assertThat(fileOperationManager.isPathAllowed("plugins/x.yml").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("同一段 outside-roots 原因文本，可配置与不可配置两条消息不相等")
+        void configurableAndNonConfigurableRefusalMessagesDiffer() {
+            String outsideRootsMessage = fileOperationManager.isPathAllowed("world/level.dat").getMessage();
+            String credentialMessage = fileOperationManager.isPathAllowed("server.properties").getMessage();
+
+            assertThat(outsideRootsMessage).isNotEqualTo(credentialMessage);
+        }
+    }
+
+    /**
+     * Top-level, NOT nested under a {@code @Nested} class: 06-VALIDATION.md's automated command
+     * is the bare {@code mvn -B -o test -Dtest=FileOperationManagerTest#shouldRejectCredentialFilesUnconditionally}
+     * with no {@code $NestedClass} qualifier, and Surefire's method-name filter does not descend
+     * into {@code @Nested} classes for that syntax — verified empirically: the identical method
+     * nested one level down ran 0 tests under that exact command.
+     */
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("凭据文件无论 editable-roots 如何配置都被拒绝，且拒绝是不可配置的")
+    @ValueSource(strings = {
+        "plugins/UltiTools/data.json",
+        "foo.key",
+        "plugins/certs/foo.pem",
+        "foo.p12",
+        "foo.jks",
+        "foo.keystore",
+        "secring.gpg",
+        ".env",
+        ".env.local",
+        "access_key.txt",
+        ".dev.vars",
+        "ops.json",
+        "server.properties",
+        "whitelist.json",
+        "banned-ips.json",
+        "eula.txt"
+    })
+    void shouldRejectCredentialFilesUnconditionally(String path) {
+        AccessDecision decision = fileOperationManager.isPathAllowed(path);
+
+        assertThat(decision.isAllowed()).as("path: " + path).isFalse();
+        assertThat(decision.isConfigurable()).as("path: " + path).isFalse();
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as
+     * {@link #shouldRejectCredentialFilesUnconditionally(String)} — 06-VALIDATION.md's automated
+     * command is the bare {@code FileOperationManagerTest#shouldRejectSiblingPrefixEscape}.
+     * <p>
+     * Pins T-06-16 (D-21): with the editable root's real path at {@code <tmp>/root}, a request
+     * resolving to the sibling {@code <tmp>/root-evil/x} must be refused. This is exactly ROADMAP
+     * criterion 4's {@code /allowed-root-evil} shape, reproduced against the editable root; the
+     * pre-6.3.0 defect was {@code String.startsWith} admitting it because {@code "/root-evil"}
+     * has {@code "/root"} as a literal character prefix.
+     */
+    @Test
+    @DisplayName("兄弟目录前缀转义（<root>-evil）必须被拒绝")
+    void shouldRejectSiblingPrefixEscape() throws Exception {
+        File root = new File(tempDir, "root");
+        root.mkdirs();
+        File siblingEvil = new File(tempDir, "root-evil");
+        siblingEvil.mkdirs();
+
+        setServerRootAndEditableRoots(tempDir, root);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("root-evil/x"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as above.
+     * <p>
+     * Pins T-06-17 (D-21): a symlink inside the editable root whose target resolves outside every
+     * root must be refused, because containment is checked against the {@code toRealPath()}
+     * result, never the requested path. Skips (does not fail) on a filesystem/user that refuses
+     * symlink creation, per Task 3's own instruction — this behaviour cannot be pinned there.
+     */
+    @Test
+    @DisplayName("根目录内指向根目录外的符号链接必须被拒绝")
+    void shouldRejectSymlinkEscape() throws Exception {
+        File root = new File(tempDir, "root");
+        root.mkdirs();
+        File outside = new File(tempDir, "outside");
+        outside.mkdirs();
+        File outsideFile = new File(outside, "somefile.txt");
+        assertThat(outsideFile.createNewFile()).isTrue();
+
+        try {
+            Files.createSymbolicLink(new File(root, "link").toPath(), outside.toPath());
+        } catch (IOException | UnsupportedOperationException e) {
+            Assumptions.assumeTrue(false,
+                    "symlink creation not permitted on this filesystem/user: " + e.getMessage());
+            return;
+        }
+
+        setServerRootAndEditableRoots(tempDir, root);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("root/link/somefile.txt"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as above.
+     * <p>
+     * Pins T-06-22 (D-21): on a case-sensitive filesystem (the CI runner), a request naming the
+     * wrong case for a real directory must be refused, not silently resolved. Guards itself with
+     * an explicit sensitivity probe (create a lowercase marker, check whether the uppercase name
+     * also resolves) and skips — rather than passing vacuously — on a case-insensitive filesystem,
+     * per Task 3's own instruction.
+     */
+    @Test
+    @DisplayName("大小写不匹配的路径在大小写敏感文件系统上必须被拒绝")
+    void shouldRejectCaseMismatchOnCaseSensitiveFs() throws Exception {
+        File pluginsDir = new File(tempDir, "plugins");
+        pluginsDir.mkdirs();
+        File fooFile = new File(pluginsDir, "foo.yml");
+        assertThat(fooFile.createNewFile()).isTrue();
+
+        boolean caseSensitiveFs = !new File(tempDir, "Plugins").exists();
+        Assumptions.assumeTrue(caseSensitiveFs,
+                "filesystem is case-insensitive; the case-mismatch refusal cannot be pinned here");
+
+        setServerRootAndEditableRoots(tempDir, pluginsDir);
+
+        assertThatThrownBy(() -> invokeGetSecureFile("Plugins/foo.yml"))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above.
+     * <p>
+     * Pins a phase-06 security-audit gap: a recursive delete of an ANCESTOR of the security
+     * directory (and of {@code plugins/UltiTools/data.json}) must not remove either. Before the
+     * fix, {@link com.ultikits.ultitools.manager.FileOperationManager}'s
+     * {@code isUnderSecurityDirectory} only ever ran against the exact requested path —
+     * {@code Path.startsWith} cannot make a shorter path "start with" a longer one — so a
+     * recursive delete of {@code plugins/UltiTools} or {@code plugins} consulted no policy at all
+     * about what was underneath it; {@code deleteDirectory}'s naked walk just deleted everything.
+     * Goes through the real {@link FileOperationManager#handleFileOperation} dispatch, not a
+     * reflective call into the private walker, so the assertion exercises the exact remote-API
+     * code path an operator's delete request would take, and asserts the protected files are
+     * still on disk afterward — the only assertion that actually proves the vulnerability rather
+     * than merely a refusal message.
+     */
+    @ParameterizedTest(name = "[{index}] deleting ''{0}'' recursively must not remove protected descendants")
+    @DisplayName("递归删除祖先目录不得清除其下受保护的安全目录与凭据文件")
+    @ValueSource(strings = {"plugins/UltiTools", "plugins"})
+    void recursiveDeleteOfAncestorMustNotDeleteProtectedDescendants(String ancestorPath) throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File securityDir = new File(tempDir, "plugins/UltiTools/security");
+        assertThat(securityDir.mkdirs()).isTrue();
+        File actionLog = new File(securityDir, "action.log");
+        assertThat(actionLog.createNewFile()).isTrue();
+        File dataJson = new File(tempDir, "plugins/UltiTools/data.json");
+        assertThat(dataJson.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", ancestorPath);
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "ancestor-delete-" + ancestorPath.replace('/', '-'));
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+
+        // Assert the actual filesystem effect FIRST — this is the assertion that proves the
+        // vulnerability, not merely a refusal message. Against the unfixed code these files are
+        // genuinely gone by this point (deleteDirectory already ran).
+        assertThat(actionLog)
+                .as("the remote action log must survive a recursive delete of '" + ancestorPath + "'")
+                .exists();
+        assertThat(dataJson)
+                .as("the UltiCloud credential file must survive a recursive delete of '" + ancestorPath + "'")
+                .exists();
+
+        assertThat(entryCaptor.getValue().getVerdict())
+                .as("recording exactly one DENIED entry, never an ALLOWED one, for a refused ancestor delete")
+                .isEqualTo(RemoteActionLog.Verdict.DENIED);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above. Regression guard: the
+     * pre-existing direct rule (D-23/D-31) — deleting the security directory itself — must still
+     * be refused once the ancestor gate is added alongside it.
+     */
+    @Test
+    @DisplayName("回归防护：直接递归删除 plugins/UltiTools/security 本身仍应被拒绝（既有规则）")
+    void recursiveDeleteOfSecurityDirectoryItselfStillRefused() throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File securityDir = new File(tempDir, "plugins/UltiTools/security");
+        assertThat(securityDir.mkdirs()).isTrue();
+        File actionLog = new File(securityDir, "action.log");
+        assertThat(actionLog.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", "plugins/UltiTools/security");
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "direct-security-delete");
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+        assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(actionLog).exists();
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason as the tests above. Negative control: an
+     * ordinary module directory that contains nothing unconditionally protected must still be
+     * deletable through the same recursive-delete path — the ancestor gate must not become an
+     * over-broad denial of ordinary operator use.
+     */
+    @Test
+    @DisplayName("不应过度拒绝：不含受保护路径的普通模块目录仍可递归删除")
+    void recursiveDeleteOfOrdinarySiblingDirectoryStillSucceeds() throws Exception {
+        RemoteActionLog mockLog = mock(RemoteActionLog.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+            lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockLog);
+        });
+        FileOperationManager manager = new FileOperationManager();
+        manager.setWebSocketClient(mockWebSocketClient);
+        setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+        File otherModuleDir = new File(tempDir, "plugins/SomeOtherModule");
+        assertThat(otherModuleDir.mkdirs()).isTrue();
+        File config = new File(otherModuleDir, "config.yml");
+        assertThat(config.createNewFile()).isTrue();
+
+        JsonObject operationData = new JsonObject();
+        operationData.addProperty("operation", "delete");
+        operationData.addProperty("path", "plugins/SomeOtherModule");
+        operationData.addProperty("recursive", true);
+        operationData.addProperty("operationId", "ordinary-sibling-delete");
+
+        manager.handleFileOperation(operationData);
+
+        ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockLog, timeout(2000).times(1)).record(entryCaptor.capture());
+        assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(otherModuleDir).doesNotExist();
+    }
+
+    @Nested
+    @DisplayName("不可配置的凭据拒绝层测试（D-16/D-19/D-23）")
+    class CredentialDenyLayerTests {
+
+        @Test
+        @DisplayName("granting 'plugins' as an editable root does not make plugins/UltiTools/data.json readable")
+        void grantingPluginsRootDoesNotUnlockDataJson() {
+            configureEditableRoots(Collections.singletonList("plugins"));
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/data.json");
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(decision.isConfigurable()).isFalse();
+        }
+
+        @Test
+        @DisplayName("data.json.bak 不被 data.json 规则捕获——精确 basename 匹配，不是子串匹配")
+        void dataJsonBakIsNotCaughtByTheDataJsonRule() {
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/SomeModule/data.json.bak");
+
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("plugins/UltiTools/security/ 下的任何路径与该目录本身都被拒绝——动作日志无法通过它记录的 API 被读取或删除")
+        void securityDirectoryAndItsContentsAreRejectedUnconditionally() {
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security/action.log").isAllowed())
+                    .isFalse();
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security/action.log.0").isAllowed())
+                    .isFalse();
+            assertThat(fileOperationManager.isPathAllowed("plugins/UltiTools/security").isAllowed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("同名前缀的兄弟目录 security-backup 不被 security/ 前缀规则捕获")
+        void siblingDirectoryWithSamePrefixIsNotCaughtBySecurityRule() {
+            AccessDecision decision = fileOperationManager.isPathAllowed(
+                    "plugins/UltiTools/security-backup/note.txt");
+
+            assertThat(decision.isAllowed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("凭据拒绝层不读取任何配置键——即便根集合为空，凭据文件的拒绝原因依旧是不可配置")
+        void denyLayerDoesNotConsultConfiguration() {
+            configureEditableRoots(Collections.emptyList());
+
+            AccessDecision decision = fileOperationManager.isPathAllowed("plugins/UltiTools/data.json");
+
+            assertThat(decision.isConfigurable())
+                    .as("credential refusal must stay non-configurable even when the root set is also refusing")
+                    .isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("getSecureFile 的分段感知包含检查测试（D-21）")
+    class SegmentAwareContainmentTests {
+
+        @Test
+        @DisplayName("<root>/sub/file.yml 应被放行")
+        void requestUnderRootIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            File sub = new File(root, "sub");
+            sub.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            File result = invokeGetSecureFile("root/sub/file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("写入尚不存在的目录下的新文件——解析最近的已存在祖先而不是抛出异常")
+        void createIntoNotYetExistingDirectoryIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            // Neither "new" nor "file.yml" exist yet — only "root" does.
+            File result = invokeGetSecureFile("root/new/file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("最近已存在祖先解析到根集合之外时被拒绝——祖先松弛不能被用作逃逸手段")
+        void requestWhoseNearestExistingAncestorIsOutsideEveryRootIsRefused() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            // "nowhere" does not exist anywhere under tempDir — its nearest existing ancestor is
+            // tempDir itself, which is NOT the configured root (tempDir/root).
+            assertThatThrownBy(() -> invokeGetSecureFile("nowhere/deep/file.yml"))
+                    .isInstanceOf(SecurityException.class);
+        }
+
+        @Test
+        @DisplayName("规范化后落在根内的 .. 路径被放行")
+        void dotDotPathThatCanonicalizesInsideRootIsAdmitted() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            File sub = new File(root, "sub");
+            sub.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            File result = invokeGetSecureFile("root/sub/../file.yml");
+
+            assertThat(result.getName()).isEqualTo("file.yml");
+        }
+
+        @Test
+        @DisplayName("规范化后落在根外的 .. 路径被拒绝")
+        void dotDotPathThatCanonicalizesOutsideEveryRootIsRefused() throws Exception {
+            File root = new File(tempDir, "root");
+            root.mkdirs();
+            setServerRootAndEditableRoots(tempDir, root);
+
+            assertThatThrownBy(() -> invokeGetSecureFile("root/../elsewhere/file.yml"))
+                    .isInstanceOf(SecurityException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("拒绝理由透传给面板测试（D-17，Plan 06-04 Task 1）")
+    class ReasonCarryingRefusalTests {
+
+        @Test
+        @DisplayName("根集合之外的读取拒绝消息同时包含 ultipanel.files.editable-roots 与 plugins/UltiTools/config.yml")
+        void readRefusalOutsideRootsNamesConfigKeyAndFile() throws Exception {
+            JsonObject captured = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+
+            assertThat(captured.get("message").getAsString())
+                    .contains("ultipanel.files.editable-roots")
+                    .contains("plugins/UltiTools/config.yml");
+        }
+
+        @Test
+        @DisplayName("data.json 的读取拒绝消息与根集合之外的拒绝消息不相等，且说明该限制不可通过配置改变")
+        void readRefusalForCredentialFileDiffersFromOutsideRootsRefusal() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleReadOperation", "plugins/UltiTools/data.json");
+
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("写入拒绝消息同样区分两种原因")
+        void writeRefusalDistinguishesTwoCauses() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleWriteOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleWriteOperation", "plugins/UltiTools/data.json");
+
+            assertThat(outsideRoots.get("message").getAsString()).contains("ultipanel.files.editable-roots");
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("删除拒绝消息同样区分两种原因")
+        void deleteRefusalDistinguishesTwoCauses() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleDeleteOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleDeleteOperation", "plugins/UltiTools/data.json");
+
+            assertThat(outsideRoots.get("message").getAsString()).contains("ultipanel.files.editable-roots");
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("旧的通用 'Access denied' 文案不应再出现在拒绝消息中")
+        void refusalMessageDoesNotUseOldGenericWording() throws Exception {
+            JsonObject captured = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+
+            assertThat(captured.get("message").getAsString())
+                    .doesNotContain("Access denied: this file is protected");
+        }
+
+        /**
+         * Invokes one of the four private handlers via reflection against the base
+         * {@link #fileOperationManager} (default editable roots: {@code plugins}, {@code logs}) and
+         * returns the {@code data} object of the single captured panel message.
+         */
+        private JsonObject invokeHandlerAndCapturePanelMessage(String handlerName, String path) throws Exception {
+            org.mockito.Mockito.reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+
+            Method handler = FileOperationManager.class.getDeclaredMethod(
+                    handlerName, String.class, JsonObject.class, String.class);
+            handler.setAccessible(true);
+            handler.invoke(fileOperationManager, path, new JsonObject(), "reason-test");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+    }
+
+    @Nested
+    @DisplayName("文件操作动作日志记录测试（D-22，Plan 06-04 Task 1）")
+    class ActionLogRecordingTests {
+
+        private RemoteActionLog mockRemoteActionLog;
+
+        /**
+         * Mirrors {@code CommandExecutionManagerTest.ActionLogRecordingTests}'s pattern: publishes
+         * a fresh {@link UltiTools} mock whose {@code getRemoteActionLog()} returns a captured test
+         * double, then constructs a fresh {@link FileOperationManager} and points both its
+         * {@code serverRoot} and its single editable root at {@link #tempDir} — a full grant, so
+         * the only way to reach a DENIED decision in these tests is the unconditional credential
+         * deny layer, which ignores root configuration entirely.
+         */
+        private FileOperationManager createManagerWithMockedActionLog() throws Exception {
+            mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+            return manager;
+        }
+
+        @Test
+        @DisplayName("read：拒绝时恰好记录一条 DENIED，原因与面板消息一致，能力为 FILE_READ")
+        void deniedReadRecordsExactlyOneDeniedEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "read");
+            operationData.addProperty("path", "plugins/UltiTools/data.json");
+            operationData.addProperty("operationId", "al-read-denied");
+            operationData.addProperty("executor", "some-admin");
+
+            manager.handleFileOperation(operationData);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.FILE_READ.name());
+            assertThat(entry.getAction()).isEqualTo("file_operation:read");
+            assertThat(entry.getTarget()).isEqualTo("plugins/UltiTools/data.json");
+            assertThat(entry.getActor()).isEqualTo("some-admin");
+            assertThat(entry.getReason()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("read：允许时恰好记录一条 ALLOWED，actor 缺省回退为 'panel'")
+        void allowedReadRecordsExactlyOneAllowedEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("operation", "read");
+            operationData.addProperty("path", "somefile.txt");
+            operationData.addProperty("operationId", "al-read-allowed");
+
+            manager.handleFileOperation(operationData);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.FILE_READ.name());
+            assertThat(entry.getActor()).isEqualTo("panel");
+        }
+
+        @Test
+        @DisplayName("write：拒绝与允许各记录恰好一条")
+        void writeRecordsExactlyOneEntryPerOutcome() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "write");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-write-denied");
+            denied.addProperty("content", "x");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "write");
+            allowed.addProperty("path", "newfile.txt");
+            allowed.addProperty("operationId", "al-write-allowed");
+            allowed.addProperty("content", "x");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("delete：拒绝与允许各记录恰好一条")
+        void deleteRecordsExactlyOneEntryPerOutcome() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "delete");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-delete-denied");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            File toDelete = new File(tempDir, "al-delete-me.txt");
+            assertThat(toDelete.createNewFile()).isTrue();
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "delete");
+            allowed.addProperty("path", "al-delete-me.txt");
+            allowed.addProperty("operationId", "al-delete-allowed");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("list：拒绝记录恰好一条；允许时即便有三个子项，也只记录一条——决策记录的是操作本身而非每一行")
+        void listRecordsExactlyOneEntryRegardlessOfChildCount() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+
+            JsonObject denied = new JsonObject();
+            denied.addProperty("operation", "list");
+            denied.addProperty("path", "server.properties");
+            denied.addProperty("operationId", "al-list-denied");
+            manager.handleFileOperation(denied);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.DENIED));
+
+            org.mockito.Mockito.reset(mockRemoteActionLog);
+            File listDir = new File(tempDir, "al-listdir");
+            listDir.mkdirs();
+            new File(listDir, "a.txt").createNewFile();
+            new File(listDir, "b.txt").createNewFile();
+            new File(listDir, "c.txt").createNewFile();
+            JsonObject allowed = new JsonObject();
+            allowed.addProperty("operation", "list");
+            allowed.addProperty("path", "al-listdir");
+            allowed.addProperty("operationId", "al-list-allowed");
+            manager.handleFileOperation(allowed);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(
+                    ArgumentMatchers.argThat(e -> e.getVerdict() == RemoteActionLog.Verdict.ALLOWED));
+        }
+
+        @Test
+        @DisplayName("不支持的操作不产生任何动作日志记录")
+        void unsupportedOperationRecordsNoEntry() throws Exception {
+            FileOperationManager manager = createManagerWithMockedActionLog();
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "unsupported");
+            data.addProperty("path", "whatever.txt");
+            data.addProperty("operationId", "al-unsupported");
+
+            manager.handleFileOperation(data);
+
+            verify(mockWebSocketClient, timeout(2000).times(1)).sendMessage(ArgumentMatchers.any(JsonObject.class));
+            verify(mockRemoteActionLog, after(300).never()).record(ArgumentMatchers.any());
+        }
+
+        @Test
+        @DisplayName("RemoteActionLog 为 null 时记录是静默 no-op")
+        void nullRemoteActionLogIsSilentNoOp() throws Exception {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "read");
+            data.addProperty("path", "somefile.txt");
+            data.addProperty("operationId", "al-null-log");
+
+            manager.handleFileOperation(data);
+
+            verify(mockWebSocketClient, timeout(2000).times(1)).sendMessage(ArgumentMatchers.any(JsonObject.class));
+        }
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason established by Plan 06-03 —
+     * 06-VALIDATION.md's automated command is the bare
+     * {@code FileOperationManagerTest#shouldMarkInaccessibleEntriesInList} with no
+     * {@code $NestedClass} qualifier.
+     * <p>
+     * Pins D-18: listing a directory containing one permitted file and one credential file (D-16)
+     * returns <b>both</b> entries — the permitted one {@code accessible: true} with all six
+     * pre-6.3.0 fields intact, the credential one {@code accessible: false} with reason
+     * {@code PROTECTED_CREDENTIAL} and none of the four withheld fields (size, lastModified,
+     * readable, writable). Today's behaviour (pre-Task-2) would silently drop the credential entry
+     * from the result — this is the silent shape D-17/D-18 exist to remove.
+     */
+    @Test
+    @DisplayName("目录列表标记不可访问的项，而不是省略它们（D-18）")
+    void shouldMarkInaccessibleEntriesInList() throws Exception {
+        setServerRootAndEditableRoots(tempDir);
+
+        File dir = new File(tempDir, "marklist");
+        dir.mkdirs();
+        new File(dir, "allowed.txt").createNewFile();
+        new File(dir, "data.json").createNewFile(); // unconditionally denied credential file (D-16)
+
+        com.google.gson.JsonArray files = invokeListAndCaptureFiles("marklist");
+
+        assertThat(files.size()).isEqualTo(2);
+
+        JsonObject allowed = findEntryByName(files, "allowed.txt");
+        assertThat(allowed.get("accessible").getAsBoolean()).isTrue();
+        assertThat(allowed.has("reason")).isFalse();
+        assertThat(allowed.has("size")).isTrue();
+        assertThat(allowed.has("lastModified")).isTrue();
+        assertThat(allowed.has("readable")).isTrue();
+        assertThat(allowed.has("writable")).isTrue();
+
+        JsonObject credential = findEntryByName(files, "data.json");
+        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
+        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
+        assertThat(credential.has("size")).isFalse();
+        assertThat(credential.has("lastModified")).isFalse();
+        assertThat(credential.has("readable")).isFalse();
+        assertThat(credential.has("writable")).isFalse();
+    }
+
+    @Nested
+    @DisplayName("目录列表标记的补充覆盖测试（D-18，Plan 06-04 Task 2）")
+    class ListMarkingTests {
+
+        @Test
+        @DisplayName("totalCount 等于返回数组长度，即便目录内含被拒绝的项")
+        void totalCountMatchesArrayLengthWithRefusedEntry() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "totalcount");
+            dir.mkdirs();
+            new File(dir, "ok.txt").createNewFile();
+            new File(dir, "data.json").createNewFile();
+
+            JsonObject data = invokeListAndCaptureData("totalcount");
+            com.google.gson.JsonArray files = data.getAsJsonArray("files");
+
+            assertThat(data.get("totalCount").getAsInt()).isEqualTo(files.size());
+            assertThat(files.size()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("子目录继续被列出——目录条目从不应用逐项检查，始终标记为可访问")
+        void subdirectoriesRemainListedAndAccessible() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "subdirtest");
+            dir.mkdirs();
+            new File(dir, "childdir").mkdirs();
+
+            com.google.gson.JsonArray files = invokeListAndCaptureFiles("subdirtest");
+
+            JsonObject childDir = findEntryByName(files, "childdir");
+            assertThat(childDir.get("isDirectory").getAsBoolean()).isTrue();
+            assertThat(childDir.get("accessible").getAsBoolean()).isTrue();
+        }
+
+        @Test
+        @DisplayName("旧版消费者只读取六个既有字段，看到的值与今天完全一致")
+        void olderConsumerFieldsUnchangedForAccessibleEntries() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "legacyfields");
+            dir.mkdirs();
+            File f = new File(dir, "plain.txt");
+            f.createNewFile();
+
+            com.google.gson.JsonArray files = invokeListAndCaptureFiles("legacyfields");
+            JsonObject entry = findEntryByName(files, "plain.txt");
+
+            assertThat(entry.get("name").getAsString()).isEqualTo("plain.txt");
+            assertThat(entry.get("isDirectory").getAsBoolean()).isFalse();
+            assertThat(entry.get("size").getAsLong()).isEqualTo(f.length());
+            assertThat(entry.get("lastModified").getAsLong()).isEqualTo(f.lastModified());
+            assertThat(entry.get("readable").getAsBoolean()).isEqualTo(f.canRead());
+            assertThat(entry.get("writable").getAsBoolean()).isEqualTo(f.canWrite());
+        }
+
+        /**
+         * Unit-tests the reason-code derivation directly (D-18's two codes): a configurable
+         * {@link AccessDecision} maps to {@code OUTSIDE_ROOTS}, a non-configurable one maps to
+         * {@code PROTECTED_CREDENTIAL}.
+         * <p>
+         * End-to-end, a listed child can only ever be marked {@code OUTSIDE_ROOTS} when the listed
+         * directory itself is an ancestor of an editable root rather than a descendant of one — a
+         * shape {@code getSecureFile}'s containment check (unchanged by this plan; see its
+         * prohibitions) never admits for the top-level directory, since {@code Path.startsWith}
+         * containment is monotonic under path extension: if the listed directory itself passed
+         * containment, every one of its children does too. This method pins the mapping directly,
+         * independent of whether today's concrete configuration surface can reach it for
+         * {@code list} specifically.
+         */
+        @Test
+        @DisplayName("原因码派生：可配置拒绝映射为 OUTSIDE_ROOTS，不可配置拒绝映射为 PROTECTED_CREDENTIAL")
+        void reasonCodeDerivationMapsBothCauses() throws Exception {
+            Method reasonCodeFor =
+                    FileOperationManager.class.getDeclaredMethod("reasonCodeFor", AccessDecision.class);
+            reasonCodeFor.setAccessible(true);
+
+            String outsideRoots = (String) reasonCodeFor.invoke(null,
+                    AccessDecision.deniedConfigurable("outside", "ultipanel.files.editable-roots"));
+            String protectedCredential = (String) reasonCodeFor.invoke(null,
+                    AccessDecision.deniedNonConfigurable("credential"));
+
+            assertThat(outsideRoots).isEqualTo("OUTSIDE_ROOTS");
+            assertThat(protectedCredential).isEqualTo("PROTECTED_CREDENTIAL");
+        }
+    }
+
+    private com.google.gson.JsonArray invokeListAndCaptureFiles(String path) throws Exception {
+        return invokeListAndCaptureData(path).getAsJsonArray("files");
+    }
+
+    private JsonObject invokeListAndCaptureData(String path) throws Exception {
+        org.mockito.Mockito.reset(mockWebSocketClient);
+        when(mockWebSocketClient.isConnected()).thenReturn(true);
+        when(mockWebSocketClient.getServerId()).thenReturn("test-server");
+
+        Method handleList = FileOperationManager.class.getDeclaredMethod(
+                "handleListOperation", String.class, JsonObject.class, String.class);
+        handleList.setAccessible(true);
+        handleList.invoke(fileOperationManager, path, new JsonObject(), "list-marking-test");
+
+        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+        verify(mockWebSocketClient).sendMessage(captor.capture());
+        return captor.getValue().getAsJsonObject("data");
+    }
+
+    private JsonObject findEntryByName(com.google.gson.JsonArray files, String name) {
+        for (int i = 0; i < files.size(); i++) {
+            JsonObject entry = files.get(i).getAsJsonObject();
+            if (name.equals(entry.get("name").getAsString())) {
+                return entry;
+            }
+        }
+        throw new AssertionError("No entry named '" + name + "' in list result: " + files);
+    }
+
+    /**
+     * Top-level for the same Surefire filtering reason established by Plan 06-03/06-04 Task 2 —
+     * 06-VALIDATION.md's automated command is the bare
+     * {@code FileOperationManagerTest#shouldRefuseRecursiveDeleteWithoutFlag} with no
+     * {@code $NestedClass} qualifier.
+     * <p>
+     * Pins D-20: a delete request naming a directory with no {@code recursive} member is refused
+     * — and, the assertion that matters, nothing is deleted. Today
+     * {@code {"operation":"delete","path":"world"}} recursively destroys the directory with no
+     * confirmation.
+     */
+    @Test
+    @DisplayName("目录删除缺少 recursive 标志时被拒绝，且什么都不删除（D-20）")
+    void shouldRefuseRecursiveDeleteWithoutFlag() throws Exception {
+        setServerRootAndEditableRoots(tempDir);
+
+        File dir = new File(tempDir, "world");
+        dir.mkdirs();
+        File child = new File(dir, "level.dat");
+        assertThat(child.createNewFile()).isTrue();
+
+        Method handleDelete = FileOperationManager.class.getDeclaredMethod(
+                "handleDeleteOperation", String.class, JsonObject.class, String.class);
+        handleDelete.setAccessible(true);
+
+        JsonObject operationData = new JsonObject();
+        // no "recursive" field
+
+        handleDelete.invoke(fileOperationManager, "world", operationData, "no-flag-test");
+
+        assertThat(dir.exists()).isTrue();
+        assertThat(child.exists()).isTrue();
+    }
+
+    @Nested
+    @DisplayName("递归删除标志的补充覆盖测试（D-20，Plan 06-04 Task 3）")
+    class RecursiveDeleteFlagTests {
+
+        private AccessDecision invokeDelete(String path, JsonObject operationData) throws Exception {
+            Method handleDelete = FileOperationManager.class.getDeclaredMethod(
+                    "handleDeleteOperation", String.class, JsonObject.class, String.class);
+            handleDelete.setAccessible(true);
+            return (AccessDecision) handleDelete.invoke(
+                    fileOperationManager, path, operationData, "recursive-flag-test");
+        }
+
+        @Test
+        @DisplayName("recursive: false 与缺失标志给出相同的拒绝，什么都不删除")
+        void recursiveFalseIsRefusedSameAsAbsent() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "falseflag");
+            dir.mkdirs();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", false);
+
+            AccessDecision decision = invokeDelete("falseflag", operationData);
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("recursive: true 时按今天的方式递归删除")
+        void recursiveTrueDeletesRecursively() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "trueflag");
+            dir.mkdirs();
+            new File(dir, "child.txt").createNewFile();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", true);
+
+            AccessDecision decision = invokeDelete("trueflag", operationData);
+
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(dir.exists()).isFalse();
+        }
+
+        @Test
+        @DisplayName("recursive 存在但不是布尔值（字符串 'false'）时被拒绝，而不是被强制转换")
+        void nonBooleanRecursiveIsRefusedRatherThanCoerced() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "stringflag");
+            dir.mkdirs();
+
+            JsonObject operationData = new JsonObject();
+            operationData.addProperty("recursive", "false");
+
+            AccessDecision decision = invokeDelete("stringflag", operationData);
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("删除普通文件不受 recursive 标志影响，缺失时依然成功")
+        void regularFileDeleteSucceedsWithoutFlag() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File file = new File(tempDir, "plain.txt");
+            assertThat(file.createNewFile()).isTrue();
+
+            AccessDecision decision = invokeDelete("plain.txt", new JsonObject());
+
+            assertThat(decision.isAllowed()).isTrue();
+            assertThat(file.exists()).isFalse();
+        }
+
+        @Test
+        @DisplayName("空目录同样需要该标志——守卫针对操作的形状，而非目录内容多少")
+        void emptyDirectoryIsRefusedWithoutFlag() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "emptynoflag");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("emptynoflag", new JsonObject());
+
+            assertThat(decision.isAllowed()).isFalse();
+            assertThat(dir.exists()).isTrue();
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝与路径策略拒绝可区分——不可配置，不命名任何配置键")
+        void missingFlagRefusalIsDistinguishableFromPathPolicyRefusal() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "distinguishtest");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("distinguishtest", new JsonObject());
+
+            assertThat(decision.isConfigurable()).isFalse();
+            assertThat(decision.getConfigKey()).isNull();
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝原因命名了 'recursive' 字段")
+        void missingFlagRefusalNamesTheField() throws Exception {
+            setServerRootAndEditableRoots(tempDir);
+            File dir = new File(tempDir, "namesfieldtest");
+            dir.mkdirs();
+
+            AccessDecision decision = invokeDelete("namesfieldtest", new JsonObject());
+
+            assertThat(decision.getMessage()).contains("recursive");
+        }
+
+        @Test
+        @DisplayName("缺失标志的拒绝也会记录到动作日志——恰好一条 DENIED")
+        void missingFlagRefusalIsRecordedInActionLog() throws Exception {
+            RemoteActionLog mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            FileOperationManager manager = new FileOperationManager();
+            manager.setWebSocketClient(mockWebSocketClient);
+            setServerRootAndEditableRoots(manager, tempDir, tempDir);
+
+            File dir = new File(tempDir, "actionlogflagtest");
+            dir.mkdirs();
+
+            JsonObject data = new JsonObject();
+            data.addProperty("operation", "delete");
+            data.addProperty("path", "actionlogflagtest");
+            data.addProperty("operationId", "action-log-flag-test");
+
+            manager.handleFileOperation(data);
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, timeout(2000).times(1)).record(entryCaptor.capture());
+            assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(dir.exists()).isTrue();
         }
     }
 }

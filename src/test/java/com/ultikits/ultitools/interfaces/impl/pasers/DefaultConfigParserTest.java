@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -79,5 +80,47 @@ class DefaultConfigParserTest {
             this.name = name;
             this.value = value;
         }
+    }
+
+    /**
+     * Reproduces the real UAT failure (Phase 06 issue): {@code UltiTools.onDisable()} ->
+     * {@code ConfigManager.saveAll()} -> {@code AbstractConfigEntity.save()} calls exactly
+     * {@code ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue)} for every
+     * {@code @ConfigEntry} field - which for the default parser is {@link
+     * DefaultConfigParser#serialize} (inherited, final, from {@link ConfigParser}). A
+     * {@code Map}-typed field value is not a basic type, {@code String}, or {@code List}, so it
+     * reaches {@link DefaultConfigParser#serializeToMemorySection(Object)}. Before the fix, that
+     * method reflected on the {@code LinkedHashMap} instance's own implementation fields (table/
+     * head/tail/modCount/serialVersionUID) instead of walking its entries, and on this JDK 21
+     * toolchain {@code field.setAccessible(true)} on a private {@code java.util} field throws
+     * {@link java.lang.reflect.InaccessibleObjectException} because {@code java.base} does not
+     * open {@code java.util} to an unnamed module.
+     * <p>
+     * Also proves the round trip stays lossless: what {@code serialize} writes, {@code parse}
+     * must read back as an equal map - not just "no exception".
+     */
+    @Test
+    void testSerializeMapWalksEntriesAndRoundTripsThroughParse() {
+        DefaultConfigParser parser = new DefaultConfigParser();
+        Map<String, String> input = new LinkedHashMap<>();
+        input.put("alpha", "one");
+        input.put("beta", "two");
+
+        // Same public entry point AbstractConfigEntity.save() calls: ConfigParser#serialize.
+        Object serialized = parser.serialize(input);
+
+        assertTrue(serialized instanceof MemorySection);
+        MemorySection section = (MemorySection) serialized;
+
+        // The entries themselves must be what got serialized - never LinkedHashMap's own
+        // reflective bookkeeping fields (table/size/modCount/serialVersionUID/...).
+        assertEquals(new HashSet<>(Arrays.asList("alpha", "beta")), section.getKeys(false));
+        assertEquals("one", section.getString("alpha"));
+        assertEquals("two", section.getString("beta"));
+
+        // Round trip: parse(serialize(map)) must equal the original map.
+        Object roundTripped = parser.parse(section);
+        assertTrue(roundTripped instanceof Map);
+        assertEquals(input, roundTripped);
     }
 }

@@ -5,20 +5,29 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.entities.AccessDecision;
+import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -46,6 +55,10 @@ class CommandExecutionManagerTest {
         mockLogger = mock(Logger.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
+            // An empty config (absent ultipanel.commands.blocklist key) so the constructor's
+            // loadConfiguration() falls through cleanly to the shipped default instead of hitting
+            // its failure branch on every test — a real UltiTools.getConfig() never returns null.
+            when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
         });
 
         // Mock WebSocket client
@@ -59,6 +72,26 @@ class CommandExecutionManagerTest {
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * Publishes a fresh {@link com.ultikits.ultitools.UltiTools} mock whose {@code getConfig()}
+     * returns a real, standalone {@link YamlConfiguration} carrying only
+     * {@code ultipanel.commands.blocklist} (or nothing, for {@code blocklist == null}, to pin the
+     * absent-key default), then constructs a new {@link CommandExecutionManager} so its
+     * constructor's {@code loadConfiguration()} call picks up the mocked config — mirrors
+     * {@code FileOperationManagerTest#configureEditableRoots}.
+     */
+    private CommandExecutionManager createManagerWithConfiguredBlocklist(List<String> blocklist) {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            YamlConfiguration config = new YamlConfiguration();
+            if (blocklist != null) {
+                config.set("ultipanel.commands.blocklist", blocklist);
+            }
+            when(ultiTools.getConfig()).thenReturn(config);
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
+        return new CommandExecutionManager();
     }
 
     @Nested
@@ -877,9 +910,9 @@ class CommandExecutionManagerTest {
             newManager.setBlockedCommands(blocked);
 
             // Assert
-            assertThat(newManager.isCommandAllowed("op player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("stop")).isFalse();
-            assertThat(newManager.isCommandAllowed("ban-ip 127.0.0.1")).isFalse();
+            assertThat(newManager.isCommandAllowed("op player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("stop").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("ban-ip 127.0.0.1").isAllowed()).isFalse();
         }
 
         @Test
@@ -891,9 +924,9 @@ class CommandExecutionManagerTest {
             newManager.setBlockedCommands(blocked);
 
             // Assert
-            assertThat(newManager.isCommandAllowed("say Hello")).isTrue();
-            assertThat(newManager.isCommandAllowed("list")).isTrue();
-            assertThat(newManager.isCommandAllowed("tps")).isTrue();
+            assertThat(newManager.isCommandAllowed("say Hello").isAllowed()).isTrue();
+            assertThat(newManager.isCommandAllowed("list").isAllowed()).isTrue();
+            assertThat(newManager.isCommandAllowed("tps").isAllowed()).isTrue();
         }
 
         @Test
@@ -905,7 +938,7 @@ class CommandExecutionManagerTest {
             newManager.setBlockedCommands(blocked);
 
             // Assert
-            assertThat(newManager.isCommandAllowed("/op player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("/op player123").isAllowed()).isFalse();
         }
 
         @Test
@@ -916,16 +949,16 @@ class CommandExecutionManagerTest {
             // Using default blocklist
 
             // Assert - test various dangerous commands
-            assertThat(newManager.isCommandAllowed("op someuser")).isFalse();
-            assertThat(newManager.isCommandAllowed("deop someuser")).isFalse();
-            assertThat(newManager.isCommandAllowed("stop")).isFalse();
-            assertThat(newManager.isCommandAllowed("restart")).isFalse();
-            assertThat(newManager.isCommandAllowed("reload")).isFalse();
-            assertThat(newManager.isCommandAllowed("ban-ip 1.2.3.4")).isFalse();
-            assertThat(newManager.isCommandAllowed("pardon-ip 1.2.3.4")).isFalse();
-            assertThat(newManager.isCommandAllowed("whitelist add player")).isFalse();
-            assertThat(newManager.isCommandAllowed("save-off")).isFalse();
-            assertThat(newManager.isCommandAllowed("save-all")).isFalse();
+            assertThat(newManager.isCommandAllowed("op someuser").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("deop someuser").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("stop").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("restart").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("reload").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("ban-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("pardon-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("whitelist add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("save-off").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("save-all").isAllowed()).isFalse();
         }
 
         @Test
@@ -937,9 +970,9 @@ class CommandExecutionManagerTest {
             newManager.setBlockedCommands(blocked);
 
             // Assert
-            assertThat(newManager.isCommandAllowed("OP player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("Op player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("oP player123")).isFalse();
+            assertThat(newManager.isCommandAllowed("OP player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("Op player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("oP player123").isAllowed()).isFalse();
         }
 
         @Test
@@ -949,9 +982,9 @@ class CommandExecutionManagerTest {
             CommandExecutionManager newManager = new CommandExecutionManager();
 
             // Assert
-            assertThat(newManager.isCommandAllowed(null)).isFalse();
-            assertThat(newManager.isCommandAllowed("")).isFalse();
-            assertThat(newManager.isCommandAllowed("   ")).isFalse();
+            assertThat(newManager.isCommandAllowed(null).isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("   ").isAllowed()).isFalse();
         }
 
         @Test
@@ -963,9 +996,9 @@ class CommandExecutionManagerTest {
             newManager.setBlockedCommands(blocked);
 
             // Assert
-            assertThat(newManager.isCommandAllowed("teleport player1 player2")).isFalse();
-            assertThat(newManager.isCommandAllowed("teleport @a ~ ~ ~")).isFalse();
-            assertThat(newManager.isCommandAllowed("  teleport   arg1   arg2  ")).isFalse();
+            assertThat(newManager.isCommandAllowed("teleport player1 player2").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("teleport @a ~ ~ ~").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("  teleport   arg1   arg2  ").isAllowed()).isFalse();
         }
 
         @Test
@@ -990,7 +1023,11 @@ class CommandExecutionManagerTest {
 
             JsonObject data = result.getAsJsonObject("data");
             assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString()).contains("blocked", "security");
+            // D-05: the refusal now names its cause and remedy — the config key and the file —
+            // instead of the old bare "blocked by security policy" text.
+            assertThat(data.get("output").getAsString())
+                    .contains("ultipanel.commands.blocklist")
+                    .contains("plugins/UltiTools/config.yml");
         }
 
         @Test
@@ -1017,17 +1054,17 @@ class CommandExecutionManagerTest {
         void shouldBlockNamespacePrefixedCommands() {
             CommandExecutionManager newManager = new CommandExecutionManager();
 
-            assertThat(newManager.isCommandAllowed("bukkit:op player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("minecraft:op player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("bukkit:deop player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("minecraft:stop")).isFalse();
-            assertThat(newManager.isCommandAllowed("bukkit:reload")).isFalse();
-            assertThat(newManager.isCommandAllowed("minecraft:ban-ip 1.2.3.4")).isFalse();
-            assertThat(newManager.isCommandAllowed("bukkit:whitelist add player")).isFalse();
-            assertThat(newManager.isCommandAllowed("minecraft:save-off")).isFalse();
-            assertThat(newManager.isCommandAllowed("minecraft:save-all")).isFalse();
-            assertThat(newManager.isCommandAllowed("bukkit:pardon-ip 1.2.3.4")).isFalse();
-            assertThat(newManager.isCommandAllowed("spigot:restart")).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:op player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:op player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:deop player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:stop").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:reload").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:ban-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:whitelist add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:save-off").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("minecraft:save-all").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("bukkit:pardon-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("spigot:restart").isAllowed()).isFalse();
         }
 
         @Test
@@ -1035,8 +1072,8 @@ class CommandExecutionManagerTest {
         void shouldBlockNamespacePrefixedCommandsWithSlash() {
             CommandExecutionManager newManager = new CommandExecutionManager();
 
-            assertThat(newManager.isCommandAllowed("/bukkit:op player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("/minecraft:stop")).isFalse();
+            assertThat(newManager.isCommandAllowed("/bukkit:op player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("/minecraft:stop").isAllowed()).isFalse();
         }
 
         @Test
@@ -1044,9 +1081,9 @@ class CommandExecutionManagerTest {
         void shouldBlockNamespacePrefixedCommandsCaseInsensitive() {
             CommandExecutionManager newManager = new CommandExecutionManager();
 
-            assertThat(newManager.isCommandAllowed("Bukkit:OP player123")).isFalse();
-            assertThat(newManager.isCommandAllowed("MINECRAFT:STOP")).isFalse();
-            assertThat(newManager.isCommandAllowed("Bukkit:Reload")).isFalse();
+            assertThat(newManager.isCommandAllowed("Bukkit:OP player123").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("MINECRAFT:STOP").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("Bukkit:Reload").isAllowed()).isFalse();
         }
 
         @Test
@@ -1054,9 +1091,9 @@ class CommandExecutionManagerTest {
         void shouldAllowSafeNamespacePrefixedCommands() {
             CommandExecutionManager newManager = new CommandExecutionManager();
 
-            assertThat(newManager.isCommandAllowed("bukkit:help")).isTrue();
-            assertThat(newManager.isCommandAllowed("minecraft:say Hello")).isTrue();
-            assertThat(newManager.isCommandAllowed("essentials:tps")).isTrue();
+            assertThat(newManager.isCommandAllowed("bukkit:help").isAllowed()).isTrue();
+            assertThat(newManager.isCommandAllowed("minecraft:say Hello").isAllowed()).isTrue();
+            assertThat(newManager.isCommandAllowed("essentials:tps").isAllowed()).isTrue();
         }
 
         @Test
@@ -1080,7 +1117,261 @@ class CommandExecutionManagerTest {
             JsonObject result = captor.getValue();
             JsonObject data = result.getAsJsonObject("data");
             assertThat(data.get("success").getAsBoolean()).isFalse();
-            assertThat(data.get("output").getAsString()).contains("blocked");
+            assertThat(data.get("output").getAsString()).contains("blocklist");
+        }
+    }
+
+    @Nested
+    @DisplayName("Action-Log Recording Tests")
+    class ActionLogRecordingTests {
+
+        private RemoteActionLog mockRemoteActionLog;
+
+        /**
+         * Publishes a fresh {@link com.ultikits.ultitools.UltiTools} mock whose
+         * {@code getRemoteActionLog()} returns a captured {@link RemoteActionLog} test double —
+         * this is what keeps these tests sub-second and filesystem-independent, mirroring
+         * {@code CapabilityGateTracerTest}'s pattern — then constructs a fresh
+         * {@link CommandExecutionManager} against it.
+         */
+        private CommandExecutionManager createManagerWithMockedActionLog() {
+            mockRemoteActionLog = mock(RemoteActionLog.class);
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+                when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
+            });
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            newManager.setWebSocketClient(mockWebSocketClient);
+            return newManager;
+        }
+
+        @Test
+        @DisplayName("a blocklisted command should record exactly one DENIED entry whose reason matches the panel message")
+        void deniedCommandShouldRecordExactlyOneDeniedActionLogEntry() {
+            // Arrange
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "op hacker123");
+            commandData.addProperty("executor", "some-admin");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "action-log-denied-test");
+
+            // Act
+            newManager.executeCommand(commandData);
+
+            // Assert — exactly one entry, DENIED, and its reason equals what was sent to the panel
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(entry.getAction()).isEqualTo("execute_command");
+            assertThat(entry.getTarget()).isEqualTo("op hacker123");
+            assertThat(entry.getActor()).isEqualTo("some-admin");
+
+            ArgumentCaptor<JsonObject> panelCaptor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(panelCaptor.capture());
+            String panelMessage = panelCaptor.getValue().getAsJsonObject("data").get("output").getAsString();
+            assertThat(entry.getReason()).isEqualTo(panelMessage);
+        }
+
+        @Test
+        @DisplayName("an allowed command should record exactly one ALLOWED entry before dispatch")
+        void allowedCommandShouldRecordExactlyOneAllowedActionLogEntry() {
+            // Arrange
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "say hello");
+            commandData.addProperty("commandId", "action-log-allowed-test");
+            // No "executor" field — actor should fall back to the literal "panel"
+
+            // Act
+            newManager.executeCommand(commandData);
+
+            // Assert
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+            assertThat(entry.getCapability()).isEqualTo(Capability.COMMANDS.name());
+            assertThat(entry.getAction()).isEqualTo("execute_command");
+            assertThat(entry.getTarget()).isEqualTo("say hello");
+            assertThat(entry.getActor()).isEqualTo("panel");
+        }
+
+        @Test
+        @DisplayName("an allowed command whose dispatch fails should still yield exactly one ALLOWED entry")
+        void allowedCommandWhoseDispatchFailsShouldStillYieldExactlyOneAllowedEntry() {
+            // Arrange — a command no registered handler will accept, so Bukkit.dispatchCommand
+            // returns false once the scheduled task actually runs
+            CommandExecutionManager newManager = createManagerWithMockedActionLog();
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "definitely-not-a-real-command-xyz");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "action-log-dispatch-fail-test");
+
+            // Act — record the decision, then let the scheduled dispatch actually run and fail
+            newManager.executeCommand(commandData);
+            server.getScheduler().performOneTick();
+
+            // Assert — the policy decision, not the execution result, drives the log: still
+            // exactly one entry, still ALLOWED
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            assertThat(entryCaptor.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        }
+
+        @Test
+        @DisplayName("a null RemoteActionLog should make every record call a silent no-op")
+        void nullRemoteActionLogShouldBeSilentNoOp() {
+            // Arrange — getRemoteActionLog() returns null (Mockito's unstubbed default)
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
+            });
+            CommandExecutionManager newManager = new CommandExecutionManager();
+            newManager.setWebSocketClient(mockWebSocketClient);
+
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", "op hacker");
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("async", false);
+            commandData.addProperty("commandId", "null-action-log-test");
+
+            // Act & Assert — no exception, command still refused normally
+            assertDoesNotThrow(() -> newManager.executeCommand(commandData));
+            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+        }
+    }
+
+    // --- Top-level (not @Nested): Surefire's bare -Dtest=Class#method filter used by
+    // 06-VALIDATION.md's automated commands does not descend into @Nested classes — verified
+    // empirically by Plan 06-03 (FileOperationManagerTest). Placing these four here, not inside
+    // CommandBlocklistTests, is what makes that exact command actually run them. ---
+
+    @Test
+    @DisplayName("should load the blocklist from ultipanel.commands.blocklist, honoring removals and empty lists")
+    void shouldLoadBlocklistFromConfig() {
+        // Arrange & Act — a configured list omitting "op" allows it, keeps "stop" blocked
+        CommandExecutionManager configuredManager =
+                createManagerWithConfiguredBlocklist(Arrays.asList("stop", "deop"));
+
+        // Assert
+        assertThat(configuredManager.isCommandAllowed("op").isAllowed()).isTrue();
+        assertThat(configuredManager.isCommandAllowed("stop").isAllowed()).isFalse();
+
+        // Act — an explicit empty list is D-03's honest escape value: block nothing
+        CommandExecutionManager emptyBlocklistManager =
+                createManagerWithConfiguredBlocklist(Collections.emptyList());
+
+        // Assert
+        assertThat(emptyBlocklistManager.isCommandAllowed("op").isAllowed()).isTrue();
+        assertThat(emptyBlocklistManager.isCommandAllowed("stop").isAllowed()).isTrue();
+
+        // Act — an absent key is NOT the same as an empty list; it falls back to the
+        // shipped ten-command default (T-06-12)
+        CommandExecutionManager defaultManager = createManagerWithConfiguredBlocklist(null);
+
+        // Assert
+        assertThat(defaultManager.isCommandAllowed("op").isAllowed()).isFalse();
+        assertThat(defaultManager.isCommandAllowed("say hi").isAllowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("should return a refusal that names its config key and file")
+    void shouldReturnRefusalWithConfigKey() {
+        // Arrange
+        CommandExecutionManager newManager = new CommandExecutionManager();
+
+        // Act
+        AccessDecision decision = newManager.isCommandAllowed("op");
+
+        // Assert
+        assertThat(decision.isAllowed()).isFalse();
+        assertThat(decision.isConfigurable()).isTrue();
+        assertThat(decision.getConfigKey()).isEqualTo("ultipanel.commands.blocklist");
+        assertThat(decision.getMessage())
+                .contains("ultipanel.commands.blocklist")
+                .contains("plugins/UltiTools/config.yml");
+    }
+
+    @Test
+    @DisplayName("should distinguish malformed input from a blocklist hit")
+    void shouldDistinguishMalformedInputFromBlocklistHit() {
+        // Arrange
+        CommandExecutionManager newManager = new CommandExecutionManager();
+
+        // Act
+        AccessDecision blank = newManager.isCommandAllowed("   ");
+        AccessDecision nullCommand = newManager.isCommandAllowed(null);
+        AccessDecision blocked = newManager.isCommandAllowed("op");
+
+        // Assert — malformed input carries no config key, since no config change makes a
+        // blank command valid
+        assertThat(blank.isConfigurable()).isFalse();
+        assertThat(blank.getConfigKey()).isNull();
+        assertThat(nullCommand.isConfigurable()).isFalse();
+        assertThat(nullCommand.getConfigKey()).isNull();
+        assertThat(blocked.isConfigurable()).isTrue();
+        assertThat(blank.getReason()).isNotEqualTo(blocked.getReason());
+    }
+
+    @Test
+    @DisplayName("a command refused by isCommandAllowed should never reach dispatch, through any code path")
+    void refusedCommandShouldNeverReachDispatch() {
+        // Arrange — the only production call site for isCommandAllowed is executeCommand's
+        // own refusal branch; no other public method on this manager consults the blocklist
+        CommandExecutionManager configuredManager =
+                createManagerWithConfiguredBlocklist(Collections.singletonList("help"));
+        configuredManager.setWebSocketClient(mockWebSocketClient);
+
+        JsonObject commandData = new JsonObject();
+        commandData.addProperty("command", "help");
+        commandData.addProperty("executor", "console");
+        commandData.addProperty("async", false);
+        commandData.addProperty("commandId", "guard-test");
+
+        int initialTaskCount = server.getScheduler().getPendingTasks().size();
+
+        // Act
+        configuredManager.executeCommand(commandData);
+
+        // Assert
+        assertThat(server.getScheduler().getPendingTasks().size()).isEqualTo(initialTaskCount);
+    }
+
+    @Test
+    @DisplayName("should deny blocklisted commands even under a Turkish default locale (dotless-i bypass)")
+    void shouldDenyBlocklistedCommandsUnderTurkishLocale() {
+        // In tr_TR, String.toLowerCase() (no Locale argument) maps 'I' to the dotless 'ı'
+        // (U+0131), not 'i' — so "BAN-IP".toLowerCase() under that locale yields "ban-ıp", which
+        // no longer matches the blocklist entry "ban-ip". Pin the fix with the real default-locale
+        // switch, not a mocked Locale, since the defect is specifically in an unqualified
+        // toLowerCase() call reading JVM global state.
+        java.util.Locale originalLocale = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(new java.util.Locale("tr", "TR"));
+
+            CommandExecutionManager newManager = new CommandExecutionManager();
+
+            // Uppercase forms — these are the ones that diverge under tr_TR toLowerCase()
+            assertThat(newManager.isCommandAllowed("BAN-IP 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("WHITELIST add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("PARDON-IP 1.2.3.4").isAllowed()).isFalse();
+
+            // Lowercase forms must still be denied too, so this test cannot pass by accident
+            // (e.g. by a blocklist mutation that happens to also break the uppercase case).
+            assertThat(newManager.isCommandAllowed("ban-ip 1.2.3.4").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("whitelist add player").isAllowed()).isFalse();
+            assertThat(newManager.isCommandAllowed("pardon-ip 1.2.3.4").isAllowed()).isFalse();
+        } finally {
+            // MUST restore: a leaked default locale corrupts every later test in the 5340-test
+            // suite, not just this class.
+            java.util.Locale.setDefault(originalLocale);
         }
     }
 }
