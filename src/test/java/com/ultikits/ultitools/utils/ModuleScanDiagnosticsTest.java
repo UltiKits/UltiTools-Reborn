@@ -36,6 +36,12 @@ class ModuleScanDiagnosticsTest {
     void setUp() {
         captured.clear();
         diagnosticsLogger = Logger.getLogger(ModuleScanDiagnostics.class.getName());
+        // Force ALL explicitly rather than relying on ModuleScanDiagnostics' own static
+        // initializer having already run with a level some other test in the full suite has not
+        // since narrowed -- java.util.logging state is JVM-wide, not per-test-class, and this
+        // class's FINE-level assertion (unlike every other capture-handler test in this tree,
+        // which only ever asserts WARNING/SEVERE) is the one sensitive to that ambient state.
+        diagnosticsLogger.setLevel(Level.ALL);
         captureHandler = new Handler() {
             @Override
             public void publish(LogRecord record) {
@@ -52,6 +58,7 @@ class ModuleScanDiagnosticsTest {
                 // nothing to release
             }
         };
+        captureHandler.setLevel(Level.ALL);
         diagnosticsLogger.addHandler(captureHandler);
     }
 
