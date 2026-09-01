@@ -1,8 +1,6 @@
 package com.ultikits.ultitools.interfaces;
 
-import com.ultikits.ultitools.interfaces.impl.PlayerTempListener;
 import com.ultikits.ultitools.interfaces.impl.SimpleTempListener;
-import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
@@ -46,27 +44,6 @@ public interface TempListener extends Listener {
      */
     static <E extends Event> DefaultTempListenerBuilder<E> common(Class<E> eventClass) {
         return new DefaultTempListenerBuilder<>(eventClass);
-    }
-
-    /**
-     * Create a player temporary listener builder.
-     * <br>
-     * 创建一个玩家临时监听器构建器。
-     *
-     * @deprecated Use {@link #common(Class)} instead.
-     * You can use {@link DefaultTempListenerBuilder#filter(Function)} to filter player events.
-     * <br>
-     * 使用 {@link #common(Class)} 代替。
-     * 你可以使用 {@link DefaultTempListenerBuilder#filter(Function)} 来过滤玩家事件。
-     *
-     * @param eventClass Event class <br> 事件类
-     * @param <E>        PlayerEvent type <br> 玩家事件类型
-     * @return Builder <br> 构建器
-     * @removeIn 6.3.0
-     */
-    @Deprecated(since = "6.1.0", forRemoval = true)
-    static <E extends PlayerEvent> PlayerTempListenerBuilder<E> player(Class<E> eventClass) {
-        return new PlayerTempListenerBuilder<E>().eventClass(eventClass);
     }
 
     /**
@@ -174,55 +151,6 @@ public interface TempListener extends Listener {
          */
         public void listen(TempEventHandler<E> handler) {
             new SimpleTempListener<>(eventClass, priority, handler, filter).register();
-        }
-    }
-
-    /**
-     * Builder for player-scoped temporary listeners.
-     * <p>
-     * 玩家维度临时监听器的构建器。
-     *
-     * @param <E> PlayerEvent type <br> 玩家事件类型
-     * @deprecated Use {@link #common(Class)} instead, narrowing with
-     *             {@link DefaultTempListenerBuilder#filter(Function)}.
-     *             <p>
-     *             请改用 {@link #common(Class)}，并用
-     *             {@link DefaultTempListenerBuilder#filter(Function)} 收窄范围。
-     * @removeIn 6.3.0
-     */
-    @Deprecated(since = "6.1.0", forRemoval = true)
-    class PlayerTempListenerBuilder<E extends PlayerEvent> {
-        private Class<E> eventClass;
-        private TempEventHandler<E> eventHandler;
-        private EventPriority priority = EventPriority.NORMAL;
-        private Player player;
-
-        public PlayerTempListenerBuilder<E> eventClass(Class<E> eventClass) {
-            this.eventClass = eventClass;
-            return this;
-        }
-
-        public PlayerTempListenerBuilder<E> eventHandler(TempEventHandler<E> eventHandler) {
-            this.eventHandler = eventHandler;
-            return this;
-        }
-
-        public PlayerTempListenerBuilder<E> priority(EventPriority priority) {
-            this.priority = priority;
-            return this;
-        }
-
-        public PlayerTempListenerBuilder<E> player(Player player) {
-            this.player = player;
-            return this;
-        }
-
-        public TempListener build() {
-            return new PlayerTempListener<>(eventClass, priority, eventHandler, player);
-        }
-
-        public void listen(TempEventHandler<E> handler) {
-            new PlayerTempListener<>(eventClass, priority, handler, player).register();
         }
     }
 }
