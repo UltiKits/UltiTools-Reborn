@@ -24,6 +24,7 @@ import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 
 import org.jetbrains.annotations.ApiStatus;
 
@@ -76,7 +77,7 @@ public class ComponentScanner {
                     // Classes on disk (development mode)
                     File directory = new File(resource.getFile());
                     if (directory.exists()) {
-                        scanDirectory(directory, basePackage, classLoader);
+                        scanDirectory(directory, basePackage, classLoader, basePackage);
                     }
                 } else if ("jar".equals(protocol)) {
                     // Classes inside a JAR file (production mode)
@@ -94,6 +95,11 @@ public class ComponentScanner {
             // failure - logged at WARNING and never forwarded to the UltiPanel dashboard
             // (D-24).
             LOGGER.log(Level.WARNING, "Failed to scan package: " + basePackage, e);
+        } finally {
+            // D-19: one SEVERE summary for this basePackage's scan, if (and only if) either
+            // catch block below recorded a skipped class into the accumulator. A healthy scan
+            // never invokes the emitter at all -- see ModuleScanDiagnostics' own class javadoc.
+            ModuleScanDiagnostics.emitSummary(basePackage);
         }
     }
 
@@ -125,7 +131,12 @@ public class ComponentScanner {
                         // D-26). LinkageError covers NoClassDefFoundError,
                         // UnsupportedClassVersionError and ExceptionInInitializerError with one
                         // clause - the same union scanDirectory uses below, so the same missing
-                        // class behaves identically on both scan modes.
+                        // class behaves identically on both scan modes. D-19 escalates the
+                        // diagnostics without overturning D-25/D-26's skip-and-continue: the
+                        // WARNING stays exactly as it was, and this class is also accumulated so
+                        // scanPackage's finally block can emit one loud, named summary for the
+                        // whole module once its scan finishes.
+                        ModuleScanDiagnostics.recordSkippedClass(basePackage, className, e);
                         LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }
@@ -140,13 +151,28 @@ public class ComponentScanner {
      * Scan directory for class files.
      * <br>
      * 扫描目录以查找类文件。
+     *
+     * @param directory   the directory to scan <br> 待扫描的目录
+     * @param packageName the dotted package name for {@code directory}, growing with each
+     *                    recursive descent into a subdirectory <br>
+     *                    {@code directory} 对应的点分隔包名，随每次递归进入子目录而增长
+     * @param classLoader the class loader to load discovered classes with <br> 用于加载所发现类的类加载器
+     * @param moduleName  the D-19 diagnostic identifier for this scan -- fixed at the original
+     *                    {@code basePackage} for the whole recursion, deliberately NOT the
+     *                    per-recursion {@code packageName} above, so a class three subdirectories
+     *                    deep is still attributed to the same module {@code scanPackage}'s
+     *                    {@code finally} block will emit a summary for <br>
+     *                    本次扫描的 D-19 诊断标识——在整个递归过程中固定为最初的
+     *                    {@code basePackage}，刻意不使用上面逐层增长的 {@code packageName}，
+     *                    这样即便是三层子目录之下的类，也仍归属于 {@code scanPackage} 的
+     *                    {@code finally} 块最终会为之输出汇总的同一个模块
      */
-    private void scanDirectory(File directory, String packageName, ClassLoader classLoader) {
+    private void scanDirectory(File directory, String packageName, ClassLoader classLoader, String moduleName) {
         File[] files = directory.listFiles();
         if (files != null) {
             for (File file : files) {
                 if (file.isDirectory()) {
-                    scanDirectory(file, packageName + "." + file.getName(), classLoader);
+                    scanDirectory(file, packageName + "." + file.getName(), classLoader, moduleName);
                 } else if (file.getName().endsWith(".class")) {
                     String className = packageName + "." + file.getName().substring(0, file.getName().length() - 6);
                     try {
@@ -157,6 +183,9 @@ public class ComponentScanner {
                         // D-26). Same union as scanJar's per-class catch above - the same
                         // missing/unlinkable class must behave identically on both scan modes,
                         // rather than one skipping a class and the other killing the package.
+                        // D-19 escalates the diagnostics without overturning D-25/D-26's
+                        // skip-and-continue -- see the matching comment in scanJar above.
+                        ModuleScanDiagnostics.recordSkippedClass(moduleName, className, e);
                         LOGGER.log(Level.WARNING, "Failed to load scanned class: " + className, e);
                     }
                 }

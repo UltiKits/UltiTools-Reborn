@@ -76,6 +76,7 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
@@ -539,6 +540,9 @@ public class PluginManager {
                     }
                 } catch (ClassNotFoundException | LinkageError e) {
                     // 记录但不中断，继续扫描其他类
+                    // D-19: also accumulated for the one-SEVERE-per-module summary this method's
+                    // finally block emits below -- skip-and-continue itself is unchanged.
+                    ModuleScanDiagnostics.recordSkippedClass(pluginJar.getName(), className, e);
                     Bukkit.getLogger().log(Level.FINE,
                         "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
                 } catch (SecurityException e) {
@@ -548,8 +552,13 @@ public class PluginManager {
                 }
             }
         } catch (IOException | LinkageError | RuntimeException e) {
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
+        } finally {
+            // D-19: fires whether the method returned early (main class found), fell through
+            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
+            // exactly once per call, after the scan loop, naming pluginJar as the module.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
         }
         return null;
     }
@@ -599,11 +608,18 @@ public class PluginManager {
                             + "not enforced, so no entity is silently dropped).");
                 }
 
-                resolveEntityClass(className).ifPresent(entities::add);
+                resolveEntityClass(className, pluginJar.getName()).ifPresent(entities::add);
             }
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to scan jar for entities: " + pluginJar.getName(), e);
+        } finally {
+            // D-19: fires after the entity scan loop finishes, whether it completed normally or
+            // the jar itself could not be read -- exactly once per call, naming pluginJar as the
+            // module. Independent of loadPluginMainClass's own emitSummary call above: the two
+            // scan the same jar for different purposes and may run at different times, so each
+            // owns its own accumulator lifecycle for the classes it individually recorded.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
         }
         return entities;
     }
@@ -639,17 +655,25 @@ public class PluginManager {
      * {@link #scanEntitiesInJar} 逐条目使用。永不抛出异常：无法加载的类，或加载成功但不是实体的类，
      * 都会解析为 {@code Optional.empty()}。
      *
-     * @param className the dotted class name to load <br> 待加载的点分隔类名
+     * @param className  the dotted class name to load <br> 待加载的点分隔类名
+     * @param moduleName the D-19 diagnostic identifier for the enclosing {@link
+     *                   #scanEntitiesInJar}'s jar, threaded through so this method's own catch
+     *                   block can accumulate into the correct module <br>
+     *                   外层 {@link #scanEntitiesInJar} 所在 jar 的 D-19 诊断标识，一并传入以便
+     *                   本方法自身的 catch 块能累加到正确的模块下
      * @return the loaded class if it is a {@code @Table} entity, otherwise empty <br>
      *         若加载的类是 {@code @Table} 实体则返回该类，否则为空
      */
-    private static Optional<Class<?>> resolveEntityClass(String className) {
+    private static Optional<Class<?>> resolveEntityClass(String className, String moduleName) {
         try {
             Class<?> aClass = ClassLoaderUtils.loadClass(className);
             if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
                 return Optional.of(aClass);
             }
         } catch (ClassNotFoundException | LinkageError e) {
+            // D-19: also accumulated for scanEntitiesInJar's one-SEVERE-per-module summary --
+            // skip-and-continue itself is unchanged.
+            ModuleScanDiagnostics.recordSkippedClass(moduleName, className, e);
             Bukkit.getLogger().log(Level.FINE,
                 "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
         } catch (SecurityException e) {
