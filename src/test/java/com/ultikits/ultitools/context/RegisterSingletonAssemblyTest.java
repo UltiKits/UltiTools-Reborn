@@ -584,8 +584,13 @@ class RegisterSingletonAssemblyTest {
                     .thenReturn(new org.bukkit.configuration.file.YamlConfiguration());
 
             PluginManager pluginManager = new PluginManager();
+            // Plan 07-14 (GEN-04) removed the deprecated with-args initializePlugin(ClassLoader,
+            // Class, Object...) overload; this call always passed an empty constructorArgs array,
+            // which that overload's own javadoc documented as routing straight through to the
+            // two-argument overload anyway (SILENT-17) -- retargeting the reflection changes
+            // nothing about what this test observes.
             Method initializePlugin = PluginManager.class.getDeclaredMethod(
-                    "initializePlugin", ClassLoader.class, Class.class, Object[].class);
+                    "initializePlugin", ClassLoader.class, Class.class);
             initializePlugin.setAccessible(true);
 
             Object plugin;
@@ -599,7 +604,7 @@ class RegisterSingletonAssemblyTest {
                 ultiToolsStatic.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 ultiToolsStatic.when(UltiTools::getPluginVersion).thenReturn(Integer.MAX_VALUE);
 
-                plugin = initializePlugin.invoke(pluginManager, loader, pluginClass, new Object[0]);
+                plugin = initializePlugin.invoke(pluginManager, loader, pluginClass);
             }
 
             assertNotNull(plugin, "initializePlugin must not refuse this module");
