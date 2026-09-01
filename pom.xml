@@ -518,6 +518,27 @@
                                  declared no members of its own beyond the inherited getInstance()
                                  override, confirmed against target/japicmp/japicmp.xml. -->
                             <exclude>com.ultikits.ultitools.abstracts.AbstractCommendExecutor</exclude>
+                            <!-- 07-17-PLAN.md (GEN-11): the seven-type WIRE-17 WebSocket dispatch
+                                 cluster japicmp replaced with the PluginInitiationUtils dispatch
+                                 table back in Phase 1 (plan 01-05), but which stayed in the tree
+                                 unreferenced until this plan deleted it. All seven are
+                                 `@ApiStatus.Internal` (websocket/package-info.java and
+                                 websocket/handlers/package-info.java before its own deletion), so
+                                 removing them is NOT a public-API compatibility event per
+                                 COMPATIBILITY.md:128-133 and they carry no COMPATIBILITY.md
+                                 removal-list entry — but japicmp reads bytecode, not
+                                 `@ApiStatus`, so it reports these exactly as it would a public
+                                 removal, which is why they still need entries here (06-CONTEXT
+                                 D-30's precedent, D-15 in 07-CONTEXT). Each is a whole-class
+                                 removal — one entry per type covers the class and every one of
+                                 its members, confirmed against target/japicmp/japicmp.xml. -->
+                            <exclude>com.ultikits.ultitools.websocket.MessageHandlerRegistry</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.WebSocketMessageHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.CommandExecutionHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.FileOperationHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
