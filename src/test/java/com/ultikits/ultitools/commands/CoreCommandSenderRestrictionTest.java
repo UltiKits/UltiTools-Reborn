@@ -11,8 +11,9 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 
 /**
  * Pins the resolved sender type of the framework's three core commands - {@code /ul},
- * {@code /ulticloud} and {@code /upm} - as they stood on 6.2.5, before plan 07-05 migrates them
- * from {@code AbstractCommandExecutor} to {@code BaseCommandExecutor}.
+ * {@code /ulticloud} and {@code /upm} - as they stood on 6.2.5, before plan 07-05 migrated them
+ * from {@code AbstractCommandExecutor} to {@code BaseCommandExecutor}. {@code
+ * AbstractCommandExecutor} itself was later removed entirely by plan 07-15 (6.3.0).
  * <p>
  * The migration swaps a base class, not an annotation, so a compiler cannot catch a resolved
  * sender type silently flipping. This test drives every assertion through
@@ -40,8 +41,8 @@ class CoreCommandSenderRestrictionTest {
      * Reads a class's declared {@code @CmdTarget} value directly. This is the one place in this
      * test that reads the annotation without going through {@code CmdTargetComposition} - it
      * exists only to obtain the class-level input that gets fed into {@code resolve}, mirroring
-     * exactly what {@code AbstractCommandExecutor#checkSender} and
-     * {@code SenderTypeValidator#determineTargetType} both do before delegating to the shared
+     * exactly what the removed (6.3.0) {@code AbstractCommandExecutor#checkSender} and
+     * {@code SenderTypeValidator#determineTargetType} both did before delegating to the shared
      * resolution call.
      */
     private static CmdTarget.CmdTargetType classLevelValue(Class<?> commandClass) {

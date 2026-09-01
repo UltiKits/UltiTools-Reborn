@@ -1651,7 +1651,7 @@ public class PluginManager {
      * freshly built default one) holds no instance of the corresponding validator type
      * (SILENT-11 / D-01 half 2, D-04). Every {@link CommandExecutor} bean in {@code pluginContext}
      * is checked; a bean that is not a {@link BaseCommandExecutor} (the legacy
-     * {@code AbstractCommandExecutor} generation has no {@link
+     * {@code AbstractCommandExecutor} generation -- removed in 6.3.0 -- never had a {@link
      * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} at all) is skipped.
      * <p>
      * This is a STRUCTURAL check only -- it asks whether the required validator TYPE is present
@@ -1666,7 +1666,7 @@ public class PluginManager {
      * 所经过的那一条，而不是重新构建的默认链）中不包含对应验证器类型的实例
      * （SILENT-11 / D-01 第二部分, D-04）。{@code pluginContext} 中每一个 {@link CommandExecutor}
      * bean 都会被检查；不是 {@link BaseCommandExecutor} 的 bean（旧一代
-     * {@code AbstractCommandExecutor} 根本没有 {@link
+     * {@code AbstractCommandExecutor}——已在 6.3.0 中移除——从来就没有 {@link
      * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain}）会被跳过。
      * <p>
      * 这只是一个结构性检查——只问链中是否存在所需验证器的类型，从不问某次具体调用是否真的会被

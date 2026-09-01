@@ -655,7 +655,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         // before the split: "".split(" ") returns a length-1 array holding one empty
         // string, so both comparisons below read the wrong thing -- with no arguments it
         // sees 1 != 0 and rejects, and with one argument it sees 1 == 1 and accepts.
-        // AbstractCommandExecutor.checkParameters carries the equivalent guard.
+        // The removed AbstractCommandExecutor.checkParameters (deleted 6.3.0) carried the
+        // equivalent guard.
         if (format.isEmpty()) {
             if (args.length == 0) {
                 return true;

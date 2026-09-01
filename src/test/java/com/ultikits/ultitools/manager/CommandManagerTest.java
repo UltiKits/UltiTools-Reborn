@@ -33,7 +33,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
@@ -87,7 +86,7 @@ class CommandManagerTest {
      * 测试用命令执行器 - 有 @CmdExecutor 注解
      */
     @CmdExecutor(alias = {"testcmd"}, permission = "test.cmd", description = "Test command")
-    static class TestCommandExecutor extends AbstractCommandExecutor {
+    static class TestCommandExecutor extends BaseCommandExecutor {
 
         @CmdMapping(format = "")
         public void execute(@CmdSender CommandSender sender) {
@@ -120,7 +119,7 @@ class CommandManagerTest {
      * 测试用命令执行器 - manualRegister = true
      */
     @CmdExecutor(alias = {"manualcmd"}, permission = "manual.cmd", description = "Manual command", manualRegister = true)
-    static class ManualRegisterCommandExecutor extends AbstractCommandExecutor {
+    static class ManualRegisterCommandExecutor extends BaseCommandExecutor {
         @Override
         public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
             return true;

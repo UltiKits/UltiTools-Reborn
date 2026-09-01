@@ -177,9 +177,9 @@ class PluginManagerAutoRegisterAliasTest {
      * package-scan overloads neither consult {@code manualRegister()} (listener side) nor
      * {@code @ConditionalOnConfig} (command side, because the container's own gating during
      * {@code scanComponents} never runs for a class the overload finds by raw reflection), and
-     * the command side additionally casts to the legacy {@code AbstractCommandExecutor}, which
-     * throws an uncaught {@code ClassCastException} for any class extending the current {@code
-     * BaseCommandExecutor} (issue #272).
+     * the command side additionally casts to the legacy {@code AbstractCommandExecutor} (removed
+     * in 6.3.0 by plan 07-15), which threw an uncaught {@code ClassCastException} for any class
+     * extending the current {@code BaseCommandExecutor} (issue #272).
      * <p>
      * {@code registerBukkit} now has a single one-argument signature reached identically from
      * both {@code register(Class)} and {@code register(UltiToolsPlugin)} -- these tests reuse the
@@ -272,7 +272,8 @@ class PluginManagerAutoRegisterAliasTest {
 
                 Assertions.assertDoesNotThrow(() -> invokeRegisterBukkit(plugin),
                         "a @CmdExecutor extending BaseCommandExecutor must never reach the legacy "
-                                + "AbstractCommandExecutor cast on the connector path (difference #9)");
+                                + "AbstractCommandExecutor cast on the connector path (difference "
+                                + "#9; AbstractCommandExecutor itself was removed in 6.3.0)");
 
                 assertThat(realCommandMap.getCommand("conditionalfalsecmd"))
                         .as("a false @ConditionalOnConfig command must never reach Bukkit's "

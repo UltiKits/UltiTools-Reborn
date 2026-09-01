@@ -18,21 +18,21 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionContext;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 
 /**
- * Single tab-completion dispatch implementation shared by both command-executor generations
- * (WIRE-01 / D-06).
+ * Single tab-completion dispatch implementation originally shared by both command-executor
+ * generations (WIRE-01 / D-06); {@code AbstractCommandExecutor} was removed in 6.3.0, so
+ * {@link BaseCommandExecutor} is now this class's only caller.
  * <p>
- * {@link BaseCommandExecutor} and the deprecated
- * {@code com.ultikits.ultitools.abstracts.AbstractCommandExecutor} each scan their own
- * {@code @CmdMapping} methods into an independent {@code BiMap<String, Method>} and do not share
- * a class hierarchy, so neither can simply inherit a single {@code suggest} implementation from a
- * common supertype. This class is the alternative both delegate to: a stateless dispatch entered
- * with the caller's own mapping table and {@code this}.
+ * {@link BaseCommandExecutor} and the removed {@code AbstractCommandExecutor} each scanned their
+ * own {@code @CmdMapping} methods into an independent {@code BiMap<String, Method>} and did not
+ * share a class hierarchy, so neither could simply inherit a single {@code suggest}
+ * implementation from a common supertype. This class was the alternative both delegated to: a
+ * stateless dispatch entered with the caller's own mapping table and {@code this}.
  * <p>
  * Two responsibilities live here that were previously either duplicated or entirely absent:
  * <ul>
  *     <li>The mapping-level {@code @CmdMapping(permission=)}/{@code requireOp()} guard
  *     ({@link #checkPermission(CommandSender, Method)}/{@link #checkOp(CommandSender, Method)}),
- *     relocated -- not copied -- from the deprecated class's private methods of the same name
+ *     relocated -- not copied -- from the removed (6.3.0) AbstractCommandExecutor's private methods of the same name
  *     (T-05-20 / T-05-21). {@code BaseCommandExecutor.suggest} had ZERO permission checks before
  *     this class existed, so migrating a command onto the current generation leaked the entire
  *     sub-command table to unprivileged players.</li>
@@ -45,8 +45,8 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
  * resolved {@code <param>} slot is handed to
  * {@link TabCompletionManager#suggest(TabCompletionContext)}, which reaches
  * {@code MethodInvocationCompleter}. That completer walks the class hierarchy (issue #190), so an
- * AOP-proxied executor's suggestion method resolves correctly; the deprecated class's own eight
- * private reflection helpers did not.
+ * AOP-proxied executor's suggestion method resolves correctly; the removed (6.3.0)
+ * AbstractCommandExecutor's own eight private reflection helpers did not.
  * <p>
  * {@code @key} notation (a {@code suggest()} value starting with {@code @}) resolves through
  * {@link TabCompletionManager#resolveSuggestValue(Method, String)} +
@@ -70,7 +70,7 @@ public final class CommandTabCompletionDispatch {
      * <p>
      * Both generations' {@code suggest(Player, Command, String[])} reduce to a one-line
      * delegation to this method -- see {@link BaseCommandExecutor#suggest(Player, Command,
-     * String[])} and the deprecated class's own shell.
+     * String[])} and the removed (6.3.0) AbstractCommandExecutor's own former shell.
      *
      * @param mappings         the executor's own format-to-method mapping table
      * @param player           the player requesting completion
@@ -95,8 +95,8 @@ public final class CommandTabCompletionDispatch {
     /**
      * First-token completion: literal command formats, permission-filtered before they enter the
      * candidate map, then delegated to {@link TabCompletionManager#suggestFirstArgs(Map,
-     * TabCompletionContext)} for the package's existing sort-and-dedup semantics. The deprecated
-     * class's own first-token branch neither sorted nor deduplicated -- adopting the package's
+     * TabCompletionContext)} for the package's existing sort-and-dedup semantics. The removed (6.3.0) AbstractCommandExecutor's
+     * own first-token branch neither sorted nor deduplicated -- adopting the package's
      * behaviour here is a deliberate, named change (see plan 05-05's SUMMARY).
      */
     private static List<String> suggestFirstToken(BiMap<String, Method> mappings, Player player,
@@ -191,7 +191,7 @@ public final class CommandTabCompletionDispatch {
 
     /**
      * Permission-filtered before it can contribute a suggestion -- T-05-20's mitigation extended
-     * to this branch too. The pre-refactor {@code AbstractCommandExecutor.suggest}'s equivalent
+     * to this branch too. The removed (6.3.0) {@code AbstractCommandExecutor.suggest}'s equivalent
      * else-branch scanned every sibling format unconditionally; both generations now share this
      * gated version.
      */
@@ -234,7 +234,7 @@ public final class CommandTabCompletionDispatch {
      * "no permission" message while typing unrelated sub-commands, because every mapping this
      * class's first-token and literal-sibling-token paths evaluate for visibility went through
      * the SAME messaging {@code checkPermission}/{@code checkOp} used by actual command dispatch
-     * (the deprecated {@code AbstractCommandExecutor.onCommand}'s call site). Tab completion is
+     * (the removed (6.3.0) {@code AbstractCommandExecutor.onCommand}'s call site). Tab completion is
      * not a command invocation: filtering an unprivileged sender's candidates out silently is
      * correct, but re-sending the rejection notice on every keystroke that happens to
      * re-evaluate a gated mapping is not. {@link #checkPermission(CommandSender, Method)} and
@@ -254,12 +254,12 @@ public final class CommandTabCompletionDispatch {
      * completion (or dispatch) entirely before it can contribute anything, rather than filtering
      * an already-assembled list afterwards.
      * <p>
-     * Relocated -- not copied -- from the deprecated {@code AbstractCommandExecutor}'s private
+     * Relocated -- not copied -- from the removed (6.3.0) {@code AbstractCommandExecutor}'s private
      * method of the same name and signature (T-05-20). Behaviour is byte-for-byte identical,
-     * including the {@code sendMessage} on denial, which both base-class generations inherit
-     * unchanged from the pre-existing class this predicate was ported from. This method remains
-     * the actual-dispatch guard for the deprecated {@code AbstractCommandExecutor.onCommand}
-     * (its call site is unchanged); tab completion's own visibility filter now goes through the
+     * including the {@code sendMessage} on denial, which both base-class generations inherited
+     * unchanged from the pre-existing class this predicate was ported from, back when both
+     * generations coexisted. This method remains {@link BaseCommandExecutor}'s actual-dispatch
+     * guard (its call site is unchanged); tab completion's own visibility filter goes through the
      * silent {@link #isPermissionSatisfied(CommandSender, Method)} instead (T-05-fix Part 3).
      *
      * @param sender the command sender being checked
@@ -277,10 +277,11 @@ public final class CommandTabCompletionDispatch {
 
     /**
      * Mapping-level OP guard, the {@code requireOp()} counterpart to {@link
-     * #checkPermission(CommandSender, Method)}. Relocated -- not copied -- from the deprecated
-     * {@code AbstractCommandExecutor}'s private method of the same name and signature (T-05-21).
-     * Remains the actual-dispatch guard, unchanged; tab completion's visibility filter goes
-     * through the silent {@link #isOpSatisfied(CommandSender, Method)} instead (T-05-fix Part 3).
+     * #checkPermission(CommandSender, Method)}. Relocated -- not copied -- from the removed
+     * (6.3.0) {@code AbstractCommandExecutor}'s private method of the same name and signature
+     * (T-05-21). Remains the actual-dispatch guard, unchanged; tab completion's visibility
+     * filter goes through the silent {@link #isOpSatisfied(CommandSender, Method)} instead
+     * (T-05-fix Part 3).
      *
      * @param sender the command sender being checked
      * @param method the matched {@code @CmdMapping} method
