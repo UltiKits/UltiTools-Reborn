@@ -3,106 +3,119 @@ package com.ultikits.ultitools.utils;
 import java.io.File;
 import java.io.IOException;
 import java.util.Enumeration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Logger;
 import java.util.logging.Level;
 
 /**
- * Security policy configuration for UltiTools class loading and reflection operations.
- * This class defines security rules and validation logic to prevent malicious code execution.
+ * <b>Provides NO runtime constraint on class loading or reflection (GEN-07, D-12, since 6.3.0).</b>
+ * {@link #isSafeClassName(String)} and {@link #isSafeParameterType(Class)} now unconditionally
+ * return {@code true}; {@link #addTrustedPackage(String)} and {@link #addDangerousClass(String)}
+ * are no-ops. The three name-based filter layers this class used to enforce never protected
+ * anything: they evaluated already-trusted, already-loaded classes on the framework's own
+ * classpath, not arbitrary untrusted input, and the trusted-package whitelist alone would have
+ * refused nearly every third-party module class ({@code TRUSTED_PACKAGE_PREFIXES} held no
+ * third-party package). See the package-private {@code ClassloadFilterAudit} (D-14) for what
+ * these removed layers would have refused, recorded as telemetry rather than enforced.
+ * <p>
+ * This class still performs plugin-scan-time JAR STRUCTURE filtering only:
+ * {@link #isSafeFileStructure(long, int)} and {@link #isValidModuleJar(File)} are unchanged and
+ * remain the framework's one genuine defense against a zip-bomb or oversized module JAR
+ * (ROADMAP criterion 4).
  * <br>
- * UltiTools类加载和反射操作的安全策略配置。
- * 此类定义安全规则和验证逻辑以防止恶意代码执行。
+ * <b>不再对类加载或反射提供任何运行时约束（GEN-07，D-12，自 6.3.0 起）。</b>
+ * {@link #isSafeClassName(String)} 与 {@link #isSafeParameterType(Class)} 现在无条件返回
+ * {@code true}；{@link #addTrustedPackage(String)} 与 {@link #addDangerousClass(String)} 变为空操作。
+ * 该类曾经强制执行的三个基于名称的过滤层从未真正保护过任何东西——它们评估的是框架自身 classpath 上
+ * 已经信任、已经加载的类，而非任意的不可信输入。此类仍然只在插件扫描阶段执行 JAR
+ * 结构性过滤：{@link #isSafeFileStructure(long, int)} 与 {@link #isValidModuleJar(File)}
+ * 保持不变，仍是框架对付超大或炸弹式 JAR 的唯一真实防线。
  *
  * @author UltiKits Security Team
  * @version 1.0.0
  */
 public class SecurityPolicy {
-    
+
     private static final Logger LOGGER = Logger.getLogger(SecurityPolicy.class.getName());
 
     // The four name-based filter lists formerly lived here. They moved to ClassloadFilterAudit
-    // (same package) once addTrustedPackage/addDangerousClass became no-ops (D-12/D-14) -- see
-    // that class's javadoc. isSafeClassName/isSafeParameterType read them via
-    // ClassloadFilterAudit.<LIST_NAME> below, same-package access requiring no accessor method.
+    // (same package) once addTrustedPackage/addDangerousClass became no-ops below (D-12/D-14) --
+    // the audit now reflects exactly the shipped lists, never a caller's runtime mutation.
 
     /**
-     * Validate if a class name is safe to load.
-     * <br>
-     * 验证类名是否可以安全加载。
-     *
-     * @param className class name to validate <br> 要验证的类名
-     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     * Fires the D-13 deprecation warning below at most once per JVM. Guards against the measured
+     * call volume: isSafeClassName was reached from two PluginManager scan loops, each capped at
+     * 1000 classes per JAR -- up to 2000 calls per module JAR, roughly 28,000 per startup with
+     * fourteen modules. A naive per-call warning would flood startup.
      */
+    private static final AtomicBoolean DEPRECATION_WARNING_LOGGED = new AtomicBoolean(false);
+
+    private static void warnDeprecatedNoOp() {
+        if (DEPRECATION_WARNING_LOGGED.compareAndSet(false, true)) {
+            LOGGER.log(Level.WARNING, "[UltiTools-Security] GEN-07 (6.3.0): SecurityPolicy's "
+                    + "name-based classload filters were removed -- isSafeClassName/"
+                    + "isSafeParameterType always return true and addTrustedPackage/"
+                    + "addDangerousClass are no-ops. This class provides no runtime constraint; "
+                    + "see its class javadoc. (This warning logs once per JVM.)");
+        }
+    }
+
+    /**
+     * Formerly validated whether a class name was safe to load; unconditionally returns
+     * {@code true} now, including for a {@code null} or blank input (GEN-07 empty-input edge --
+     * this differs from the pre-6.3.0 behavior, which returned {@code false} for both).
+     * <br>
+     * 曾用于验证类名是否可以安全加载；现在无条件返回 {@code true}，包括对 {@code null} 或空白输入
+     * （GEN-07 空输入边界——此前对两者都返回 {@code false}）。
+     *
+     * @param className class name to validate, ignored <br> 要验证的类名，被忽略
+     * @return {@code true}, unconditionally <br> 始终返回 {@code true}
+     * @deprecated Since 6.3.0 (GEN-07) this method is an unconditional no-op -- the three
+     * name-based classload filter layers it enforced never protected anything (they evaluated
+     * already-trusted, already-loaded classes, not arbitrary untrusted input), and the
+     * trusted-package whitelist alone would have refused nearly every third-party module class.
+     * The signature is retained because it is {@code public static} on a published class and
+     * cannot be removed without breaking a downstream caller's compile. See the package-private
+     * {@code ClassloadFilterAudit} for what these removed layers would have refused, now recorded
+     * as telemetry.
+     * <br>
+     * 自 6.3.0（GEN-07）起，此方法是无条件空操作——它曾强制执行的三个基于名称的过滤层从未真正
+     * 保护过任何东西（它们评估的是已经信任、已经加载的类，而非任意不可信输入），且信任包白名单
+     * 本身几乎会拒绝所有第三方模块类。保留签名是因为它是已发布类上的 {@code public static}
+     * 方法，删除会破坏下游调用方的编译。
+     */
+    @Deprecated(since = "6.3.0")
     public static boolean isSafeClassName(String className) {
-        if (className == null || className.trim().isEmpty()) {
-            logSecurityViolation("Empty or null class name", className);
-            return false;
-        }
-
-        // Delegates to ClassloadFilterAudit.classify() -- same package, same four layers, same
-        // evaluation order -- rather than owning the lists directly. The lists themselves now
-        // live in ClassloadFilterAudit (D-14).
-        ClassloadFilterAudit.Layer refusingLayer = ClassloadFilterAudit.classify(className);
-        if (refusingLayer != null) {
-            logSecurityViolation("Class name " + refusingLayer.describe(), className);
-            return false;
-        }
-
+        warnDeprecatedNoOp();
         return true;
     }
-    
+
     /**
-     * Validate if a parameter type is safe for reflection operations.
+     * Formerly validated whether a parameter type was safe for reflection operations;
+     * unconditionally returns {@code true} now, including for a {@code null} input (GEN-07
+     * empty-input edge -- this differs from the pre-6.3.0 behavior, which returned {@code false}).
      * <br>
-     * 验证参数类型是否对反射操作安全。
+     * 曾用于验证参数类型是否对反射操作安全；现在无条件返回 {@code true}，包括对 {@code null}
+     * 输入（GEN-07 空输入边界——此前会返回 {@code false}）。
      *
-     * @param clazz parameter class <br> 参数类
-     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
+     * @param clazz parameter class, ignored <br> 参数类，被忽略
+     * @return {@code true}, unconditionally <br> 始终返回 {@code true}
+     * @deprecated Since 6.3.0 (GEN-07), for the same reason as {@link #isSafeClassName(String)} --
+     * its only in-tree caller (the seven-argument {@code PluginManager.register}/with-args
+     * reflective-construction path) was deleted by GEN-04, which is what dissolved this method's
+     * former "shared-field, can't safely delete the whitelist" objection.
+     * <br>
+     * 自 6.3.0（GEN-07）起弃用，原因同 {@link #isSafeClassName(String)}——它在框架内唯一的调用方
+     * （七参数 {@code PluginManager.register}/带参反射构造路径）已被 GEN-04 删除。
      */
+    @Deprecated(since = "6.3.0")
     public static boolean isSafeParameterType(Class<?> clazz) {
-        if (clazz == null) {
-            return false;
-        }
-        
-        String className = clazz.getName();
-        
-        // 允许基本数据类型和包装类
-        if (clazz.isPrimitive() || 
-            className.startsWith("java.lang.String") ||
-            className.startsWith("java.lang.Integer") ||
-            className.startsWith("java.lang.Long") ||
-            className.startsWith("java.lang.Double") ||
-            className.startsWith("java.lang.Float") ||
-            className.startsWith("java.lang.Boolean") ||
-            className.startsWith("java.lang.Character") ||
-            className.startsWith("java.lang.Byte") ||
-            className.startsWith("java.lang.Short")) {
-            return true;
-        }
-        
-        // 允许常用集合类型
-        if (className.startsWith("java.util.List") ||
-            className.startsWith("java.util.Map") ||
-            className.startsWith("java.util.Set") ||
-            className.startsWith("java.util.ArrayList") ||
-            className.startsWith("java.util.HashMap") ||
-            className.startsWith("java.util.HashSet")) {
-            return true;
-        }
-        
-        // 允许信任的包
-        for (String trustedPrefix : ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES) {
-            if (className.startsWith(trustedPrefix)) {
-                return true;
-            }
-        }
-        
-        logSecurityViolation("Unsafe parameter type", className);
-        return false;
+        warnDeprecatedNoOp();
+        return true;
     }
-    
+
     /**
      * Validate file size and structure for security.
      * <br>
@@ -180,33 +193,48 @@ public class SecurityPolicy {
     }
 
     /**
-     * Add a trusted package prefix at runtime.
+     * Formerly added a trusted package prefix at runtime; now a no-op that does not mutate
+     * anything (GEN-07, D-12) -- {@code ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES} reflects
+     * exactly the shipped list, never a caller's runtime addition, so the audit measures the
+     * framework as released.
      * <br>
-     * 在运行时添加信任的包前缀。
+     * 曾用于在运行时添加信任的包前缀；现在是空操作，不再修改任何状态（GEN-07，D-12）——
+     * {@code ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES} 精确反映发布时的列表，而非调用方的
+     * 运行时添加，这样审计衡量的才是框架实际发布的样子。
      *
-     * @param packagePrefix package prefix to trust <br> 要信任的包前缀
+     * @param packagePrefix package prefix, ignored <br> 包前缀，被忽略
+     * @deprecated Since 6.3.0 (GEN-07): this method no longer mutates
+     * {@code ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES} or anything else. The signature is
+     * retained because it is {@code public static} on a published class.
+     * <br>
+     * 自 6.3.0（GEN-07）起弃用：此方法不再修改 {@code ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES}
+     * 或任何其他状态。
      */
+    @Deprecated(since = "6.3.0")
     public static void addTrustedPackage(String packagePrefix) {
-        if (packagePrefix != null && !packagePrefix.trim().isEmpty()) {
-            ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES.add(packagePrefix);
-            LOGGER.log(Level.INFO, "Added trusted package: " + packagePrefix);
-        }
+        warnDeprecatedNoOp();
     }
-    
+
     /**
-     * Add a dangerous class to the blacklist.
+     * Formerly added a class to the dangerous-class blacklist at runtime; now a no-op that does
+     * not mutate anything (GEN-07, D-12) -- {@code ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES}
+     * reflects exactly the shipped list, never a caller's runtime addition.
      * <br>
-     * 将危险类添加到黑名单。
+     * 曾用于在运行时将类添加到危险类黑名单；现在是空操作，不再修改任何状态（GEN-07，D-12）。
      *
-     * @param className class name to blacklist <br> 要加入黑名单的类名
+     * @param className class name, ignored <br> 类名，被忽略
+     * @deprecated Since 6.3.0 (GEN-07): this method no longer mutates
+     * {@code ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES} or anything else. The signature is
+     * retained because it is {@code public static} on a published class.
+     * <br>
+     * 自 6.3.0（GEN-07）起弃用：此方法不再修改 {@code ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES}
+     * 或任何其他状态。
      */
+    @Deprecated(since = "6.3.0")
     public static void addDangerousClass(String className) {
-        if (className != null && !className.trim().isEmpty()) {
-            ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES.add(className);
-            LOGGER.log(Level.INFO, "Added dangerous class: " + className);
-        }
+        warnDeprecatedNoOp();
     }
-    
+
     /**
      * Log security violation for monitoring and audit purposes.
      * <br>

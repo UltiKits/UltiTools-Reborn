@@ -17,20 +17,25 @@ public class ClassLoaderUtils {
     private static final Pattern VALID_CLASS_NAME_PATTERN = Pattern.compile("^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$");
     
     /**
-     * Validate class name for security.
+     * Validate class name format.
      * <br>
-     * 验证类名的安全性。
+     * 验证类名格式。
+     *
+     * <p><b>GEN-07 (D-13, since 6.3.0):</b> this method no longer calls into
+     * {@link SecurityPolicy} at all -- that class's four name-based checks are now unconditional
+     * no-ops (D-12), and the framework must not call a method it has just declared to do nothing.
+     * {@link #VALID_CLASS_NAME_PATTERN} is the only check left here, and it is input validation,
+     * not security: a {@code null} is guarded explicitly before the regex runs (a bare
+     * {@code Pattern.matcher(null)} throws {@link NullPointerException} rather than failing to
+     * match), so a {@code null}/blank/malformed class name is still rejected, just for a
+     * different reason than before.</p>
      *
      * @param className class name to validate <br> 要验证的类名
-     * @throws SecurityException if class name is invalid or dangerous <br> 如果类名无效或危险
+     * @throws SecurityException if the class name is null or does not match the expected format
+     *                           <br> 如果类名为 null 或不符合预期格式
      */
     private static void validateClassName(String className) throws SecurityException {
-        if (!SecurityPolicy.isSafeClassName(className)) {
-            throw new SecurityException("Class loading blocked by security policy: " + className);
-        }
-        
-        // 额外的格式验证
-        if (!VALID_CLASS_NAME_PATTERN.matcher(className).matches()) {
+        if (className == null || !VALID_CLASS_NAME_PATTERN.matcher(className).matches()) {
             throw new SecurityException("Invalid class name format: " + className);
         }
     }

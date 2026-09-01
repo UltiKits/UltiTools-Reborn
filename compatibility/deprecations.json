@@ -553,5 +553,45 @@
     "removeIn": "6.4.0",
     "replacement": "This legacy lookup only walks one meta-annotation level and never merges {@code @AliasFor} overrides. Use MergedAnnotationResolver#find instead, which walks the whole annotation tree and applies any {@code @AliasFor} override found along the way.",
     "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.SecurityPolicy#addDangerousClass(java.lang.String)",
+    "className": "com.ultikits.ultitools.utils.SecurityPolicy",
+    "memberName": "addDangerousClass",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "Since 6.3.0 (GEN-07): this method no longer mutates {@code ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES} or anything else. The signature is retained because it is {@code public static} on a published class.",
+    "status": "DEPRECATED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.SecurityPolicy#addTrustedPackage(java.lang.String)",
+    "className": "com.ultikits.ultitools.utils.SecurityPolicy",
+    "memberName": "addTrustedPackage",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "Since 6.3.0 (GEN-07): this method no longer mutates {@code ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES} or anything else. The signature is retained because it is {@code public static} on a published class.",
+    "status": "DEPRECATED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.SecurityPolicy#isSafeClassName(java.lang.String)",
+    "className": "com.ultikits.ultitools.utils.SecurityPolicy",
+    "memberName": "isSafeClassName",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "Since 6.3.0 (GEN-07) this method is an unconditional no-op -- the three name-based classload filter layers it enforced never protected anything (they evaluated already-trusted, already-loaded classes, not arbitrary untrusted input), and the trusted-package whitelist alone would have refused nearly every third-party module class. The signature is retained because it is {@code public static} on a published class and cannot be removed without breaking a downstream caller's compile. See the package-private {@code ClassloadFilterAudit} for what these removed layers would have refused, now recorded as telemetry.",
+    "status": "DEPRECATED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.SecurityPolicy#isSafeParameterType(java.lang.Class)",
+    "className": "com.ultikits.ultitools.utils.SecurityPolicy",
+    "memberName": "isSafeParameterType",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "Since 6.3.0 (GEN-07), for the same reason as isSafeClassName(String) -- its only in-tree caller (the seven-argument {@code PluginManager.register}/with-args reflective-construction path) was deleted by GEN-04, which is what dissolved this method's former \"shared-field, can't safely delete the whitelist\" objection.",
+    "status": "DEPRECATED"
   }
 ]

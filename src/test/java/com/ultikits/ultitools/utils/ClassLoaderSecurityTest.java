@@ -52,7 +52,11 @@ public class ClassLoaderSecurityTest {
         String[] formerlyUntrustedClasses = {
             "com.evil.malware.Payload",
             "hacker.tools.Exploit",
-            "java.lang.reflect.Method"
+            "java.lang.reflect.Method",
+            // Legal format ('$' is a valid identifier character for inner-class binary names),
+            // formerly rejected only by the now-removed whitelist layer -- see
+            // testValidateInvalidClassNameFormats for why this is not a format-regex case.
+            "com.invalid$special$.Class"
         };
 
         for (String className : formerlyUntrustedClasses) {
@@ -133,13 +137,17 @@ public class ClassLoaderSecurityTest {
 
     @Test
     public void testValidateInvalidClassNameFormats() {
-        // Unaffected by GEN-07 -- VALID_CLASS_NAME_PATTERN is untouched.
+        // Unaffected by GEN-07 -- VALID_CLASS_NAME_PATTERN is untouched. Deliberately excludes
+        // "com.invalid$special$.Class" -- '$' is a legal identifier character in the pattern (it
+        // supports inner-class binary names like Outer$Inner), so that name always matched the
+        // regex. Before GEN-07 it was rejected by the now-removed trusted-package whitelist layer,
+        // not by the format check; see testFormerlyUntrustedPackagesAreNoLongerBlocked below for
+        // its inverted coverage.
         String[] invalidFormats = {
             "123InvalidStart",
             "com..double.dot",
             "com.invalid-dash.Class",
-            "com.invalid space.Class",
-            "com.invalid$special$.Class"
+            "com.invalid space.Class"
         };
 
         for (String className : invalidFormats) {
