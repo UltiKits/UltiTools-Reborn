@@ -15,7 +15,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.SimpleCommandMap;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.SimplePluginManager;
-import org.bukkit.plugin.java.JavaPluginLoader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,30 +27,44 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.Answers;
 import org.mockito.MockedStatic;
 
-import com.ultikits.testfixtures.conditionallistenerdispatch.FalseConditionDispatchListener;
-import com.ultikits.testfixtures.conditionallistenerdispatch.TrueConditionDispatchListener;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
 
 /**
- * WIRE-07 / D-17, D-19: proves at Bukkit's own boundary -- the command map and real event
- * dispatch -- that a false {@code @ConditionalOnConfig} condition actually removes the
- * registration, on both the standard command path and the listener package-scan path Task 1
- * gated.
+ * WIRE-07 / D-19: proves at Bukkit's own boundary -- the command map -- that a false
+ * {@code @ConditionalOnConfig} condition actually removes the registration, on the standard
+ * bean-resolving command path.
  * <p>
- * Each half runs a true-condition and a false-condition fixture through the same real scan/
- * registration machinery in a single pass, so the true-condition sibling is the control proving
- * the false-condition sibling's absence is the gate working, not an unrelated scan/registration
+ * Runs a true-condition and a false-condition fixture through the same real scan/registration
+ * machinery in a single pass, so the true-condition sibling is the control proving the
+ * false-condition sibling's absence is the gate working, not an unrelated scan/registration
  * failure (03-04-PLAN.md's "inert case" guard).
- * <br>
- * WIRE-07 / D-17、D-19：在 Bukkit 自身的边界——命令表与真实事件分发——上证明一个为
- * {@code false} 的 {@code @ConditionalOnConfig} 条件确实会移除注册，覆盖标准命令路径与 Task 1
- * 门控的监听器包扫描路径。
  * <p>
- * 两半测试都在同一次真实扫描/注册流程中，让 true 条件与 false 条件两个 fixture 一起跑，因此
- * true 条件的那一个是对照组，用来证明 false 条件那一个的缺席是门控生效，而不是扫描/注册本身
- * 出了无关的问题（03-04-PLAN.md 的"inert case"防护）。
+ * This class formerly carried a second half proving the same gate on
+ * {@code ListenerManager.registerAll(UltiToolsPlugin, String)}'s reflective package-scan path
+ * (D-17). Plan 07-14 (GEN-04) deleted that overload outright -- it was the only place in the
+ * framework that ran {@link com.ultikits.ultitools.context.ConditionalRegistrationEvaluator}
+ * against a manually reflection-scanned class outside the container; the surviving
+ * {@code registerAll(UltiToolsPlugin)} resolves listeners from beans the container already
+ * conditionally registered (or did not) via {@code ComponentScanner}, so there is no analogous
+ * gate left on that path to prove separately -- it is covered by the container's own
+ * {@code @ConditionalOnConfig} tests, not by this class.
+ * <br>
+ * WIRE-07 / D-19：在 Bukkit 自身的边界——命令表——上证明一个为 {@code false} 的
+ * {@code @ConditionalOnConfig} 条件确实会移除注册，覆盖标准的按 bean 解析的命令路径。
+ * <p>
+ * 让 true 条件与 false 条件两个 fixture 在同一次真实扫描/注册流程中一起跑，因此 true 条件的
+ * 那一个是对照组，用来证明 false 条件那一个的缺席是门控生效，而不是扫描/注册本身出了无关的
+ * 问题（03-04-PLAN.md 的"inert case"防护）。
+ * <p>
+ * 这个类原先还有第二半，用来在 {@code ListenerManager.registerAll(UltiToolsPlugin, String)} 的
+ * 反射式包扫描路径（D-17）上证明同一个门控。计划 07-14（GEN-04）整体删除了这个重载——它是框架
+ * 中唯一一处会对一个手动反射扫描出来、不经过容器的类运行
+ * {@link com.ultikits.ultitools.context.ConditionalRegistrationEvaluator} 的地方；存活下来的
+ * {@code registerAll(UltiToolsPlugin)} 只会从容器已经（有条件地）注册好的 bean 中解析监听器，
+ * 因此那条路径上已经没有需要单独证明的同类门控了——它由容器自身的
+ * {@code @ConditionalOnConfig} 测试覆盖，不再由这个类覆盖。
  */
 @DisplayName("@ConditionalOnConfig at the Bukkit boundary (WIRE-07)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -156,79 +169,6 @@ class ConditionalOnConfigRegistrationIntegrationTest {
                                 + "from the whole scan/registration path being broken")
                         .isNotNull();
 
-                container.close();
-            }
-        }
-    }
-
-    /**
-     * Listener half: drives {@code ListenerManager.registerAll(plugin, packageName)} (the
-     * overload Task 1 gated) over a real fixture package, then fires a real
-     * {@link org.bukkit.event.player.PlayerJoinEvent} through MockBukkit's own plugin manager and
-     * asserts on each fixture's own hit counter -- not a registration-list inspection, per
-     * 03-04-PLAN.md's explicit instruction ("The listener case is asserted through the actual
-     * event dispatch, not by inspecting a registration list").
-     * <p>
-     * {@code ListenerManager.register(plugin, listener)} calls
-     * {@code Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance())}.
-     * That needs {@code UltiTools.getInstance().getPluginLoader()} to be a real, functioning
-     * {@link JavaPluginLoader} -- the generic Mockito mock the shared {@code TestHelper} stubs
-     * elsewhere in this test tree returns an empty {@code Map} by Mockito's own default answer
-     * for unstubbed methods returning a {@code Map}, which makes {@code registerEvents} silently
-     * attach zero real Bukkit handlers (proven empirically while building this test). A real
-     * {@link JavaPluginLoader} is substituted here instead so a fired event genuinely reaches (or
-     * does not reach) the fixture's {@code @EventHandler} method.
-     */
-    @Nested
-    @DisplayName("Listener half: the package-scan path Task 1 gated")
-    class ListenerHalf {
-
-        @BeforeEach
-        void resetHitCounters() {
-            FalseConditionDispatchListener.HITS.set(0);
-            TrueConditionDispatchListener.HITS.set(0);
-        }
-
-        @Test
-        @DisplayName("false-condition listener receives no events; true-condition control does")
-        void falseConditionListenerReceivesNoEventsTrueConditionDoes(@TempDir File tempDir) throws Exception {
-            writeConfig(tempDir, "enableFalseListener: false\nenableTrueListener: true\n");
-
-            UltiTools mockUltiTools = mock(UltiTools.class);
-            when(mockUltiTools.isEnabled()).thenReturn(true);
-            when(mockUltiTools.getPluginLoader()).thenReturn(new JavaPluginLoader(server));
-            when(mockUltiTools.getLogger()).thenReturn(java.util.logging.Logger.getLogger(
-                    "ConditionalOnConfigRegistrationIntegrationTest.ListenerHalf"));
-            publishUltiToolsInstance(mockUltiTools);
-
-            UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
-            when(mockPlugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-
-            SimpleContainer container = new SimpleContainer();
-            container.registerType(UltiToolsPlugin.class, mockPlugin);
-            when(mockPlugin.getContext()).thenReturn(container);
-
-            ListenerManager listenerManager = new ListenerManager();
-
-            try {
-                // Act - the overload Task 1 gated with ConditionalRegistrationEvaluator.
-                listenerManager.registerAll(mockPlugin, "com.ultikits.testfixtures.conditionallistenerdispatch");
-
-                // server.addPlayer() itself dispatches a real PlayerJoinEvent through Bukkit's
-                // plugin manager (see PlayerEventManagerRegistrationTest's own fireJoinEvent()
-                // for the same idiom) -- no separate manual callEvent needed.
-                server.addPlayer();
-
-                assertThat(FalseConditionDispatchListener.HITS.get())
-                        .as("a listener whose @ConditionalOnConfig condition is false must receive "
-                                + "no events -- ROADMAP Criterion 4")
-                        .isZero();
-                assertThat(TrueConditionDispatchListener.HITS.get())
-                        .as("inert-case guard: the true-condition control must still receive the "
-                                + "event, or the false-condition zero above would not distinguish the "
-                                + "gate working from event dispatch itself being broken")
-                        .isGreaterThan(0);
-            } finally {
                 container.close();
             }
         }

@@ -145,16 +145,21 @@ class DeprecatedParagraphExtractorTest {
             }
 
             // Control assertion: a zero-paragraph scan would pass the CJK assertion vacuously.
-            // Threshold lowered from 40 to 15 by 07-13-PLAN.md (GEN-04): this milestone is
-            // deliberately deleting @Deprecated(forRemoval = true) symbols across several Phase 7
-            // plans, and the corpus this test scans shrinks by design as each one lands (measured
-            // 21 remaining after this plan's twelve deletions). The number itself carries no
+            // Threshold lowered from 40 to 15 by 07-13-PLAN.md (GEN-04), then from 15 to 13 by
+            // 07-14-PLAN.md (GEN-04, second half): this milestone is deliberately deleting
+            // @Deprecated(forRemoval = true) symbols across several Phase 7 plans, and the corpus
+            // this test scans shrinks by design as each one lands (measured 13 remaining after
+            // this plan's eight further deletions -- the with-args PluginManager subtree, the
+            // six-argument UltiToolsPlugin constructor, both CommandManager register(CommandExecutor,
+            // ...) overloads, CommandManager.registerAll(UltiToolsPlugin, String),
+            // ListenerManager.register(UltiToolsPlugin, Listener), and
+            // ListenerManager.registerAll(UltiToolsPlugin, String)). The number itself carries no
             // business meaning -- it exists only to prove the scan is not vacuously passing over
             // an empty corpus -- so it is recalibrated downward with removals rather than treated
             // as a floor to defend. A later Phase 7 plan may need to lower it again.
             assertThat(paragraphsScanned)
-                    .as("expected at least 15 @deprecated paragraphs in src/main/java")
-                    .isGreaterThanOrEqualTo(15);
+                    .as("expected at least 13 @deprecated paragraphs in src/main/java")
+                    .isGreaterThanOrEqualTo(13);
             assertThat(leaks).as("CJK leaked into extracted replacement text").isEmpty();
         }
     }

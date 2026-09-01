@@ -431,38 +431,6 @@ class CommandManagerTest {
     }
 
     @Nested
-    @DisplayName("register(CommandExecutor) 废弃方法测试")
-    class RegisterDeprecatedTests {
-
-        @Test
-        @DisplayName("带注解的 CommandExecutor 应该能注册")
-        void shouldRegisterWithAnnotation() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-
-            // Act & Assert - 验证注册不会抛出意外异常（NPE在MockBukkit环境中是预期的）
-            try {
-                commandManager.register(executor);
-                // 如果注册成功，commandManager应该仍然有效
-                assertThat(commandManager).isNotNull();
-            } catch (NullPointerException e) {
-                // 预期行为 - MockBukkit 环境中 CommandMap 为 null
-                assertThat(e).isNotNull();
-            }
-        }
-
-        @Test
-        @DisplayName("无注解的 CommandExecutor 应该记录警告")
-        void shouldLogWarningWithoutAnnotation() {
-            // Arrange
-            NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-
-            // Act & Assert - 应该记录警告日志但不抛出异常
-            assertDoesNotThrow(() -> commandManager.register(executor));
-        }
-    }
-
-    @Nested
     @DisplayName("registerCoreCommand 测试")
     class RegisterCoreCommandTests {
 
@@ -488,27 +456,6 @@ class CommandManagerTest {
 
             // Act & Assert - 应该记录警告但不抛出异常
             assertDoesNotThrow(() -> commandManager.registerCoreCommand(executor));
-        }
-    }
-
-    @Nested
-    @DisplayName("register(CommandExecutor, permission, description, aliases) 废弃方法测试")
-    class RegisterWithParamsDeprecatedTests {
-
-        @Test
-        @DisplayName("应该尝试注册命令")
-        void shouldTryToRegister() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-
-            // Act & Assert - 验证注册过程不会导致意外崩溃
-            try {
-                commandManager.register(executor, "test.perm", "Test description", "testcmd", "tc");
-                assertThat(commandManager).isNotNull();
-            } catch (NullPointerException e) {
-                // 预期 - MockBukkit 中 CommandMap 为 null
-                assertThat(e).isNotNull();
-            }
         }
     }
 
@@ -843,46 +790,6 @@ class CommandManagerTest {
     }
 
     @Nested
-    @DisplayName("register 废弃方法详细测试")
-    class RegisterDeprecatedDetailedTests {
-
-        @Test
-        @DisplayName("register(CommandExecutor, permission, description, aliases) 应该设置命令属性")
-        void shouldSetCommandProperties() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // 获取 getCommand 方法来验证命令被创建
-            Method getCommandMethod = CommandManager.class.getDeclaredMethod("getCommand", String.class, Plugin.class);
-            getCommandMethod.setAccessible(true);
-            
-            // Act - 由于 getCommandMap 返回 null，会抛出 NPE
-            try {
-                commandManager.register(executor, "test.permission", "Test description", "testcmd", "tc");
-            } catch (NullPointerException e) {
-                // 预期行为 - 但代码执行到了设置 aliases, permission, description 之后
-            }
-        }
-
-        @Test
-        @DisplayName("register(CommandExecutor) 应该检查注解并调用 register")
-        void shouldCheckAnnotationAndCallRegister() {
-            // Arrange
-            TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act - 由于 getCommandMap 返回 null，会抛出 NPE
-            try {
-                commandManager.register(executor);
-            } catch (NullPointerException e) {
-                // 预期行为
-            }
-            
-            // Assert - 验证注解被检查
-            assertThat(executor.getClass().isAnnotationPresent(CmdExecutor.class)).isTrue();
-        }
-    }
-
-    @Nested
     @DisplayName("registerCoreCommand 详细测试")
     class RegisterCoreCommandDetailedTests {
 
@@ -1011,15 +918,6 @@ class CommandManagerTest {
         }
 
         @Test
-        @DisplayName("registerAll(UltiToolsPlugin, String) 应该存在")
-        void registerAllWithPackageShouldExist() throws Exception {
-            Method method = CommandManager.class.getDeclaredMethod(
-                "registerAll", UltiToolsPlugin.class, String.class);
-            assertThat(method).isNotNull();
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("registerAll(UltiToolsPlugin) 应该存在")
         void registerAllShouldExist() throws Exception {
             Method method = CommandManager.class.getDeclaredMethod("registerAll", UltiToolsPlugin.class);
@@ -1042,16 +940,6 @@ class CommandManagerTest {
             assertThat(java.lang.reflect.Modifier.isPrivate(method2.getModifiers())).isTrue();
         }
 
-        @Test
-        @DisplayName("废弃方法应该有 @Deprecated 注解")
-        void deprecatedMethodsShouldHaveAnnotation() throws Exception {
-            Method registerWithParams = CommandManager.class.getDeclaredMethod(
-                "register", CommandExecutor.class, String.class, String.class, String[].class);
-            assertThat(registerWithParams.isAnnotationPresent(Deprecated.class)).isTrue();
-            
-            Method registerSimple = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
-            assertThat(registerSimple.isAnnotationPresent(Deprecated.class)).isTrue();
-        }
     }
 
     @Nested
@@ -1102,59 +990,6 @@ class CommandManagerTest {
 
             // Assert - 命令不应该被重复添加
             assertThat(map.get(mockPlugin)).hasSize(1);
-        }
-    }
-
-    @Nested
-    @DisplayName("registerAll(UltiToolsPlugin, String) 测试")
-    class RegisterAllWithPackageTests {
-
-        @Test
-        @DisplayName("应该扫描指定包下的类")
-        void shouldScanPackage() { // NOPMD - uses Mockito verify()
-            // 注意：这个测试主要验证方法不会抛出异常
-            // 实际的扫描逻辑依赖于 PackageScanUtils 和 ClassLoader
-            
-            // Act - 使用不存在的包名
-            commandManager.registerAll(mockPlugin, "com.nonexistent.package");
-
-            // Assert - 不应该抛出异常
-        }
-
-        @Test
-        @DisplayName("BaseCommandExecutor 不属于本重载强转的类型——这是弃用它的全部依据")
-        void baseCommandExecutorIsNotAssignableToTheCastTarget() {
-            // 本重载把扫描到的每个类强转为 AbstractCommandExecutor。当代命令类继承的是
-            // BaseCommandExecutor，它 implements TabExecutor 而不继承前者，所以那次强转
-            // 必抛 ClassCastException——而外层 catch 只列了四个反射类受检异常，异常会逃出去。
-            //
-            // 这条断言钉住的是那个结论的**全部依据**：一条类型关系。不去跑真实包扫描，
-            // 因为那需要往测试树里放一个 @CmdExecutor 类，会被别的扫描测试捎带上，而这个
-            // 方法在 6.3.0 就删了，不值得为一个版本的寿命引入那种耦合。
-            //
-            // 如果哪天有人让 BaseCommandExecutor 继承了 AbstractCommandExecutor，弃用理由
-            // 就不再成立——这条会立刻变红，提醒去重新评估 issue #272 的结论。
-            assertThat(AbstractCommandExecutor.class.isAssignableFrom(BaseCommandExecutor.class))
-                    .as("BaseCommandExecutor 若继承了 AbstractCommandExecutor，#272 的弃用理由需重新评估")
-                    .isFalse();
-        }
-
-        @Test
-        @DisplayName("本重载应当带着 forRemoval 标注，下游才会被 -Xlint:removal 点名")
-        void castingOverloadShouldBeMarkedForRemoval() throws Exception {
-            // COMPATIBILITY.md 把「你确实被点名警告过」定为可以移除的前提，而 javac 的
-            // -Xlint:removal 默认开启、-Xlint:deprecation 默认关闭。所以标注掉了不只是
-            // 文档不同步，是下游拿不到警告就被删了 API。
-            Method method = CommandManager.class.getDeclaredMethod(
-                    "registerAll", UltiToolsPlugin.class, String.class);
-            Deprecated deprecated = method.getAnnotation(Deprecated.class);
-
-            assertThat(deprecated)
-                    .as("registerAll(UltiToolsPlugin, String) 的 @Deprecated 标注不见了")
-                    .isNotNull();
-            assertThat(deprecated.forRemoval())
-                    .as("forRemoval 被改成了 false，下游将只收到不含 API 名的笼统提示")
-                    .isTrue();
         }
     }
 
@@ -1341,24 +1176,27 @@ class CommandManagerTest {
     }
 
     /**
-     * 废弃方法 register(CommandExecutor, String, String, String...) 深度测试
+     * 私有 registerCommandDirect(CommandExecutor, String, String, String...) / registerCommandDirect(CommandExecutor)
+     * 深度测试。计划 07-14（GEN-04）删除了这两个方法原先所在的公开废弃 register(CommandExecutor, ...)
+     * 重载；这里的断言原本钉住的就是这段底层注册原语本身的行为（NPE 路径、注解检查路径），
+     * 现在改为直接反射这两个私有方法，行为未变，变的只是它们不再是公开、废弃的入口。
      */
     @Nested
-    @DisplayName("废弃 register 方法深度测试")
+    @DisplayName("registerCommandDirect 私有方法深度测试")
     class DeprecatedRegisterDeepTests {
 
         @Test
-        @DisplayName("废弃的 register 方法应该设置命令属性")
+        @DisplayName("registerCommandDirect 方法应该设置命令属性")
         void deprecatedRegisterShouldSetCommandProperties() throws Exception {
-            // 这个测试验证废弃方法的行为
+            // 这个测试验证底层注册原语的行为
             // 由于 getCommandMap() 返回 null，会抛出 NullPointerException
-            
+
             Method registerMethod = CommandManager.class.getDeclaredMethod(
-                "register", CommandExecutor.class, String.class, String.class, String[].class);
+                "registerCommandDirect", CommandExecutor.class, String.class, String.class, String[].class);
             registerMethod.setAccessible(true);
-            
+
             CommandExecutor executor = mock(CommandExecutor.class);
-            
+
             // Act & Assert - 预期 NullPointerException 因为 getCommandMap() 返回 null
             try {
                 registerMethod.invoke(commandManager, executor, "permission", "description", new String[]{"cmd"});
@@ -1369,33 +1207,33 @@ class CommandManagerTest {
         }
 
         @Test
-        @DisplayName("废弃的 register(CommandExecutor) 应该检查注解")
+        @DisplayName("registerCommandDirect(CommandExecutor) 应该检查注解")
         void deprecatedRegisterWithExecutorShouldCheckAnnotation() throws Exception { // NOPMD - uses Mockito verify()
             // 测试无注解的 executor 行为
-            Method registerMethod = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
+            Method registerMethod = CommandManager.class.getDeclaredMethod("registerCommandDirect", CommandExecutor.class);
             registerMethod.setAccessible(true);
-            
+
             NoAnnotationCommandExecutor executor = new NoAnnotationCommandExecutor();
-            
+
             // Act - 应该记录警告但不抛出异常
             registerMethod.invoke(commandManager, executor);
-            
-            // 方法应该完成而不抛出异常（因为没有调用 register(perm, desc, aliases)）
+
+            // 方法应该完成而不抛出异常（因为没有调用 registerCommandDirect(perm, desc, aliases)）
         }
 
         @Test
-        @DisplayName("废弃的 register(CommandExecutor) 有注解时应该调用完整 register")
+        @DisplayName("registerCommandDirect(CommandExecutor) 有注解时应该调用完整 registerCommandDirect")
         void deprecatedRegisterWithAnnotatedExecutorShouldCallFullRegister() throws Exception {
-            Method registerMethod = CommandManager.class.getDeclaredMethod("register", CommandExecutor.class);
+            Method registerMethod = CommandManager.class.getDeclaredMethod("registerCommandDirect", CommandExecutor.class);
             registerMethod.setAccessible(true);
-            
+
             TestCommandExecutor executor = new TestCommandExecutor();
-            
-            // Act & Assert - 有注解，会调用 register(perm, desc, aliases) 但 getCommandMap 返回 null
+
+            // Act & Assert - 有注解，会调用 registerCommandDirect(perm, desc, aliases) 但 getCommandMap 返回 null
             try {
                 registerMethod.invoke(commandManager, executor);
             } catch (Exception e) {
-                // 预期行为 - 调用 register(perm, desc, aliases) 时 getCommandMap() 返回 null
+                // 预期行为 - 调用 registerCommandDirect(perm, desc, aliases) 时 getCommandMap() 返回 null
                 assertThat(e.getCause()).isInstanceOf(NullPointerException.class);
             }
         }
@@ -1786,35 +1624,6 @@ class CommandManagerTest {
             // Assert - register(executor) 被调用（因为 NoAnnotationCommandExecutor 没有 @CmdExecutor）
             // 由于废弃方法内部也检查注解，所以只会记录警告
             assertTrue(true, "Method invocation completed without exceptions");
-        }
-    }
-
-    /**
-     * registerAll(UltiToolsPlugin, String) 深度测试
-     */
-    @Nested
-    @DisplayName("registerAll 包扫描深度测试")
-    class RegisterAllPackageScanDeepTests {
-
-        @Test
-        @DisplayName("扫描空包应该不注册任何命令")
-        void emptyPackageShouldNotRegisterAnyCommands() throws Exception {
-            // Arrange - 使用一个不存在的包名
-            // Act & Assert - 验证扫描空包不会抛出异常
-            assertDoesNotThrow(() ->
-                commandManager.registerAll(mockPlugin, "com.nonexistent.package.that.does.not.exist"),
-                "registerAll should not throw for empty/nonexistent package");
-        }
-
-        @Test
-        @DisplayName("扫描的类必须有无参构造函数")
-        void scannedClassMustHaveNoArgConstructor() {
-            // 这个测试验证 NoSuchMethodException 的处理
-            // registerAll 捕获 NoSuchMethodException 并忽略
-            // Act & Assert - 验证类没有无参构造函数时异常会被捕获
-            assertDoesNotThrow(() ->
-                commandManager.registerAll(mockPlugin, "com.ultikits.ultitools.manager"),
-                "registerAll should handle classes without no-arg constructor gracefully");
         }
     }
 
