@@ -63,7 +63,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use the seven-argument constructor and pass {@code resourceFolderPath} explicitly. This overload hard-codes it to {@code <dataFolder>/pluginConfig/<pluginName>}.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.UltiToolsPlugin#getVersionWrapper()",
@@ -454,7 +455,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use register(UltiToolsPlugin, Class) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.CommandManager#register(org.bukkit.command.CommandExecutor,java.lang.String,java.lang.String,java.lang.String[])",
@@ -465,7 +467,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use register(UltiToolsPlugin, Class, String, String, String...) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.CommandManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.String)",
@@ -476,7 +479,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This overload casts every scanned class to AbstractCommandExecutor, which is itself scheduled for removal in 6.3.0. A command class written against the current BaseCommandExecutor does not extend that type, so the cast throws ClassCastException — and the surrounding catch lists only the four reflective checked exceptions, so it escapes. Use registerAll(UltiToolsPlugin), which resolves command classes as beans from the plugin's container and performs no cast. See issue #272.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin,org.bukkit.event.Listener)",
@@ -487,7 +491,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use register(UltiToolsPlugin, Class) instead; this overload takes an already-constructed instance and therefore performs no dependency injection.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.ListenerManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.String)",
@@ -498,7 +503,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This overload reflectively scans and instantiates every {@code @EventListener} class in {@code packageName} without ever consulting EventListener#manualRegister() -- a listener its author deliberately withheld from auto-registration is registered anyway. After plan 04-08, PluginManager#registerBukkit no longer has an in-framework caller for this overload either; both registration entry points resolve listeners as beans from the module's own container instead. Use registerAll(UltiToolsPlugin), which does honour {@code manualRegister()}. See issue #337.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.PluginDependencyResolver$PluginNode#getAllDependencies(java.util.Set)",
@@ -520,7 +526,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This reflective, with-args construction path has failed on every release since 6.2.0 (Phase 1 D-15, measured): SecurityPolicy#isSafeParameterType matches collection arguments by exact runtime-class-name prefix ({@code java.util.List}, {@code java.util.ArrayList}, ...), and neither {@code Arrays.asList(...)}'s runtime type ({@code java.util.Arrays$ArrayList}) nor any {@code Collections.*} wrapper type matches any of those prefixes -- the list-typed arguments a caller actually supplies are rejected before construction ever runs. This path is scheduled for removal (issue #332) rather than repair; only the seven-argument register(Class, String, String, List, List, int, String) calls it with a non-empty argument array.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.PluginManager#register(java.lang.Class,java.lang.String,java.lang.String,java.util.List,java.util.List,int,java.lang.String)",
@@ -531,7 +538,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This overload's reflective, with-args construction has failed on every release since 6.2.0 (Phase 1 D-15, measured): SecurityPolicy#isSafeParameterType rejects the runtime types {@code authors} and {@code loadAfter} actually are ({@code Arrays.asList(...)}'s {@code java.util.Arrays$ArrayList}, or any {@code Collections.*} wrapper) before the module's constructor ever runs. This overload existed to bypass {@code plugin.yml}-based metadata for connector callers; use register(UltiToolsPlugin) instead, which takes an already-constructed plugin instance and has no reflective construction path of its own. See issue #332.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation(java.lang.Class,java.lang.Class)",
