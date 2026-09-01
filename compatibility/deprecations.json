@@ -31,7 +31,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This class is maintained for backward compatibility. Use BaseCommandExecutor instead, which provides better architecture with Chain of Responsibility pattern.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.AbstractCommendExecutor",
@@ -41,7 +42,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use AbstractCommandExecutor instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.AbstractDataEntity",

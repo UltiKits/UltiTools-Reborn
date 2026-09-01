@@ -497,6 +497,27 @@
                             <exclude>com.ultikits.ultitools.manager.CommandManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.String)</exclude>
                             <exclude>com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin, org.bukkit.event.Listener)</exclude>
                             <exclude>com.ultikits.ultitools.manager.ListenerManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.String)</exclude>
+                            <!-- 07-15-PLAN.md (GEN-02): the deprecated command-executor generation
+                                 itself, deleted in 6.3.0 after its 6.2.1 deprecation window closed.
+                                 japicmp reports both the class and every one of its 11 members on a
+                                 whole-class removal (D-04's granularity rule: one class-level entry
+                                 covers all of them, confirmed against target/japicmp/japicmp.xml —
+                                 CLASS_REMOVED plus 11 member-level entries, all folded under this
+                                 one FQN, nothing left unaccounted for). Removed with all six
+                                 maintained downstream modules' migration pull requests OPEN and
+                                 UNMERGED (maintainer decision, 2026-09-02): merging to -SNAPSHOT
+                                 alpha is not releasing, and the "all six downstream published"
+                                 precondition this plan originally carried is transferred to the
+                                 6.3.0 framework release gate (Phase 8) rather than discharged here
+                                 — see .planning/phases/07-generational-removals/
+                                 07-DOWNSTREAM-PREFLIGHT.md's "Publication confirmed" and "Removal
+                                 authorized" sections. -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractCommandExecutor</exclude>
+                            <!-- The misspelled empty @Deprecated shim that extended the class
+                                 above; also deleted in 6.3.0. A single class-level entry — it
+                                 declared no members of its own beyond the inherited getInstance()
+                                 override, confirmed against target/japicmp/japicmp.xml. -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractCommendExecutor</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
