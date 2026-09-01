@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Trimmed from a real target/japicmp/japicmp.xml, captured by temporarily deleting the
+  `com.ultikits.ultitools.aop.AopProxyBeanPostProcessor` <exclude> entry from pom.xml and
+  re-running `mvn -B -o clean verify -DskipTests` (07-03, Task 1). The class element, its
+  constructor, and its two methods (one zero-argument, one with a real-typed parameter) are the
+  real emitter's own output shape - only the surrounding classes/whitespace were trimmed.
+-->
+<japicmp xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" accessModifier="PROTECTED"
+         xsi:noNamespaceSchemaLocation="japicmp.xsd">
+    <classes>
+        <class binaryCompatible="false" changeStatus="REMOVED"
+               fullyQualifiedName="com.ultikits.ultitools.aop.AopProxyBeanPostProcessor"
+               javaObjectSerializationCompatible="NOT_SERIALIZABLE" sourceCompatible="false">
+            <compatibilityChanges>
+                <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="CLASS_REMOVED"/>
+            </compatibilityChanges>
+            <constructors>
+                <constructor binaryCompatible="false" changeStatus="REMOVED"
+                             name="AopProxyBeanPostProcessor" newLineNumber="n.a." oldLineNumber="30"
+                             sourceCompatible="false">
+                    <compatibilityChanges>
+                        <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="CONSTRUCTOR_REMOVED"/>
+                    </compatibilityChanges>
+                    <modifiers>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_FINAL"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_STATIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="PUBLIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_ABSTRACT"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_BRIDGE"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_SYNTHETIC"/>
+                    </modifiers>
+                    <parameters/>
+                </constructor>
+            </constructors>
+            <fields/>
+            <methods>
+                <method binaryCompatible="false" changeStatus="REMOVED" name="addAdvisor"
+                        newLineNumber="n.a." oldLineNumber="42" sourceCompatible="false">
+                    <compatibilityChanges>
+                        <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="METHOD_REMOVED"/>
+                    </compatibilityChanges>
+                    <modifiers>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_FINAL"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_STATIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="PUBLIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_ABSTRACT"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_BRIDGE"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_SYNTHETIC"/>
+                    </modifiers>
+                    <parameters>
+                        <parameter binaryCompatible="true" changeStatus="UNCHANGED" sourceCompatible="true"
+                                   templateName="N/A" type="com.ultikits.ultitools.aop.AopAdvisor"/>
+                    </parameters>
+                    <returnType binaryCompatible="true" changeStatus="REMOVED" newValue="n.a." oldValue="void" sourceCompatible="true"/>
+                </method>
+                <method binaryCompatible="false" changeStatus="REMOVED" name="getAdvisors"
+                        newLineNumber="n.a." oldLineNumber="63" sourceCompatible="false">
+                    <compatibilityChanges>
+                        <compatibilityChange binaryCompatible="false" sourceCompatible="false" type="METHOD_REMOVED"/>
+                    </compatibilityChanges>
+                    <modifiers>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_FINAL"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_STATIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="PUBLIC"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_ABSTRACT"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_BRIDGE"/>
+                        <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_SYNTHETIC"/>
+                    </modifiers>
+                    <parameters/>
+                    <returnType binaryCompatible="true" changeStatus="REMOVED" newValue="n.a." oldValue="java.util.List" sourceCompatible="true"/>
+                </method>
+            </methods>
+            <modifiers>
+                <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_FINAL"/>
+                <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_STATIC"/>
+                <modifier changeStatus="REMOVED" newValue="n.a." oldValue="PUBLIC"/>
+                <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_ABSTRACT"/>
+                <modifier changeStatus="REMOVED" newValue="n.a." oldValue="NON_SYNTHETIC"/>
+            </modifiers>
+        </class>
+    </classes>
+</japicmp>
