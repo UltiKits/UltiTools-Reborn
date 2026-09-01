@@ -9,6 +9,7 @@ package com.ultikits.ultitools.abstracts;
  *
  * @see AbstractCommandExecutor
  * @deprecated Use {@link AbstractCommandExecutor} instead.
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.2.1", forRemoval = true)
 public abstract class AbstractCommendExecutor extends AbstractCommandExecutor {

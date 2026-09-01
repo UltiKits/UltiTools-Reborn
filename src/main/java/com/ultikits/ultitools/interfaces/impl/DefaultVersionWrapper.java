@@ -10,6 +10,7 @@ import com.ultikits.ultitools.interfaces.VersionWrapper;
  * 所有方法使用接口的默认实现。
  *
  * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} directly instead.
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.2.0", forRemoval = true)
 public class DefaultVersionWrapper implements VersionWrapper {

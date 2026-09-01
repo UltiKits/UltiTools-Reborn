@@ -30,6 +30,7 @@ import static com.ultikits.ultitools.utils.MessageUtils.warning;
  *             请使用 {@link com.ultikits.ultitools.abstracts.gui.BasePaginationPage}，
  *             它提供了更好的模板方法模式和代码组织。
  * @since 6.2.0 deprecated
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.2.0", forRemoval = true)
 public abstract class PagingPage extends Gui {

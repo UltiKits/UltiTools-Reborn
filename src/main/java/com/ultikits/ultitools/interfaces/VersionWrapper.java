@@ -23,6 +23,7 @@ import org.bukkit.scoreboard.Scoreboard;
  *             <p>
  *             请改用 {@link XVersionUtils} 静态方法。
  *             此接口仅为向后兼容保留，将在未来版本中移除。
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.2.0", forRemoval = true)
 public interface VersionWrapper {
@@ -35,6 +36,7 @@ public interface VersionWrapper {
      * @param plane {@link Colors} color <br> 颜色
      * @return Glass pane <br> 玻璃板
      * @deprecated Use {@link XVersionUtils#getColoredPlaneGlass(Colors)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getColoredPlaneGlass(Colors plane) {
@@ -48,6 +50,7 @@ public interface VersionWrapper {
      *
      * @return sign <br> 告示牌
      * @deprecated Use {@link XVersionUtils#getSign()} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getSign() {
@@ -61,6 +64,7 @@ public interface VersionWrapper {
      *
      * @return End eye <br> 末影之眼
      * @deprecated Use {@link XVersionUtils#getEndEye()} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getEndEye() {
@@ -75,6 +79,7 @@ public interface VersionWrapper {
      * @param isRead is read <br> 是否已读
      * @return material of the email <br> 邮件材质
      * @deprecated Use {@link XVersionUtils#getEmailMaterial(boolean)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getEmailMaterial(boolean isRead) {
@@ -89,6 +94,7 @@ public interface VersionWrapper {
      * @param player player <br> 玩家
      * @return player's head <br> 玩家头颅
      * @deprecated Use {@link XVersionUtils#getHead(OfflinePlayer)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getHead(OfflinePlayer player) {
@@ -102,6 +108,7 @@ public interface VersionWrapper {
      *
      * @return glass block <br> 玻璃块
      * @deprecated Use {@link XVersionUtils#getGrassBlock()} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getGrassBlock() {
@@ -119,6 +126,7 @@ public interface VersionWrapper {
      * @param displayName display name <br> 显示名称
      * @return 计分板对象
      * @deprecated Use {@link XVersionUtils#registerNewObjective(Scoreboard, String, String, String)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default Objective registerNewObjective(Scoreboard scoreboard, String name, String criteria, String displayName) {
@@ -133,6 +141,7 @@ public interface VersionWrapper {
      * @param sound sound <br> 声音
      * @return Sound <br> 声音
      * @deprecated Use {@link XVersionUtils#getSound(Sounds)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default Sound getSound(Sounds sound) {
@@ -147,6 +156,7 @@ public interface VersionWrapper {
      * @param bedColor {@link Colors} bed color <br> 床颜色
      * @return Bed <br> 床
      * @deprecated Use {@link XVersionUtils#getBed(Colors)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getBed(Colors bedColor) {
@@ -161,6 +171,7 @@ public interface VersionWrapper {
      * @param itemStack itemstack <br> 物品
      * @return durability <br> 耐久度
      * @deprecated Use {@link XVersionUtils#getItemDurability(ItemStack)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default int getItemDurability(ItemStack itemStack) {
@@ -176,6 +187,7 @@ public interface VersionWrapper {
      * @param isMainHand is main hand <br> 是否是主手
      * @return item in player's hand <br> 玩家手中的物品
      * @deprecated Use {@link XVersionUtils#getItemInHand(Player, boolean)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default ItemStack getItemInHand(Player player, boolean isMainHand) {
@@ -190,6 +202,7 @@ public interface VersionWrapper {
      * @param player  player <br> 玩家
      * @param message message <br> 消息
      * @deprecated Use {@link XVersionUtils#sendActionBar(Player, String)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default void sendActionBar(Player player, String message) {
@@ -205,6 +218,7 @@ public interface VersionWrapper {
      * @param header prefix <br> 前缀
      * @param footer suffix <br> 后缀
      * @deprecated Use {@link XVersionUtils#sendPlayerList(Player, String, String)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default void sendPlayerList(Player player, String header, String footer) {
@@ -219,6 +233,7 @@ public interface VersionWrapper {
      * @param placedBlock placed block <br> 放置的方块
      * @return block face <br> 方块面向
      * @deprecated Use {@link XVersionUtils#getBlockFace(Block)} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     default BlockFace getBlockFace(Block placedBlock) {

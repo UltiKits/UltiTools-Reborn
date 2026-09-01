@@ -21,6 +21,7 @@ import java.io.Serializable;
  *             请使用 {@link com.ultikits.ultitools.abstracts.data.BaseDataEntity}，
  *             它提供泛型 ID 类型和生命周期钩子。
  * @since 6.2.0 deprecated
+ * @removeIn 6.3.0
  */
 @Data
 @Deprecated(since = "6.2.0", forRemoval = true)

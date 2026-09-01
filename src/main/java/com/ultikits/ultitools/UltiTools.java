@@ -130,6 +130,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private URLClassLoader ultiToolsClassLoader;
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     private VersionWrapper versionWrapper;
@@ -150,6 +151,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      *
      * @return the version wrapper <br> 版本适配器
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     public VersionWrapper getVersionWrapper() {

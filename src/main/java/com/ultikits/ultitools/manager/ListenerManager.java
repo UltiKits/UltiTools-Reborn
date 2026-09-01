@@ -48,6 +48,7 @@ public class ListenerManager {
      *             <p>
      *             请改用 {@link #register(UltiToolsPlugin, Class)}；此重载接收已经构造好的实例，
      *             因此不会执行任何依赖注入。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(UltiToolsPlugin plugin, Listener listener) {
@@ -82,6 +83,7 @@ public class ListenerManager {
      *             都改为从模块自身的容器中按 bean 解析监听器。请改用
      *             {@link #registerAll(UltiToolsPlugin)}——它确实遵循 {@code manualRegister()}。
      *             见 issue #337。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public void registerAll(UltiToolsPlugin plugin, String packageName) {

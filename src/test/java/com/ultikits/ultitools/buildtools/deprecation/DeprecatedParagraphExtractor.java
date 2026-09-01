@@ -60,7 +60,9 @@ public final class DeprecatedParagraphExtractor {
         }
         int cut = findCutPoint(trimmed);
         String segment = cut >= 0 ? trimmed.substring(0, cut) : trimmed;
-        return resolveLinks(segment).trim();
+        // Collapse whitespace runs left behind by javadoc's per-line "* " indentation once a
+        // multi-line paragraph's newlines have already been folded to spaces by the caller.
+        return resolveLinks(segment).trim().replaceAll("\\s+", " ");
     }
 
     /**
@@ -174,7 +176,7 @@ public final class DeprecatedParagraphExtractor {
             if (deprecatedMatcher.find()) {
                 String raw = deprecatedMatcher.group(1);
                 // Strip leading " * " javadoc line prefixes so <p>/<br> detection sees prose only.
-                String cleaned = raw.replaceAll("(?m)^\\s*\\*\\s?", " ");
+                String cleaned = raw.replaceAll("\\r?\\n[ \\t]*\\*[ \\t]?", " ");
                 paragraphs.add(cleaned.trim());
             }
         }

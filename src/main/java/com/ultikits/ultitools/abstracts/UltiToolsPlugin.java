@@ -223,6 +223,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *             <p>
      *             请改用七参数构造函数并显式传入 {@code resourceFolderPath}。
      *             此重载把它硬编码成了 {@code <dataFolder>/pluginConfig/<插件名>}。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.0.8", forRemoval = true)
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
@@ -350,6 +351,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     /**
      * @return the version wrapper <br> 版本包装器
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     public static VersionWrapper getVersionWrapper() {

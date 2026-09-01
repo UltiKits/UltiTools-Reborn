@@ -61,6 +61,7 @@ import lombok.Getter;
  *             请使用 {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}，
  *             它提供了使用责任链模式的更好架构。
  * @since 6.2.0 deprecated
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.2.0", forRemoval = true)
 public abstract class AbstractCommandExecutor implements TabExecutor {

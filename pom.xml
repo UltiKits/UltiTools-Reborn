@@ -386,6 +386,39 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Deprecation registry generator (GEN-12, D-08). Regenerates
+                 compatibility/deprecations.json and compatibility/DEPRECATIONS.md from the
+                 @Deprecated annotations plus @deprecated/@removeIn javadoc tags in src/main/java,
+                 cross-checked against japicmp's own report (D-22). Declared textually AFTER the
+                 japicmp <plugin> block above - Maven runs same-phase executions in POM
+                 declaration order, and that ordering is the only thing that guarantees
+                 target/japicmp/japicmp.xml exists when the generator reads it.
+                 Build-time only: never a dependency of the published artifact, never shaded.
+                 废弃注记表生成器（GEN-12，D-08）。从 src/main/java 中的
+                 @Deprecated 注解以及 @deprecated/@removeIn javadoc 标签重新生成
+                 compatibility/deprecations.json 和 compatibility/DEPRECATIONS.md，并与 japicmp
+                 自身的报告交叉校验（D-22）。文本上写在上方 japicmp <plugin> 块之后——
+                 Maven 在同一阶段按 POM 声明顺序执行执行项，而这个顺序是唯一能保证生成器读取
+                 target/japicmp/japicmp.xml 时该文件已经存在的机制。仅用于构建时：
+                 从不作为已发布制作物的依赖，也从不被 shade 。 -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <mainClass>com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator</mainClass>
+                    <classpathScope>test</classpathScope>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>generate-deprecation-registry</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <!--发布源码插件 -->
             <!--            <plugin>-->
             <!--                <groupId>org.apache.maven.plugins</groupId>-->
@@ -532,6 +565,22 @@
                     <docencoding>UTF-8</docencoding>
                     <locale>en_US</locale>
                     <failOnWarnings>false</failOnWarnings>
+                    <!-- Registers the @removeIn block tag (D-27) so the registry generator's
+                         javadoc convention does not fail `mvn package` with "error: unknown
+                         tag: removeIn" - an unregistered custom javadoc tag is a fatal error,
+                         not a warning (07-RESEARCH.md Priority 4); this registration lands in
+                         the same commit as the first @removeIn site.
+                         注册 @removeIn 块标签（D-27），避免废弃注记表生成器的 javadoc 约定让
+                         `mvn package` 报 "error: unknown tag: removeIn" 而失败——未注册的自定义
+                         javadoc 标签是致命错误，而非警告；本次注册与第一个 @removeIn 站点
+                         在同一个提交中落地。 -->
+                    <tags>
+                        <tag>
+                            <name>removeIn</name>
+                            <placement>a</placement>
+                            <head>Scheduled removal version:</head>
+                        </tag>
+                    </tags>
                 </configuration>
                 <executions>
                     <execution>

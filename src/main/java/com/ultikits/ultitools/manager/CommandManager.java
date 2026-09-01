@@ -129,6 +129,7 @@ public class CommandManager {
      *             且外层 catch 只列了四个反射类受检异常，异常会逃出去。
      *             请改用 {@link #registerAll(UltiToolsPlugin)} —— 它从模块容器里按 bean
      *             解析命令类，不做强转。见 issue #272。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.5", forRemoval = true)
     public void registerAll(UltiToolsPlugin plugin, String packageName) {
@@ -225,6 +226,7 @@ public class CommandManager {
      * @deprecated Use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
      *             <p>
      *             请改用 {@link #register(UltiToolsPlugin, Class, String, String, String...)}。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
@@ -245,6 +247,7 @@ public class CommandManager {
      * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead.
      *             <p>
      *             请改用 {@link #register(UltiToolsPlugin, Class)}。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.0.5", forRemoval = true)
     public void register(CommandExecutor commandExecutor) {

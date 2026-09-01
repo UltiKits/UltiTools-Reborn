@@ -252,6 +252,7 @@ public class PluginManager {
      *             Collections.*} 包装类型）。这个重载原本是为了绕开 {@code plugin.yml} 元数据，
      *             供连接器调用方使用；请改用 {@link #register(UltiToolsPlugin)} —— 它接收一个
      *             已经构造好的插件实例，自身不涉及任何反射构造路径。见 issue #332。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public boolean register(
@@ -1550,6 +1551,7 @@ public class PluginManager {
      *             List 类型参数因此在构造之前就会被拒绝。这条路径计划移除（issue #332）而非
      *             修复；只有传入非空参数数组的七参 {@link #register(Class, String, String,
      *             List, List, int, String)} 会调用它。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {

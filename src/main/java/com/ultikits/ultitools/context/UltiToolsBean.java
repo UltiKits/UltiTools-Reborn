@@ -25,6 +25,7 @@ public class UltiToolsBean {
 
     /**
      * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.2.0", forRemoval = true)
     @Bean

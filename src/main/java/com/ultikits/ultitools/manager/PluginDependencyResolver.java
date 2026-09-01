@@ -138,8 +138,9 @@ public class PluginDependencyResolver {
          *
          * @deprecated use {@link #getAllDependencies(Set, Map)}, which resolves each entry
          *             through the plugin.yml-name alias map (D-12) before checking availability
+         * @removeIn 6.4.0
          */
-        @Deprecated
+        @Deprecated(since = "6.3.0", forRemoval = true)
         public Set<String> getAllDependencies(Set<String> availablePlugins) {
             return getAllDependencies(availablePlugins, Collections.emptyMap());
         }

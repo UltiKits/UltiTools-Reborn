@@ -62,6 +62,7 @@ public interface TempListener extends Listener {
      * @param eventClass Event class <br> 事件类
      * @param <E>        PlayerEvent type <br> 玩家事件类型
      * @return Builder <br> 构建器
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.1.0", forRemoval = true)
     static <E extends PlayerEvent> PlayerTempListenerBuilder<E> player(Class<E> eventClass) {
@@ -187,6 +188,7 @@ public interface TempListener extends Listener {
      *             <p>
      *             请改用 {@link #common(Class)}，并用
      *             {@link DefaultTempListenerBuilder#filter(Function)} 收窄范围。
+     * @removeIn 6.3.0
      */
     @Deprecated(since = "6.1.0", forRemoval = true)
     class PlayerTempListenerBuilder<E extends PlayerEvent> {

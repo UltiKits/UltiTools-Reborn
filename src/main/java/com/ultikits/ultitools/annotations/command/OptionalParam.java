@@ -18,6 +18,7 @@ import java.lang.annotation.Target;
  *             <p>
  *             从未实现——没有任何代码读取该注解，标注它对指令解析不产生任何影响。
  *             没有替代品：请为每种可接受的参数形态各声明一个 {@code @CmdMapping} 格式。
+ * @removeIn 6.3.0
  */
 @Deprecated(since = "6.0.7", forRemoval = true)
 @Target(ElementType.PARAMETER)
