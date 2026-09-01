@@ -5,7 +5,17 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,18 +30,22 @@ import java.util.regex.Pattern;
 /**
  * Build-time entry point (bound to the {@code verify} phase, after japicmp - see {@code pom.xml})
  * that regenerates {@code compatibility/deprecations.json} and {@code compatibility/DEPRECATIONS.md}
- * from source plus the japicmp report (D-08, D-17, D-22).
+ * from source plus the japicmp report (D-08, D-17, D-22), then runs
+ * {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own {@code <exclude>} list,
+ * the japicmp report, and the merged registry.
  *
  * <p>Reads the prior ledger (if any), scans {@code src/main/java} with
  * {@link JavadocDeprecationScanner}, reads {@code target/japicmp/japicmp.xml} for the set of keys
- * japicmp reports {@code changeStatus="REMOVED"}, merges via {@link RegistryLedger#merge}, and
- * writes both output files. A merge disagreement ({@link LedgerMergeConflictException}) or any
- * other failure exits non-zero, failing {@code mvn verify}.
+ * japicmp reports {@code changeStatus="REMOVED"}, merges via {@link RegistryLedger#merge}, writes
+ * both output files, then evaluates removal-record consistency. A merge disagreement
+ * ({@link LedgerMergeConflictException}), a consistency finding, or any other failure exits
+ * non-zero, failing {@code mvn verify}.
  */
 public final class DeprecationRegistryGenerator {
 
     private static final Path SRC_ROOT = Paths.get("src/main/java");
     private static final Path JAPICMP_REPORT = Paths.get("target/japicmp/japicmp.xml");
+    private static final Path POM_XML = Paths.get("pom.xml");
     private static final Path LEDGER_JSON = Paths.get("compatibility/deprecations.json");
     private static final Path LEDGER_MARKDOWN = Paths.get("compatibility/DEPRECATIONS.md");
 
@@ -58,7 +72,8 @@ public final class DeprecationRegistryGenerator {
                 Thread.currentThread().getContextClassLoader());
         List<DeprecationEntry> freshScan = scanner.scan(SRC_ROOT);
 
-        Set<RegistryKey> japicmpRemoved = readJapicmpRemovedKeys();
+        JapicmpReportReader.Report report = readJapicmpReport();
+        Set<RegistryKey> japicmpRemoved = removedKeys(report);
 
         RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved);
 
@@ -68,6 +83,29 @@ public final class DeprecationRegistryGenerator {
 
         System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
                 + LEDGER_JSON + " and " + LEDGER_MARKDOWN);
+
+        evaluateRemovalConsistency(report, merged);
+    }
+
+    /**
+     * Runs {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) and fails the build - naming
+     * every offending key - on any finding. This is the japicmp {@code <exclude>} staleness check
+     * japicmp itself cannot produce (its {@code ConfigParameters} has no such field).
+     */
+    private static void evaluateRemovalConsistency(JapicmpReportReader.Report report, RegistryLedger merged)
+            throws IOException {
+        Set<RegistryKey> excludeKeys = readPomExcludeKeys();
+        List<RemovalConsistencyEvaluator.Finding> findings =
+                RemovalConsistencyEvaluator.evaluate(excludeKeys, report, merged);
+        if (findings.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("RemovalConsistencyEvaluator found ")
+                .append(findings.size()).append(" consistency violation(s):\n");
+        for (RemovalConsistencyEvaluator.Finding finding : findings) {
+            sb.append("  - ").append(finding).append('\n');
+        }
+        throw new IllegalStateException(sb.toString());
     }
 
     private static RegistryLedger loadPriorLedger() throws IOException {
@@ -135,24 +173,120 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
-     * Reads {@code target/japicmp/japicmp.xml} and returns the set of {@link RegistryKey}s that
-     * japicmp reports with {@code compatibilityChanges} containing a REMOVED-shaped change
-     * (class removed, method/constructor removed, or field removed) - the japicmp-side half of
-     * D-22's dual-source cross-check. Reconstructs each key from the report's own
-     * {@code <method>}/{@code <field>}/{@code <parameter type=...>} attributes so both sides of
-     * the check share the exact same string form (D-01).
+     * Reads {@code target/japicmp/japicmp.xml} via {@link JapicmpReportReader} - the full-fidelity
+     * parse {@link RemovalConsistencyEvaluator} needs (changeStatus, old-side access modifier,
+     * and root scope for every element, not just the REMOVED subset).
      */
-    private static Set<RegistryKey> readJapicmpRemovedKeys() throws IOException {
-        Set<RegistryKey> removed = new LinkedHashSet<>();
+    private static JapicmpReportReader.Report readJapicmpReport() throws IOException {
         if (!Files.exists(JAPICMP_REPORT)) {
             // No japicmp report (e.g. `-DskipTests` ran before `verify`'s cmp goal on a partial
-            // build). Nothing can be confirmed REMOVED without it - an empty set is the safe,
+            // build). Nothing can be confirmed REMOVED without it - an empty report is the safe,
             // conservative default; D-22 requires agreement, and silence from japicmp never
             // authorizes a REMOVED transition on its own.
-            return removed;
+            return JapicmpReportReader.Report.empty();
         }
-        String xml = new String(Files.readAllBytes(JAPICMP_REPORT), StandardCharsets.UTF_8);
-        removed.addAll(JapicmpReportParser.findRemovedKeys(xml));
+        return JapicmpReportReader.read(JAPICMP_REPORT);
+    }
+
+    /**
+     * The japicmp-side half of D-22's dual-source cross-check: every key the report shows
+     * {@code changeStatus="REMOVED"} - reconstructed from the report's own attributes so both
+     * sides of the check share the exact same string form (D-01).
+     */
+    private static Set<RegistryKey> removedKeys(JapicmpReportReader.Report report) {
+        Set<RegistryKey> removed = new LinkedHashSet<>();
+        for (java.util.Map.Entry<RegistryKey, JapicmpReportReader.Entry> e : report.entries().entrySet()) {
+            if ("REMOVED".equals(e.getValue().getChangeStatus())) {
+                removed.add(e.getKey());
+            }
+        }
         return removed;
+    }
+
+    /**
+     * Reads {@code pom.xml}'s japicmp {@code <plugin>} block and returns every
+     * {@code <exclude>} entry as a {@link RegistryKey} - the pom-side input
+     * {@link RemovalConsistencyEvaluator} cross-checks against the report and the registry.
+     * Uses the same JDK parser and XXE hardening as {@link JapicmpReportReader}.
+     */
+    private static Set<RegistryKey> readPomExcludeKeys() throws IOException {
+        String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
+        Document doc = parsePomXml(xml);
+
+        Element japicmpPlugin = findJapicmpPlugin(doc);
+        Set<RegistryKey> keys = new LinkedHashSet<>();
+        if (japicmpPlugin == null) {
+            return keys;
+        }
+        NodeList excludeNodes = japicmpPlugin.getElementsByTagName("exclude");
+        for (int i = 0; i < excludeNodes.getLength(); i++) {
+            String text = excludeNodes.item(i).getTextContent().trim();
+            if (!text.isEmpty()) {
+                keys.add(parseExcludeKey(text));
+            }
+        }
+        return keys;
+    }
+
+    private static Element findJapicmpPlugin(Document doc) {
+        NodeList plugins = doc.getElementsByTagName("plugin");
+        for (int i = 0; i < plugins.getLength(); i++) {
+            Element plugin = (Element) plugins.item(i);
+            NodeList artifactIds = plugin.getElementsByTagName("artifactId");
+            for (int j = 0; j < artifactIds.getLength(); j++) {
+                if ("japicmp-maven-plugin".equals(artifactIds.item(j).getTextContent().trim())) {
+                    return plugin;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Parses one japicmp {@code <exclude>} entry's text back into a {@link RegistryKey}, using
+     * the same {@code Class#member(paramTypes)} / {@code Class#field} / bare-class syntax japicmp
+     * itself requires (confirmed via decompilation, 07-RESEARCH.md "Priority 1").
+     */
+    private static RegistryKey parseExcludeKey(String text) {
+        int hashIndex = text.indexOf('#');
+        if (hashIndex < 0) {
+            return RegistryKey.forClass(text);
+        }
+        String className = text.substring(0, hashIndex);
+        String rest = text.substring(hashIndex + 1);
+        int parenIndex = rest.indexOf('(');
+        if (parenIndex < 0) {
+            return RegistryKey.forField(className, rest);
+        }
+        String memberName = rest.substring(0, parenIndex);
+        String paramsText = rest.substring(parenIndex + 1, rest.length() - 1).trim();
+        List<String> params = paramsText.isEmpty()
+                ? java.util.Collections.emptyList()
+                : splitParams(paramsText);
+        return RegistryKey.forMember(className, memberName, params);
+    }
+
+    private static List<String> splitParams(String paramsText) {
+        List<String> params = new ArrayList<>();
+        for (String part : paramsText.split(",")) {
+            params.add(part.trim());
+        }
+        return params;
+    }
+
+    private static Document parsePomXml(String xml) throws IOException {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            // Same XXE hardening as JapicmpReportReader (T-07-03-04).
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            return builder.parse(new InputSource(new StringReader(xml)));
+        } catch (ParserConfigurationException | SAXException e) {
+            throw new IOException("Failed to parse " + POM_XML + ": " + e.getMessage(), e);
+        }
     }
 }

@@ -28,8 +28,8 @@ import java.util.Set;
  * Parses japicmp's {@code target/japicmp/japicmp.xml} report into the same {@link RegistryKey}
  * identifier space the registry and the pom {@code <exclude>} entries use (D-22), carrying every
  * class/method/constructor/field element's {@code changeStatus}, old-side access modifier, and
- * binary-compatibility flag - not just the {@code REMOVED} subset {@link JapicmpReportParser}
- * looks for.
+ * binary-compatibility flag - the full-fidelity parse {@link RemovalConsistencyEvaluator} needs
+ * for D-01's coverage/staleness checks and D-21's admissibility check.
  *
  * <p><strong>Structural limitation, load-bearing for {@link RemovalConsistencyEvaluator}:</strong>
  * once a symbol is named in the pom's {@code <excludes>} list, japicmp filters it out of the
