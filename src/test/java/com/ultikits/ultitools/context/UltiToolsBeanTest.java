@@ -23,7 +23,6 @@ import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 
@@ -42,9 +41,6 @@ class UltiToolsBeanTest {
 
     @Mock
     private DataStore mockDataStore;
-
-    @Mock
-    private VersionWrapper mockVersionWrapper;
 
     @Mock
     private Language mockLanguage;
@@ -83,16 +79,6 @@ class UltiToolsBeanTest {
     void testGetDataStoreBeanAnnotation() throws Exception {
         // Given
         Method method = UltiToolsBean.class.getMethod("getDataStore");
-
-        // Then
-        assertTrue(method.isAnnotationPresent(Bean.class));
-    }
-
-    @Test
-    @DisplayName("Should have @Bean annotated method for VersionWrapper")
-    void testGetVersionWrapperBeanAnnotation() throws Exception {
-        // Given
-        Method method = UltiToolsBean.class.getMethod("getVersionWrapper");
 
         // Then
         assertTrue(method.isAnnotationPresent(Bean.class));
@@ -160,24 +146,6 @@ class UltiToolsBeanTest {
             assertNotNull(result);
             assertEquals(mockDataStore, result);
             verify(mockUltiTools, times(1)).getDataStore();
-        }
-    }
-
-    @Test
-    @DisplayName("Should return VersionWrapper instance")
-    void testGetVersionWrapper() {
-        try (MockedStatic<UltiTools> mockedStatic = mockStatic(UltiTools.class)) {
-            // Given
-            mockedStatic.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-            when(mockUltiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
-
-            // When
-            VersionWrapper result = ultiToolsBean.getVersionWrapper();
-
-            // Then
-            assertNotNull(result);
-            assertEquals(mockVersionWrapper, result);
-            verify(mockUltiTools, times(1)).getVersionWrapper();
         }
     }
 
@@ -250,7 +218,7 @@ class UltiToolsBeanTest {
         }
 
         // Then
-        assertEquals(6, beanMethodCount, "Should have 6 @Bean annotated methods");
+        assertEquals(5, beanMethodCount, "Should have 5 @Bean annotated methods");
     }
 
     @Test
@@ -265,11 +233,6 @@ class UltiToolsBeanTest {
         Method getDataStore = UltiToolsBean.class.getMethod("getDataStore");
         assertEquals(DataStore.class, getDataStore.getReturnType());
         assertEquals(0, getDataStore.getParameterCount());
-
-        // Test getVersionWrapper
-        Method getVersionWrapper = UltiToolsBean.class.getMethod("getVersionWrapper");
-        assertEquals(VersionWrapper.class, getVersionWrapper.getReturnType());
-        assertEquals(0, getVersionWrapper.getParameterCount());
 
         // Test getLanguage
         Method getLanguage = UltiToolsBean.class.getMethod("getLanguage");

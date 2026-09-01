@@ -3,7 +3,6 @@ package com.ultikits.ultitools.context;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.annotations.Bean;
@@ -21,16 +20,6 @@ public class UltiToolsBean {
     @Bean
     public DataStore getDataStore() {
         return UltiTools.getInstance().getDataStore();
-    }
-
-    /**
-     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
-     * @removeIn 6.3.0
-     */
-    @Deprecated(since = "6.2.0", forRemoval = true)
-    @Bean
-    public VersionWrapper getVersionWrapper() {
-        return UltiTools.getInstance().getVersionWrapper();
     }
 
     @Bean

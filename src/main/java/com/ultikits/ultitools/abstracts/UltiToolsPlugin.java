@@ -38,7 +38,6 @@ import com.ultikits.ultitools.interfaces.Configurable;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
@@ -346,16 +345,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
-    }
-
-    /**
-     * @return the version wrapper <br> 版本包装器
-     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
-     * @removeIn 6.3.0
-     */
-    @Deprecated(since = "6.2.0", forRemoval = true)
-    public static VersionWrapper getVersionWrapper() {
-        return UltiTools.getInstance().getVersionWrapper();
     }
 
     /**

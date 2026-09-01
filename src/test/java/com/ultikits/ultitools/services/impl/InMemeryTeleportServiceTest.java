@@ -16,7 +16,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import org.bukkit.Location;
-import org.bukkit.Sound;
 import org.bukkit.World;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +25,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
 
@@ -53,16 +51,12 @@ class InMemeryTeleportServiceTest {
         // Mock logger
         Logger mockLogger = mock(Logger.class);
 
-        // Mock VersionWrapper
-        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
-            when(ultiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
             // i18n 原先在 6 个用例里各打一遍、内容完全相同。提到发布之前既消掉重复，
             // 也让这 6 处不再在「mock 已全进程可见」的窗口里打桩。见 issue #256。
             lenient().when(ultiTools.i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
         });
-        when(mockVersionWrapper.getSound(any())).thenReturn(Sound.ENTITY_ENDERMAN_TELEPORT);
 
         teleportService = new InMemeryTeleportService();
         
