@@ -8,7 +8,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.UltiTools#versionWrapper",
@@ -19,7 +20,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.AbstractCommandExecutor",
@@ -49,7 +51,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "This class uses Object type for ID which is not type-safe. Use BaseDataEntity instead, which provides generic ID type and lifecycle hooks.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.UltiToolsPlugin#UltiToolsPlugin(java.lang.String,java.lang.String,java.util.List,java.util.List,int,java.lang.String)",
@@ -71,7 +74,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.guis.OkCancelPage",
@@ -81,7 +85,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use BaseConfirmationPage instead, which provides better template method pattern, builder support, and code organization.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.abstracts.guis.PagingPage",
@@ -91,7 +96,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use BasePaginationPage instead, which provides better template method pattern and code organization.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.annotations.command.OptionalParam",
@@ -101,7 +107,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Never implemented — no code reads this annotation, so applying it has no effect on command parsing. There is no replacement: declare a separate {@code @CmdMapping} format for each accepted argument shape.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.context.UltiToolsBean#getVersionWrapper()",
@@ -112,7 +119,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.DataStore#getOperator(com.ultikits.ultitools.abstracts.UltiToolsPlugin,java.lang.Class)",
@@ -145,7 +153,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use common(Class) instead. You can use DefaultTempListenerBuilder#filter(Function) to filter player events.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.TempListener$PlayerTempListenerBuilder",
@@ -155,7 +164,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use common(Class) instead, narrowing with DefaultTempListenerBuilder#filter(Function).",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.TransactionManager#getConnection()",
@@ -198,7 +208,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils static methods instead. This interface is kept for backward compatibility only. Will be removed in a future version.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getBed(com.ultikits.ultitools.entities.Colors)",
@@ -209,7 +220,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getBed(Colors) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getBlockFace(org.bukkit.block.Block)",
@@ -220,7 +232,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getBlockFace(Block) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getColoredPlaneGlass(com.ultikits.ultitools.entities.Colors)",
@@ -231,7 +244,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getColoredPlaneGlass(Colors) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getEmailMaterial(boolean)",
@@ -242,7 +256,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getEmailMaterial(boolean) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getEndEye()",
@@ -253,7 +268,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getEndEye() instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getGrassBlock()",
@@ -264,7 +280,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getGrassBlock() instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getHead(org.bukkit.OfflinePlayer)",
@@ -275,7 +292,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getHead(OfflinePlayer) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getItemDurability(org.bukkit.inventory.ItemStack)",
@@ -286,7 +304,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getItemDurability(ItemStack) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getItemInHand(org.bukkit.entity.Player,boolean)",
@@ -297,7 +316,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getItemInHand(Player, boolean) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getSign()",
@@ -308,7 +328,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getSign() instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#getSound(com.ultikits.ultitools.entities.Sounds)",
@@ -319,7 +340,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#getSound(Sounds) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#registerNewObjective(org.bukkit.scoreboard.Scoreboard,java.lang.String,java.lang.String,java.lang.String)",
@@ -330,7 +352,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#registerNewObjective(Scoreboard, String, String, String) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#sendActionBar(org.bukkit.entity.Player,java.lang.String)",
@@ -341,7 +364,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#sendActionBar(Player, String) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.VersionWrapper#sendPlayerList(org.bukkit.entity.Player,java.lang.String,java.lang.String)",
@@ -352,7 +376,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils#sendPlayerList(Player, String, String) instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper",
@@ -362,7 +387,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use XVersionUtils directly instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.PlayerTempListener",
@@ -372,7 +398,8 @@
     "forRemoval": true,
     "removeIn": "6.3.0",
     "replacement": "Use TempListener#common(Class) and filter by player instead.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.interfaces.impl.SimpleTempListener#SimpleTempListener()",

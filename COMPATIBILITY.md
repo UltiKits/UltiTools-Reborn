@@ -135,6 +135,15 @@ included — they were never public API, so removing them is not a compatibility
 "Removal announced in" is the release in which the API first carried the `forRemoval` annotation,
 that is, the first version in which your build named it in a warning.
 
+**Twelve entries in this list — the whole "Version adaptation" table, the "Data and GUI base
+classes" table, and the `TempListener`/`PlayerTempListener` rows of "Listeners and registration" —
+are no longer merely announced: plan 07-13 (GEN-04) actually deleted them from source in 6.3.0.**
+`@OptionalParam` (in "Commands" below) is deleted too. Their rows stay in this table because the
+facts recorded here (the release that first announced removal, the replacement) remain accurate for
+readers on earlier versions; for the behavioural detail of what happens if you load an
+un-recompiled JAR referencing one of them, see
+[`records/6.3.0.md`](records/6.3.0.md).
+
 ### Commands
 
 | Type / member | Removal announced in | Replacement | Downstream references (informational) |
@@ -1876,8 +1885,12 @@ entry: a module that only uses `.query()….first()` calls no `DataOperator` met
 affected.
 
 Overloads that do not mention the entity type (`update(String, Object, Object)`,
-`exist(WhereCondition[])`) kept their descriptors. `AbstractDataEntity` itself was not deleted, so
-this case likewise cannot go on the removal list.
+`exist(WhereCondition[])`) kept their descriptors. `AbstractDataEntity` itself was not deleted at
+the time this section was written, so this case could not go on the removal list yet — that has
+since changed: `AbstractDataEntity` was deleted in 6.3.0 by plan 07-13 (GEN-04), and the descriptor
+history recorded above (6.2.0 → 6.2.1) remains accurate for servers running those earlier versions.
+See [the 6.3.0 removal record](records/6.3.0.md#recorded-instance-abstractdataentity-is-gone-basedataentity-now-owns-its-id-field-directly-gen-04-630)
+for what an un-recompiled JAR referencing `AbstractDataEntity` now sees.
 
 **Descriptor changes are inherently bidirectional**, and both instances are. When a symbol has the
 same name and a different descriptor across two versions, then whichever side you compile against,
@@ -2195,6 +2208,13 @@ flatten-maven-plugin 处理后不含依赖声明，因此把 UltiTools-API 放�
 
 「移除预告发自」是该 API 首次带上 `forRemoval` 标注的发布版本，
 也就是你的构建第一次点名警告它的版本。
+
+**本清单中有十二项不再只是「预告」：plan 07-13（GEN-04）已在 6.3.0 中把它们从源码里实际删除了**——
+「版本适配」整表、「数据与 GUI 基类」整表，以及「监听器与注册」表中
+`TempListener`/`PlayerTempListener` 相关行。下方「命令」表中的 `@OptionalParam` 也已删除。
+这些行仍留在本表中，因为此处记录的事实（首次预告移除的版本、替代方案）对使用更早版本的读者
+依然准确；若要了解未重编译的 JAR 引用其中某一项时具体会发生什么，见
+[`records/6.3.0.md`](records/6.3.0.md)。
 
 ### 命令
 
@@ -3265,7 +3285,11 @@ JAR 都解开，对 `com/ultikits/ultitools/**` 跑 `javap -s`，按 `(类, 成�
 方法都没调，照样中招。
 
 不含实体类型的重载（`update(String, Object, Object)`、`exist(WhereCondition[])`）描述符未变。
-`AbstractDataEntity` 本身没被删，所以这一条同样进不了移除清单。
+写这一节时 `AbstractDataEntity` 本身还没被删，所以这一条当时进不了移除清单——此后已有变化：
+`AbstractDataEntity` 已由 plan 07-13（GEN-04）在 6.3.0 中删除，上面记录的描述符变迁历史
+（6.2.0 → 6.2.1）对运行更早版本的服务器仍然准确。未重编译的 JAR 引用 `AbstractDataEntity`
+现在会看到什么，见
+[6.3.0 移除记录](records/6.3.0.md#recorded-instance-abstractdataentity-is-gone-basedataentity-now-owns-its-id-field-directly-gen-04-630)。
 
 **描述符变更本质上都是双向的**，两个实例都是——一个符号在两版里名字相同、描述符不同，
 那么无论从哪一侧编译，另一侧都没有它。老 JAR 在新框架上炸（找 `(AbstractDataEntity)`，

@@ -374,6 +374,99 @@
                                  tell third-party authors something will break them when nothing
                                  can. -->
                             <exclude>com.ultikits.ultitools.commands.tabcomplete.MethodInvocationCompleter#getSuggestMethodsByName(java.lang.Object, java.lang.String)</exclude>
+                            <!-- 07-13-PLAN.md (GEN-04, maintainer decision "proceed" — expanded
+                                 scope). Whole-class removals: one bare-FQN entry each covers the
+                                 class and every one of its members/constructors, including any
+                                 reported SUPERCLASS_REMOVED/INTERFACE_REMOVED for the class under
+                                 its own name (confirmed against target/japicmp/japicmp.xml for
+                                 each entry below, per 07-03's documented blind spot: its staleness
+                                 evaluator cannot see class-level entries, so this is hand-checked). -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractDataEntity</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.guis.OkCancelPage</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.guis.PagingPage</exclude>
+                            <exclude>com.ultikits.ultitools.annotations.command.OptionalParam</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper</exclude>
+                            <!-- RemovalConsistencyEvaluator's D-22 pom-sync check does an exact
+                                 RegistryKey match, not a "does an enclosing class-level exclude
+                                 already cover this" check — so a whole-class entry above suppresses
+                                 japicmp's own report for these methods, but does NOT satisfy the
+                                 evaluator's sync check for the individually-@Deprecated registry
+                                 entries every VersionWrapper default method carries (measured: this
+                                 evaluator has no such recognition of the (\$.*)? class-filter
+                                 japicmp itself applies). Each one needs its own member-level entry
+                                 too. UltiTools#versionWrapper (below, near its class's own excludes)
+                                 is the same situation for a field. Neither PlayerTempListener nor
+                                 TempListener$PlayerTempListenerBuilder needs this treatment — their
+                                 individual Lombok-generated members carry no per-member @Deprecated
+                                 of their own, only the enclosing class does, so the registry has no
+                                 individual entries to sync for them. -->
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getBed(com.ultikits.ultitools.entities.Colors)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getBlockFace(org.bukkit.block.Block)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getColoredPlaneGlass(com.ultikits.ultitools.entities.Colors)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getEmailMaterial(boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getEndEye()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getGrassBlock()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getHead(org.bukkit.OfflinePlayer)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getItemDurability(org.bukkit.inventory.ItemStack)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getItemInHand(org.bukkit.entity.Player, boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getSign()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getSound(com.ultikits.ultitools.entities.Sounds)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#registerNewObjective(org.bukkit.scoreboard.Scoreboard, java.lang.String, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#sendActionBar(org.bukkit.entity.Player, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#sendPlayerList(org.bukkit.entity.Player, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.PlayerTempListener</exclude>
+                            <!-- Nested class of a class that itself survives (TempListener) —
+                                 TempListener's own FQN is NOT excluded here, so this needs its own
+                                 entry naming the nested ($) form; see 07-01-SUMMARY.md's D-04 note
+                                 on japicmp's internal (\$.*)? class-filter suffix. -->
+                            <exclude>com.ultikits.ultitools.interfaces.TempListener$PlayerTempListenerBuilder</exclude>
+                            <!-- Members removed from classes that otherwise survive. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#getVersionWrapper()</exclude>
+                            <!-- The private backing field, individually @Deprecated in its own
+                                 right (not just the accessor). japicmp never sees it at all —
+                                 accessModifier=protected means a private member is outside its
+                                 scan surface entirely, not merely "unchanged" — so this entry
+                                 exists purely to satisfy RemovalConsistencyEvaluator's D-22
+                                 pom-sync check for the registry entry
+                                 DeprecationRegistryGenerator#impliedRemovedByPrivateVisibility
+                                 (07-13-PLAN.md, Rule 3 fix) allowed to flip to REMOVED without
+                                 japicmp corroboration, on the same zero-downstream-risk rationale
+                                 D-21 already applies to pom excludes. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#versionWrapper</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#getVersionWrapper()</exclude>
+                            <exclude>com.ultikits.ultitools.context.UltiToolsBean#getVersionWrapper()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TempListener#player(java.lang.Class)</exclude>
+                            <!-- BaseDataEntity survives AbstractDataEntity's deletion but no
+                                 longer extends it (it now owns its own id field directly) —
+                                 japicmp attributes SUPERCLASS_REMOVED to the subclass's own FQN,
+                                 not to the deleted superclass, so this needs its own entry even
+                                 though AbstractDataEntity is already excluded above. -->
+                            <exclude>com.ultikits.ultitools.abstracts.data.BaseDataEntity</exclude>
+                            <!-- InventoryConfirm survives OkCancelPage's deletion by migrating
+                                 onto BaseConfirmationPage (07-13-PLAN.md's expanded scope): its
+                                 superclass changed and three hook methods were renamed/re-scoped
+                                 (getOkName/getCancelName -> getOkButtonName/getCancelButtonName,
+                                 onOk -> onConfirm, onCancel narrowed from public to protected) as
+                                 one coordinated migration, not independent member removals — one
+                                 class-level entry covers the whole reported set (confirmed against
+                                 target/japicmp/japicmp.xml: SUPERCLASS_REMOVED + 4 method changes,
+                                 all under InventoryConfirm's own FQN, nothing else). -->
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm</exclude>
+                            <!-- Pre-existing gap from plan 07-05 (GEN-01, commit 4706bff), not
+                                 part of this plan's (07-13, GEN-04) declared symbol set. 07-05
+                                 migrated these three core commands from AbstractCommandExecutor to
+                                 BaseCommandExecutor but never ran `mvn -B -o clean verify
+                                 -DskipTests` (only `mvn -B test`), so the japicmp gate — live and
+                                 build-breaking since plan 07-01, which landed before 07-05 — never
+                                 saw this SUPERCLASS_REMOVED change until this plan's own verify
+                                 run. Fixed here under Rule 3 (blocking issue): every later Phase 7
+                                 plan's verify step would otherwise inherit this same red build.
+                                 AbstractCommandExecutor itself is untouched by this plan; only
+                                 these three framework-owned command classes' own supertype changed. -->
+                            <exclude>com.ultikits.ultitools.commands.CloudLoginCommand</exclude>
+                            <exclude>com.ultikits.ultitools.commands.PluginInstallCommands</exclude>
+                            <exclude>com.ultikits.ultitools.commands.UltiToolsCommands</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
