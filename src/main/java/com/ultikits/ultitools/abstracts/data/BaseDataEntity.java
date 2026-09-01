@@ -2,7 +2,7 @@ package com.ultikits.ultitools.abstracts.data;
 
 import java.io.Serializable;
 
-import com.ultikits.ultitools.abstracts.AbstractDataEntity;
+import com.ultikits.ultitools.annotations.Column;
 
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -10,16 +10,24 @@ import lombok.ToString;
 /**
  * Enhanced abstract data entity with generic ID type and lifecycle hooks.
  * Provides a type-safe foundation for persistent data entities.
- * Extends {@link AbstractDataEntity} to maintain compatibility with existing data operators.
  * <p>
- * Note: This class does NOT declare its own {@code id} field. It reuses the parent
- * {@link AbstractDataEntity} id field (type Object) and provides typed accessors
- * via {@code getId()} and {@code setId(Serializable)}. This avoids Gson's
- * "declares multiple JSON fields named 'id'" error.
+ * This class declares its own {@code id} field, typed {@code ID} rather than {@code Object}.
+ * Before 6.3.0 this class extended the now-removed {@code AbstractDataEntity} and reused its
+ * {@code Object}-typed {@code id} field instead of declaring one directly, specifically to avoid
+ * Gson's "declares multiple JSON fields named 'id'" error, which fires when two classes in the
+ * same hierarchy both declare a field mapped to the same JSON key. With {@code
+ * AbstractDataEntity} deleted this class is now the only declarer of {@code id} in its own
+ * hierarchy, so that collision cannot occur and the extra indirection is no longer needed.
  * <p>
  * 带有泛型 ID 类型和生命周期钩子的增强型抽象数据实体。
  * 为持久化数据实体提供类型安全的基础。
- * 继承 {@link AbstractDataEntity} 以保持与现有数据操作器的兼容性。
+ * <p>
+ * 此类直接声明自己的 {@code id} 字段，类型为 {@code ID} 而非 {@code Object}。
+ * 6.3.0 之前，本类继承已删除的 {@code AbstractDataEntity} 并复用其 {@code Object} 类型的
+ * {@code id} 字段，而不是自己声明——专门用来规避 Gson 的
+ * "declares multiple JSON fields named 'id'" 报错（当同一继承链上的两个类都声明了映射到
+ * 同一 JSON 键的字段时触发）。{@code AbstractDataEntity} 删除后，本类成为其自身继承链中
+ * {@code id} 的唯一声明者，该冲突已不可能发生，这层额外的间接也就不再需要。
  *
  * @param <ID> the type of the entity identifier
  * @author wisdomme
@@ -27,33 +35,36 @@ import lombok.ToString;
  * @since 6.2.0
  */
 @ToString
-@EqualsAndHashCode(callSuper = true)
-public abstract class BaseDataEntity<ID extends Serializable> extends AbstractDataEntity implements Serializable {
+@EqualsAndHashCode
+public abstract class BaseDataEntity<ID extends Serializable> implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     /**
-     * Gets the entity ID with proper type casting.
-     * Delegates to parent's Object-typed id field.
+     * The entity's identifier, owned directly by this class (see the class javadoc for why this
+     * moved here from the now-removed {@code AbstractDataEntity}).
+     */
+    @Column("id")
+    private ID id;
+
+    /**
+     * Gets the entity ID.
      *
      * @return the typed entity ID
      */
-    @SuppressWarnings("unchecked")
-    @Override
     public ID getId() {
-        return (ID) super.getId();
+        return id;
     }
 
     /**
      * Sets the entity ID.
-     * Delegates to parent's Object-typed id field.
      *
      * @param id the entity ID to set
      */
     public void setId(ID id) {
-        super.setId(id);
+        this.id = id;
     }
-    
+
     /**
      * Called before the entity is persisted for the first time.
      * Override to add custom pre-insert logic.
