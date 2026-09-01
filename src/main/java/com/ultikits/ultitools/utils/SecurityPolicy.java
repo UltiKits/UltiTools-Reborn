@@ -2,9 +2,6 @@ package com.ultikits.ultitools.utils;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -24,61 +21,12 @@ import java.util.logging.Level;
 public class SecurityPolicy {
     
     private static final Logger LOGGER = Logger.getLogger(SecurityPolicy.class.getName());
-    
-    // 系统级别的危险类黑名单
-    private static final Set<String> SYSTEM_DANGEROUS_CLASSES = new HashSet<>(Arrays.asList(
-        "java.lang.ProcessBuilder",
-        "java.lang.Runtime",
-        "java.lang.System",
-        "java.lang.reflect.Method",
-        "java.io.FileOutputStream",
-        "java.io.FileInputStream",
-        "java.io.RandomAccessFile",
-        "java.nio.file.Files",
-        "java.nio.file.Paths",
-        "javax.script.ScriptEngine",
-        "javax.script.ScriptEngineManager",
-        "sun.misc.Unsafe",
-        "jdk.internal.misc.Unsafe",
-        "java.net.Socket",
-        "java.net.ServerSocket",
-        "java.net.URL",
-        "java.net.URLConnection",
-        "java.security.AccessController",
-        "java.lang.ClassLoader"
-    ));
-    
-    // 危险包前缀黑名单
-    private static final Set<String> DANGEROUS_PACKAGE_PREFIXES = new HashSet<>(Arrays.asList(
-        "java.lang.reflect",
-        "java.security",
-        "sun.misc",
-        "jdk.internal",
-        "com.sun",
-        "javax.script",
-        "java.rmi",
-        "java.beans",
-        "javax.management"
-    ));
-    
-    // 允许的包前缀白名单
-    private static final Set<String> TRUSTED_PACKAGE_PREFIXES = new HashSet<>(Arrays.asList(
-        "com.ultikits.ultitools",
-        "com.ultikits.plugins",
-        "org.bukkit",
-        "net.md_5.bungee",
-        "io.papermc.paper",
-        "org.spigotmc",
-        "net.kyori.adventure"
-    ));
-    
-    // 可疑关键词列表
-    private static final Set<String> SUSPICIOUS_KEYWORDS = new HashSet<>(Arrays.asList(
-        "process", "runtime", "script", "unsafe", "file", "network", 
-        "socket", "classloader", "reflection", "invoke", "exec",
-        "shell", "cmd", "bash", "powershell", "system", "native"
-    ));
-    
+
+    // The four name-based filter lists formerly lived here. They moved to ClassloadFilterAudit
+    // (same package) once addTrustedPackage/addDangerousClass became no-ops (D-12/D-14) -- see
+    // that class's javadoc. isSafeClassName/isSafeParameterType read them via
+    // ClassloadFilterAudit.<LIST_NAME> below, same-package access requiring no accessor method.
+
     /**
      * Validate if a class name is safe to load.
      * <br>
@@ -92,44 +40,16 @@ public class SecurityPolicy {
             logSecurityViolation("Empty or null class name", className);
             return false;
         }
-        
-        // 检查系统危险类黑名单
-        if (SYSTEM_DANGEROUS_CLASSES.contains(className)) {
-            logSecurityViolation("Class in system dangerous list", className);
+
+        // Delegates to ClassloadFilterAudit.classify() -- same package, same four layers, same
+        // evaluation order -- rather than owning the lists directly. The lists themselves now
+        // live in ClassloadFilterAudit (D-14).
+        ClassloadFilterAudit.Layer refusingLayer = ClassloadFilterAudit.classify(className);
+        if (refusingLayer != null) {
+            logSecurityViolation("Class name " + refusingLayer.describe(), className);
             return false;
         }
-        
-        // 检查危险包前缀
-        for (String dangerousPrefix : DANGEROUS_PACKAGE_PREFIXES) {
-            if (className.startsWith(dangerousPrefix)) {
-                logSecurityViolation("Class in dangerous package", className);
-                return false;
-            }
-        }
-        
-        // 检查是否在信任的包前缀中
-        boolean isTrusted = false;
-        for (String trustedPrefix : TRUSTED_PACKAGE_PREFIXES) {
-            if (className.startsWith(trustedPrefix)) {
-                isTrusted = true;
-                break;
-            }
-        }
-        
-        if (!isTrusted) {
-            logSecurityViolation("Class not in trusted packages", className);
-            return false;
-        }
-        
-        // 检查可疑关键词
-        String lowerClassName = className.toLowerCase();
-        for (String keyword : SUSPICIOUS_KEYWORDS) {
-            if (lowerClassName.contains(keyword)) {
-                logSecurityViolation("Class name contains suspicious keyword: " + keyword, className);
-                return false;
-            }
-        }
-        
+
         return true;
     }
     
@@ -173,7 +93,7 @@ public class SecurityPolicy {
         }
         
         // 允许信任的包
-        for (String trustedPrefix : TRUSTED_PACKAGE_PREFIXES) {
+        for (String trustedPrefix : ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES) {
             if (className.startsWith(trustedPrefix)) {
                 return true;
             }
@@ -268,7 +188,7 @@ public class SecurityPolicy {
      */
     public static void addTrustedPackage(String packagePrefix) {
         if (packagePrefix != null && !packagePrefix.trim().isEmpty()) {
-            TRUSTED_PACKAGE_PREFIXES.add(packagePrefix);
+            ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES.add(packagePrefix);
             LOGGER.log(Level.INFO, "Added trusted package: " + packagePrefix);
         }
     }
@@ -282,7 +202,7 @@ public class SecurityPolicy {
      */
     public static void addDangerousClass(String className) {
         if (className != null && !className.trim().isEmpty()) {
-            SYSTEM_DANGEROUS_CLASSES.add(className);
+            ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES.add(className);
             LOGGER.log(Level.INFO, "Added dangerous class: " + className);
         }
     }
@@ -310,9 +230,9 @@ public class SecurityPolicy {
     public static String getSecurityPolicySummary() {
         return String.format(
             "UltiTools Security Policy - Trusted packages: %d, Dangerous classes: %d, Dangerous packages: %d",
-            TRUSTED_PACKAGE_PREFIXES.size(),
-            SYSTEM_DANGEROUS_CLASSES.size(),
-            DANGEROUS_PACKAGE_PREFIXES.size()
+            ClassloadFilterAudit.TRUSTED_PACKAGE_PREFIXES.size(),
+            ClassloadFilterAudit.SYSTEM_DANGEROUS_CLASSES.size(),
+            ClassloadFilterAudit.DANGEROUS_PACKAGE_PREFIXES.size()
         );
     }
 }

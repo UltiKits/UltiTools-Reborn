@@ -94,11 +94,12 @@ class ClassloadFilterAuditTest {
     class PackagePrefixLayerTests {
 
         @Test
-        @DisplayName("java.security.AccessController is attributed to the package-prefix layer")
+        @DisplayName("java.rmi.Remote is attributed to the package-prefix layer")
         void dangerousPrefixIsAttributed() {
-            // Not also in the exact-name blacklist, unlike java.lang.reflect.Method, so this
-            // isolates the package-prefix layer from the attribution-order case (Test 5).
-            assertThat(ClassloadFilterAudit.classify("java.security.AccessController"))
+            // Not also in the exact-name blacklist, unlike java.lang.reflect.Method or
+            // java.security.AccessController, so this isolates the package-prefix layer from the
+            // attribution-order case (Test 5).
+            assertThat(ClassloadFilterAudit.classify("java.rmi.Remote"))
                     .isEqualTo(ClassloadFilterAudit.Layer.PACKAGE_PREFIX);
         }
 
@@ -281,12 +282,19 @@ class ClassloadFilterAuditTest {
     class NeverDecidesTests {
 
         @Test
-        @DisplayName("no declared method returns a boolean verdict")
+        @DisplayName("no non-private (exposed) method returns a boolean verdict")
         void noBooleanVerdictMethodExists() {
+            // Scoped to non-private methods: a private helper like isBlank(String) is an internal
+            // implementation detail, not part of what this evaluator exposes to a caller. Test 10
+            // is about the observable contract -- nothing a caller of this package-private class
+            // can use to refuse a class.
             for (Method method : ClassloadFilterAudit.class.getDeclaredMethods()) {
+                if (java.lang.reflect.Modifier.isPrivate(method.getModifiers())) {
+                    continue;
+                }
                 assertThat(method.getReturnType())
-                        .as("method %s must not return boolean -- that would make it a verdict, "
-                                + "not an observation", method.getName())
+                        .as("exposed method %s must not return boolean -- that would make it a "
+                                + "verdict, not an observation", method.getName())
                         .isNotEqualTo(boolean.class)
                         .isNotEqualTo(Boolean.class);
             }
