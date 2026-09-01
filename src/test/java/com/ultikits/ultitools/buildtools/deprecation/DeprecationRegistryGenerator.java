@@ -74,6 +74,7 @@ public final class DeprecationRegistryGenerator {
 
         JapicmpReportReader.Report report = readJapicmpReport();
         Set<RegistryKey> japicmpRemoved = removedKeys(report);
+        japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
 
         RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved);
 
@@ -201,6 +202,47 @@ public final class DeprecationRegistryGenerator {
             }
         }
         return removed;
+    }
+
+    /**
+     * The other half of D-22's dual-source rule cannot fire for a {@code private} member: japicmp
+     * scans at {@code accessModifier=protected} (pom.xml), so a private field never appears in its
+     * report at any {@code changeStatus} - not "unchanged", not "REMOVED", simply absent (confirmed
+     * empirically, 07-13-PLAN.md GEN-04: {@code UltiTools#versionWrapper} was a real, deleted,
+     * {@code @Deprecated(forRemoval = true)} private field with zero mentions anywhere in
+     * {@code target/japicmp/japicmp.xml}). Requiring japicmp's corroboration for such a key would
+     * make its {@code REMOVED} transition permanently unreachable through the normal path, even
+     * though a private member can, by construction, hold no downstream binary reference - the
+     * exact zero-risk criterion {@link RemovalConsistencyEvaluator}'s D-21 already applies to pom
+     * {@code <exclude>} entries. This extends that same, already-established principle to the
+     * ledger merge itself for prior entries the report has literally never heard of, rather than
+     * inventing a new one.
+     *
+     * <p>Scoped narrowly: only entries the source scan no longer finds (candidates for this run's
+     * merge) and that {@code japicmpRemoved} does not already cover, and only where the report has
+     * zero record of the key under any {@code changeStatus} - a public/protected member missing
+     * from source with no REMOVED report entry is still a hard conflict (D-22's core guarantee is
+     * unweakened for anything japicmp could have seen).
+     */
+    private static Set<RegistryKey> impliedRemovedByPrivateVisibility(
+            RegistryLedger prior, List<DeprecationEntry> freshScan, JapicmpReportReader.Report report) {
+        Set<String> freshKeyStrings = new java.util.HashSet<>();
+        for (DeprecationEntry entry : freshScan) {
+            freshKeyStrings.add(entry.getKey().toString());
+        }
+        Set<RegistryKey> implied = new LinkedHashSet<>();
+        for (DeprecationEntry priorEntry : prior.entries()) {
+            if (priorEntry.getStatus() == DeprecationEntry.Status.REMOVED) {
+                continue; // already history; RegistryLedger.merge carries it forward unconditionally
+            }
+            if (freshKeyStrings.contains(priorEntry.getKey().toString())) {
+                continue; // still declared in source
+            }
+            if (!report.find(priorEntry.getKey()).isPresent()) {
+                implied.add(priorEntry.getKey());
+            }
+        }
+        return implied;
     }
 
     /**
