@@ -467,6 +467,11 @@ public class PluginManager {
                 }
                 
                 try {
+                    // GEN-07 (D-14): records what the removed classload filter layers would have
+                    // refused for className, independent of whether loadClass below succeeds,
+                    // throws ClassNotFoundException, or throws SecurityException -- classify() is
+                    // a pure function of the name alone. Purely observational; never refuses.
+                    ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);
                     // Use security-validated class loading (checks dangerous classes/packages)
                     // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
                     Class<?> aClass = ClassLoaderUtils.loadClass(className);
@@ -496,6 +501,9 @@ public class PluginManager {
             // (class-count cap reached / jar exhausted), or the jar itself could not be read --
             // exactly once per call, after the scan loop, naming pluginJar as the module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return null;
     }
@@ -557,6 +565,11 @@ public class PluginManager {
             // scan the same jar for different purposes and may run at different times, so each
             // owns its own accumulator lifecycle for the classes it individually recorded.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two. Same independence rationale as
+            // ModuleScanDiagnostics above -- this scan owns its own ClassloadFilterAudit
+            // accumulator lifecycle, separate from loadPluginMainClass's.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
     }
@@ -603,6 +616,10 @@ public class PluginManager {
      */
     private static Optional<Class<?>> resolveEntityClass(String className, String moduleName) {
         try {
+            // GEN-07 (D-14): records what the removed classload filter layers would have refused
+            // for className, independent of whether loadClass below succeeds or throws. Purely
+            // observational; never refuses.
+            ClassLoaderUtils.recordClassloadFilterAudit(moduleName, className);
             Class<?> aClass = ClassLoaderUtils.loadClass(className);
             if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
                 return Optional.of(aClass);

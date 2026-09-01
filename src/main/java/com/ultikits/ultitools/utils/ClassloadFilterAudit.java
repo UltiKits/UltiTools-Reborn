@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -36,11 +37,15 @@ import java.util.logging.Logger;
  * non-root {@link Logger} with {@code setUseParentHandlers(false)}, so a record here can never
  * reach {@code SystemLogHandler} (which attaches only to the root logger and auto-reports any
  * {@link Level#SEVERE} record carrying a {@link Throwable} into {@code ErrorReportCollector}) and
- * risk the circular-logging hazard both of those classes' javadoc already warns about. Internal
- * failures of this evaluator itself would print to {@link System#err} rather than through any
- * {@link Logger} -- the same discipline, for the same reason -- but this class has no internal
- * failure mode: {@link #classify(String)} is a pure function over in-memory {@link Set}s and never
- * throws.
+ * risk the circular-logging hazard both of those classes' javadoc already warns about.
+ * {@code setUseParentHandlers(false)} also disconnects this logger from the root logger's own
+ * handlers -- the console/{@code logs/latest.log} sink the server installs there -- so, exactly
+ * like {@code ModuleScanDiagnostics}, a dedicated {@link ConsoleHandler} is attached directly in
+ * the static initializer below to restore that reach without restoring the
+ * {@code SystemLogHandler} path. Internal failures of this evaluator itself would print to
+ * {@link System#err} rather than through any {@link Logger} -- the same discipline, for the same
+ * reason -- but this class has no internal failure mode: {@link #classify(String)} is a pure
+ * function over in-memory {@link Set}s and never throws.
  * <p>
  * <b>Locale.ROOT, not the default locale.</b> The removed {@code isSafeClassName} lowercased with
  * the no-argument {@code String#toLowerCase()}, which uses the JVM's default locale. Under a
@@ -64,6 +69,16 @@ final class ClassloadFilterAudit {
         // entirely.
         AUDIT_LOGGER.setUseParentHandlers(false);
         AUDIT_LOGGER.setLevel(Level.ALL);
+        // setUseParentHandlers(false) above also disconnects this logger from the root logger's
+        // own handlers -- the console/logs-latest.log sink the server installs there. A dedicated
+        // handler restores that reach without restoring the SystemLogHandler path. Matches
+        // ModuleScanDiagnostics's identical fix, confirmed on a real server in 07-JAPICMP-BASELINE.md's
+        // "D-19 diagnostic observation" section -- found here by the same real-server verification
+        // step this class's own D-14 mandates (Rule 1: a logger with no handler and parent
+        // handlers disabled produces no output anywhere, silently).
+        ConsoleHandler consoleHandler = new ConsoleHandler();
+        consoleHandler.setLevel(Level.ALL);
+        AUDIT_LOGGER.addHandler(consoleHandler);
     }
 
     // The four lists SecurityPolicy used to own directly, relocated here by D-14. Package-private

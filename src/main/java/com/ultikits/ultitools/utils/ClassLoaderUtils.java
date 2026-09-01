@@ -127,6 +127,50 @@ public class ClassLoaderUtils {
     }
     
     /**
+     * GEN-07 (D-14) package-boundary bridge into the package-private {@code ClassloadFilterAudit}
+     * evaluator, for {@code PluginManager} (a different package, {@code manager}) to record what
+     * the removed classload filter layers would have refused for {@code className} during
+     * {@code moduleName}'s scan. {@code ClassloadFilterAudit} stays package-private per D-14 (its
+     * four relocated lists must not become part of the public surface); this method is the one
+     * public seam a caller outside {@code utils} needs, mirroring the position of the
+     * {@link #loadClass(String)} call site it is always paired with. Purely observational: never
+     * throws, never refuses, and does not affect whether {@code className} loads.
+     * <br>
+     * GEN-07（D-14）跨包桥接：让 {@code PluginManager}（不同包 {@code manager}）能够记录被移除的
+     * 类加载过滤层原本会对 {@code moduleName} 扫描中的 {@code className} 做出什么裁决。
+     * {@code ClassloadFilterAudit} 依 D-14 保持包私有；这是包外调用方唯一需要的公开入口，
+     * 总是与其配对的 {@link #loadClass(String)} 调用点放在一起。纯观察性：从不抛出异常，
+     * 从不拒绝，也不影响 {@code className} 是否被加载。
+     *
+     * @param moduleName the module (or scan unit) currently being evaluated <br> 正在评估的模块
+     * @param className  the class name being evaluated <br> 正在评估的类名
+     * @since 6.3.0
+     */
+    public static void recordClassloadFilterAudit(String moduleName, String className) {
+        ClassloadFilterAudit.record(moduleName, className);
+    }
+
+    /**
+     * GEN-07 (D-14) package-boundary bridge: emits the package-private
+     * {@code ClassloadFilterAudit}'s one-INFO-per-module summary for {@code moduleName}, always --
+     * even when nothing was recorded (a module the removed layers would have refused nothing from
+     * is itself the measurement, not silence). Call once, at the same point
+     * {@code ModuleScanDiagnostics.emitSummary} is called for the same module, so the two
+     * diagnostics land together.
+     * <br>
+     * GEN-07（D-14）跨包桥接：为 {@code moduleName} 触发包私有 {@code ClassloadFilterAudit} 的
+     * 单条 INFO 汇总——始终触发，即便没有记录到任何内容（被移除的层原本不会拒绝任何东西，
+     * 这个「零」本身就是度量结果，而非沉默）。应在与该模块的 {@code ModuleScanDiagnostics.emitSummary}
+     * 同一位置调用一次，使两种诊断一并落地。
+     *
+     * @param moduleName the module whose scan just finished <br> 刚完成扫描的模块
+     * @since 6.3.0
+     */
+    public static void emitClassloadFilterAuditSummary(String moduleName) {
+        ClassloadFilterAudit.emitSummary(moduleName);
+    }
+
+    /**
      * Validate that a class loader has the correct parent hierarchy.
      * <br>
      * 验证类加载器具有正确的父类层次结构。
