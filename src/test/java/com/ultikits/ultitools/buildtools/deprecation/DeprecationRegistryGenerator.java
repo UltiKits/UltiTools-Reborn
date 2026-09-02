@@ -96,9 +96,11 @@ public final class DeprecationRegistryGenerator {
      */
     private static void evaluateRemovalConsistency(JapicmpReportReader.Report report, RegistryLedger merged)
             throws IOException {
-        Set<RegistryKey> excludeKeys = readPomExcludeKeys();
+        Document pomDocument = readPomDocument();
+        Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
+        String baselineVersion = readJapicmpBaselineVersion(pomDocument);
         List<RemovalConsistencyEvaluator.Finding> findings =
-                RemovalConsistencyEvaluator.evaluate(excludeKeys, report, merged);
+                RemovalConsistencyEvaluator.evaluate(excludeKeys, report, merged, baselineVersion);
         if (findings.isEmpty()) {
             return;
         }
@@ -261,15 +263,21 @@ public final class DeprecationRegistryGenerator {
     }
 
     /**
+     * Reads and parses {@code pom.xml} once. {@link #readPomExcludeKeys(Document)} and
+     * {@link #readJapicmpBaselineVersion(Document)} both operate on the same parsed
+     * {@link Document} rather than each opening their own XML reader.
+     */
+    private static Document readPomDocument() throws IOException {
+        String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
+        return parsePomXml(xml);
+    }
+
+    /**
      * Reads {@code pom.xml}'s japicmp {@code <plugin>} block and returns every
      * {@code <exclude>} entry as a {@link RegistryKey} - the pom-side input
      * {@link RemovalConsistencyEvaluator} cross-checks against the report and the registry.
-     * Uses the same JDK parser and XXE hardening as {@link JapicmpReportReader}.
      */
-    private static Set<RegistryKey> readPomExcludeKeys() throws IOException {
-        String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
-        Document doc = parsePomXml(xml);
-
+    private static Set<RegistryKey> readPomExcludeKeys(Document doc) {
         Element japicmpPlugin = findJapicmpPlugin(doc);
         Set<RegistryKey> keys = new LinkedHashSet<>();
         if (japicmpPlugin == null) {
@@ -283,6 +291,27 @@ public final class DeprecationRegistryGenerator {
             }
         }
         return keys;
+    }
+
+    /**
+     * Reads the {@code japicmp.baseline.version} property out of {@code pom.xml}'s
+     * {@code <properties>} element (D-06) - the baseline {@link RemovalConsistencyEvaluator}
+     * compares each REMOVED entry's {@code removedIn} against. Reuses the same parsed
+     * {@link Document} {@link #readPomExcludeKeys(Document)} reads, rather than opening a
+     * second XML reader.
+     */
+    private static String readJapicmpBaselineVersion(Document doc) {
+        NodeList propertiesNodes = doc.getElementsByTagName("properties");
+        if (propertiesNodes.getLength() == 0) {
+            return null;
+        }
+        Element properties = (Element) propertiesNodes.item(0);
+        NodeList baselineNodes = properties.getElementsByTagName("japicmp.baseline.version");
+        if (baselineNodes.getLength() == 0) {
+            return null;
+        }
+        String text = baselineNodes.item(0).getTextContent();
+        return text == null ? null : text.trim();
     }
 
     private static Element findJapicmpPlugin(Document doc) {

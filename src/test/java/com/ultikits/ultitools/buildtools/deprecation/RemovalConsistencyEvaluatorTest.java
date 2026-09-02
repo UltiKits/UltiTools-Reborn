@@ -63,6 +63,18 @@ class RemovalConsistencyEvaluatorTest {
                 .build();
     }
 
+    /** A REMOVED-status registry entry with a directly-controlled {@code removedIn}, including {@code null}. */
+    private static DeprecationEntry removedEntry(RegistryKey key, String removedIn) {
+        return DeprecationEntry.builder()
+                .key(key)
+                .kind(DeprecationEntry.Kind.METHOD)
+                .since("6.2.0")
+                .forRemoval(true)
+                .status(DeprecationEntry.Status.REMOVED)
+                .removedIn(removedIn)
+                .build();
+    }
+
     @Nested
     @DisplayName("D-01 staleness")
     class StalenessTests {
@@ -77,7 +89,7 @@ class RemovalConsistencyEvaluatorTest {
             RegistryLedger registry = RegistryLedger.empty();
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, registry);
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, registry, "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
@@ -99,7 +111,7 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportOf("PROTECTED", entries);
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
@@ -128,7 +140,7 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportWithAllowlistEntry(key, "PRIVATE");
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings).noneMatch(f -> f.getKind() == RemovalConsistencyEvaluator.Finding.Kind.INADMISSIBLE_ALLOWLIST);
         }
@@ -141,7 +153,7 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportWithAllowlistEntry(key, "PACKAGE_PROTECTED");
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings).noneMatch(f -> f.getKind() == RemovalConsistencyEvaluator.Finding.Kind.INADMISSIBLE_ALLOWLIST);
         }
@@ -154,7 +166,7 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportWithAllowlistEntry(key, "PUBLIC");
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
@@ -169,7 +181,7 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportWithAllowlistEntry(key, "PROTECTED");
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
@@ -210,7 +222,7 @@ class RemovalConsistencyEvaluatorTest {
 
             Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(key));
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(excludeKeys, JapicmpReportReader.Report.empty(), merged);
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, JapicmpReportReader.Report.empty(), merged, "6.2.5");
 
             assertThat(findings).isEmpty();
         }
@@ -246,7 +258,7 @@ class RemovalConsistencyEvaluatorTest {
                     new HashSet<>(Collections.singletonList(key)));
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), JapicmpReportReader.Report.empty(), merged);
+                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), JapicmpReportReader.Report.empty(), merged, "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
@@ -262,7 +274,7 @@ class RemovalConsistencyEvaluatorTest {
         @DisplayName("Test 10: empty excludes, empty report and empty registry together produce a clean verdict, not a throw")
         void emptyInputsProduceCleanVerdict() {
             List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
-                    Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty());
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings).isNotNull().isEmpty();
         }
@@ -278,11 +290,81 @@ class RemovalConsistencyEvaluatorTest {
             JapicmpReportReader.Report report = reportOf("PUBLIC", Collections.emptyMap());
 
             List<RemovalConsistencyEvaluator.Finding> findings =
-                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), report, RegistryLedger.empty());
+                    RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), report, RegistryLedger.empty(), "6.2.5");
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
                     .contains(RemovalConsistencyEvaluator.Finding.Kind.SCOPE_MISMATCH);
+        }
+    }
+
+    @Nested
+    @DisplayName("D-06 baseline-aware MISSING_EXCLUSION_FOR_REMOVED")
+    class BaselineAwareMissingExclusionTests {
+
+        @Test
+        @DisplayName("a REMOVED entry whose removedIn equals the baseline requires no exclude (equality boundary)")
+        void removedEntryAtBaselineEqualityRequiresNoExclusion() {
+            RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "6.3.0")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "6.3.0");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .doesNotContain(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+        }
+
+        @Test
+        @DisplayName("a REMOVED entry whose removedIn is strictly newer than the baseline still requires an exclude")
+        void removedEntryStrictlyNewerThanBaselineStillRequiresExclusion() {
+            RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "6.3.0")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "6.2.5");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .contains(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+        }
+
+        @Test
+        @DisplayName("a REMOVED entry with a null removedIn still requires an exclude even against a newer baseline (fail closed)")
+        void removedEntryWithNullRemovedInStillRequiresExclusion() {
+            RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, null)));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "9.9.9");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .contains(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+        }
+
+        @Test
+        @DisplayName("a REMOVED entry with a blank removedIn behaves identically to null (fail closed)")
+        void removedEntryWithBlankRemovedInStillRequiresExclusion() {
+            RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "  ")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "9.9.9");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .contains(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+        }
+
+        @Test
+        @DisplayName("empty exclude set, empty report and empty registry with a baseline present yields an empty list, not a throw")
+        void emptyInputsWithBaselineYieldNoFindings() {
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.3.0");
+
+            assertThat(findings).isNotNull().isEmpty();
         }
     }
 }

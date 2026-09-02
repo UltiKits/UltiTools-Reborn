@@ -1,11 +1,14 @@
 package com.ultikits.ultitools.buildtools.deprecation;
 
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * The D-01 / D-21 / D-22 decision logic: a japicmp {@code <exclude>} entry whose key has no
@@ -59,7 +62,7 @@ public final class RemovalConsistencyEvaluator {
     // would lower the number while removing the property that the rules can be read in order.
     @SuppressWarnings("PMD.NPathComplexity")
     public static List<Finding> evaluate(Set<RegistryKey> excludeKeys, JapicmpReportReader.Report report,
-            RegistryLedger registry) {
+            RegistryLedger registry, String baselineVersion) {
         List<Finding> findings = new ArrayList<>();
 
         // D-22 scope equality: a report narrower than the framework's declared scope can never
@@ -72,10 +75,15 @@ public final class RemovalConsistencyEvaluator {
 
         Map<String, DeprecationEntry> registryByKey = indexByKeyString(registry);
 
+        // Deterministic iteration order (RegistryKey's own total order) so two runs over the
+        // same inputs produce identical build-failure text, regardless of the caller's Set
+        // implementation or insertion order.
+        Set<RegistryKey> sortedExcludeKeys = new TreeSet<>(excludeKeys);
+
         // D-01 staleness: a member-level exclude key with no registry entry AND no visible trace
         // in the report - neither the exact key nor its enclosing class - protects nothing
         // discoverable. Whole-class excludes are exempt (see class javadoc).
-        for (RegistryKey key : excludeKeys) {
+        for (RegistryKey key : sortedExcludeKeys) {
             if (key.isClassLevel()) {
                 continue;
             }
@@ -102,7 +110,7 @@ public final class RemovalConsistencyEvaluator {
         // D-21 admissibility: an exclude key that is still visible in the report (see class
         // javadoc for when that is possible) and NOT tracked by the deprecation lifecycle must
         // clear the mechanical PRIVATE/PACKAGE_PROTECTED old-side test.
-        for (RegistryKey key : excludeKeys) {
+        for (RegistryKey key : sortedExcludeKeys) {
             JapicmpReportReader.Entry entry = report.entries().get(key);
             if (entry == null || registryByKey.containsKey(key.toString())) {
                 continue;
