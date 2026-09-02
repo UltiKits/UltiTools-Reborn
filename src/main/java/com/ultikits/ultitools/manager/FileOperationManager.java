@@ -28,6 +28,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.CredentialStore;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
@@ -69,9 +70,21 @@ public class FileOperationManager {
      */
     private static final List<PathMatcher> DENY_GLOB_MATCHERS = buildDenyGlobMatchers();
 
-    /** D-16's exact-basename credential set — matched case-insensitively, see {@link #basenameOf}. */
+    /**
+     * D-16's exact-basename credential set — matched case-insensitively, see {@link #basenameOf}.
+     * <p>
+     * <b>Plan 08-15 checkpoint decision ({@code outside-roots-keep-filename}):</b> the credential
+     * file moved outside every default editable root (D-15) to
+     * {@code <server root>/.ultikits/credentials.json} — the remote file surface cannot reach it
+     * by path at all any more, so this entry stops being the *only* protection. It is kept
+     * anyway, referencing {@link CredentialStore#CREDENTIAL_FILE_NAME} rather than a duplicated
+     * literal, as defence in depth: it costs nothing, and it still protects an operator who
+     * widens the editable roots to include the new location's parent. {@code "data.json"} stays
+     * in this set too — not dead weight, but the pre-6.3.0 name, still live at its old location
+     * for any install that has not yet restarted onto a migrated {@code CredentialStore}.
+     */
     private static final Set<String> DENY_EXACT_BASENAMES = new HashSet<String>(Arrays.asList(
-        "data.json", "secring.gpg", "access_key.txt", ".dev.vars"
+        "data.json", CredentialStore.CREDENTIAL_FILE_NAME, "secring.gpg", "access_key.txt", ".dev.vars"
     ));
 
     /**
@@ -225,11 +238,18 @@ public class FileOperationManager {
      * is persistent access an operator cannot revoke by changing a password, unlike a compromised
      * editable-root grant, which a config edit closes immediately.
      * <p>
-     * <b>{@code plugins/UltiTools/data.json}</b> holds the live UltiCloud access and refresh
-     * tokens ({@code CloudAuthManager}), which is why D-19 names it explicitly rather than leaving
-     * it to the glob patterns. It is matched by exact basename below, not merely by the
-     * literal {@code plugins/UltiTools} prefix, so a credential file with the same name anywhere
-     * else is caught too.
+     * <b>The credential file</b> holds the live UltiCloud access and refresh tokens
+     * ({@code CloudAuthManager}), which is why D-19 names it explicitly rather than leaving it to
+     * the glob patterns. As of plan 08-15 it lives at
+     * {@code <server root>/.ultikits/credentials.json} — outside every default editable root
+     * (D-15), so the editable-root layer below can no longer reach it at all, regardless of
+     * configuration. This layer's basename entries are kept anyway as defence in depth for both
+     * names: {@code "credentials.json"} (current, referencing
+     * {@link com.ultikits.ultitools.utils.CredentialStore#CREDENTIAL_FILE_NAME}) and
+     * {@code "data.json"} (the pre-6.3.0 name, still live at
+     * {@code plugins/UltiTools/data.json} for any install that has not yet restarted onto a
+     * migrated {@code CredentialStore}). Matched by exact basename, not by directory prefix, so a
+     * credential file with either name anywhere else is caught too.
      * <p>
      * <b>The {@code plugins/UltiTools/security/} rule</b> is what lets the remote action log
      * ({@code RemoteActionLog}) live inside {@code getDataFolder()} — Bukkit convention intact —
