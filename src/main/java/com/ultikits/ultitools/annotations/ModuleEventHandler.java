@@ -11,9 +11,6 @@ import com.ultikits.ultitools.events.EventPriority;
 /**
  * Marks a method as a module event handler.
  * The method must have exactly one parameter extending ModuleEvent.
- * <p>
- * 标记一个方法为模块事件处理器。
- * 该方法必须有且仅有一个 ModuleEvent 子类参数。
  *
  * @since 6.2.2
  */

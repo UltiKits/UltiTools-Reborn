@@ -8,15 +8,12 @@ import java.lang.annotation.Target;
 /**
  * Marks a method for automatic scheduled execution by the framework.
  * <p>
- * 标记一个方法由框架自动调度执行。
- * <p>
  * The annotated method must be {@code void} and take no parameters.
  * It must be inside a {@code @Service} or other managed bean.
  * Tasks are automatically cancelled when the owning plugin is unloaded.
- * <p>
- * 被注解的方法必须是 {@code void} 且无参数。
- * 必须在 {@code @Service} 或其他托管 Bean 中使用。
- * 当所属插件卸载时，任务会自动取消。
+ * {@link com.ultikits.ultitools.manager.TaskManager} walks the class hierarchy when scanning for
+ * {@code @Scheduled} methods, so an annotated method is still found on a ByteBuddy AOP proxy of
+ * the declaring bean.
  *
  * <p>Usage example:
  * <pre>{@code
@@ -36,8 +33,6 @@ import java.lang.annotation.Target;
 public @interface Scheduled {
     /**
      * Initial delay in ticks before first execution. Default: 0
-     * <p>
-     * 首次执行前的延迟tick数。默认：0
      *
      * @return delay in ticks
      */
@@ -45,8 +40,6 @@ public @interface Scheduled {
 
     /**
      * Repeat interval in ticks. -1 = run once after delay. Default: -1
-     * <p>
-     * 重复间隔tick数。-1 = 延迟后只执行一次。默认：-1
      *
      * @return period in ticks
      */
@@ -54,8 +47,6 @@ public @interface Scheduled {
 
     /**
      * Run on async thread instead of main server thread. Default: false
-     * <p>
-     * 在异步线程而非主线程上运行。默认：false
      *
      * @return true if async
      */

@@ -6,9 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Table annotation.
- * <p>
- * 持久化数据表注释
+ * Table annotation. Marks a class as a persisted data table.
  *
  * @author wisdomme
  * @version 1.0.0
@@ -18,7 +16,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Table {
     /**
-     * @return Data table/file name <br> 数据表/文件夹名称
+     * @return Data table/file name
      */
     String value();
 }

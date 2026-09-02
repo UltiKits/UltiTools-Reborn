@@ -20,10 +20,6 @@ import java.lang.annotation.Target;
  * therefore covers every class loaded through the framework, across module boundaries. It does
  * <b>not</b> happen at compile time, so an IDE will not flag a violation.
  * <p>
- * AOP 通过生成子类实现，子类的被拦截方法经 {@code super} 到达原方法体。{@code final} 类无法
- * 被继承、{@code final} 方法无法被重写，因此关键词与 AOP 互斥。本注解表达同样的意图，同时
- * 保持类可被代理。契约在框架扫描模块类时强制，跨模块有效，但不在编译期强制。
- * <p>
  * Usage example:
  * <pre>{@code
  * @Final

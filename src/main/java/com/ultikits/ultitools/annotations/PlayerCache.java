@@ -17,9 +17,6 @@ import java.lang.annotation.Target;
  *   <li>{@code Map<?, UUID>} -- every entry whose VALUE equals the quitting player's UUID is
  *       removed; entries belonging to other players are left intact.</li>
  * </ul>
- * <p>
- * 标记一个字段，当玩家退出时自动清理。支持三种字段形状：以 UUID 为键的 Map、Set&lt;UUID&gt;，
- * 以及以 UUID 为值的 Map；其他形状会在注册时被拒绝，而不是被静默忽略。
  *
  * @since 6.2.0
  */

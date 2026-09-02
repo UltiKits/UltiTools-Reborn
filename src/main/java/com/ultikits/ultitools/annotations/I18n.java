@@ -4,8 +4,6 @@ import java.lang.annotation.*;
 
 /**
  * I18n annotation.
- * <p>
- * I18n注解。
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/i18n.html">I18n</a>
  */
@@ -14,7 +12,7 @@ import java.lang.annotation.*;
 @Documented
 public @interface I18n {
     /**
-     * @return i18n code <br> I18n代码
+     * @return i18n code
      * @see <a href="http://www.lingoes.net/en/translator/langcode.htm">I18n Code</a>
      */
     String[] value() default {};
