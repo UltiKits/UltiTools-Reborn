@@ -56,6 +56,20 @@ public final class RemovalConsistencyEvaluator {
         return "PRIVATE".equals(modifier) || "PACKAGE_PROTECTED".equals(modifier);
     }
 
+    /**
+     * D-06: an exclude is required only when a REMOVED entry's removal is strictly newer than the
+     * configured japicmp baseline - once the baseline advances past {@code removedIn}, the symbol
+     * is absent from both sides of the japicmp comparison and can never be re-flagged against it.
+     * A {@code null} or blank {@code removedIn} is fail-closed: absence of data is not evidence of
+     * safety, so an exclude is still required regardless of the baseline.
+     */
+    private static boolean stillRequiresExclusion(String removedIn, String baselineVersion) {
+        if (removedIn == null || removedIn.trim().isEmpty()) {
+            return true;
+        }
+        return VersionComparatorUtil.isGreaterThan(removedIn, baselineVersion);
+    }
+
     // PMD.NPathComplexity: each `if` in this method is one named D-01/D-21/D-22 consistency
     // rule, applied independently to every key. Read top to bottom, the method IS the rule
     // list -- which is what makes a build gate auditable. Splitting it into per-rule helpers
@@ -120,11 +134,18 @@ public final class RemovalConsistencyEvaluator {
             }
         }
 
-        // D-22 pom-sync: every REMOVED registry entry must have a matching pom exclude, or
-        // japicmp will re-flag it against the old baseline on every subsequent build with no
-        // record of why it is accepted.
+        // D-22 pom-sync, D-06 baseline-aware: a REMOVED registry entry needs a matching pom
+        // exclude only while its removal is still newer than the configured baseline - once the
+        // baseline advances past removedIn, japicmp can never re-flag it against that baseline,
+        // so no exclude is required to protect against a re-flag that cannot happen.
         for (DeprecationEntry entry : registry.entries()) {
-            if (entry.getStatus() == DeprecationEntry.Status.REMOVED && !excludeKeys.contains(entry.getKey())) {
+            if (entry.getStatus() != DeprecationEntry.Status.REMOVED) {
+                continue;
+            }
+            if (excludeKeys.contains(entry.getKey())) {
+                continue;
+            }
+            if (stillRequiresExclusion(entry.getRemovedIn(), baselineVersion)) {
                 findings.add(Finding.missingExclusionForRemoved(entry.getKey()));
             }
         }
