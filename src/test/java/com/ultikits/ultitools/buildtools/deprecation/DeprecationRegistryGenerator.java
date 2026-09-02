@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
@@ -32,14 +33,15 @@ import java.util.regex.Pattern;
  * that regenerates {@code compatibility/deprecations.json} and {@code compatibility/DEPRECATIONS.md}
  * from source plus the japicmp report (D-08, D-17, D-22), then runs
  * {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own {@code <exclude>} list,
- * the japicmp report, and the merged registry.
+ * the japicmp report, and the merged registry, and finally {@link ReleaseBoundaryInvariant} (D-03)
+ * over the project version, the japicmp baseline version, and the same exclude list.
  *
  * <p>Reads the prior ledger (if any), scans {@code src/main/java} with
  * {@link JavadocDeprecationScanner}, reads {@code target/japicmp/japicmp.xml} for the set of keys
  * japicmp reports {@code changeStatus="REMOVED"}, merges via {@link RegistryLedger#merge}, writes
- * both output files, then evaluates removal-record consistency. A merge disagreement
- * ({@link LedgerMergeConflictException}), a consistency finding, or any other failure exits
- * non-zero, failing {@code mvn verify}.
+ * both output files, then evaluates removal-record consistency and the release-boundary invariant.
+ * A merge disagreement ({@link LedgerMergeConflictException}), a consistency finding, a
+ * release-boundary violation, or any other failure exits non-zero, failing {@code mvn verify}.
  */
 public final class DeprecationRegistryGenerator {
 
@@ -86,7 +88,9 @@ public final class DeprecationRegistryGenerator {
         System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
                 + LEDGER_JSON + " and " + LEDGER_MARKDOWN);
 
-        evaluateRemovalConsistency(report, merged);
+        Document pomDocument = readPomDocument();
+        evaluateRemovalConsistency(pomDocument, report, merged);
+        evaluateReleaseBoundary(pomDocument);
     }
 
     /**
@@ -94,9 +98,8 @@ public final class DeprecationRegistryGenerator {
      * every offending key - on any finding. This is the japicmp {@code <exclude>} staleness check
      * japicmp itself cannot produce (its {@code ConfigParameters} has no such field).
      */
-    private static void evaluateRemovalConsistency(JapicmpReportReader.Report report, RegistryLedger merged)
-            throws IOException {
-        Document pomDocument = readPomDocument();
+    private static void evaluateRemovalConsistency(
+            Document pomDocument, JapicmpReportReader.Report report, RegistryLedger merged) {
         Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
         String baselineVersion = readJapicmpBaselineVersion(pomDocument);
         List<RemovalConsistencyEvaluator.Finding> findings =
@@ -108,6 +111,28 @@ public final class DeprecationRegistryGenerator {
                 .append(findings.size()).append(" consistency violation(s):\n");
         for (RemovalConsistencyEvaluator.Finding finding : findings) {
             sb.append("  - ").append(finding).append('\n');
+        }
+        throw new IllegalStateException(sb.toString());
+    }
+
+    /**
+     * Runs {@link ReleaseBoundaryInvariant} (D-03) and fails the build - naming every violation -
+     * when {@code ${project.version}} carries no {@code -SNAPSHOT} and either the japicmp
+     * {@code <excludes>} list is still populated or {@code japicmp.baseline.version} has not been
+     * advanced past the project version. Dormant on every {@code -SNAPSHOT} build.
+     */
+    private static void evaluateReleaseBoundary(Document pomDocument) {
+        String projectVersion = readProjectVersion(pomDocument);
+        String baselineVersion = readJapicmpBaselineVersion(pomDocument);
+        Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
+        List<String> violations = ReleaseBoundaryInvariant.evaluate(projectVersion, baselineVersion, excludeKeys);
+        if (violations.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("ReleaseBoundaryInvariant found ")
+                .append(violations.size()).append(" violation(s):\n");
+        for (String violation : violations) {
+            sb.append("  - ").append(violation).append('\n');
         }
         throw new IllegalStateException(sb.toString());
     }
@@ -312,6 +337,24 @@ public final class DeprecationRegistryGenerator {
         }
         String text = baselineNodes.item(0).getTextContent();
         return text == null ? null : text.trim();
+    }
+
+    /**
+     * Reads {@code ${project.version}} out of {@code pom.xml} - the first direct {@code <version>}
+     * child of the document element, not {@link Document#getElementsByTagName}, since that would
+     * also match every {@code <version>} nested inside a {@code <dependency>} or {@code <plugin>}
+     * block (D-03). Reuses the same parsed {@link Document} the other pom readers share.
+     */
+    private static String readProjectVersion(Document doc) {
+        NodeList children = doc.getDocumentElement().getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node node = children.item(i);
+            if (node.getNodeType() == Node.ELEMENT_NODE && "version".equals(node.getNodeName())) {
+                String text = node.getTextContent();
+                return text == null ? null : text.trim();
+            }
+        }
+        return null;
     }
 
     private static Element findJapicmpPlugin(Document doc) {
