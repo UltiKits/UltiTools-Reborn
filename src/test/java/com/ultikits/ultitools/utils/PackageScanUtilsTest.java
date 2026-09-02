@@ -609,8 +609,8 @@ class PackageScanUtilsTest {
                 // against, and a green result on the tests below would mean nothing.
                 // The name is a compile-time constant taken from a class literal, not input:
                 // BreakingConfigEntity.class.getName(). Loading it is the assertion.
-                // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                 assertThatThrownBy(() ->
+                        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                         Class.forName(BreakingConfigEntity.class.getName(), true, loader))
                         .isInstanceOf(NoClassDefFoundError.class);
             }

@@ -39,6 +39,7 @@ class RemovalConsistencyEvaluatorTest {
         }
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static JapicmpReportReader.Report reportOf(String scope, Map<RegistryKey, JapicmpReportReader.Entry> entries) {
         try {
             Constructor<JapicmpReportReader.Report> ctor = JapicmpReportReader.Report.class.getDeclaredConstructor(
