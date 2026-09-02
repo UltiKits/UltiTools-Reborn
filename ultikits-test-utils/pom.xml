@@ -12,6 +12,30 @@
 
     <name>UltiKits Test Utilities</name>
     <description>Shared test helpers for UltiKits plugin module development</description>
+    <url>https://github.com/UltiKits/UltiTools-Reborn/tree/main/ultikits-test-utils</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://raw.githubusercontent.com/UltiKits/UltiTools-Reborn/main/ultikits-test-utils/LICENSE</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git@github.com:UltiKits/UltiTools-Reborn.git</connection>
+        <developerConnection>scm:git@github.com:UltiKits/UltiTools-Reborn.git</developerConnection>
+        <url>https://github.com/UltiKits/UltiTools-Reborn/tree/main/ultikits-test-utils</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <name>wisdomme</name>
+            <email>xia.erich03@gmail.com</email>
+            <organization>UltiKits</organization>
+            <timezone>+10</timezone>
+        </developer>
+    </developers>
 
     <properties>
         <java.version>1.8</java.version>
@@ -25,7 +49,7 @@
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>6.2.0</version>
+            <version>6.2.5</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
