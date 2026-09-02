@@ -367,4 +367,86 @@ class RemovalConsistencyEvaluatorTest {
             assertThat(findings).isNotNull().isEmpty();
         }
     }
+
+    @Nested
+    @DisplayName("Task 2: D-06 boundary, empty and ordering pinning")
+    class Task2PinningTests {
+
+        @Test
+        @DisplayName("empty exclude set, empty ledger and empty report yields an empty finding list")
+        void emptyExcludeSetEmptyLedgerEmptyReportYieldsEmptyFindings() {
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.3.0");
+
+            assertThat(findings).isNotNull().isEmpty();
+        }
+
+        @Test
+        @DisplayName("a REMOVED entry with a null removedIn is flagged even when the baseline is newer than every other entry")
+        void nullRemovedInIsFlaggedEvenAgainstANewerBaselineThanEverythingElse() {
+            RegistryKey nullRemovedInKey = RegistryKey.forMember(
+                    "com.ultikits.ultitools.Foo", "nullRemovedIn", Collections.emptyList());
+            RegistryKey oldRemovedInKey = RegistryKey.forMember(
+                    "com.ultikits.ultitools.Foo", "oldRemovedIn", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(java.util.Arrays.asList(
+                    removedEntry(nullRemovedInKey, null),
+                    removedEntry(oldRemovedInKey, "6.0.0")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "9.9.9");
+
+            assertThat(findings)
+                    .filteredOn(f -> f.getKind() == RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKey)
+                    .contains(nullRemovedInKey)
+                    .doesNotContain(oldRemovedInKey);
+        }
+
+        @Test
+        @DisplayName("a REMOVED entry with a blank removedIn behaves identically to null")
+        void blankRemovedInBehavesIdenticallyToNull() {
+            RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "blankRemovedIn", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "   ")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    Collections.emptySet(), JapicmpReportReader.Report.empty(), registry, "9.9.9");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .contains(RemovalConsistencyEvaluator.Finding.Kind.MISSING_EXCLUSION_FOR_REMOVED);
+        }
+
+        @Test
+        @DisplayName("two evaluate() calls over the same exclude keys, inserted in different order, produce equal-in-order finding lists")
+        void findingsAreDeterministicRegardlessOfExcludeSetInsertionOrder() {
+            RegistryKey keyZeta = RegistryKey.forMember("com.ultikits.ultitools.Zeta", "z", Collections.emptyList());
+            RegistryKey keyAlpha = RegistryKey.forMember("com.ultikits.ultitools.Alpha", "a", Collections.emptyList());
+            RegistryKey keyMid = RegistryKey.forMember("com.ultikits.ultitools.Mid", "m", Collections.emptyList());
+
+            // LinkedHashSet guarantees iteration order == insertion order, so these two sets are
+            // guaranteed to iterate in genuinely different orders before evaluate()'s internal sort -
+            // a plain HashSet's iteration order is not reliably insertion-dependent enough to prove
+            // this test actually exercises the ordering path rather than passing by accident.
+            Set<RegistryKey> forwardOrder = new java.util.LinkedHashSet<>();
+            forwardOrder.add(keyZeta);
+            forwardOrder.add(keyAlpha);
+            forwardOrder.add(keyMid);
+
+            Set<RegistryKey> reverseOrder = new java.util.LinkedHashSet<>();
+            reverseOrder.add(keyMid);
+            reverseOrder.add(keyAlpha);
+            reverseOrder.add(keyZeta);
+
+            JapicmpReportReader.Report report = reportOf("PROTECTED", Collections.emptyMap());
+
+            List<RemovalConsistencyEvaluator.Finding> forwardFindings =
+                    RemovalConsistencyEvaluator.evaluate(forwardOrder, report, RegistryLedger.empty(), "6.2.5");
+            List<RemovalConsistencyEvaluator.Finding> reverseFindings =
+                    RemovalConsistencyEvaluator.evaluate(reverseOrder, report, RegistryLedger.empty(), "6.2.5");
+
+            assertThat(forwardFindings).isNotEmpty();
+            assertThat(forwardFindings.stream().map(Object::toString).collect(java.util.stream.Collectors.toList()))
+                    .isEqualTo(reverseFindings.stream().map(Object::toString).collect(java.util.stream.Collectors.toList()));
+        }
+    }
 }
