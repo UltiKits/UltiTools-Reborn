@@ -12,31 +12,31 @@ import org.bukkit.event.inventory.InventoryType;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * DeclarativeGui 是声明式 GUI 框架的基类。
+ * DeclarativeGui is the base class of the declarative GUI framework.
  * <p>
- * 它继承自 obliviate-invs 的 {@link Gui}，提供声明式 UI 的能力。
- * 子类只需要实现 {@link #build(BuildContext)} 方法，返回 Widget 树即可。
+ * It extends obliviate-invs' {@link Gui}, layering declarative UI capability on top. A subclass
+ * only needs to implement {@link #build(BuildContext)}, returning a Widget tree.
  * <p>
- * <b>使用示例：</b>
+ * <b>Usage example:</b>
  * <pre>{@code
  * public class ShopPage extends DeclarativeGui {
  *     private final List<ItemStack> items;
- *     
+ *
  *     public ShopPage(Player player, List<ItemStack> items) {
  *         super(player, "shop", "Shop", 6);
  *         this.items = items;
  *     }
- *     
+ *
  *     @Override
  *     public Widget build(BuildContext context) {
  *         return Column.builder()
  *             .children(
- *                 // 标题行
+ *                 // Title row
  *                 Center.builder()
  *                     .child(TextDisplay.title("Item Shop"))
  *                     .build(),
- *                 
- *                 // 物品网格
+ *
+ *                 // Item grid
  *                 GridView.builder()
  *                     .items(items)
  *                     .itemBuilder(item -> ItemButton.builder()
@@ -44,8 +44,8 @@ import org.jetbrains.annotations.NotNull;
  *                         .onClick(() -> buyItem(item))
  *                         .build())
  *                     .build(),
- *                 
- *                 // 分页控制
+ *
+ *                 // Pagination controls
  *                 Row.builder()
  *                     .children(
  *                         PrevPageButton.builder().build(),
@@ -56,9 +56,9 @@ import org.jetbrains.annotations.NotNull;
  *             )
  *             .build();
  *     }
- *     
+ *
  *     private void buyItem(ItemStack item) {
- *         // 购买逻辑
+ *         // Purchase logic
  *         player.sendMessage("Bought " + item.getType());
  *     }
  * }
@@ -76,12 +76,12 @@ public abstract class DeclarativeGui extends Gui {
     private boolean initialized = false;
 
     /**
-     * 创建 DeclarativeGui。
+     * Creates a DeclarativeGui.
      *
-     * @param player 玩家
-     * @param id     GUI ID
-     * @param title  标题
-     * @param rows   行数
+     * @param player the player
+     * @param id     the GUI ID
+     * @param title  the title
+     * @param rows   the row count
      */
     public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull String title, int rows) {
         super(player, id, title, rows);
@@ -90,12 +90,12 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 创建 DeclarativeGui。
+     * Creates a DeclarativeGui.
      *
-     * @param player        玩家
-     * @param id            GUI ID
-     * @param title         标题
-     * @param inventoryType 背包类型
+     * @param player        the player
+     * @param id            the GUI ID
+     * @param title         the title
+     * @param inventoryType the inventory type
      */
     public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull String title, 
                           @NotNull InventoryType inventoryType) {
@@ -105,12 +105,12 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 创建 DeclarativeGui，使用 Component 标题。
+     * Creates a DeclarativeGui with a Component title.
      *
-     * @param player 玩家
-     * @param id     GUI ID
-     * @param title  标题（Component）
-     * @param rows   行数
+     * @param player the player
+     * @param id     the GUI ID
+     * @param title  the title (Component)
+     * @param rows   the row count
      */
     public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull Component title, int rows) {
         super(player, id, title, rows);
@@ -119,12 +119,12 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 创建 DeclarativeGui，使用 Component 标题。
+     * Creates a DeclarativeGui with a Component title.
      *
-     * @param player        玩家
-     * @param id            GUI ID
-     * @param title         标题（Component）
-     * @param inventoryType 背包类型
+     * @param player        the player
+     * @param id            the GUI ID
+     * @param title         the title (Component)
+     * @param inventoryType the inventory type
      */
     public DeclarativeGui(@NotNull Player player, @NotNull String id, @NotNull Component title, 
                           @NotNull InventoryType inventoryType) {
@@ -134,13 +134,13 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 构建 Widget 树。
+     * Builds the Widget tree.
      * <p>
-     * 子类必须实现此方法，返回描述 UI 的 Widget 树。
-     * 每次状态变化时，这个方法会被重新调用。
+     * Subclasses must implement this method, returning the Widget tree describing the UI. This
+     * method is called again every time the state changes.
      *
-     * @param context 构建上下文，包含玩家、GUI 配置等信息
-     * @return Widget 树
+     * @param context the build context, carrying the player, GUI configuration, and similar info
+     * @return the Widget tree
      */
     @NotNull
     public abstract Widget build(@NotNull BuildContext context);
@@ -148,26 +148,26 @@ public abstract class DeclarativeGui extends Gui {
     @Override
     public final void onOpen(@NotNull InventoryOpenEvent event) {
         if (!initialized) {
-            // 初始化渲染器。传入的是一个 Supplier，而不是构建好的 Widget——
-            // GuiRenderer 会在每一帧的开头重新调用 build(context)，这样状态变化才能
-            // 真正重新派生出 Widget 树（D-09 item 1；GuiRenderer 的这半改动来自 05-11
-            // 计划的 Task 1，这里的调用点更新属于 Task 2 的范围，为了保持编译通过
-            // 提前完成）。
+            // Initialize the renderer. What is passed is a Supplier, not a built Widget --
+            // GuiRenderer calls build(context) again at the start of every frame, so that a
+            // state change actually re-derives the Widget tree (D-09 item 1; GuiRenderer's half
+            // of this change came from plan 05-11's Task 1, and updating the call site here
+            // belongs to Task 2's scope, done early to keep the build compiling).
             BuildContext context = BuildContext.root(player, getId(), getSize() / 9);
             renderer.initialize(() -> build(context), context);
             initialized = true;
         }
 
-        // 调用子类的钩子
+        // Call the subclass hook
         onGuiOpen(event);
     }
 
     @Override
     public final void onClose(@NotNull InventoryCloseEvent event) {
-        // 调用子类的钩子
+        // Call the subclass hook
         onGuiClose(event);
 
-        // 清理资源
+        // Release resources
         renderer.dispose();
         initialized = false;
     }
@@ -180,31 +180,24 @@ public abstract class DeclarativeGui extends Gui {
      * check happens one call down, in {@link GuiRenderer#handleClick}: it rejects (returns
      * without dispatching) any click whose raw slot falls outside the GUI's own inventory, so
      * a click on the player's own inventory can never reach a GUI handler here.
-     * <p>
-     * 这是框架自己做越界检查的地方（D-09 item 4），不是一个"后置过滤"的钩子。子类如果重写这个
-     * 方法，需要知道 obliviate-invs 的 {@code InvListener} 是无条件调用这个方法的——在它自己做
-     * 任何过滤之前——所以每一次点击都会到达这里，包括玩家点击自己背包的情形。真正的越界检查
-     * 在下一层，{@link GuiRenderer#handleClick} 里：它会拒绝（直接返回、不派发）任何原始槽位
-     * 落在 GUI 自身 Inventory 范围之外的点击，所以玩家点击自己背包永远不会在这里触发 GUI 的
-     * 处理器。
      *
-     * @param event 点击事件
-     * @return 见 {@link #onGuiClick(InventoryClickEvent)}
+     * @param event the click event
+     * @return see {@link #onGuiClick(InventoryClickEvent)}
      */
     @Override
     public final boolean onClick(@NotNull InventoryClickEvent event) {
-        // 传递给渲染器处理——渲染器自己做越界检查，见上面的 javadoc 和
-        // GuiRenderer.handleClick。
+        // Pass it to the renderer -- the renderer does its own bounds check; see the javadoc
+        // above and GuiRenderer.handleClick.
         renderer.handleClick(event);
 
-        // 调用子类的钩子
+        // Call the subclass hook
         return onGuiClick(event);
     }
 
     /**
-     * 标记需要重建。
+     * Marks that a rebuild is needed.
      * <p>
-     * 通常在子类中，当数据变化时调用此方法触发 UI 更新。
+     * Typically called in a subclass to trigger a UI update when data changes.
      */
     protected void markNeedsBuild() {
         if (initialized) {
@@ -213,20 +206,20 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 设置状态并触发重建。
+     * Sets state and triggers a rebuild.
      * <p>
-     * 这是 Flutter 风格的状态管理方式。在回调中修改状态，
-     * 框架会自动触发重建。
+     * This is the Flutter-style approach to state management. Modify state inside the callback,
+     * and the framework automatically triggers a rebuild.
      * <p>
-     * <b>使用示例：</b>
+     * <b>Usage example:</b>
      * <pre>{@code
      * setState(() -> {
-     *     counter++;          // 修改状态
+     *     counter++;          // modify state
      *     selectedItem = item;
      * });
      * }</pre>
      *
-     * @param action 状态修改操作
+     * @param action the state-modifying operation
      */
     protected void setState(@NotNull Runnable action) {
         action.run();
@@ -234,38 +227,32 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * GUI 打开时的钩子方法。
+     * Hook method called when the GUI opens.
      * <p>
-     * 子类可以重写此方法执行额外的初始化工作。
+     * Subclasses may override this to perform extra initialization work.
      *
-     * @param event 打开事件
+     * @param event the open event
      */
     protected void onGuiOpen(@NotNull InventoryOpenEvent event) {
-        // 子类重写
+        // Overridden by subclasses
     }
 
     /**
-     * GUI 关闭时的钩子方法。
+     * Hook method called when the GUI closes.
      * <p>
-     * 子类可以重写此方法执行清理工作。
+     * Subclasses may override this to perform cleanup work.
      *
-     * @param event 关闭事件
+     * @param event the close event
      */
     protected void onGuiClose(@NotNull InventoryCloseEvent event) {
-        // 子类重写
+        // Overridden by subclasses
     }
 
     /**
-     * GUI 点击时的钩子方法。
+     * Hook method called on a GUI click.
      * <p>
-     * 注意：点击事件首先由声明式框架处理，然后才调用此方法。
-     * <p>
-     * <b>返回值语义与直觉相反，务必看清：</b>返回 {@code false} 表示保持事件被取消，
-     * 玩家<b>拿不走</b>格子里的物品；返回 {@code true} 表示放行，玩家<b>可以取走</b>物品。
-     * 这一层语义来自 obliviate-invs —— 其 {@code InvListener} 在 {@code Gui.onClick}
-     * 返回 true 时调用 {@code setCancelled(false)}，返回 false 时调用
-     * {@code setCancelled(true)}。默认值 {@code false} 与库基类 {@code Gui.onClick}
-     * 的默认值保持一致，也是安全的一侧。
+     * Note: the click event is handled by the declarative framework first, before this method
+     * is called.
      * <p>
      * The return value reads backwards, so read it carefully: returning {@code false}
      * keeps the event cancelled and the player <b>cannot</b> take the clicked item;
@@ -275,19 +262,19 @@ public abstract class DeclarativeGui extends Gui {
      * {@code setCancelled(true)} when it returns false. The default of {@code false}
      * matches the library base class and is the safe side.
      *
-     * @param event 点击事件
-     * @return {@code false} 保持事件取消（默认，物品拿不走）；{@code true} 放行
+     * @param event the click event
+     * @return {@code false} keeps the event cancelled (default, item cannot be taken);
+     *         {@code true} lets it through
      */
     protected boolean onGuiClick(@NotNull InventoryClickEvent event) {
-        // 子类重写。默认保持事件取消——这是安全的一侧。
         // Subclasses override. The default keeps the event cancelled, which is the safe side.
         return false;
     }
 
     /**
-     * 获取渲染器。
+     * Gets the renderer.
      *
-     * @return GuiRenderer
+     * @return the GuiRenderer
      */
     @NotNull
     protected GuiRenderer getRenderer() {
@@ -295,18 +282,18 @@ public abstract class DeclarativeGui extends Gui {
     }
 
     /**
-     * 检查是否已初始化。
+     * Checks whether this has been initialized.
      *
-     * @return 如果已初始化返回 true
+     * @return true if initialized
      */
     public boolean isInitialized() {
         return initialized;
     }
 
     /**
-     * 获取玩家。
+     * Gets the player.
      *
-     * @return 玩家
+     * @return the player
      */
     @NotNull
     public Player getPlayer() {

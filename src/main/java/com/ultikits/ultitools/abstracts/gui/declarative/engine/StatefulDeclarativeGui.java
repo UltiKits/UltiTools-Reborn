@@ -4,11 +4,12 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * StatefulDeclarativeGui 支持状态的声明式 GUI 基类。
+ * StatefulDeclarativeGui is the base class for a declarative GUI that carries state.
  * <p>
- * 它内部管理一个 State 对象，提供 {@link #setState(Runnable)} 方法来触发重建。
+ * It manages a State object internally, providing {@link #setState(Runnable)} to trigger a
+ * rebuild.
  *
- * @param <T> State 类型
+ * @param <T> the State type
  */
 public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>.State> extends DeclarativeGui {
 
@@ -22,17 +23,17 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
     }
 
     /**
-     * 创建状态对象。
+     * Creates the state object.
      *
-     * @return 状态对象
+     * @return the state object
      */
     @NotNull
     protected abstract T createState();
 
     /**
-     * 获取状态对象。
+     * Gets the state object.
      *
-     * @return 状态对象
+     * @return the state object
      */
     @NotNull
     protected T getState() {
@@ -40,9 +41,9 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
     }
 
     /**
-     * 设置状态并触发重建。
+     * Sets state and triggers a rebuild.
      *
-     * @param action 状态修改操作
+     * @param action the state-modifying operation
      */
     protected void setState(@NotNull Runnable action) {
         action.run();
@@ -50,13 +51,13 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
     }
 
     /**
-     * 声明式 GUI 的状态基类。
+     * The base class for a declarative GUI's state.
      */
     public abstract class State {
         protected StatefulDeclarativeGui<T> gui;
 
         /**
-         * 触发重建。
+         * Triggers a rebuild.
          */
         protected void setState(@NotNull Runnable action) {
             if (gui != null) {
@@ -65,9 +66,9 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
         }
 
         /**
-         * 获取关联的 GUI。
+         * Gets the associated GUI.
          *
-         * @return GUI 实例
+         * @return the GUI instance
          */
         @NotNull
         protected StatefulDeclarativeGui<T> getGui() {
@@ -78,9 +79,9 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
         }
 
         /**
-         * 获取玩家。
+         * Gets the player.
          *
-         * @return 玩家
+         * @return the player
          */
         @NotNull
         protected Player getPlayer() {
