@@ -28,6 +28,7 @@ import com.ultikits.ultitools.aop.AopEligibility;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import org.jetbrains.annotations.ApiStatus;
@@ -72,6 +73,10 @@ public class SimpleContainer {
     private SimpleContainer parent;
     private ClassLoader classLoader;
     private boolean isStarted = false;
+    // The 07-21 D-19 diagnostic identifier for this container's own bean-creation phase --
+    // independently keyed from ComponentScanner's basePackage-keyed summary. Set (for real) via
+    // setDisplayName, wired from PluginManager.assemblePluginContainer.
+    private String displayName;
     /**
      * Resolves which class to instantiate for a bean. Null means AOP is not wired for this
      * container, in which case every bean is instantiated as its declared class.
@@ -710,7 +715,7 @@ public class SimpleContainer {
      * @param displayName display name <br> 显示名称
      */
     public void setDisplayName(String displayName) {
-        // No-op for now
+        this.displayName = displayName;
     }
 
     /**
@@ -910,6 +915,26 @@ public class SimpleContainer {
             singletonFactories.remove(name);
             earlySingletonObjects.remove(name);
             LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
+            throw e;
+        } catch (LinkageError | TypeNotPresentException e) {
+            // A symbol this bean's own method signatures reference is absent from the classpath
+            // (e.g. a module JAR compiled against an older UltiTools-API, referencing a removed
+            // symbol) -- AopProxyResolver.resolve (called above) triggers
+            // ReflectionUtil.getAllMethods -> Class.getDeclaredMethods, which the JVM resolves
+            // eagerly, throwing NoClassDefFoundError/TypeNotPresentException right there rather
+            // than at bean-construction time. Mirrors FinalContractValidator's own, already-
+            // reviewed catch (NoClassDefFoundError | TypeNotPresentException e) for the identical
+            // hazard, one call away from this one (07-21).
+            //
+            // Deliberately does NOT widen to Error or Throwable: OutOfMemoryError and
+            // StackOverflowError are VirtualMachineError, a sibling branch of Error and not a
+            // LinkageError subtype, and must keep propagating and aborting rather than letting
+            // bean creation continue in a possibly corrupted VM state.
+            singletonFactories.remove(name);
+            earlySingletonObjects.remove(name);
+            ModuleScanDiagnostics.recordSkippedClass(displayName, definition.getBeanClass().getName(), e);
+            LOGGER.log(Level.WARNING, "Skipping bean '" + name + "' -- its class references a "
+                    + "symbol absent from the classpath", e);
             throw e;
         } catch (Exception e) {
             // Clean up caches on failure
@@ -1322,12 +1347,29 @@ public class SimpleContainer {
      * 初始化所有单例。
      */
     public void preInstantiateSingletons() {
-        String[] beanNames = getBeanDefinitionNames();
-        for (String beanName : beanNames) {
-            BeanDefinition definition = beanDefinitions.get(beanName);
-            if (definition != null && definition.isSingleton() && !definition.isLazyInit()) {
-                getBean(beanName);
+        try {
+            String[] beanNames = getBeanDefinitionNames();
+            for (String beanName : beanNames) {
+                BeanDefinition definition = beanDefinitions.get(beanName);
+                if (definition != null && definition.isSingleton() && !definition.isLazyInit()) {
+                    try {
+                        getBean(beanName);
+                    } catch (LinkageError | TypeNotPresentException e) {
+                        // createBean already recorded the skip via ModuleScanDiagnostics and
+                        // logged a local WARNING (07-21) -- this catch only needs to move on to
+                        // the next bean, so one poisoned bean no longer takes the whole module
+                        // (and every other bean it declares) down with it.
+                        continue;
+                    }
+                }
             }
+        } finally {
+            // D-19: one SEVERE summary for this container's bean-creation phase, independently
+            // keyed from ComponentScanner's own basePackage-keyed summary and from any
+            // PluginManager-keyed one -- three independent accumulator keys, matching the
+            // multi-keyed-accumulator design plan 07-04 already established. A container with no
+            // skipped bean never invokes the emitter at all.
+            ModuleScanDiagnostics.emitSummary(displayName);
         }
     }
 

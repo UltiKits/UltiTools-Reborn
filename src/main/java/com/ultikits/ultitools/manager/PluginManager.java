@@ -1570,6 +1570,12 @@ public class PluginManager {
         // on that path silently observed a null context.
         plugin.setContext(pluginContext);
 
+        // 07-21 D-19: the per-container diagnostic identifier for
+        // SimpleContainer.preInstantiateSingletons' own SEVERE summary -- set before
+        // scanComponents/refresh() run, so both register(Class) (via initializePlugin) and
+        // register(UltiToolsPlugin) get it for free through this one shared method.
+        pluginContext.setDisplayName(plugin.getPluginName());
+
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(loader);
