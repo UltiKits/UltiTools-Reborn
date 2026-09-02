@@ -28,9 +28,20 @@
 # Scope enumeration:
 #   Candidate files come from `git ls-files -- <scope>`, never a bare `find` or a recursive `grep`
 #   over the working tree — this keeps untracked and gitignored paths out of the scan and makes
-#   the file list deterministic. Default scope is the three D-08 areas: src/main,
-#   .github/workflows, and the buildtools test package
-#   (src/test/java/com/ultikits/ultitools/buildtools).
+#   the file list deterministic. Default scope is three areas: src/main/java, .github/workflows,
+#   and the buildtools test package (src/test/java/com/ultikits/ultitools/buildtools).
+#
+#   Scope correction (08-17, "08-SAME-LINE-CJK-RESIDUE.md" DECISIVE MEASUREMENT section): the
+#   default scope used to be src/main (which also pulls in src/main/resources). GATE-02 and
+#   ROADMAP criterion 2 are about "src/main comments and javadoc ... and the published
+#   sources/javadoc jars carry that form" — an argument about the published Java artifacts.
+#   src/main/resources/config.yml and plugin.yml ship in neither jar, and config.yml specifically
+#   mixes genuinely-legacy Chinese-only comments with comment lines the framework itself writes
+#   at runtime from Capability.getCommentLines() (deliberately bilingual, matching the three
+#   already-allowlisted UltiTools.java constants' pattern) — converting the whole file would
+#   either miss that runtime-generated portion or contradict it. Narrowed to src/main/java, which
+#   is unambiguously in criterion 2's scope and contains no such runtime-generated content.
+#   This is a deliberate scope narrowing, not a silent one — see the commit that made this change.
 #
 #   Two structural exclusions apply regardless of --scope:
 #     - lang/*.json catalogue files (src/main/resources/lang/{en,zh}.json) are never scanned.
@@ -43,6 +54,28 @@
 #     - .github/scripts/testdata/ (this script's own fixtures) is always excluded. The fixtures
 #       under that directory contain CJK by design, to prove the gate fires and to prove it
 #       exempts — if they were in scope they would permanently fail the gate they exist to test.
+#
+# String-literal exclusion for .java files (08-17, "DECISIVE MEASUREMENT" section of
+# "08-SAME-LINE-CJK-RESIDUE.md"): GATE-02 and ROADMAP criterion 2 are about *comments and
+# javadoc*: "src/main comments and javadoc are English-first ... and the published sources/javadoc
+# jars carry that form." A CJK string literal is neither a comment nor javadoc, is not in either
+# published jar, and this phase's own rule R2/C-03 (08-BATCH-CONVERSION-RULES.md,
+# 08-CONTROL-DOC-CORRECTIONS.md) already treats translating one as a behaviour change out of
+# scope, since it may be user-facing output that belongs in lang/*.json instead. The scanner
+# previously counted string-literal CJK anyway, because it never distinguished a comment line from
+# a string line — this measured 158 such violations across the repository before this fix, which
+# is the gate measuring a superset of what GATE-02 actually requires.
+#
+# is_comment_or_javadoc_line() (below) makes that distinction for .java files only (YAML has no
+# comparable code/string split worth making — a workflow's echoed step-summary text is still
+# genuinely in scope, per 08-17's own conversion of maven-ci.yml). A CJK-containing line counts as
+# a violation when EITHER: the line, stripped of leading whitespace, starts with `//`, `/*`, or
+# `*` (a whole comment/javadoc line); OR the line contains a `//` that is not inside a
+# double-quoted string literal, with CJK appearing at or after that position (a same-line trailing
+# comment). Otherwise the CJK is inside a string literal only, and is excluded. This is the same
+# quote-tracking approach as check-comment-only-diff.sh's find_code_half() — kept as an
+# independent implementation here rather than sourcing that script, since the two tools have
+# different processes, different failure semantics, and no shared runtime today.
 #
 # Allowlist format: .github/cjk-allowlist.txt, one `<path-glob>:<extended-regex>` pair per
 # non-comment line, split on the FIRST colon. An entry exempts a LINE, not a file — the path glob
@@ -119,7 +152,7 @@ done
 
 if [ ${#SCOPES[@]} -eq 0 ]; then
     SCOPES=(
-        "src/main"
+        "src/main/java"
         ".github/workflows"
         "src/test/java/com/ultikits/ultitools/buildtools"
     )
@@ -176,11 +209,63 @@ is_allowlisted() {
 # Scanning
 # ---------------------------------------------------------------------------
 
-# scan_file PATH — prints "PATH:LINENO:TEXT" for every CJK line at PATH that is not allowlisted.
+# is_comment_or_javadoc_line TEXT — true (0) when TEXT (already known to contain CJK) is
+# comment/javadoc content per GATE-02's actual criterion; false (1) when the CJK is inside a
+# string literal only. See the header note above ("String-literal exclusion for .java files").
+is_comment_or_javadoc_line() {
+    local text="$1"
+    local stripped="${text#"${text%%[![:space:]]*}"}"
+    case "$stripped" in
+        '//'* | '/*'* | '*'*) return 0 ;;
+    esac
+
+    # Find the first `//` that is not inside a double-quoted string literal (simple
+    # backslash-escape aware, same approach as check-comment-only-diff.sh's find_code_half()).
+    local i=0 len=${#text} ch nextch in_string=0 escape=0 comment_start=-1
+    while [ "$i" -lt "$len" ]; do
+        ch="${text:$i:1}"
+        if [ "$in_string" -eq 1 ]; then
+            if [ "$escape" -eq 1 ]; then
+                escape=0
+            elif [ "$ch" = '\' ]; then
+                escape=1
+            elif [ "$ch" = '"' ]; then
+                in_string=0
+            fi
+        else
+            if [ "$ch" = '"' ]; then
+                in_string=1
+            elif [ "$ch" = '/' ]; then
+                nextch="${text:$((i + 1)):1}"
+                if [ "$nextch" = '/' ]; then
+                    comment_start=$i
+                    break
+                fi
+            fi
+        fi
+        i=$((i + 1))
+    done
+
+    if [ "$comment_start" -ge 0 ]; then
+        local after="${text:$comment_start}"
+        if printf '%s' "$after" | grep -qP "$CJK_RANGE"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# scan_file PATH — prints "PATH:LINENO:TEXT" for every CJK line at PATH that is not allowlisted
+# and (for .java files) is comment/javadoc content rather than a pure string-literal occurrence.
 scan_file() {
     local path="$1"
     grep -nP "$CJK_RANGE" -- "$path" 2>/dev/null | while IFS=: read -r lineno text; do
         is_allowlisted "$path" "$text" && continue
+        case "$path" in
+            *.java)
+                is_comment_or_javadoc_line "$text" || continue
+                ;;
+        esac
         printf '%s:%s:%s\n' "$path" "$lineno" "$text"
     done || true
     return 0
@@ -273,6 +358,31 @@ run_self_test() {
         failures=1
     else
         echo "PASS: assertion 4 — kana/full-width punctuation must not match U+4E00-U+9FFF."
+    fi
+
+    # Assertions 5-7 (08-17): is_comment_or_javadoc_line()'s three directions. A whole comment
+    # line and a same-line trailing comment must still be counted (the string-literal exclusion
+    # must not over-correct into silently passing real comment debt); a CJK string literal alone
+    # must be excluded (the actual fix).
+    if is_comment_or_javadoc_line '     * 中文注释'; then
+        echo "PASS: assertion 5 — a whole javadoc/comment line is still counted."
+    else
+        echo "FAIL: assertion 5 — a whole javadoc/comment line is still counted."
+        failures=1
+    fi
+
+    if is_comment_or_javadoc_line '        return 5; // 中文尾注'; then
+        echo "PASS: assertion 6 — a same-line trailing comment is still counted."
+    else
+        echo "FAIL: assertion 6 — a same-line trailing comment is still counted."
+        failures=1
+    fi
+
+    if is_comment_or_javadoc_line '        String s = "中文字符串";'; then
+        echo "FAIL: assertion 7 — a CJK string literal (no comment on the line) is excluded."
+        failures=1
+    else
+        echo "PASS: assertion 7 — a CJK string literal (no comment on the line) is excluded."
     fi
 
     return "$failures"
