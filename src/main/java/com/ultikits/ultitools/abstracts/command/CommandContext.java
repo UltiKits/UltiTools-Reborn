@@ -15,9 +15,6 @@ import java.util.Map;
 /**
  * Immutable command execution context containing all information about a command invocation.
  * This class follows the Context Object pattern, encapsulating command execution data.
- * <p>
- * 不可变的命令执行上下文，包含命令调用的所有信息。
- * 此类遵循上下文对象模式，封装命令执行数据。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -26,48 +23,41 @@ import java.util.Map;
 @Getter
 @Builder(toBuilder = true)
 public final class CommandContext {
-    
+
     /**
      * The sender of the command.
-     * 命令的发送者。
      */
     private final CommandSender sender;
-    
+
     /**
      * The Bukkit command object.
-     * Bukkit 命令对象。
      */
     private final Command command;
-    
+
     /**
      * The alias used to invoke the command.
-     * 用于调用命令的别名。
      */
     private final String alias;
-    
+
     /**
      * The raw arguments passed to the command.
-     * 传递给命令的原始参数。
      */
     private final String[] rawArgs;
-    
+
     /**
      * The parsed parameters mapped by their names.
-     * 按名称映射的已解析参数。
      */
     @Builder.Default
     private final Map<String, String[]> parsedParams = Collections.emptyMap();
-    
+
     /**
      * The matched method for execution.
-     * 匹配的执行方法。
      */
     @Nullable
     private final Method matchedMethod;
-    
+
     /**
      * The format string of the matched command.
-     * 匹配命令的格式字符串。
      */
     @Nullable
     private final String matchedFormat;
@@ -96,24 +86,21 @@ public final class CommandContext {
 
     /**
      * Timestamp when the command was received.
-     * 命令接收的时间戳。
      */
     @Builder.Default
     private final long timestamp = System.currentTimeMillis();
-    
+
     /**
      * Checks if the sender is a player.
-     * 检查发送者是否为玩家。
      *
      * @return true if sender is a player, false otherwise
      */
     public boolean isPlayer() {
         return sender instanceof Player;
     }
-    
+
     /**
      * Gets the sender as a player.
-     * 获取作为玩家的发送者。
      *
      * @return the player, or null if sender is not a player
      */
@@ -121,20 +108,18 @@ public final class CommandContext {
     public Player getPlayer() {
         return isPlayer() ? (Player) sender : null;
     }
-    
+
     /**
      * Gets the number of arguments.
-     * 获取参数数量。
      *
      * @return the number of raw arguments
      */
     public int getArgCount() {
         return rawArgs != null ? rawArgs.length : 0;
     }
-    
+
     /**
      * Gets an argument at the specified index.
-     * 获取指定索引处的参数。
      *
      * @param index the argument index (0-based)
      * @return the argument value, or null if index is out of bounds
@@ -146,10 +131,9 @@ public final class CommandContext {
         }
         return rawArgs[index];
     }
-    
+
     /**
      * Gets a parsed parameter by name.
-     * 按名称获取已解析的参数。
      *
      * @param name the parameter name
      * @return the parameter values, or null if not found
@@ -158,10 +142,9 @@ public final class CommandContext {
     public String[] getParam(String name) {
         return parsedParams.get(name);
     }
-    
+
     /**
      * Gets a single parsed parameter value by name.
-     * 按名称获取单个已解析的参数值。
      *
      * @param name the parameter name
      * @return the first parameter value, or null if not found
@@ -171,10 +154,9 @@ public final class CommandContext {
         String[] values = parsedParams.get(name);
         return (values != null && values.length > 0) ? values[0] : null;
     }
-    
+
     /**
      * Creates a new context with additional parsed parameters.
-     * 创建带有附加已解析参数的新上下文。
      *
      * @param params the parameters to add
      * @return a new context with the merged parameters
@@ -186,10 +168,9 @@ public final class CommandContext {
                 .parsedParams(Collections.unmodifiableMap(merged))
                 .build();
     }
-    
+
     /**
      * Creates a new context with a matched method.
-     * 创建带有匹配方法的新上下文。
      *
      * @param method the matched method
      * @param format the command format

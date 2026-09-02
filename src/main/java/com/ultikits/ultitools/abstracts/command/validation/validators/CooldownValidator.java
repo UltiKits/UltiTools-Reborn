@@ -20,9 +20,6 @@ import java.util.concurrent.TimeUnit;
 /**
  * Validates and manages command cooldowns for players.
  * Thread-safe implementation using ConcurrentHashMap.
- * <p>
- * 验证和管理玩家的命令冷却。
- * 使用 ConcurrentHashMap 的线程安全实现。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -63,7 +60,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     
     /**
      * Creates a cooldown validator with no default cooldown.
-     * 创建一个没有默认冷却的冷却验证器。
      */
     public CooldownValidator() {
         this.defaultCooldownSeconds = 0;
@@ -71,7 +67,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     
     /**
      * Creates a cooldown validator with a default cooldown.
-     * 创建具有默认冷却的冷却验证器。
      *
      * @param defaultCooldownSeconds the default cooldown in seconds
      */
@@ -123,8 +118,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     /**
      * Applies cooldown after command execution.
      * Should be called after successful command execution.
-     * 在命令执行后应用冷却。
-     * 应在成功执行命令后调用。
      *
      * @param context the command context
      */
@@ -158,9 +151,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * {@link #applyCooldown(CommandContext)} and is invoked only by a chain that actually ran
      * this validator for the current dispatch -- see
      * {@link CommandValidator#onComplete(CommandContext, boolean)}.
-     * <p>
-     * 应用本次调用所需冷却的后置钩子。委托给 {@link #applyCooldown(CommandContext)}，仅由实际为本次
-     * 分发运行了该验证器的责任链调用——参见 {@link CommandValidator#onComplete(CommandContext, boolean)}。
      *
      * @param context          the command context
      * @param commandSucceeded ignored -- the cooldown applies whether the mapped method
@@ -229,7 +219,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
 
     /**
      * Clears all cooldowns for a player.
-     * 清除玩家的所有冷却。
      *
      * @param playerId the player's UUID
      */
@@ -239,7 +228,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     
     /**
      * Clears a specific cooldown for a player.
-     * 清除玩家的特定冷却。
      *
      * @param playerId  the player's UUID
      * @param methodKey the method key
@@ -253,7 +241,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     
     /**
      * Gets the remaining cooldown time in seconds.
-     * 获取剩余的冷却时间（秒）。
      *
      * @param playerId  the player's UUID
      * @param methodKey the method key
@@ -274,8 +261,6 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     /**
      * Cleans up expired cooldowns to prevent memory leaks.
      * Should be called periodically.
-     * 清理过期的冷却以防止内存泄漏。
-     * 应定期调用。
      */
     public void cleanupExpired() {
         long now = System.currentTimeMillis();
@@ -298,23 +283,12 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * passes the load-time check -- whether declared on a shared abstract base or on the
      * concrete executor class itself -- now actually cools down every inherited mapping that
      * does not declare its own.
-     * <p>
-     * 解析 {@code method} 的冷却时间：方法自身的 {@code @CmdCD}，若无则回退到分发本次命令的具体
-     * 执行器类上的类级 {@code @CmdCD}，再无则回退到方法声明类上的类级 {@code @CmdCD}，均不存在时
-     * 回退到 {@link #defaultCooldownSeconds}——方法级优先，经由 {@link
-     * ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)} 解析。这与
-     * {@code PluginManager} 加载时拒绝检查所采信的解析方式完全一致（SILENT-11 / D-01 追加任务，
-     * WR-02 / 05-REVIEW.md 修复）：一个通过了加载时检查的类级 {@code @CmdCD}——无论声明在共享的
-     * 抽象基类上，还是声明在具体执行器类自身上——现在都会真正冷却每一个未声明自己
-     * {@code @CmdCD} 的继承映射。
      *
-     * @param method        the matched command mapping method <br> 已匹配的命令映射方法
+     * @param method        the matched command mapping method
      * @param executorClass the concrete executor class dispatching this command (WR-02,
      *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
-     *                      pre-WR-02, declaring-class-only resolution in that case <br>
-     *                      分发本次命令的具体执行器类（WR-02，05-REVIEW.md）；不可用时为
-     *                      {@code null}，此时回退到 WR-02 之前的、仅声明类的解析
-     * @return the resolved cooldown in seconds <br> 解析出的冷却秒数
+     *                      pre-WR-02, declaring-class-only resolution in that case
+     * @return the resolved cooldown in seconds
      * @since 6.3.0
      */
     private int getCooldownSeconds(Method method, Class<?> executorClass) {

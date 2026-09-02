@@ -12,9 +12,6 @@ import java.lang.reflect.Method;
 /**
  * Validates that the command sender has the required permission.
  * Supports both class-level and method-level permission requirements.
- * <p>
- * 验证命令发送者是否具有所需权限。
- * 支持类级别和方法级别的权限要求。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -29,7 +26,6 @@ public class PermissionValidator implements CommandValidator {
     
     /**
      * Creates a permission validator with no base permission requirement.
-     * 创建一个没有基本权限要求的权限验证器。
      */
     public PermissionValidator() {
         this.basePermission = null;
@@ -38,7 +34,6 @@ public class PermissionValidator implements CommandValidator {
     
     /**
      * Creates a permission validator with the specified permission.
-     * 创建具有指定权限的权限验证器。
      *
      * @param permission the required permission
      * @param requireOp  whether OP is required
@@ -105,7 +100,6 @@ public class PermissionValidator implements CommandValidator {
     
     /**
      * Creates a validator from a CmdExecutor annotation.
-     * 从 CmdExecutor 注解创建验证器。
      *
      * @param annotation the annotation
      * @return a new validator

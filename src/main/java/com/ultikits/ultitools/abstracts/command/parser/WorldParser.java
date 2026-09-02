@@ -9,9 +9,6 @@ import org.bukkit.World;
 /**
  * Type parser for Bukkit World.
  * Supports parsing by world name.
- * <p>
- * Bukkit World 类型解析器。
- * 支持通过世界名称解析。
  *
  * @since 6.2.0
  */

@@ -20,9 +20,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * Validates and manages command usage locks to prevent concurrent execution.
  * Supports sender-specific and server-wide locks.
  * <p>
- * 验证和管理命令使用锁以防止并发执行。
- * 支持发送者特定锁和服务器范围锁。
- * <p>
  * <b>Acquire-then-execute (D-02, GEN-09, @since 6.3.0):</b> acquisition is no longer a
  * separate step called by field from {@code BaseCommandExecutor.executeCommand}. It happens
  * inside {@link #validate(CommandContext)} itself -- "acquire-as-you-validate" -- so that on
@@ -32,13 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * happens in {@link #onComplete(CommandContext, boolean)}, driven by the validator chain that
  * actually ran this validator (see {@link CommandValidator#onComplete(CommandContext, boolean)}) --
  * never called twice, and never called for an invocation whose acquisition failed.
- * <p>
- * <b>获取即验证（D-02, GEN-09, 自 6.3.0 起）：</b>获取锁不再是由 {@code BaseCommandExecutor.executeCommand}
- * 按字段调用的独立步骤，而是发生在 {@link #validate(CommandContext)} 内部——"验证即获取"——使得在同步分发
- * 路径上，从判定锁空闲到实际取得锁之间不存在调度点。获取失败会作为普通的
- * {@link ValidationResult#failure} 经由正常的验证拒绝路径呈现；映射方法永远不会被调用。释放发生在
- * {@link #onComplete(CommandContext, boolean)} 中，由实际运行了该验证器的责任链驱动——不会被调用两次，
- * 也不会为获取失败的调用而调用。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -81,10 +71,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * ACQUIRE -- the lock for this invocation. Delegates entirely to {@link #acquireLock(CommandContext)}:
      * a successful acquisition is a successful validation; a failed acquisition is reported as
      * an ordinary validation failure carrying the scope-appropriate i18n key.
-     * <p>
-     * 验证——并按本类的"获取即验证"契约——尝试获取本次调用的锁。完全委托给
-     * {@link #acquireLock(CommandContext)}：获取成功即验证成功；获取失败会以携带对应作用域 i18n 键的
-     * 普通验证失败形式呈现。
      *
      * @param context the command context
      * @return the validation result
@@ -121,11 +107,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * {@link CommandValidator#onComplete(CommandContext, boolean)}. An invocation whose
      * acquisition failed never reaches this hook (it is absent from the chain's
      * passed-validator list), so there is nothing here to release on that path.
-     * <p>
-     * 释放由 {@link #validate(CommandContext)} 为本次调用获取的锁的后置钩子。委托给
-     * {@link #releaseLock(CommandContext)}，仅由实际为本次分发运行了该验证器的责任链调用——参见
-     * {@link CommandValidator#onComplete(CommandContext, boolean)}。获取失败的调用永远不会到达此钩子
-     * （它不在责任链的通过验证器列表中），因此该路径上没有需要释放的内容。
      *
      * @param context          the command context
      * @param commandSucceeded ignored -- the lock releases whether the mapped method
@@ -183,9 +164,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * Should be called before executing the command. As of 6.3.0 this is also the method
      * {@link #validate(CommandContext)} itself calls -- see the class-level acquire-then-execute
      * note.
-     * 获取命令执行的锁。
-     * 应在执行命令之前调用。自 6.3.0 起，{@link #validate(CommandContext)} 本身也调用此方法——参见类级别的
-     * "获取即验证"说明。
      *
      * @param context the command context
      * @return true if lock was acquired, false if already locked
@@ -230,9 +208,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * Should be called after command execution completes (success or failure). As of 6.3.0 this
      * is also the method {@link #onComplete(CommandContext, boolean)} calls -- see the
      * class-level acquire-then-execute note.
-     * 在命令执行后释放锁。
-     * 应在命令执行完成（成功或失败）后调用。自 6.3.0 起，{@link #onComplete(CommandContext, boolean)}
-     * 本身也调用此方法——参见类级别的"获取即验证"说明。
      *
      * @param context the command context
      */
@@ -273,26 +248,13 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * class-level {@code @UsageLimit} that passes the load-time check -- whether declared on a
      * shared abstract base or on the concrete executor class itself -- now actually locks every
      * inherited mapping that does not declare its own.
-     * <p>
-     * 解析 {@code method} 生效的 {@code @UsageLimit}：方法自身的声明，若无则回退到分发本次命令的
-     * 具体执行器类上的类级声明，再无则回退到方法声明类上的类级声明——方法级优先，经由
-     * {@link ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)} 解析。这与
-     * {@code PluginManager} 加载时拒绝检查所采信的解析方式完全一致（SILENT-11 / D-01 追加任务，
-     * WR-02 / 05-REVIEW.md 修复）：一个通过了加载时检查的类级 {@code @UsageLimit}——无论声明在
-     * 共享的抽象基类上，还是声明在具体执行器类自身上——现在都会真正锁定每一个未声明自己
-     * {@code @UsageLimit} 的继承映射。
      *
-     * @param method        the matched command mapping method, or {@code null} <br> 已匹配的命令
-     *                      映射方法，可能为 {@code null}
+     * @param method        the matched command mapping method, or {@code null}
      * @param executorClass the concrete executor class dispatching this command (WR-02,
      *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
-     *                      pre-WR-02, declaring-class-only resolution in that case <br>
-     *                      分发本次命令的具体执行器类（WR-02，05-REVIEW.md）；不可用时为
-     *                      {@code null}，此时回退到 WR-02 之前的、仅声明类的解析
+     *                      pre-WR-02, declaring-class-only resolution in that case
      * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
      *         neither the method, {@code executorClass}, nor its declaring class carries one
-     *         <br> 解析出的注解；{@code method} 为 {@code null}，或方法、
-     *         {@code executorClass} 与其声明类均未携带该注解时为 {@code null}
      * @since 6.3.0
      */
     private static UsageLimit resolveLimit(Method method, Class<?> executorClass) {
@@ -305,8 +267,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
     /**
      * Clears all locks for a player.
      * Useful when a player disconnects.
-     * 清除玩家的所有锁。
-     * 当玩家断开连接时很有用。
      *
      * @param playerId the player's UUID
      */
@@ -317,7 +277,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
     
     /**
      * Clears all locks.
-     * 清除所有锁。
      */
     public void clearAllLocks() {
         senderLocks.clear();
@@ -326,7 +285,6 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
     
     /**
      * Checks if a specific method is locked for a player.
-     * 检查特定方法是否对玩家锁定。
      *
      * @param playerId  the player's UUID
      * @param methodKey the method key

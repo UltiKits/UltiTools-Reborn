@@ -54,8 +54,6 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
  * the parameter's actual {@code @CmdParam.suggest()}, never by {@code parameterName} (the
  * display name), so a display name that happens to start with {@code @} is never mistaken for a
  * completer key.
- * <p>
- * 由两代命令执行器共用的单一 Tab 补全分发实现（WIRE-01 / D-06）。
  *
  * @author wisdomme
  * @since 6.3.0
