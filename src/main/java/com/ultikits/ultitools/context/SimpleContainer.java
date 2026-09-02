@@ -68,6 +68,16 @@ public class SimpleContainer {
     private final List<BeanPostProcessor> beanPostProcessors = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final Map<String, BeanDefinition> beanDefinitions = new ConcurrentHashMap<>();
     private final Set<String> currentlyCreating = ConcurrentHashMap.newKeySet();
+    // The container's own memory of a bean whose creation is DETERMINISTICALLY unresolvable for
+    // the lifetime of this container's classloader (07-23) -- keyed by bean name, valued by the
+    // EXACT LinkageError/TypeNotPresentException createBean already caught for that name. Once a
+    // name is present here, getBean(String) fails fast and createBean is never re-invoked for it,
+    // so a later, independent caller (e.g. PluginManager.validateCommandExecutorContracts's
+    // second getBean() call after preInstantiateSingletons already tried and skipped the same
+    // bean once) never re-attempts creation and never re-throws uncaught. Distinct from
+    // currentlyCreating's transient in-progress tracking: this map records a PERMANENT, terminal
+    // failure, not work still underway.
+    private final Map<String, Throwable> unresolvableBeans = new ConcurrentHashMap<>();
     // Cache for supplier types to avoid instantiation in getBeanNamesForType
     private final Map<String, Class<?>> supplierTypes = new ConcurrentHashMap<>();
     private SimpleContainer parent;
@@ -346,6 +356,25 @@ public class SimpleContainer {
      * @return bean instance <br> Bean实例
      */
     public Object getBean(String name) {
+        // Fast-path: a bean already proven deterministically unresolvable (07-23) is never
+        // retried -- rethrow its ORIGINAL exception type, never null. A null return would flow
+        // into AutowireFactory.autowireBean's `dependency == null` branch and, for any OTHER bean
+        // with a required=true field of the SAME poisoned type, convert what is today a reliably
+        // caught LinkageError into an uncaught ContainerException that
+        // preInstantiateSingletons's narrow catch does NOT catch -- silently turning today's
+        // correct per-bean skip into a NEW whole-module abort for a different bean. Only these
+        // two types are ever stored (see createBean's catch below), so the two checks are
+        // exhaustive.
+        Throwable memoized = unresolvableBeans.get(name);
+        if (memoized != null) {
+            if (memoized instanceof RuntimeException) {
+                throw (RuntimeException) memoized;
+            }
+            if (memoized instanceof Error) {
+                throw (Error) memoized;
+            }
+        }
+
         // Try three-level cache for singletons
         Object bean = getSingleton(name, true);
         if (bean != null) {
@@ -541,6 +570,13 @@ public class SimpleContainer {
         
         // Check bean definitions by class type (no instantiation needed)
         for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
+            // 07-23: never offer a name already proven deterministically unresolvable -- this is
+            // the fix for PluginManager.validateCommandExecutorContracts's uncaught retry (and
+            // the identically-shaped CommandManager.registerAll/ListenerManager.registerAll):
+            // all three enumerate via this method, then call getBean() per returned name.
+            if (unresolvableBeans.containsKey(entry.getKey())) {
+                continue;
+            }
             if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
                 beanNames.add(entry.getKey());
             }
@@ -605,6 +641,9 @@ public class SimpleContainer {
         // exactly the kind of reference every other Class/instance-keyed collection above is
         // cleared to stop pinning after a plugin unloads.
         resolvedTypeCache.clear();
+        // 07-23: release the failed-bean memo too -- instance-scoped bookkeeping, cleared exactly
+        // like every other per-container structure above.
+        unresolvableBeans.clear();
         isStarted = false;
         
         LOGGER.info("Container closed.");
@@ -932,6 +971,14 @@ public class SimpleContainer {
             // bean creation continue in a possibly corrupted VM state.
             singletonFactories.remove(name);
             earlySingletonObjects.remove(name);
+            // 07-23: remember this bean is deterministically unresolvable so getBean(String)'s
+            // fast-path above short-circuits any later, independent caller instead of
+            // re-invoking createBean and re-throwing. Because the fast-path means createBean can
+            // now only ever run its real body once per bean name per container lifetime, this
+            // single put is sufficient on its own -- no separate dedup guard is needed, and the
+            // recordSkippedClass call below now fires exactly once per distinct poisoned bean
+            // name rather than once per encounter.
+            unresolvableBeans.put(name, e);
             ModuleScanDiagnostics.recordSkippedClass(displayName, definition.getBeanClass().getName(), e);
             LOGGER.log(Level.WARNING, "Skipping bean '" + name + "' -- its class references a "
                     + "symbol absent from the classpath", e);
@@ -1184,6 +1231,18 @@ public class SimpleContainer {
      * @param type bean type <br> Bean类型
      * @return beans map <br> Bean映射
      */
+    // 07-23: deliberately NOT filtered against unresolvableBeans the way getBeanNamesForType is.
+    // getBeanNamesForType is what PluginManager.validateCommandExecutorContracts and its two
+    // identically-shaped siblings enumerate before an ordinary per-name getBean() lookup, where
+    // excluding a poisoned name only removes redundant, already-doomed work. Filtering here would
+    // be different in kind, not degree: this method backs getOrderedBeansOfType, getBean(Class)'s
+    // ambiguous-candidate path, and getHighestPriorityBean -- for an interface-typed
+    // @Autowired(required = true) dependency whose SOLE implementor is poisoned, filtering the
+    // poisoned candidate OUT of this result turns getBean(Class)'s candidates.isEmpty() branch
+    // into a null return, which AutowireFactory.autowireBean then converts into an uncaught
+    // ContainerException for a DIFFERENT bean -- reintroducing the exact regression getBean(String)'s
+    // fast-path above exists to prevent. Left throwing exactly as it does today, this method still
+    // benefits from that same fast-path (faster, deduplicated) without needing its own filter.
     @SuppressWarnings("unchecked")
     public <T> Map<String, T> getBeansOfType(Class<T> type) {
         Map<String, T> result = new HashMap<>();
