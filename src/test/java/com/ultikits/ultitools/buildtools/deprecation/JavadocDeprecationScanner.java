@@ -102,7 +102,7 @@ public final class JavadocDeprecationScanner {
                 continue;
             }
             List<String> enclosingStack = enclosingClassAt(nesting, commentMatcher.start());
-            Declaration decl = parseDeclarationAfter(source, commentMatcher.end());
+            Declaration decl = parseDeclarationAfter(source, masked, commentMatcher.end());
             if (decl == null || !decl.hasDeprecatedAnnotation) {
                 continue;
             }
@@ -296,60 +296,45 @@ public final class JavadocDeprecationScanner {
      * specifically for {@code @Deprecated} and its {@code since}/{@code forRemoval} arguments),
      * then the declaration itself, classifying it as a class, field, method, or constructor.
      */
-    // PMD.NPathComplexity: 28252, and unlike this file's siblings that number is NOT an
-    // artifact of flat sequential guards -- this is a hand-written character scanner with real
-    // nesting (annotation loop, balanced-paren scan, terminator scan). It is suppressed rather
-    // than split because every candidate split threads the scan cursor and paren depth through
-    // a signature, which is where scanners acquire off-by-one defects; and because this is a
-    // build-time tool whose output is checked against japicmp's independent report before any
-    // ledger entry flips to `removed`, so a parse defect is caught by that cross-check rather
-    // than shipped. This is the weakest suppression claim of the four -- if the scanner is
-    // extended again, split it then.
-    @SuppressWarnings("PMD.NPathComplexity")
-    private static Declaration parseDeclarationAfter(String source, int fromOffset) {
+    /**
+     * Parses the annotation run and declaration signature that follow a javadoc comment.
+     * <p>
+     * Takes both the raw {@code source} and its offset-preserving {@code masked} twin (see
+     * {@link #maskCommentsAndStrings}). Every scan runs over {@code masked}, so a parenthesis or
+     * semicolon inside a string literal cannot be mistaken for structure; every substring is taken
+     * from {@code source}, so the text extracted is the real one. The two share an index space
+     * because masking blanks in place and never changes length.
+     */
+    private static Declaration parseDeclarationAfter(String source, String masked, int fromOffset) {
         int i = fromOffset;
         int n = source.length();
         Declaration decl = new Declaration();
         while (true) {
-            i = skipWhitespace(source, i);
-            if (i >= n || source.charAt(i) != '@') {
+            i = skipWhitespace(masked, i);
+            if (i >= n || masked.charAt(i) != '@') {
                 break;
             }
             int annotationStart = i;
             i++;
             int nameStart = i;
-            while (i < n && (Character.isLetterOrDigit(source.charAt(i)) || source.charAt(i) == '.')) {
+            while (i < n && (Character.isLetterOrDigit(masked.charAt(i)) || masked.charAt(i) == '.')) {
                 i++;
             }
             String annotationName = source.substring(nameStart, i);
-            int afterName = skipWhitespace(source, i);
-            String args = null;
-            if (afterName < n && source.charAt(afterName) == '(') {
-                int depth = 0;
-                int j = afterName;
-                do {
-                    if (source.charAt(j) == '(') {
-                        depth++;
-                    } else if (source.charAt(j) == ')') {
-                        depth--;
-                    }
-                    j++;
-                } while (j < n && depth > 0);
-                args = source.substring(afterName + 1, j - 1);
-                i = j;
-            }
-            if ("Deprecated".equals(annotationName)) {
-                decl.hasDeprecatedAnnotation = true;
-                if (args != null) {
-                    Matcher sinceMatcher = SINCE_ARG.matcher(args);
-                    if (sinceMatcher.find()) {
-                        decl.since = sinceMatcher.group(1);
-                    }
-                    Matcher forRemovalMatcher = FOR_REMOVAL_ARG.matcher(args);
-                    if (forRemovalMatcher.find()) {
-                        decl.forRemoval = Boolean.parseBoolean(forRemovalMatcher.group(1));
-                    }
+            int afterName = skipWhitespace(masked, i);
+            if (afterName < n && masked.charAt(afterName) == '(') {
+                int close = scanBalancedParens(masked, afterName);
+                if (close < 0) {
+                    // Unbalanced: refuse the declaration rather than report a truncated parse.
+                    return null;
                 }
+                if ("Deprecated".equals(annotationName)) {
+                    decl.hasDeprecatedAnnotation = true;
+                    readDeprecatedArgs(source.substring(afterName + 1, close - 1), decl);
+                }
+                i = close;
+            } else if ("Deprecated".equals(annotationName)) {
+                decl.hasDeprecatedAnnotation = true;
             }
             if (annotationStart == i) {
                 // Defensive: no progress made, avoid an infinite loop on malformed input.
@@ -357,27 +342,76 @@ public final class JavadocDeprecationScanner {
             }
         }
 
-        // From here to the first top-level '{' or ';' is the declaration signature.
-        int declStart = skipWhitespace(source, i);
+        int declStart = skipWhitespace(masked, i);
+        int declEnd = findDeclarationEnd(masked, declStart);
+        if (declEnd < 0) {
+            return null;
+        }
+        classifyDeclaration(source.substring(declStart, declEnd), decl);
+        return decl.kind == null ? null : decl;
+    }
+
+    /** Reads {@code since} / {@code forRemoval} out of a {@code @Deprecated} argument list. */
+    private static void readDeprecatedArgs(String args, Declaration decl) {
+        Matcher sinceMatcher = SINCE_ARG.matcher(args);
+        if (sinceMatcher.find()) {
+            decl.since = sinceMatcher.group(1);
+        }
+        Matcher forRemovalMatcher = FOR_REMOVAL_ARG.matcher(args);
+        if (forRemovalMatcher.find()) {
+            decl.forRemoval = Boolean.parseBoolean(forRemovalMatcher.group(1));
+        }
+    }
+
+    /**
+     * Returns the index just past the {@code ')'} matching the {@code '('} at
+     * {@code openParenOffset}, or {@code -1} if they never balance or that offset is not an open
+     * parenthesis.
+     * <p>
+     * Package-private for direct testing: this is the scanner whose depth count an unmasked
+     * parenthesis inside a string literal would corrupt.
+     */
+    static int scanBalancedParens(String masked, int openParenOffset) {
+        int n = masked.length();
+        if (openParenOffset < 0 || openParenOffset >= n || masked.charAt(openParenOffset) != '(') {
+            return -1;
+        }
         int depth = 0;
-        int j = declStart;
-        while (j < n) {
-            char c = source.charAt(j);
+        for (int j = openParenOffset; j < n; j++) {
+            char c = masked.charAt(j);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    return j + 1;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Returns the index of the {@code '{'} or {@code ';'} that ends a declaration signature --
+     * ignoring any inside parentheses, which belong to a parameter list -- or {@code -1} if the
+     * input ends first.
+     * <p>
+     * Package-private for direct testing, for the same reason as {@link #scanBalancedParens}.
+     */
+    static int findDeclarationEnd(String masked, int from) {
+        int n = masked.length();
+        int depth = 0;
+        for (int j = from; j < n; j++) {
+            char c = masked.charAt(j);
             if (c == '(') {
                 depth++;
             } else if (c == ')') {
                 depth--;
             } else if (depth == 0 && (c == '{' || c == ';')) {
-                break;
+                return j;
             }
-            j++;
         }
-        if (j >= n) {
-            return null;
-        }
-        String declText = source.substring(declStart, j);
-        classifyDeclaration(declText, decl);
-        return decl.kind == null ? null : decl;
+        return -1;
     }
 
     private static int skipWhitespace(String source, int from) {
