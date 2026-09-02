@@ -138,7 +138,7 @@ public class PlayerEventManager implements Listener {
 
         // Also send a log-stream message
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
-            "玩家加入", player.getName(),
+            "玩家加入", player.getName(), 
             String.format("玩家加入服务器，当前在线: %d人", Bukkit.getOnlinePlayers().size())
         );
     }
