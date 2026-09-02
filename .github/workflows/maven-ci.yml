@@ -33,6 +33,19 @@ jobs:
       # not active by default.
       run: mvn -B clean verify
       
+    - name: 🇨🇳 CJK Comment/Javadoc Scope Gate
+      # D-11/D-20: enforces the publication-language constraint (English-first comments and
+      # javadoc, Chinese as a supplement) over src/main/java, .github/workflows and the
+      # buildtools test package. Invoked with no threshold flag, so the script's default
+      # zero-violation exit applies -- the migration aid existed only for introducing the gate
+      # before GATE-02's conversion batches finished (08-04..08-17), and the conversion is now
+      # finished. Runs after the Maven build so a compile failure is reported before a
+      # text-scan failure. Placed inside this job (the sole required status check on both alpha
+      # and main), not a new job, so no branch-protection change is needed. Runs on every
+      # trigger of this workflow -- there is no separate paths: filter here, so a change to the
+      # script or the allowlist is validated by the same mechanism it governs, not narrowed out.
+      run: .github/scripts/check-cjk-scope.sh
+      
     - name: 📊 Generate JaCoCo Coverage Report
       run: mvn -B jacoco:report
       
