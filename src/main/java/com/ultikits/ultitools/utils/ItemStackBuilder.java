@@ -24,8 +24,6 @@ import com.cryptomorin.xseries.XMaterial;
 
 /**
  * A fluent builder for creating ItemStacks with various properties.
- * <p>
- * 用于创建具有各种属性的 ItemStack 的流式构建器。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -38,8 +36,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from an XMaterial.
-     * <p>
-     * 从 XMaterial 创建新的 ItemStackBuilder。
      *
      * @param material the XMaterial to use
      */
@@ -53,8 +49,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from a Material.
-     * <p>
-     * 从 Material 创建新的 ItemStackBuilder。
      *
      * @param material the Material to use
      */
@@ -65,8 +59,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from an existing ItemStack.
-     * <p>
-     * 从现有的 ItemStack 创建新的 ItemStackBuilder。
      *
      * @param itemStack the ItemStack to clone
      */
@@ -78,9 +70,6 @@ public class ItemStackBuilder {
     /**
      * Creates a new ItemStackBuilder from a material name string.
      * Uses XMaterial for cross-version compatibility.
-     * <p>
-     * 从材料名称字符串创建新的 ItemStackBuilder。
-     * 使用 XMaterial 实现跨版本兼容。
      *
      * @param materialName the material name
      * @return a new ItemStackBuilder, or null if the material is invalid
@@ -93,8 +82,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from an XMaterial.
-     * <p>
-     * 从 XMaterial 创建新的 ItemStackBuilder。
      *
      * @param material the XMaterial
      * @return a new ItemStackBuilder
@@ -105,8 +92,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from a Material.
-     * <p>
-     * 从 Material 创建新的 ItemStackBuilder。
      *
      * @param material the Material
      * @return a new ItemStackBuilder
@@ -117,8 +102,6 @@ public class ItemStackBuilder {
     
     /**
      * Creates a new ItemStackBuilder from an existing ItemStack.
-     * <p>
-     * 从现有 ItemStack 创建新的 ItemStackBuilder。
      *
      * @param itemStack the ItemStack to clone
      * @return a new ItemStackBuilder
@@ -129,8 +112,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the display name of the item.
-     * <p>
-     * 设置物品的显示名称。
      *
      * @param name the display name (supports color codes with &amp;)
      * @return this builder
@@ -144,8 +125,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the amount of items in the stack.
-     * <p>
-     * 设置堆叠中的物品数量。
      *
      * @param amount the amount
      * @return this builder
@@ -157,8 +136,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the lore of the item.
-     * <p>
-     * 设置物品的描述。
      *
      * @param lore the lore lines (supports color codes with &amp;)
      * @return this builder
@@ -169,8 +146,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the lore of the item.
-     * <p>
-     * 设置物品的描述。
      *
      * @param lore the lore lines (supports color codes with &amp;)
      * @return this builder
@@ -188,8 +163,6 @@ public class ItemStackBuilder {
     
     /**
      * Adds lines to the existing lore.
-     * <p>
-     * 向现有描述添加行。
      *
      * @param lines the lines to add
      * @return this builder
@@ -210,8 +183,6 @@ public class ItemStackBuilder {
     
     /**
      * Adds an enchantment to the item.
-     * <p>
-     * 为物品添加附魔。
      *
      * @param enchantment the enchantment
      * @param level       the level
@@ -226,8 +197,6 @@ public class ItemStackBuilder {
     
     /**
      * Adds an enchantment using XEnchantment for cross-version compatibility.
-     * <p>
-     * 使用 XEnchantment 添加附魔以实现跨版本兼容。
      *
      * @param enchantment the XEnchantment
      * @param level       the level
@@ -243,8 +212,6 @@ public class ItemStackBuilder {
     
     /**
      * Removes an enchantment from the item.
-     * <p>
-     * 从物品移除附魔。
      *
      * @param enchantment the enchantment to remove
      * @return this builder
@@ -258,8 +225,6 @@ public class ItemStackBuilder {
     
     /**
      * Makes the item glow without showing enchantments.
-     * <p>
-     * 使物品发光但不显示附魔。
      *
      * @return this builder
      */
@@ -276,8 +241,6 @@ public class ItemStackBuilder {
     
     /**
      * Adds item flags to the item.
-     * <p>
-     * 为物品添加物品标志。
      *
      * @param flags the flags to add
      * @return this builder
@@ -291,8 +254,6 @@ public class ItemStackBuilder {
     
     /**
      * Hides all item attributes.
-     * <p>
-     * 隐藏所有物品属性。
      *
      * @return this builder
      */
@@ -305,8 +266,6 @@ public class ItemStackBuilder {
     
     /**
      * Hides all item flags.
-     * <p>
-     * 隐藏所有物品标志。
      *
      * @return this builder
      */
@@ -319,8 +278,6 @@ public class ItemStackBuilder {
     
     /**
      * Makes the item unbreakable.
-     * <p>
-     * 使物品不可破坏。
      *
      * @return this builder
      */
@@ -333,8 +290,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the custom model data (1.14+).
-     * <p>
-     * 设置自定义模型数据（1.14+）。
      *
      * @param data the custom model data
      * @return this builder
@@ -352,8 +307,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the color of leather armor.
-     * <p>
-     * 设置皮革护甲的颜色。
      *
      * @param color the color
      * @return this builder
@@ -367,8 +320,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the color of leather armor using RGB.
-     * <p>
-     * 使用 RGB 设置皮革护甲的颜色。
      *
      * @param red   red component (0-255)
      * @param green green component (0-255)
@@ -381,8 +332,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the skull owner for player head items.
-     * <p>
-     * 设置玩家头颅的所有者。
      *
      * @param player the player
      * @return this builder
@@ -396,8 +345,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the skull owner for player head items by name.
-     * <p>
-     * 通过名称设置玩家头颅的所有者。
      *
      * @param playerName the player name
      * @return this builder
@@ -412,8 +359,6 @@ public class ItemStackBuilder {
     
     /**
      * Sets the skull owner for player head items by UUID.
-     * <p>
-     * 通过 UUID 设置玩家头颅的所有者。
      *
      * @param uuid the player's UUID
      * @return this builder
@@ -424,8 +369,6 @@ public class ItemStackBuilder {
     
     /**
      * Applies a custom modifier to the item meta.
-     * <p>
-     * 对物品元数据应用自定义修改器。
      *
      * @param modifier the modifier function
      * @return this builder
@@ -439,8 +382,6 @@ public class ItemStackBuilder {
     
     /**
      * Applies a custom modifier to the item stack.
-     * <p>
-     * 对物品堆叠应用自定义修改器。
      *
      * @param modifier the modifier function
      * @return this builder
@@ -454,8 +395,6 @@ public class ItemStackBuilder {
     
     /**
      * Builds and returns the ItemStack.
-     * <p>
-     * 构建并返回 ItemStack。
      *
      * @return the built ItemStack
      */
@@ -468,8 +407,6 @@ public class ItemStackBuilder {
     
     /**
      * Builds and returns a clone of the ItemStack.
-     * <p>
-     * 构建并返回 ItemStack 的副本。
      *
      * @return a clone of the built ItemStack
      */

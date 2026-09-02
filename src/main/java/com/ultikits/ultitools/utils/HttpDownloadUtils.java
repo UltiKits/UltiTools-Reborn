@@ -55,8 +55,8 @@ public class HttpDownloadUtils {
         
         try {
             // Set the timeouts
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
             // Set a modern user agent
             conn.setRequestProperty("User-Agent", 
@@ -88,7 +88,7 @@ public class HttpDownloadUtils {
             try (InputStream inputStream = conn.getInputStream();
                  FileOutputStream fos = new FileOutputStream(file)) {
 
-                byte[] buffer = new byte[8192]; // 增大缓冲区提高性能
+                byte[] buffer = new byte[8192]; // Larger buffer for better throughput
                 int bytesRead;
                 while ((bytesRead = inputStream.read(buffer)) != -1) {
                     fos.write(buffer, 0, bytesRead);
@@ -125,8 +125,8 @@ public class HttpDownloadUtils {
         
         try {
             // Set the timeouts
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
             // Set a modern user agent
             conn.setRequestProperty("User-Agent", 
@@ -196,8 +196,8 @@ public class HttpDownloadUtils {
         
         try {
             // Set the timeouts
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
             // Set a modern user agent
             conn.setRequestProperty("User-Agent", 

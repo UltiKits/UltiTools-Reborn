@@ -8,9 +8,6 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 /**
  * Utility class for version checking and comparison operations.
  * Provides methods to check for plugin updates and compare semantic versions.
- * <br>
- * 版本检查和比较操作的实用工具类。
- * 提供检查插件更新和比较语义版本的方法。
  *
  * @author wisdomme
  * @since 6.0.0
@@ -20,10 +17,8 @@ public class VersionUtils {
 
     /**
      * Get the newest version of UltiTools from the remote API.
-     * <br>
-     * 从远程API获取UltiTools的最新版本。
      *
-     * @return the newest UltiTools version string <br> UltiTools最新版本字符串
+     * @return the newest UltiTools version string
      */
     public static String getUltiToolsNewestVersion() {
         try (Response httpResponse = SimpleHttpClient.get(PluginInstallUtils.getBaseUrl() + "/plugin/ultitools/newest")) {

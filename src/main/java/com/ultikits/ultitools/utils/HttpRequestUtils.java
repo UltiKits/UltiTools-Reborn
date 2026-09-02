@@ -110,8 +110,8 @@ public class HttpRequestUtils {
         // Send the request using FormData format
         Map<String, Object> formMap = new HashMap<>();
 
-        formMap.put("id", token.getUserIdAsString());  // 使用token中的用户ID（字符串形式避免浮点问题）
-        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
+        formMap.put("id", token.getUserIdAsString());  // Use the user ID from the token (as a string to avoid float precision issues)
+        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // Use JSON serialization to ensure correct formatting
         
         Map<String, String> headers = new HashMap<>();
         headers.put("Authorization", "Bearer " + token.getAccess_token());
@@ -143,8 +143,8 @@ public class HttpRequestUtils {
         
         // Send the request using FormData format
         Map<String, Object> formMap = new HashMap<>();
-        formMap.put("id", token.getUserIdAsString());  // 使用token中的用户ID（字符串形式避免浮点问题）
-        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // 使用JSON序列化确保格式正确
+        formMap.put("id", token.getUserIdAsString());  // Use the user ID from the token (as a string to avoid float precision issues)
+        formMap.put("serverData", new Gson().toJson(serverEntityVO));  // Use JSON serialization to ensure correct formatting
         
         Map<String, String> headers = new HashMap<>();
         headers.put("Authorization", "Bearer " + token.getAccess_token());

@@ -1637,11 +1637,11 @@ public class PluginInitiationUtils {
         configMessage.addProperty("type", "upload_config");
         
         JsonObject data = new JsonObject();
-        data.addProperty("configType", "plugin_config");  // 添加必需的配置类型
-        data.addProperty("configName", "UltiTools.yml");   // 添加配置文件名
+        data.addProperty("configType", "plugin_config");  // The required config type
+        data.addProperty("configName", "UltiTools.yml");   // The config file name
         data.addProperty("configContent", ConfigEditorUtils.getConfigMapString());
-        data.addProperty("format", "yaml");                // 添加格式信息
-        data.addProperty("backup", true);                  // 添加备份标志
+        data.addProperty("format", "yaml");                // The format info
+        data.addProperty("backup", true);                  // The backup flag
         data.addProperty("comment", ConfigEditorUtils.getCommentMapString());
         data.addProperty("serverId", client.getServerId());
         
@@ -1725,7 +1725,7 @@ public class PluginInitiationUtils {
         UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
             "Re-initializing WebSocket connection (attempt %d/%d)...",
             reinitBackoff.getAttemptCount() + 1, MAX_REINIT_ATTEMPTS));
-        reinitBackoff.getNextDelay();   // 记一次尝试；实际的等待由客户端侧的调度承担
+        reinitBackoff.getNextDelay();   // Record one attempt; the actual wait is handled by the client-side scheduler
 
         // Disconnect old client
         if (panelWS != null) {

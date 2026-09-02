@@ -5,10 +5,10 @@ import java.lang.reflect.Modifier;
 import java.util.List;
 
 /**
- * Bean 复制工具类
+ * Bean copy utility class.
  * <p>
- * 替代 hutool BeanUtil.copyProperties()
- * 
+ * Replaces hutool BeanUtil.copyProperties().
+ *
  * @author wisdomme
  * @since 6.2.0
  */
@@ -19,44 +19,44 @@ public final class BeanCopyUtil {
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source 源对象
-     * @param target 目标对象
+     * @param source the source object
+     * @param target the target object
      */
     public static void copyProperties(Object source, Object target) {
         copyProperties(source, target, false);
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source          源对象
-     * @param target          目标对象
-     * @param ignoreNullValue 是否忽略 null 值
+     * @param source          the source object
+     * @param target          the target object
+     * @param ignoreNullValue whether to ignore null values
      */
     public static void copyProperties(Object source, Object target, boolean ignoreNullValue) {
         copyProperties(source, target, ignoreNullValue, (String[]) null);
     }
     
     /**
-     * 复制属性，排除指定字段
+     * Copies properties, excluding the specified fields.
      *
-     * @param source         源对象
-     * @param target         目标对象
-     * @param ignoreFields   要排除的字段名
+     * @param source         the source object
+     * @param target         the target object
+     * @param ignoreFields   the field names to exclude
      */
     public static void copyProperties(Object source, Object target, String... ignoreFields) {
         copyProperties(source, target, false, ignoreFields);
     }
     
     /**
-     * 复制属性
+     * Copies properties.
      *
-     * @param source          源对象
-     * @param target          目标对象
-     * @param ignoreNullValue 是否忽略 null 值
-     * @param ignoreFields    要排除的字段名
+     * @param source          the source object
+     * @param target          the target object
+     * @param ignoreNullValue whether to ignore null values
+     * @param ignoreFields    the field names to exclude
      */
     public static void copyProperties(Object source, Object target, boolean ignoreNullValue, String... ignoreFields) {
         if (source == null || target == null) {
@@ -116,17 +116,17 @@ public final class BeanCopyUtil {
 
             targetField.set(target, value);
         } catch (IllegalAccessException e) {
-            // 忽略无法访问的字段
+            // Ignore a field that cannot be accessed.
         }
     }
     
     /**
-     * 复制到新实例
+     * Copies to a new instance.
      *
-     * @param source      源对象
-     * @param targetClass 目标类
-     * @param <T>         目标类型
-     * @return 新实例
+     * @param source      the source object
+     * @param targetClass the target class
+     * @param <T>         the target type
+     * @return the new instance
      */
     public static <T> T copyToNewInstance(Object source, Class<T> targetClass) {
         if (source == null) {
@@ -139,7 +139,7 @@ public final class BeanCopyUtil {
     }
     
     /**
-     * 基本类型转换
+     * Converts a basic type.
      */
     private static Object convertValue(Object value, Class<?> targetType) {
         if (value == null) {

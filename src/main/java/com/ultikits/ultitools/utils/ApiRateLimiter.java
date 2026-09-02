@@ -6,9 +6,6 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Simple rate limiter for UltiCloud API calls.
  * Prevents excessive API calls during crash loops or rapid restarts.
- * <br>
- * UltiCloud API调用的简单速率限制器。
- * 防止崩溃循环或快速重启期间的过多API调用。
  */
 public class ApiRateLimiter {
 

@@ -76,9 +76,9 @@ public final class ModuleScanDiagnostics {
      * the literal text {@code "null"}.
      *
      * @param moduleName the module (or, from {@code ComponentScanner}, the base package) whose scan
-     *                    is in progress <br> 正在扫描的模块（在 {@code ComponentScanner} 中为基础包名）
-     * @param className   the class that failed to load <br> 加载失败的类名
-     * @param cause       the exception the scan caught; may be {@code null} <br> 扫描捕获的异常，可为 {@code null}
+     *                    is in progress
+     * @param className   the class that failed to load
+     * @param cause       the exception the scan caught; may be {@code null}
      */
     public static void recordSkippedClass(String moduleName, String className, Throwable cause) {
         if (isBlank(moduleName) || isBlank(className)) {
@@ -97,7 +97,7 @@ public final class ModuleScanDiagnostics {
      * so a subsequent, cleanly-skip-free re-scan of the same module never repeats it. A module with
      * nothing recorded is a silent no-op: the emitter is never invoked at all.
      *
-     * @param moduleName the module whose scan just finished <br> 刚完成扫描的模块
+     * @param moduleName the module whose scan just finished
      */
     public static void emitSummary(String moduleName) {
         if (isBlank(moduleName)) {
