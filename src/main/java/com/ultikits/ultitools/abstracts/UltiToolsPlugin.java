@@ -52,8 +52,6 @@ import lombok.Setter;
 
 /**
  * Abstract class representing a plugin module.
- * <p>
- * 插件模块抽象类
  *
  * @author wisdomme
  * @version 1.0.0
@@ -84,8 +82,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
-     * <p>
-     * UltiToolsPlugin的构造函数。仅用于模块开发。
      */
     protected UltiToolsPlugin() {
         YamlConfiguration pluginConfig = loadPluginConfiguration();
@@ -135,12 +131,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * {@code "en"} when {@code supported()} contains it, otherwise the first entry in
      * {@code supported()}'s iteration order. An empty {@code supported()} is "no information" -
      * the configured code is returned unchanged and nothing is logged.
-     * <p>
-     * 解析实际应该加载的语言代码，在 {@link #createLanguageFromPath(String)} 选择文件之前先
-     * 参考 {@link Localized#supported()}（D-20/D-21/WIRE-10）。优先使用已配置的代码；如果它不在
-     * 非空的 {@code supported()} 里，且 {@code supported()} 包含 {@code "en"} 则优先回退到
-     * {@code "en"}，否则回退到 {@code supported()} 迭代顺序里的第一个条目。空的
-     * {@code supported()} 代表“没有信息”——已配置的代码原样返回，不记录任何日志。
      *
      * @return the language code to actually load
      */
@@ -207,16 +197,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Constructor for UltiToolsPlugin. For plugin connector.
-     * <p>
-     * UltiToolsPlugin的构造函数。用于插件连接器。
      *
-     * @param pluginName          the name of the plugin <br> 插件名称
-     * @param version             the version of the plugin <br> 插件版本
-     * @param authors             the authors of the plugin <br> 插件作者
-     * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
-     * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
-     * @param mainClass           the main class of the plugin <br> 插件的主类
-     * @param resourceFolderPath  the path to the resource folder <br> 资源文件夹的路径
+     * @param pluginName          the name of the plugin
+     * @param version             the version of the plugin
+     * @param authors             the authors of the plugin
+     * @param loadAfter           the plugins which should be loaded before this plugin
+     * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin
+     * @param mainClass           the main class of the plugin
+     * @param resourceFolderPath  the path to the resource folder
      */
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass, String resourceFolderPath) {
         this.pluginName = pluginName;
@@ -239,28 +227,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     /**
      * Injects the IoC container created for this plugin.
      * <p>
-     * 注入为本插件创建的 IoC 容器。
-     * <p>
      * Called by {@code PluginManager} while a module is being loaded, before
      * {@code registerSelf()} runs. It is not part of the module-facing API — a
      * module that calls it replaces the container the framework already wired up,
      * losing every bean that was injected into it.
-     * <p>
-     * 由 {@code PluginManager} 在加载模块时调用，早于 {@code registerSelf()}。它不属于
-     * 面向模块的 API——模块自己调用它，等于把框架已经装配好的容器整个换掉，里面注入过的
-     * bean 全部丢失。
      * <p>
      * Deliberately still public: {@code PluginManager} lives in another package, so
      * this cannot be narrowed to package-private, and deleting it outright would
      * remove a public method, which the compatibility policy forbids in a PATCH
      * release. The annotation is a signal to humans and IDEs; it enforces nothing
      * at runtime.
-     * <p>
-     * 刻意保持 public：{@code PluginManager} 不在同一个包，降不成 package-private；
-     * 直接删掉则是移除一个 public 方法，兼容性策略不允许 PATCH 版本这么做。注解只是给人
-     * 和 IDE 看的信号，运行期不做任何强制。
      *
-     * @param context the container created for this plugin <br> 为本插件创建的容器
+     * @param context the container created for this plugin
      */
     @ApiStatus.Internal
     public void setContext(SimpleContainer context) {
@@ -277,16 +255,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * PluginManager} lives in another package and cannot be narrowed to package-private, and the
      * compatibility policy forbids removing a public method in a PATCH release. The annotation is
      * a signal to humans and IDEs; it enforces nothing at runtime.
-     * <p>
-     * 注入 {@code PluginManager} 为本模块铸造的 {@link com.ultikits.ultitools.manager.DataScope}
-     * 凭证（D-17）。由 {@code PluginManager} 在铸造后、{@code wireAop} 运行前调用——与
-     * {@link #setContext} 记录的是同一个生命周期节点。
-     * <p>
-     * 刻意保持 public，原因与 {@link #setContext} 相同：{@code PluginManager} 不在同一个包，
-     * 降不成 package-private；兼容性策略也不允许 PATCH 版本移除一个 public 方法。注解只是给人
-     * 和 IDE 看的信号，运行期不做任何强制。
      *
-     * @param scope the scope minted for this plugin <br> 为本插件铸造的 scope
+     * @param scope the scope minted for this plugin
      * @since 6.3.0
      */
     @ApiStatus.Internal
@@ -295,28 +265,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * @return the config manager <br> 配置管理器
+     * @return the config manager
      */
     public static ConfigManager getConfigManager() {
         return UltiTools.getInstance().getConfigManager();
     }
 
     /**
-     * @return the listener manager <br> 监听器管理器
+     * @return the listener manager
      */
     public static ListenerManager getListenerManager() {
         return UltiTools.getInstance().getListenerManager();
     }
 
     /**
-     * @return the command manager <br> 指令管理器
+     * @return the command manager
      */
     public static CommandManager getCommandManager() {
         return UltiTools.getInstance().getCommandManager();
     }
 
     /**
-     * @return the plugin manager <br> 插件管理器
+     * @return the plugin manager
      */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
@@ -324,8 +294,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Initializes the configuration entity.
-     * <p>
-     * 初始化配置实体。
      */
     private void initConfig() throws IOException {
         EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
@@ -358,15 +326,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * {@link Level#FINE} only. A non-empty override naming a {@code configFilePath} the scan
      * never registered is real capability loss - #336's warning-only ask cannot tell these two
      * cases apart, so this refuses the module and names every missing entity instead of guessing.
-     * <p>
-     * 将模块的 {@link #getAllConfigs()} 覆盖与自动注册实际已注册的内容做差集比对
-     * （D-06 / SILENT-18 / #336），在包扫描自动注册结束后调用一次。
-     * <p>
-     * 空覆盖（接口默认值——模块根本没有重写 {@link #getAllConfigs()}）没有可比对的对象，也不记录
-     * 任何日志。非空覆盖但其中每一个 {@code configFilePath} 都已被包扫描注册，纯属冗余，仅以
-     * {@link Level#FINE} 级别记录一行。非空覆盖里出现了包扫描从未注册过的 {@code configFilePath}，
-     * 说明真的丢失了能力——#336 仅要求警告，但警告无法区分这两种情况，因此这里拒绝加载该模块，
-     * 并点名每一个丢失的实体，而不是靠猜。
      *
      * @throws ConfigurationException if the override names a {@code configFilePath} auto-registration
      *                                 never registered
@@ -423,9 +382,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Best-effort resolution of this module's own JAR file name, for the {@code name:}-missing
      * refusal message only. Never throws -- falls back to the class name if the code source is
      * unavailable (e.g. when running from unpacked classes in a test).
-     * <p>
-     * 尽力解析本模块自身的 JAR 文件名，仅用于 {@code name:} 缺失时的拒绝加载信息。永不抛出异常——
-     * 当代码源不可用时（例如测试中从未打包的 class 运行）回退为类名。
      *
      * @return the JAR file name, or this class's name if it cannot be determined
      */
@@ -467,6 +423,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
 
+    /**
+     * Extracts this module's embedded {@code res}/{@code lang}/{@code config} jar resources into
+     * {@link #resourceFolderPath}. Guarantees canonical-path validation before every write: each
+     * extracted entry's resolved destination is checked against the resource folder's own
+     * canonical path, and any entry whose path would resolve outside it (a Zip Slip attempt) is
+     * skipped with a warning rather than written.
+     */
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
@@ -545,26 +508,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * {@code null} fallback below only covers a bare instance constructed outside the normal
      * {@code PluginManager} load flow (e.g. a test), where the deprecated overload's own {@code
      * checkOwnership(...)} call still refuses correctly on its own.
-     * <p>
-     * 获取数据操作器。若 {@code dataClazz} 未向本模块注册则直接拒绝（D-14）——校验依据是本模块
-     * 加载时铸造的同一个 {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式
-     * 与 {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个
-     * 入口，异常类型、错误码和消息形态都一致。
-     * <p>
-     * <strong>02-13（CR-03）：</strong>在此之前，这里内联检查 {@code dataScope.owns(...)}，
-     * 然后本方法直接委托给已废弃的 {@code getOperator(UltiToolsPlugin, Class)} 重载——于是
-     * {@code DataStore.getOperator(DataScope, Class)}，即 D-17/02-07 专门构建的、携带凭证的受支持
-     * 路径，在整个框架里没有任何真实调用方。现在改为通过它路由，生产环境真正用上了它当初构建的
-     * 目的。到任何模块调用本方法时 {@code dataScope} 通常已经非空（由 {@code PluginManager} 在铸造
-     * 之后、{@code registerSelf()} 运行之前立即设置）；下面的 {@code null} 回退分支只覆盖在正常
-     * {@code PluginManager} 加载流程之外直接构造出的裸实例（例如测试场景），此时已废弃重载自身的
-     * {@code checkOwnership(...)} 调用依然能正确拒绝。
      *
-     * @param dataClazz the class of the data entity <br> 数据实体的类
-     * @param <T>       the type of the data entity <br> 数据实体的类型
-     * @return the data operator <br> 数据操作器
+     * @param dataClazz the class of the data entity
+     * @param <T>       the type of the data entity
+     * @return the data operator
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code dataClazz} is not
-     *         registered to this module <br> 如果 {@code dataClazz} 未向本模块注册
+     *         registered to this module
      */
     public final <T extends BaseDataEntity<String>> DataOperator<T> getDataOperator(Class<T> dataClazz) {
         if (dataScope != null) {
@@ -574,22 +523,22 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * @return language code <br> 语言代码
+     * @return language code
      */
     public final String getLanguageCode() {
         return UltiTools.getInstance().getConfig().getString("language");
     }
 
     /**
-     * @return the language <br> 语言
+     * @return the language
      */
     public final Language getLanguage() {
         return language;
     }
 
     /**
-     * @param str the string to be localized <br> 要本地化的字符串
-     * @return the localized string <br> 本地化后的字符串
+     * @param str the string to be localized
+     * @return the localized string
      */
     public String i18n(String str) {
         return this.getLanguage().getLocalizedText(str);
@@ -601,8 +550,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * @param plugin the plugin to be checked <br> 要检查的插件
-     * @return whether the plugin is newer than the given plugin <br> 插件是否比给定的插件新
+     * @param plugin the plugin to be checked
+     * @return whether the plugin is newer than the given plugin
      */
     public boolean isNewerVersionThan(UltiToolsPlugin plugin) {
         if (plugin == null || plugin.getVersion() == null || this.getVersion() == null) {
@@ -625,7 +574,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * @return plugin logger <br> 插件日志发送器
+     * @return plugin logger
      */
     public PluginLogger getLogger() {
         return new PluginLogger(this.pluginName, UltiTools.getInstance().getLogger());
