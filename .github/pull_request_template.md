@@ -33,5 +33,5 @@ the example above closes nothing. Put real declarations outside this comment.
 
 - [ ] Targets `alpha`, unless this is an `alpha` -> `main` release promotion
 - [ ] Line endings preserved per file (`file <path>` before and after; this tree is mixed CRLF/LF)
-- [ ] New and modified comments are English-first
+- [ ] Every comment, javadoc, workflow comment, and this PR's own title and body are English-first with Chinese as a supplement, and nothing was added to `.github/cjk-allowlist.txt`
 - [ ] Documentation synced in `UltiTools-Dev-Doc` (branch `alpha`) if documented behaviour changed
