@@ -32,13 +32,6 @@ import com.zaxxer.hikari.HikariDataSource;
  * {@code File} path) never share a {@link DataOperator} instance. Neither map is {@code static}:
  * {@code DataStoreManager} registers exactly one {@code SQLiteDataStore} instance, and instance
  * scoping is what stops both maps from outliving a {@code /reload}.
- * <p>
- * 基于 SQLite 的 {@link DataStore} 实现。连接池按底层 {@code .db} 文件的规范路径分组，与具体
- * 实体类无关——存储在同一文件中的多个实体类共享同一个 {@link HikariDataSource}。操作器缓存按
- * （同一个文件路径，实体类）的组合键分组，因此解析到两个不同文件的调用方（两个插件，或插件路径
- * 与外部 {@code File} 路径）永远不会共享同一个 {@link DataOperator} 实例。两个 Map 均非
- * {@code static}：{@code DataStoreManager} 只注册一个 {@code SQLiteDataStore} 实例，实例级作用域
- * 正是防止两个 Map 在 {@code /reload} 后继续存活的原因。
  *
  * @author wisdomme
  * @since 1.0.0
@@ -142,8 +135,8 @@ public class SQLiteDataStore implements DataStore {
      * @Transactional} interceptor to it, so a module's data operators and its {@code
      * @Transactional} beans share one transaction, not two (T-02-TAM-11).
      *
-     * @param scope the identity token to resolve the manager for <br> 待解析管理器的身份令牌
-     * @return the shared manager for that scope's database file <br> 该 scope 数据库文件共享的管理器
+     * @param scope the identity token to resolve the manager for
+     * @return the shared manager for that scope's database file
      */
     public JdbcTransactionManager transactionManagerFor(DataScope scope) {
         return transactionManagerForPath(dbPathFor(scope));
@@ -196,8 +189,8 @@ public class SQLiteDataStore implements DataStore {
      * Returns the pool for {@code dbPath}, building it on first touch. {@link Map#computeIfAbsent}
      * makes a concurrent first touch by two callers build exactly one pool, never two.
      *
-     * @param dbPath canonical path of the backing .db file <br> 底层 .db 文件的规范路径
-     * @return the shared pool for that file <br> 该文件共享的连接池
+     * @param dbPath canonical path of the backing .db file
+     * @return the shared pool for that file
      */
     private HikariDataSource poolFor(String dbPath) {
         return dataSourceMap.computeIfAbsent(dbPath, path -> {
@@ -227,10 +220,6 @@ public class SQLiteDataStore implements DataStore {
      * Closes every pool this store holds and empties both caches. Idempotent -- calling it twice
      * closes nothing the second time, since the first call already emptied {@link #dataSourceMap}.
      * A failure closing one pool is logged and does not stop the rest from being closed.
-     * <p>
-     * 关闭本 store 持有的每一个连接池，并清空两个缓存。幂等——因为第一次调用已经清空了
-     * {@link #dataSourceMap}，第二次调用不会关闭任何东西。关闭某个连接池失败只会被记录，
-     * 不会中断其余连接池的关闭。
      */
     @Override
     public void destroyAllOperators() {

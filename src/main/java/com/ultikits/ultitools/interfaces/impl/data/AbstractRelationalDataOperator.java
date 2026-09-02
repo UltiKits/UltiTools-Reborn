@@ -235,8 +235,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         for (Field f : ReflectionUtil.getFields(type)) {
             if (f.isAnnotationPresent(Column.class)) {
                 Column col = f.getAnnotation(Column.class);
-                // Locale.ROOT：土耳其语/阿塞拜疆语 locale 下 'I' 会折成无点的 'ı'，
-                // 建映射与查映射只要有一边跟着系统 locale 走，列名就对不上。
+                // Locale.ROOT: under a Turkish/Azerbaijani locale, 'I' folds to dotless 'ı' --
+                // if either the build-side or query-side mapping instead follows the system
+                // locale, column names stop matching.
                 String sqlName = col.value().toLowerCase(Locale.ROOT);
                 columnToFieldName.put(sqlName, f.getName());
                 if (f.getType() == boolean.class || f.getType() == Boolean.class) {

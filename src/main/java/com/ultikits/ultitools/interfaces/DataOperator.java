@@ -9,10 +9,8 @@ import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
 /**
  * Data operation interface.
- * <p>
- * 数据操作接口
  *
- * @param <T> 数据类型，继承自BaseDataEntity
+ * @param <T> Data type inherited from BaseDataEntity
  */
 public interface DataOperator<T extends BaseDataEntity<String>> {
 
@@ -22,83 +20,67 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Check if the data record exists.
-     * <p>
-     * 查询记录数据是否存在。
      *
-     * @param object Data record entity <br> 数据记录实体
-     * @return Whether the record exists <br> 记录是否存在
+     * @param object Data record entity
+     * @return Whether the record exists
      */
     boolean exist(T object);
 
     /**
      * Check if the data record exists.
-     * <p>
-     * 使用条件查询记录是否存在
      *
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Whether the record exists <br> 记录是否存在
+     * @param whereConditions Conditions
+     * @return Whether the record exists
      */
     boolean exist(WhereCondition... whereConditions);
 
     /**
      * Get data record by ID.
-     * <p>
-     * 使用ID获取记录
      *
-     * @param id Record ID <br> 记录ID
-     * @return Data record <br> 数据记录
+     * @param id Record ID
+     * @return Data record
      */
     T getById(Object id);
 
     /**
      * Get all data record.
-     * <p>
-     * 查询所有记录
      *
-     * @return Data record list <br> 数据记录列表
+     * @return Data record list
      */
     List<T> getAll();
 
     /**
      * Get all data record by conditions.
-     * <p>
-     * 查询所有符合条件的记录
      *
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Data record list <br> 数据记录列表
+     * @param whereConditions Conditions
+     * @return Data record list
      */
     List<T> getAll(WhereCondition... whereConditions);
 
     /**
      * Fuzzy Query
-     * <p>
-     * 模糊查询
      *
-     * @param column   Column name <br> 列名
-     * @param value    Query value <br> 查询值
-     * @param likeType Like type <br> 模糊查询类型 <br>{@link LikeType}
-     * @return Data record list <br> 数据记录列表
+     * @param column   Column name
+     * @param value    Query value
+     * @param likeType Like type
+     * @return Data record list
      */
     List<T> getLike(String column, String value, LikeType likeType);
 
     /**
      * Get data record by page.
-     * <p>
-     * 分页查询
      *
-     * @param page            Page number <br> 页码
-     * @param size            Page size <br> 页大小
-     * @param whereConditions Conditions <br> 条件参数
-     * @return Data record list <br> 数据记录列表
+     * @param page            Page number
+     * @param size            Page size
+     * @param whereConditions Conditions
+     * @return Data record list
      */
     List<T> page(int page, int size, WhereCondition... whereConditions);
 
     /**
      * Insert data record.
-     * <p>
-     * 新增记录
      *
-     * @param obj Data record <br> 数据记录
+     * @param obj Data record
      */
     void insert(T obj);
 
@@ -109,51 +91,37 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * {@code whereConditions}) is rejected with a {@code DataAccessException} instead of
      * deleting every row of the table — this is a behavioral change with no migration period
      * (COMPATIBILITY.md's security-fix channel); see 02-CONTEXT.md D-12.
-     * <p>
-     * 按照条件删除记录
-     * <br>
-     * 自 6.3.0 起，不带任何条件调用（{@code whereConditions} 为 {@code null} 或空数组）会直接
-     * 抛出 {@code DataAccessException}，而不是清空整张表——这是一项没有迁移期的行为变更
-     * （COMPATIBILITY.md 的安全修复通道），详见 02-CONTEXT.md D-12。
      *
-     * @param whereConditions Conditions <br> 条件参数
+     * @param whereConditions Conditions
      */
     void del(WhereCondition... whereConditions);
 
     /**
      * Delete data record by ID.
-     * <p>
-     * 按照ID删除记录
      *
-     * @param id Record ID <br> 记录ID
+     * @param id Record ID
      */
     void delById(Object id);
 
     /**
      * Update one field of one record.
-     * <p>
-     * 更新某个记录的某个值
      *
-     * @param column Column name <br> 列名
-     * @param value  New value <br> 新值
-     * @param id     Record ID <br> 记录ID
+     * @param column Column name
+     * @param value  New value
+     * @param id     Record ID
      */
     void update(String column, Object value, Object id);
 
     /**
      * Update data record by object. It will not update the fields that the incoming entity does not have.
-     * <p>
-     * 使用实体更新记录。不会更新传入实体没有的字段。
      *
-     * @param obj Data record <br> 数据记录
+     * @param obj Data record
      * @throws IllegalAccessException Please refer{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
 
     /**
      * Returns a new fluent query builder for this data operator.
-     * <p>
-     * 返回此数据操作器的新流式查询构建器。
      *
      * @return a new Query builder
      */
@@ -165,8 +133,6 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * Execute operations within a transaction. All operations commit together
      * or roll back on exception. For SQL backends, uses database transactions.
      * For JSON, uses snapshot-based rollback.
-     * <p>
-     * 在事务中执行操作。所有操作一起提交或在异常时回滚。
      *
      * @param action the operations to execute
      * @param <R> the return type
@@ -179,8 +145,6 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Execute operations within a transaction (void variant).
-     * <p>
-     * 在事务中执行操作（无返回值）。
      *
      * @param action the operations to execute
      */
@@ -190,8 +154,6 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Insert multiple entities atomically. Uses JDBC batch for SQL backends.
-     * <p>
-     * 批量原子插入。SQL后端使用JDBC批处理。
      *
      * @param entities the entities to insert
      */
@@ -205,8 +167,6 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
 
     /**
      * Update multiple entities atomically. Uses JDBC batch for SQL backends.
-     * <p>
-     * 批量原子更新。SQL后端使用JDBC批处理。
      *
      * @param entities the entities to update
      * @throws IllegalAccessException if field access fails

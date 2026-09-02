@@ -14,11 +14,6 @@ import java.sql.Connection;
  * Framework internals that genuinely need a {@link Connection} - {@code TransactionAwareDataSource},
  * {@code AbstractRelationalDataOperator} - should program against this sub-interface, not against
  * {@link TransactionManager} directly.
- * <p>
- * {@code TransactionManager} 的 JDBC 专属扩展，携带只对 JDBC {@link javax.sql.DataSource}
- * 有意义的三个成员——裸 {@link Connection} 访问，以及事务开始后、任何语句执行前可调的两个
- * 连接级开关。非 JDBC 后端（例如 JSON 快照管理器）直接实现 {@link TransactionManager}，
- * 永远不必回答这三个问题，而不是被迫继承只能撒谎的抽象方法（D-04）。
  *
  * @author wisdomme
  * @since 6.3.0

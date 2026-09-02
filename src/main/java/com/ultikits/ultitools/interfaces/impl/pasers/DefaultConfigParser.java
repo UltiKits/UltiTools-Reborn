@@ -62,8 +62,8 @@ public class DefaultConfigParser extends ConfigParser<Object> {
      * signal, and synthetic fields are compiler-generated bookkeeping (e.g. outer-class
      * references) with no meaningful config representation.
      *
-     * @param object the object to serialize <br> 要序列化的对象
-     * @return the populated {@link MemorySection} <br> 填充好的 {@link MemorySection}
+     * @param object the object to serialize
+     * @return the populated {@link MemorySection}
      */
     @Override
     public MemorySection serializeToMemorySection(Object object) {

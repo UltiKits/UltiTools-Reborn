@@ -20,8 +20,6 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * Equality conditions are delegated to the underlying DataOperator's getAll() method.
  * Non-equality conditions (ne, gt, lt, gte, lte, like, in) are applied as in-memory filters.
  * Ordering, limit, and offset are applied as in-memory post-processing.
- * <p>
- * Query接口的默认实现，包装了DataOperator。
  *
  * @param <T> the entity type
  */

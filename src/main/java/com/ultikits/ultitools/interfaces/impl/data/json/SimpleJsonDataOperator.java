@@ -50,10 +50,8 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Simple Json data operator.
- * <br>
- * 简单Json存储操作类
  *
- * @param <T> Data type inherited from BaseDataEntity (数据类型，继承自BaseDataEntity)
+ * @param <T> Data type inherited from BaseDataEntity
  * @author wisdomme
  * @version 1.0.0
  */
@@ -82,12 +80,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     private final Class<T> type;
     private final Map<Object, T> cache = new ConcurrentHashMap<>();
     /**
-     * SQL 列名（小写）→ Java 字段名。
+     * SQL column name (lowercase) -&gt; Java field name.
      * <p>
-     * 调用方一律用 {@code @Column} 里的 SQL 列名做查询（跨 17 个 Modules 共 52 处），
-     * 而 Gson 序列化出的 map 键是 Java 字段名，两者在 snake_case / camelCase 上对不上，
-     * 查询会静默零命中。这份映射把前者翻译成后者，做法与
-     * {@code AbstractRelationalDataOperator#getListHandler()} 的读路径一致。见 issue #176。
+     * Callers always query using the SQL column name declared on {@code @Column} (52 call sites
+     * across 17 Modules), but the key Gson serializes into the map is the Java field name -- the
+     * two don't line up on snake_case vs. camelCase, and the query would silently return zero
+     * hits. This map translates the former into the latter, matching the read path
+     * {@code AbstractRelationalDataOperator#getListHandler()} already uses. See issue #176.
      */
     private final Map<String, String> columnToFieldName;
 
@@ -187,18 +186,20 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     }
 
     /**
-     * 从实体类上的 {@code @Column} 标注建立「SQL 列名 → Java 字段名」映射。
-     * 沿继承链收集，因此 {@code BaseDataEntity} 继承来的 {@code @Column("id")} 也在内。
+     * Builds the "SQL column name -&gt; Java field name" mapping from the entity class's
+     * {@code @Column} annotations. Collected along the inheritance chain, so the
+     * {@code @Column("id")} inherited from {@code BaseDataEntity} is included too.
      *
-     * @param type 实体类型
-     * @return 不可变映射，键为小写化的 SQL 列名
+     * @param type the entity type
+     * @return an unmodifiable map keyed by the lowercased SQL column name
      */
     private static Map<String, String> buildColumnToFieldName(Class<?> type) {
         Map<String, String> mapping = new LinkedHashMap<>();
         for (Field field : ReflectionUtil.getFields(type)) {
             if (field.isAnnotationPresent(Column.class)) {
-                // 必须用 Locale.ROOT：默认 locale 是土耳其语/阿塞拜疆语时，'I' 会折成无点的 'ı'，
-                // 建表侧与查询侧只要有一边跟着系统 locale 走，列名就对不上了。
+                // Must use Locale.ROOT: under a Turkish/Azerbaijani default locale, 'I' folds to
+                // dotless 'ı' -- if either the table-build side or the query side instead follows
+                // the system locale, column names stop matching.
                 mapping.put(field.getAnnotation(Column.class).value().toLowerCase(Locale.ROOT), field.getName());
             }
         }
@@ -206,14 +207,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     }
 
     /**
-     * 把调用方给的列名解析成 Gson 序列化后 map 里的键。
-     * <p>
-     * 命中 {@code @Column} 就换成对应的 Java 字段名；否则原样返回 —— 这样一来，
-     * 直接写 Java 字段名的旧调用、以及 {@link JsonPathUtil} 的点分隔嵌套路径（如
-     * {@code "a.b.c"}）都不受影响。
+     * Resolves the caller-supplied column name into the key used in the Gson-serialized map.
      *
-     * @param column 调用方给的列名，可能是 SQL 列名、Java 字段名或嵌套路径
-     * @return 可直接交给 {@link JsonPathUtil} 的键或路径
+     * @param column the caller-supplied column name, which may be a SQL column name, a Java
+     *               field name, or a nested path
+     * @return a key or path that can be passed directly to {@link JsonPathUtil}
      */
     private String resolveColumn(String column) {
         if (column == null) {
@@ -266,7 +264,8 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     }
 
     private List<T> getAllRaw(WhereCondition... whereConditions) {
-        // 空条件表示「不施加过滤」，先摘出去，免得它出现在第二个位置时中途返回全量。
+        // An empty condition means "apply no filter" -- strip it out up front so it can't cause
+        // a mid-loop return of the full set if it shows up in a later position.
         List<WhereCondition> effective = new ArrayList<>();
         for (WhereCondition condition : whereConditions) {
             if (!condition.isEmpty()) {
@@ -274,8 +273,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
             }
         }
         if (effective.isEmpty()) {
-            // 传了条件但全为空（含 getAll() 走的那条单空条件）返回全量；
-            // 一条都没传时保持历史行为返回空集 —— page() 与 exist() 都依赖它。
+            // Conditions were passed but all are empty (including the single empty condition
+            // getAll() itself passes): return the full set. Nothing passed at all: keep the
+            // historical behavior of returning an empty set -- page() and exist() both rely on it.
             return whereConditions.length > 0 ? new ArrayList<>(cache.values()) : new ArrayList<>();
         }
         List<T> results = new ArrayList<>();
@@ -296,9 +296,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(each);
             }
-            // 多条件是 AND：首个条件建立初始集合，其后一律求交，空集保持空集。
-            // 原先写的是「results 为空就 addAll」，于是首个条件零命中时会整体采信第二个
-            // 条件的命中集，AND 退化成 OR。见 issue #192。
+            // Multiple conditions are ANDed: the first condition establishes the initial set,
+            // every condition after it intersects, and an empty set stays empty. The original
+            // code read "addAll if results is empty", so when the first condition matched zero
+            // rows the whole result silently fell back to the second condition's hit set, AND
+            // degenerating into OR. See issue #192.
             if (firstCondition) {
                 results.addAll(collection);
                 firstCondition = false;
@@ -370,11 +372,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     @Override
     public synchronized void insert(T obj) {
         beforeMutate();
-        // 关系型后端在 id 为空时自动补一个 UUID（AbstractRelationalDataOperator.insert），
-        // 所以模块从来不自己设 id —— 全部 Modules 加起来的 setId 调用是 0 次。
-        // JSON 侧过去不补，null 直接进 ConcurrentHashMap 当 key，于是同一份模块代码
-        // 换成 datasource.type: json 就 NPE。补齐是为了让「谁生成 id」重新变成
-        // 框架的保证，而不是取决于后端。见 issue #275。
+        // The relational backend auto-fills a UUID when id is empty
+        // (AbstractRelationalDataOperator.insert), so modules never set the id themselves --
+        // across every Module combined, setId is called 0 times. The JSON side used to skip
+        // this, letting null go straight into the ConcurrentHashMap as a key, so the exact same
+        // module code would NPE the moment datasource.type switched to json. Filling it in here
+        // restores "who generates the id" as a framework guarantee rather than something that
+        // depends on the backend. See issue #275.
         if (obj.getId() == null) {
             obj.setId(UUID.randomUUID().toString());
         }
@@ -436,8 +440,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 String value = GSON.toJson(condition.getValue());
                 if (conditionCal(data, value, condition)) collection.add(next);
             }
-            // 与 getAll 同一处缺陷的复制品，同样改成真正的交集。在删除路径上，
-            // 原先的写法会在首个条件零命中时删掉第二个条件的全部命中行。见 issue #192。
+            // A copy of the same defect getAll had; likewise changed to a genuine intersection.
+            // On the delete path, the original code would delete every row the second condition
+            // matched whenever the first condition matched zero rows. See issue #192.
             if (firstCondition) {
                 results.addAll(collection);
                 firstCondition = false;
@@ -476,7 +481,8 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         T obj = cache.get(id);
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
-        // 不解析列名的话，putByPath 会写进一个 Gson 反序列化时直接丢弃的新键 —— 静默丢写。
+        // Without resolving the column name first, putByPath would write into a brand-new key
+        // that Gson deserialization silently discards -- a silent lost write.
         JsonPathUtil.putByPath(map, resolveColumn(column), value);
         T newObj = GSON.fromJson(GSON.toJson(map), type);
         cache.put(id, newObj);
