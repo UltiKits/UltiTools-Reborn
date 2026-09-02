@@ -72,8 +72,6 @@ import net.milkbowl.vault.economy.Economy;
 
 /**
  * UltiTools plugin main class.
- * <p>
- * UltiTools插件主类。
  *
  * @author wisdommen, qianmo
  * @version 6.0.7
@@ -83,9 +81,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
     // Deliberately java.util.logging, not Bukkit.getLogger() — this backs a static, test-seam
     // method (collectModuleJarUrls) that must be callable from a plain JUnit test with no live
     // Bukkit server (see the WIRE-11 test-seam decision recorded in 04-03-PLAN.md).
-    // 刻意使用 java.util.logging 而非 Bukkit.getLogger() —— 这是静态测试缝合方法
-    // （collectModuleJarUrls）的日志通道，该方法必须能在没有真实 Bukkit 服务器的纯 JUnit
-    // 测试中直接调用（参见 04-03-PLAN.md 记录的 WIRE-11 测试缝合决策）。
     private static final Logger MODULE_SCAN_LOGGER = Logger.getLogger(UltiTools.class.getName());
 
     /** D-03: the ten current blocked commands, shipped as the operator-editable blocklist's default. */
@@ -184,10 +179,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Returns the instance of the UltiTools.
-     * <p>
-     * 获取UltiTools的实例。
      *
-     * @return the instance of the UltiTools <br> UltiTools的实例
+     * @return the instance of the UltiTools
      */
     public static UltiTools getInstance() {
         return ultiTools;
@@ -195,10 +188,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Gets the version of UltiTools.
-     * <p>
-     * 获取UltiTools的版本。
      *
-     * @return the version of the UltiTools <br> UltiTools的版本
+     * @return the version of the UltiTools
      */
     public static int getPluginVersion() {
         String versionString = getEnv().getString("version");
@@ -226,10 +217,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Retrieves the YAML configuration object containing environment variables.
-     * <p>
-     * 获取包含环境变量的YAML配置对象。
      *
-     * @return the YAML configuration object <br> YAML配置对象
+     * @return the YAML configuration object
      */
     public static YamlConfiguration getEnv() {
         YamlConfiguration config = new YamlConfiguration();
@@ -277,8 +266,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
-            // 显式开启云连接状态机。initWebsocket() 自己不再置位 —— 它被 reinitWebSocket
-            // 复用，在那里置位会让一个正在途中的重连把 logout 关掉的状态机重新拉起来。
+            // Explicitly arms the cloud-connection state machine. initWebSocket() itself no
+            // longer sets this flag -- it is reused by reinitWebSocket, and setting it there
+            // would let an in-flight reconnect resurrect a state machine that logout just tore
+            // down.
             PluginInitiationUtils.enableCloud();
             initWebSocket();
             CloudAuthManager.startTokenRefreshScheduler();
@@ -335,7 +326,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (dataStore == null) {
             dataStore = DataStoreManager.getDatastore("json");
         }
-        // 配置要的后端和实际拿到的后端可能不是一回事，而这个降级过去是完全静默的。见 issue #183。
+        // The backend the configuration asked for and the one actually obtained can be two
+        // different things, and this fallback used to be completely silent. See issue #183.
         DataStoreManager.reportBackendSelection(getLogger(), storeType, mysqlEnabled, mysqlAvailable,
                 dataStore.getStoreType());
     }
@@ -538,25 +530,26 @@ public final class UltiTools extends JavaPlugin implements Localized {
             eventBus.shutdown();
         }
 
-        // 关闭错误报告收集器
+        // Shut down the error-report collector
         if (errorReportCollector != null) {
             errorReportCollector.shutdown();
         }
 
-        // 关闭日志流管理器
+        // Shut down the log stream manager
         if (logStreamManager != null) {
             logStreamManager.shutdown();
         }
 
-        // 关闭远程操作日志（WR-01, 06-REVIEW.md）—— 摘掉本实例挂上的 FileHandler，否则
-        // /reload 之后的下一次 onEnable 会在同一个静态 logger 上再挂一个，导致每条记录都被
-        // 写两遍。
+        // Shut down the remote action log (WR-01, 06-REVIEW.md) -- detaches the FileHandler this
+        // instance attached, otherwise the next onEnable after /reload would attach a second one
+        // to the same static logger, causing every record to be written twice.
         if (remoteActionLog != null) {
             remoteActionLog.shutdown();
         }
 
-        // 关闭面板 responder 注册表（WR-01, 06-REVIEW.md）—— 停掉它自己的超时调度线程池，
-        // 否则每次 /reload 都会再泄漏一条 UltiTools-PanelResponderRegistry-Timeout 线程。
+        // Shut down the panel responder registry (WR-01, 06-REVIEW.md) -- stops its own
+        // timeout-scheduling thread pool, otherwise every /reload would leak another
+        // UltiTools-PanelResponderRegistry-Timeout thread.
         if (panelResponderRegistry != null) {
             panelResponderRegistry.shutdown();
         }
@@ -590,8 +583,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Reloads the UltiTools plugins by calling the reload method in the PluginManager.
-     * <p>
-     * 通过调用PluginManager中的reload方法重新加载UltiTools插件。
      *
      * @throws IOException if an I/O error occurs during the reloading process
      */
@@ -605,10 +596,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Returns the supported language codes.
-     * <p>
-     * 返回支持的语言代码。
      *
-     * @return a list of supported language codes <br> 支持的语言代码列表
+     * @return a list of supported language codes
      */
     @Override
     public List<String> supported() {
@@ -618,12 +607,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * Internationalization method that translates the given string based on the current language.
      * If the string is not found in the dictionary, the original string is returned.
-     * <p>
-     * 根据当前语言翻译给定的字符串的国际化方法。
-     * 如果在字典中找不到字符串，则返回原始字符串。
      *
-     * @param str the string to be translated <br> 要翻译的字符串
-     * @return the translated string or the original string if not found in the dictionary <br> 翻译后的字符串，如果在字典中找不到，则为原始字符串
+     * @param str the string to be translated
+     * @return the translated string or the original string if not found in the dictionary
      */
     public String i18n(String str) {
         return this.language.getLocalizedText(str);
@@ -631,8 +617,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Retrieves the input stream for the specified file resource.
-     * <p>
-     * 获取指定文件资源的输入流。
      *
      * @param filename the name of the file resource
      * @return the input stream for the file resource, or null if an I/O error occurs
@@ -651,10 +635,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Get the economy provider
-     * <p>
-     * 获取经济服务提供者
      *
-     * @return the instance of the Economy provider <br> 经济服务提供者实例
+     * @return the instance of the Economy provider
      */
     public Economy getEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
@@ -669,10 +651,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Get server jar file URL.
-     * <br>
-     * 获取服务器Jar文件URL。
      *
-     * @return Server jar file URL <br> 服务器Jar文件URL
+     * @return Server jar file URL
      */
     public URL getServerJar() {
         ProtectionDomain protectionDomain = Bukkit.class.getProtectionDomain();
@@ -693,8 +673,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     /**
      * Get URLs for module plugin JARs in the UltiTools/plugins directory.
-     * <br>
-     * 获取 UltiTools/plugins 目录中模块插件JAR的URL。
      *
      * @return Array of URLs for module plugin JARs
      */
@@ -719,18 +697,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * {@link SecurityPolicy#isValidModuleJar(File)} — a JAR is validated <b>before</b> its URL is
      * added, never after. A failing JAR is skipped and named in a WARNING; the scan continues and
      * never throws (D-05: module-granularity skip, not a bootstrap abort).
-     * <br>
-     * 扫描目录下的模块插件 JAR，收集通过 {@link SecurityPolicy#isValidModuleJar(File)} 校验的
-     * URL —— 校验发生在 URL 被添加<b>之前</b>，而不是之后。未通过校验的 JAR 会被跳过并在
-     * WARNING 中命名；扫描继续进行，不会抛出异常（D-05：模块级别跳过，而非中止整个启动）。
      *
      * <p>Package-private and static so it can be exercised directly by a test against a
      * {@code @TempDir}, without standing up the whole plugin.</p>
      *
-     * @param pluginDir directory to scan for module JARs <br> 待扫描的模块 JAR 目录
+     * @param pluginDir directory to scan for module JARs
      * @return collected URLs of the JARs that passed validation, empty if {@code pluginDir} is
-     *         {@code null} or does not exist <br> 通过校验的 JAR 的 URL 集合；
-     *         若 {@code pluginDir} 为 {@code null} 或不存在则为空集合
+     *         {@code null} or does not exist
      */
     static List<URL> collectModuleJarUrls(File pluginDir) {
         List<URL> urls = new ArrayList<>();
@@ -760,11 +733,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     /**
      * Get the JavaPlugin class loader.
      * This ensures all class loading operations use the correct parent class loader.
-     * <br>
-     * 获取JavaPlugin类加载器。
-     * 这确保所有类加载操作都使用正确的父类加载器。
      *
-     * @return JavaPlugin class loader <br> JavaPlugin类加载器
+     * @return JavaPlugin class loader
      */
     public static ClassLoader getJavaPluginClassLoader() {
         UltiTools instance = getInstance();

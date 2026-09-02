@@ -9,8 +9,6 @@ import org.bukkit.World;
 
 /**
  * Completer that suggests world names.
- * <p>
- * 建议世界名称的补全器。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -22,7 +20,6 @@ public class WorldsCompleter implements TabCompleter {
     
     /**
      * Creates a completer that suggests all worlds.
-     * 创建建议所有世界的补全器。
      */
     public WorldsCompleter() {
         this.environments = null;
@@ -30,7 +27,6 @@ public class WorldsCompleter implements TabCompleter {
     
     /**
      * Creates a completer that only suggests worlds of specific environments.
-     * 创建只建议特定环境类型世界的补全器。
      *
      * @param environments the environment types to include
      */

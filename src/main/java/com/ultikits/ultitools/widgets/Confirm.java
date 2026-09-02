@@ -8,34 +8,26 @@ import com.ultikits.ultitools.widgets.impl.InventoryConfirm;
 public interface Confirm {
     /**
      * Show the confirm dialog.
-     * <br>
-     * 显示确认对话框。
      */
     void show();
     /**
      * Get the confirm text.
-     * <br>
-     * 获取确认文本。
      */
     String getConfirmText();
     /**
      * Get the cancel text.
-     * <br>
-     * 获取取消文本。
      */
     String getCancelText();
 
     /**
      * Create a confirm dialog with GUI.
-     * <br>
-     * 创建一个带有 GUI 的确认对话框。
      *
-     * @param player     Player <br> 玩家
-     * @param title      Title <br> 标题
-     * @param description Description <br> 描述
-     * @param onConfirm  On confirm <br> 确认时
-     * @param onCancel   On cancel <br> 取消时
-     * @return Confirm <br> 确认对话框
+     * @param player     Player
+     * @param title      Title
+     * @param description Description
+     * @param onConfirm  On confirm
+     * @param onCancel   On cancel
+     * @return Confirm
      */
     static Confirm gui(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         return new InventoryConfirm(player, title, description, onConfirm, onCancel);
@@ -44,18 +36,15 @@ public interface Confirm {
     /**
      * Create a confirm dialog with GUI.
      * You can set the confirm and cancel text.
-     * <br>
-     * 创建一个带有 GUI 的确认对话框。
-     * 你可以设置确认和取消文本。
      *
-     * @param player      Player <br> 玩家
-     * @param title       Title <br> 标题
-     * @param description Description <br> 描述
-     * @param confirmText Confirm text <br> 确认文本
-     * @param cancelText  Cancel text <br> 取消文本
-     * @param onConfirm   On confirm <br> 确认时
-     * @param onCancel    On cancel <br> 取消时
-     * @return Confirm <br> 确认对话框
+     * @param player      Player
+     * @param title       Title
+     * @param description Description
+     * @param confirmText Confirm text
+     * @param cancelText  Cancel text
+     * @param onConfirm   On confirm
+     * @param onCancel    On cancel
+     * @return Confirm
      */
     static Confirm gui(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         return new InventoryConfirm(player, title, description, confirmText, cancelText, onConfirm, onCancel);
@@ -63,15 +52,13 @@ public interface Confirm {
 
     /**
      * Create a confirm dialog with chat.
-     * <br>
-     * 创建一个带有聊天的确认对话框。
      *
-     * @param player     Player <br> 玩家
-     * @param title      Title <br> 标题
-     * @param description Description <br> 描述
-     * @param onConfirm  On confirm <br> 确认时
-     * @param onCancel   On cancel <br> 取消时
-     * @return Confirm <br> 确认对话框
+     * @param player     Player
+     * @param title      Title
+     * @param description Description
+     * @param onConfirm  On confirm
+     * @param onCancel   On cancel
+     * @return Confirm
      */
     static Confirm chat(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         return new ChatConfirm(player, title, description, onConfirm, onCancel);
@@ -80,18 +67,15 @@ public interface Confirm {
     /**
      * Create a confirm dialog with chat.
      * You can set the confirm and cancel text.
-     * <br>
-     * 创建一个带有聊天的确认对话框。
-     * 你可以设置确认和取消文本。
      *
-     * @param player      Player <br> 玩家
-     * @param title       Title <br> 标题
-     * @param description Description <br> 描述
-     * @param confirmText Confirm text <br> 确认文本
-     * @param cancelText  Cancel text <br> 取消文本
-     * @param onConfirm   On confirm <br> 确认时
-     * @param onCancel    On cancel <br> 取消时
-     * @return Confirm <br> 确认对话框
+     * @param player      Player
+     * @param title       Title
+     * @param description Description
+     * @param confirmText Confirm text
+     * @param cancelText  Cancel text
+     * @param onConfirm   On confirm
+     * @param onCancel    On cancel
+     * @return Confirm
      */
     static Confirm chat(Player player, String title, String description, String confirmText, String cancelText, Runnable onConfirm, Runnable onCancel) {
         return new ChatConfirm(player, title, description, confirmText, cancelText, onConfirm, onCancel);

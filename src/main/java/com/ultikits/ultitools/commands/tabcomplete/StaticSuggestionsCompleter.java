@@ -7,8 +7,6 @@ import java.util.List;
 
 /**
  * Completer that provides static suggestions from a predefined list.
- * <p>
- * 从预定义列表提供静态建议的补全器。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -21,7 +19,6 @@ public class StaticSuggestionsCompleter implements TabCompleter {
     
     /**
      * Creates a completer with static suggestions (case-insensitive matching).
-     * 使用静态建议创建补全器（不区分大小写匹配）。
      *
      * @param suggestions the suggestions to provide
      */
@@ -31,7 +28,6 @@ public class StaticSuggestionsCompleter implements TabCompleter {
     
     /**
      * Creates a completer with static suggestions (case-insensitive matching).
-     * 使用静态建议创建补全器（不区分大小写匹配）。
      *
      * @param suggestions the suggestions to provide
      */
@@ -41,7 +37,6 @@ public class StaticSuggestionsCompleter implements TabCompleter {
     
     /**
      * Creates a completer with static suggestions.
-     * 使用静态建议创建补全器。
      *
      * @param suggestions   the suggestions to provide
      * @param caseSensitive whether matching should be case-sensitive
@@ -74,7 +69,6 @@ public class StaticSuggestionsCompleter implements TabCompleter {
     
     /**
      * Creates a completer for boolean values.
-     * 创建布尔值的补全器。
      *
      * @return a completer suggesting "true" and "false"
      */
@@ -84,7 +78,6 @@ public class StaticSuggestionsCompleter implements TabCompleter {
     
     /**
      * Creates a completer for common toggle values.
-     * 创建常用开关值的补全器。
      *
      * @return a completer suggesting common toggle options
      */

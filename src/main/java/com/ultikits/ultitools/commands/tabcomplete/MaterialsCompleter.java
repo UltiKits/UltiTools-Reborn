@@ -8,8 +8,6 @@ import org.bukkit.Material;
 
 /**
  * Completer that suggests Minecraft material names.
- * <p>
- * 建议 Minecraft 材料名称的补全器。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -22,7 +20,6 @@ public class MaterialsCompleter implements TabCompleter {
     
     /**
      * Creates a completer that suggests all materials.
-     * 创建建议所有材料的补全器。
      */
     public MaterialsCompleter() {
         this(false, false);
@@ -30,7 +27,6 @@ public class MaterialsCompleter implements TabCompleter {
     
     /**
      * Creates a completer with filtering options.
-     * 使用过滤选项创建补全器。
      *
      * @param blocksOnly only suggest block materials
      * @param itemsOnly  only suggest item materials (ignored if blocksOnly is true)
@@ -71,7 +67,6 @@ public class MaterialsCompleter implements TabCompleter {
     
     /**
      * Creates a completer for block materials only.
-     * 创建仅用于方块材料的补全器。
      *
      * @return a blocks-only completer
      */
@@ -81,7 +76,6 @@ public class MaterialsCompleter implements TabCompleter {
     
     /**
      * Creates a completer for item materials only.
-     * 创建仅用于物品材料的补全器。
      *
      * @return an items-only completer
      */

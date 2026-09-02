@@ -22,8 +22,6 @@ import com.ultikits.ultitools.services.EmailService;
 
 /**
  * Default implementation of EmailService using JavaMail.
- * <p>
- * 使用JavaMail实现的默认邮件服务。
  *
  * @author wisdomme
  * @version 1.0.0

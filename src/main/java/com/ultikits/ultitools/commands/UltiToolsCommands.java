@@ -17,7 +17,7 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 
 /**
- * 重载UltiTools-API的指令
+ * The command that reloads UltiTools-API.
  *
  * @author wisdomme, qianmo
  * @version 1.0.0
@@ -72,7 +72,7 @@ public class UltiToolsCommands extends BaseCommandExecutor {
     }
 
     /**
-     * @param sender 命令发送者
+     * @param sender the command sender
      */
     @Override
     protected void handleHelp(CommandSender sender) {
