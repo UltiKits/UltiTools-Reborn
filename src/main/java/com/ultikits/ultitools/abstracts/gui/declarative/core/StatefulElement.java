@@ -4,7 +4,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * StatefulWidget 对应的 Element。
+ * The Element corresponding to a StatefulWidget.
  *
  * @author UltiTools Team
  * @version 1.0.0

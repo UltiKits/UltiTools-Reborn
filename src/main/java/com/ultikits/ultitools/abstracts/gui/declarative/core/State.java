@@ -4,34 +4,34 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * State 是 StatefulWidget 的可变状态。
+ * State is the mutable state of a StatefulWidget.
  * <p>
- * State 对象由框架管理，具有以下特性：
+ * State objects are managed by the framework and have the following properties:
  * <ul>
- *   <li>在 StatefulWidget 插入树中时创建</li>
- *   <li>在 StatefulWidget 从树中移除时销毁</li>
- *   <li>在 StatefulWidget 重建时复用</li>
+ *   <li>Created when the StatefulWidget is inserted into the tree</li>
+ *   <li>Destroyed when the StatefulWidget is removed from the tree</li>
+ *   <li>Reused across StatefulWidget rebuilds</li>
  * </ul>
  *
- * <p><strong>生命周期：</strong></p>
+ * <p><strong>Lifecycle:</strong></p>
  * <ol>
- *   <li>{@link #initState()} - 初始化状态，只调用一次</li>
- *   <li>{@link #build(BuildContext)} - 构建 UI，可能调用多次</li>
- *   <li>{@link #didUpdateWidget(StatefulWidget)} - 配置变化时调用</li>
- *   <li>{@link #dispose()} - 清理资源，只调用一次</li>
+ *   <li>{@link #initState()} - initializes state, called exactly once</li>
+ *   <li>{@link #build(BuildContext)} - builds the UI, may be called multiple times</li>
+ *   <li>{@link #didUpdateWidget(StatefulWidget)} - called when the configuration changes</li>
+ *   <li>{@link #dispose()} - releases resources, called exactly once</li>
  * </ol>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * class CounterState extends State<CounterWidget> {
  *     private int count = 0;
- *     
+ *
  *     @Override
  *     void initState() {
  *         super.initState();
- *         // 初始化工作
+ *         // initialization work
  *     }
- *     
+ *
  *     @Override
  *     Widget build(BuildContext context) {
  *         return TextButton.builder()
@@ -42,7 +42,7 @@ import org.jetbrains.annotations.Nullable;
  * }
  * }</pre>
  *
- * @param <T> 对应的 StatefulWidget 类型
+ * @param <T> the corresponding StatefulWidget type
  * @author UltiTools Team
  * @version 1.0.0
  * @since 6.2.0
@@ -57,16 +57,16 @@ public abstract class State<T extends StatefulWidget> {
     private boolean _mounted = false;
 
     /**
-     * 创建一个新的 State。
+     * Creates a new State.
      */
     public State() {
     }
 
     /**
-     * 获取与此 State 关联的 Widget。
+     * Gets the Widget associated with this State.
      *
-     * @return Widget 实例
-     * @throws IllegalStateException 如果 State 尚未挂载
+     * @return the Widget instance
+     * @throws IllegalStateException if the State is not mounted yet
      */
     @NotNull
     public T getWidget() {
@@ -77,42 +77,42 @@ public abstract class State<T extends StatefulWidget> {
     }
 
     /**
-     * 检查 State 是否已挂载到树中。
+     * Checks whether the State is mounted in the tree.
      *
-     * @return 如果已挂载则返回 true
+     * @return true if mounted
      */
     public boolean isMounted() {
         return _mounted;
     }
 
     /**
-     * 标记 State 为 dirty，并安排重建。
+     * Marks the State as dirty and schedules a rebuild.
      * <p>
-     * 这个方法通知框架 State 对象已发生变化，需要重建 UI。
-     * 框架会在下一个帧中调用 build 方法。
+     * This method notifies the framework that the State object has changed and the UI needs to
+     * be rebuilt. The framework calls the build method on the next frame.
      * <p>
-     * <b>重要：</b> 回调函数中应该只修改状态，不应该有副作用。
+     * <b>Important:</b> the callback should only modify state and must not have side effects.
      *
-     * <p><strong>使用示例：</strong></p>
+     * <p><strong>Usage example:</strong></p>
      * <pre>{@code
      * void handleClick() {
      *     setState(() -> {
-     *         _counter++;  // 只修改状态
+     *         _counter++;  // only modify state
      *     });
      * }
      * }</pre>
      *
-     * @param fn 修改状态的回调函数
+     * @param fn the callback that modifies state
      */
     public void setState(@NotNull VoidCallback fn) {
         if (!_mounted) {
             throw new IllegalStateException("setState() called after dispose()");
         }
-        
-        // 执行状态修改
+
+        // Run the state mutation
         fn.call();
-        
-        // 标记为 dirty 并安排重建
+
+        // Mark dirty and schedule a rebuild
         _dirty = true;
         if (_element != null) {
             _element.markNeedsBuild();
@@ -120,55 +120,55 @@ public abstract class State<T extends StatefulWidget> {
     }
 
     /**
-     * 初始化状态。
+     * Initializes the state.
      * <p>
-     * 这个方法在 State 对象创建后、插入树中前调用，只调用一次。
-     * 可以在此订阅流、启动动画或执行其他一次性初始化工作。
+     * Called once, after the State object is created and before it is inserted into the tree.
+     * Subscribe to streams, start animations, or run other one-time initialization here.
      * <p>
-     * 必须调用 super.initState()。
+     * Must call super.initState().
      */
     protected void initState() {
-        // 子类重写
+        // overridden by subclasses
     }
 
     /**
-     * 清理资源。
+     * Releases resources.
      * <p>
-     * 这个方法在 State 对象从树中永久移除时调用，只调用一次。
-     * 必须在此取消订阅、停止动画或执行其他清理工作。
+     * Called once, when the State object is permanently removed from the tree.
+     * Unsubscribe, stop animations, or run other cleanup work here.
      * <p>
-     * 必须调用 super.dispose()。
+     * Must call super.dispose().
      */
     protected void dispose() {
         _mounted = false;
     }
 
     /**
-     * Widget 配置发生变化时调用。
+     * Called when the Widget configuration changes.
      * <p>
-     * 当父 Widget 重建并创建新的 StatefulWidget 实例时调用。
-     * 可以在此比较新旧 Widget 的属性，并相应地调整状态。
+     * Called when the parent Widget rebuilds and creates a new StatefulWidget instance. Compare
+     * the old and new Widget properties here and adjust state accordingly.
      *
-     * @param oldWidget 旧的 Widget 实例
+     * @param oldWidget the previous Widget instance
      */
     @SuppressWarnings("unchecked")
     protected void didUpdateWidget(@NotNull T oldWidget) {
-        // 子类重写
+        // overridden by subclasses
     }
 
     /**
-     * 构建此 State 的 UI。
+     * Builds this State's UI.
      * <p>
-     * 这个方法在以下情况会被调用：
+     * This method is called:
      * <ul>
-     *   <li>initState 之后</li>
-     *   <li>didUpdateWidget 之后</li>
-     *   <li>setState 之后</li>
-     *   <li>依赖的 InheritedWidget 变化时</li>
+     *   <li>after initState</li>
+     *   <li>after didUpdateWidget</li>
+     *   <li>after setState</li>
+     *   <li>when a depended-upon InheritedWidget changes</li>
      * </ul>
      *
-     * @param context 构建上下文
-     * @return Widget 树
+     * @param context the build context
+     * @return the Widget tree
      */
     @NotNull
     public abstract Widget build(@NotNull BuildContext context);
@@ -197,7 +197,7 @@ public abstract class State<T extends StatefulWidget> {
     }
 
     /**
-     * 内部方法：调用 didUpdateWidget，使用原始类型避免泛型问题。
+     * Internal method: invokes didUpdateWidget using the raw type to avoid generics issues.
      */
     @SuppressWarnings("unchecked")
     void didUpdateWidgetInternal(@NotNull StatefulWidget oldWidget) {

@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
 /**
- * 无返回值的功能性接口。
+ * A functional interface with no return value.
  *
  * @author UltiTools Team
  * @version 1.0.0

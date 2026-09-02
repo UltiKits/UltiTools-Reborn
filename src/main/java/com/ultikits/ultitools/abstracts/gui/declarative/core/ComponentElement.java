@@ -7,10 +7,10 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * ComponentElement 是包含子 Widget 的 Element 基类。
+ * ComponentElement is the base Element class for Elements that hold a child Widget.
  * <p>
- * 它管理一个子 Widget，并在需要时构建它。
- * StatelessWidget 和 StatefulWidget 都使用此类型的 Element。
+ * It manages a single child Widget and builds it as needed.
+ * Both StatelessWidget and StatefulWidget use this kind of Element.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -26,9 +26,9 @@ public abstract class ComponentElement extends Element {
     }
 
     /**
-     * 构建子 Widget。
+     * Builds the child Widget.
      *
-     * @return 子 Widget
+     * @return the child Widget
      */
     public abstract Widget build();
 

@@ -6,24 +6,25 @@ import org.jetbrains.annotations.Nullable;
 import java.util.*;
 
 /**
- * Element 是 Widget 的实例化表示，负责管理 Widget 的生命周期和更新。
+ * Element is the instantiated representation of a Widget, responsible for managing the Widget's
+ * lifecycle and updates.
  * <p>
- * Element 是持久化的对象，当 Widget 重建时，Element 会被复用（如果类型匹配）。
- * 这种复用机制是框架高效更新的关键。
+ * An Element is a persistent object: when a Widget rebuilds, its Element is reused if the type
+ * still matches. That reuse is the key to the framework's efficient updates.
  * <p>
- * <b>Element 的职责：</b>
+ * <b>Element's responsibilities:</b>
  * <ul>
- * <li>持有 Widget 引用（会随重建更新）</li>
- * <li>管理子 Element 树</li>
- * <li>协调 Widget 的创建、更新和销毁</li>
- * <li>为 RenderObjectElement 提供 RenderNode</li>
+ * <li>Holds a reference to the Widget (updated across rebuilds)</li>
+ * <li>Manages the child Element tree</li>
+ * <li>Coordinates Widget creation, update, and disposal</li>
+ * <li>Supplies a RenderNode for RenderObjectElement</li>
  * </ul>
  *
- * <p><strong>Element 类型：</strong></p>
+ * <p><strong>Element types:</strong></p>
  * <ul>
- * <li>{@link ComponentElement} - 组合型，管理子
- * Widget（StatelessWidget/StatefulWidget）</li>
- * <li>{@link RenderObjectElement} - 渲染型，对应实际的 RenderNode</li>
+ * <li>{@link ComponentElement} - composite, manages a child
+ * Widget (StatelessWidget/StatefulWidget)</li>
+ * <li>{@link RenderObjectElement} - render, corresponds to an actual RenderNode</li>
  * </ul>
  *
  * @author UltiTools Team
@@ -51,21 +52,21 @@ public abstract class Element {
     }
 
     /**
-     * 为此 Element 分配 Context（仅用于根 Element 或测试）。
+     * Assigns a Context to this Element (only used for the root Element or in tests).
      *
-     * @param context BuildContext
+     * @param context the BuildContext
      */
     public void assignContext(@NotNull BuildContext context) {
         this._context = context;
     }
 
     /**
-     * 将此 Element 挂载到树中。
+     * Mounts this Element into the tree.
      * <p>
-     * 这个方法在 Element 首次插入树中时调用。
-     * 子类应该在此处执行初始化工作，并挂载子 Element。
+     * Called the first time the Element is inserted into the tree. Subclasses should perform
+     * initialization work here and mount their child Elements.
      *
-     * @param parent 父 Element，如果为 null 表示这是根 Element
+     * @param parent the parent Element, or null if this is the root Element
      */
     public void mount(@Nullable Element parent) {
         _parent = parent;
@@ -80,12 +81,12 @@ public abstract class Element {
     }
 
     /**
-     * 使用新的 Widget 更新此 Element。
+     * Updates this Element with a new Widget.
      * <p>
-     * 这个方法在 Widget 重建时被调用。
-     * 子类应该更新对 Widget 的引用，并执行必要的更新。
+     * Called when the Widget rebuilds. Subclasses should update their reference to the Widget
+     * and perform any necessary updates.
      *
-     * @param newWidget 新的 Widget 实例
+     * @param newWidget the new Widget instance
      */
     public void update(@NotNull Widget newWidget) {
         if (!canUpdate(newWidget)) {
@@ -101,20 +102,20 @@ public abstract class Element {
     }
 
     /**
-     * 检查此 Element 是否可以更新为给定的 Widget。
+     * Checks whether this Element can update to the given Widget.
      *
-     * @param newWidget 新的 Widget
-     * @return 如果可以更新则返回 true
+     * @param newWidget the new Widget
+     * @return true if it can be updated
      */
     public boolean canUpdate(@NotNull Widget newWidget) {
         return _widget != null && newWidget.canUpdate(this);
     }
 
     /**
-     * 从树中移除此 Element。
+     * Removes this Element from the tree.
      * <p>
-     * 这个方法在 Element 不再需要时被调用。
-     * 子类应该在此处执行清理工作，并卸载子 Element。
+     * Called when the Element is no longer needed. Subclasses should perform cleanup work here
+     * and unmount their child Elements.
      */
     public void unmount() {
         _mounted = false;
@@ -130,9 +131,9 @@ public abstract class Element {
     }
 
     /**
-     * 标记此 Element 需要重建。
+     * Marks this Element as needing a rebuild.
      * <p>
-     * 这会安排框架在下一个帧中重建此 Element。
+     * This schedules the framework to rebuild this Element on the next frame.
      */
     public void markNeedsBuild() {
         if (!_mounted) {
@@ -143,13 +144,13 @@ public abstract class Element {
         }
         _dirty = true;
 
-        // 通知父 Element 或渲染器。
+        // Notify the parent Element or the renderer.
         //
-        // 这是 State.setState() -> Element.markNeedsBuild() 这条链路唯一的出口：如果这个
-        // Element 就是挂载的根（_parent == null），冒泡到这里就到头了——在
-        // GuiRenderer 注册 _rootBuildScheduler 之前，setState() 修改了 State 的字段、
-        // 把这个 Element 标记为 dirty，但从来没有安排任何一帧真正执行
-        // performBuild()，Inventory 永远不会反映新状态。
+        // This is the sole exit point of the State.setState() -> Element.markNeedsBuild() chain:
+        // if this Element is the mounted root (_parent == null), bubbling stops right here --
+        // before GuiRenderer registers _rootBuildScheduler, setState() would mutate the State's
+        // fields and mark this Element dirty, but no frame was ever scheduled to actually run
+        // performBuild(), so the Inventory would never reflect the new state.
         if (_parent != null) {
             _parent.markChildNeedsBuild(this);
         } else if (_rootBuildScheduler != null) {
@@ -158,14 +159,15 @@ public abstract class Element {
     }
 
     /**
-     * 标记子 Element 需要重建。
+     * Marks a child Element as needing a rebuild.
      *
-     * @param child 子 Element
+     * @param child the child Element
      */
     public void markChildNeedsBuild(@NotNull Element child) {
-        // 默认实现：传递给父 Element；到达挂载的根（_parent == null）时，
-        // 交给 GuiRenderer 注册的调度回调——见上面 markNeedsBuild() 的说明，
-        // 同一个"冒泡到根即终止"的缺口在这里。
+        // Default implementation: forward to the parent Element; once bubbling reaches the
+        // mounted root (_parent == null), hand off to the scheduling callback GuiRenderer
+        // registered -- see the note on markNeedsBuild() above; the same "bubbling stops at the
+        // root" gap applies here.
         if (_parent != null) {
             _parent.markChildNeedsBuild(child);
         } else if (_rootBuildScheduler != null) {
@@ -174,32 +176,34 @@ public abstract class Element {
     }
 
     /**
-     * 注册挂载的根 Element 用来把"需要重建"的冒泡通知转交给
-     * {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer} 的回调。
+     * Registers, on the mounted root Element, the callback that a "needs rebuild" bubble hands
+     * off to on {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer}.
      * <p>
-     * 框架内部方法——只有 GuiRenderer 在挂载/重新挂载根 Element 时调用它，模块作者不需要
-     * （也不应该）自己调用。非根 Element 上这个字段永远是 null，因为冒泡在遇到第一个
-     * {@code _parent != null} 的祖先时就会转发给那个祖先，不会走到这个分支。
+     * Framework-internal method -- only GuiRenderer calls this, when it mounts or remounts the
+     * root Element; module authors do not need to (and should not) call it themselves. On a
+     * non-root Element this field is always null, because bubbling forwards to the first
+     * ancestor with {@code _parent != null} and never reaches this branch.
      *
-     * @param scheduler 根需要重建时调用的回调，通常是 {@code GuiRenderer::scheduleBuild}；
-     *                  传 {@code null} 取消注册（渲染器销毁时）
+     * @param scheduler the callback invoked when the root needs a rebuild, typically
+     *                  {@code GuiRenderer::scheduleBuild}; pass {@code null} to unregister (when
+     *                  the renderer is destroyed)
      */
     public void setRootBuildScheduler(@Nullable Runnable scheduler) {
         this._rootBuildScheduler = scheduler;
     }
 
     /**
-     * 执行重建。
+     * Performs a rebuild.
      * <p>
-     * 子类应该实现此方法来构建或重建 Widget 树。
+     * Subclasses should implement this method to build or rebuild the Widget tree.
      */
     public abstract void performRebuild();
 
     /**
-     * 获取与此 Element 关联的 Widget。
+     * Gets the Widget associated with this Element.
      *
-     * @return Widget 实例
-     * @throws IllegalStateException 如果 Widget 为 null
+     * @return the Widget instance
+     * @throws IllegalStateException if the Widget is null
      */
     @NotNull
     public Widget getWidget() {
@@ -210,9 +214,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取父 Element。
+     * Gets the parent Element.
      *
-     * @return 父 Element，如果是根则返回 null
+     * @return the parent Element, or null at the root
      */
     @Nullable
     public Element getParent() {
@@ -220,9 +224,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取子 Element 列表。
+     * Gets the list of child Elements.
      *
-     * @return 子 Element 列表，如果没有则返回空列表
+     * @return the child Element list, or an empty list if there are none
      */
     @NotNull
     public List<Element> getChildren() {
@@ -230,9 +234,9 @@ public abstract class Element {
     }
 
     /**
-     * 获取构建上下文。
+     * Gets the build context.
      *
-     * @return BuildContext
+     * @return the BuildContext
      */
     @NotNull
     public BuildContext getContext() {
@@ -243,34 +247,34 @@ public abstract class Element {
     }
 
     /**
-     * 检查是否已挂载。
+     * Checks whether this Element is mounted.
      *
-     * @return 如果已挂载则返回 true
+     * @return true if mounted
      */
     public boolean isMounted() {
         return _mounted;
     }
 
     /**
-     * 检查是否需要重建。
+     * Checks whether this Element needs a rebuild.
      *
-     * @return 如果需要重建则返回 true
+     * @return true if it needs a rebuild
      */
     public boolean isDirty() {
         return _dirty;
     }
 
     /**
-     * 清除 dirty 标记。
+     * Clears the dirty flag.
      */
     public void clearDirty() {
         _dirty = false;
     }
 
     /**
-     * 添加子 Element。
+     * Adds a child Element.
      *
-     * @param child 子 Element
+     * @param child the child Element
      */
     protected void addChild(@NotNull Element child) {
         if (_children == null) {
@@ -280,18 +284,18 @@ public abstract class Element {
     }
 
     /**
-     * 更新单个子 Element。
+     * Updates a single child Element.
      * <p>
-     * 这是协调（reconciliation）的核心方法。
-     * 它决定是复用现有 Element 还是创建新的。
+     * This is the core method of reconciliation. It decides whether to reuse the existing
+     * Element or create a new one.
      *
-     * @param newWidget 新的 Widget
-     * @param oldChild  旧的子 Element，可能为 null
-     * @return 更新后的 Element
+     * @param newWidget the new Widget
+     * @param oldChild  the previous child Element, may be null
+     * @return the updated Element
      */
     @Nullable
     protected Element updateChild(@Nullable Widget newWidget, @Nullable Element oldChild) {
-        // 如果新 Widget 为 null，移除旧 Element
+        // If the new Widget is null, remove the old Element.
         if (newWidget == null) {
             if (oldChild != null) {
                 oldChild.unmount();
@@ -299,20 +303,20 @@ public abstract class Element {
             return null;
         }
 
-        // 如果没有旧 Element，创建新的
+        // If there is no old Element, create a new one.
         if (oldChild == null) {
             Element newChild = newWidget.createElement();
             newChild.mount(this);
             return newChild;
         }
 
-        // 如果 Widget 类型相同，复用 Element
+        // If the Widget type matches, reuse the Element.
         if (oldChild.canUpdate(newWidget)) {
             oldChild.update(newWidget);
             return oldChild;
         }
 
-        // 类型不同，需要替换
+        // Type differs, so it must be replaced.
         oldChild.unmount();
         Element newChild = newWidget.createElement();
         newChild.mount(this);
@@ -333,11 +337,12 @@ public abstract class Element {
      * now call this method instead of maintaining their own copy, so the two classes cannot
      * drift apart the way they did before this plan.
      * <p>
-     * <b>算法（中文补充）：</b>先把旧子 Element 按"有 key"与"无 key"分两组；遍历新 Widget
-     * 列表，有 key 的按 key 查找旧组中的匹配项，没有 key 的按顺序从"无 key 旧组"里取一个——
-     * 找到匹配就调用 {@link #updateChild(Widget, Element)} 复用（或在类型不匹配时替换），
-     * 找不到就新建。遍历结束后，两组里还剩下的旧 Element（没有被任何新 Widget 认领）全部
-     * unmount。
+     * <b>Algorithm:</b> the old child Elements are first split into a keyed group and an
+     * unkeyed group. Iterating the new Widget list, a keyed Widget looks up its match in the
+     * keyed group, and an unkeyed Widget takes the next available Element from the unkeyed
+     * group, in order. A match is reused via {@link #updateChild(Widget, Element)} (or replaced
+     * there if its type no longer matches); no match means a new Element is created. After the
+     * pass, whatever remains in either group -- unclaimed by any new Widget -- is unmounted.
      *
      * @param oldChildren the previously-mounted child Elements, in their current order
      * @param newWidgets  the new child Widgets, in their desired order

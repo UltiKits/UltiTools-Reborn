@@ -3,20 +3,20 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * StatelessWidget 是一个不需要可变状态的 Widget。
+ * StatelessWidget is a Widget that needs no mutable state.
  * <p>
- * 它完全依赖于构造时传入的配置参数来构建 UI。
- * 当配置变化时，会创建新的 StatelessWidget 实例，
- * 框架会自动 diff 并更新必要的部分。
+ * It builds the UI entirely from the configuration parameters supplied at construction time.
+ * When the configuration changes, a new StatelessWidget instance is created, and the framework
+ * automatically diffs and updates whatever needs to change.
  * <p>
- * <b>适用场景：</b>
+ * <b>When to use it:</b>
  * <ul>
- *   <li>纯展示性 UI（如标题、图标、静态文本）</li>
- *   <li>完全由父 Widget 控制状态的 UI</li>
- *   <li>没有副作用的纯函数式组件</li>
+ *   <li>purely presentational UI (e.g. titles, icons, static text)</li>
+ *   <li>UI whose state is entirely controlled by its parent Widget</li>
+ *   <li>side-effect-free, purely functional components</li>
  * </ul>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * public class ItemRow extends StatelessWidget {
  *     private final ItemStack item;
@@ -53,36 +53,36 @@ import org.jetbrains.annotations.NotNull;
 public abstract class StatelessWidget extends Widget {
 
     /**
-     * 创建一个新的 StatelessWidget。
+     * Creates a new StatelessWidget.
      */
     protected StatelessWidget() {
         super();
     }
 
     /**
-     * 创建一个新的 StatelessWidget，指定 key。
+     * Creates a new StatelessWidget with the given key.
      *
-     * @param key 用于稳定标识此 Widget 的键
+     * @param key the key used to stably identify this Widget
      */
     protected StatelessWidget(SlotKey key) {
         super(key);
     }
 
     /**
-     * 构建此 Widget 的子树。
+     * Builds this Widget's subtree.
      * <p>
-     * 这个方法在以下情况会被调用：
+     * This method is called:
      * <ul>
-     *   <li>Widget 首次被创建时</li>
-     *   <li>父 Widget 重建时</li>
-     *   <li>依赖的数据发生变化时</li>
+     *   <li>when the Widget is first created</li>
+     *   <li>when the parent Widget rebuilds</li>
+     *   <li>when a depended-upon piece of data changes</li>
      * </ul>
      * <p>
-     * <b>重要：</b> build 方法应该是纯函数，不应该有副作用。
-     * 不要在 build 中修改状态、执行 I/O 操作或注册监听器。
+     * <b>Important:</b> the build method should be a pure function with no side effects.
+     * Do not mutate state, perform I/O, or register listeners inside build.
      *
-     * @param context 构建上下文，包含玩家、GUI 配置等信息
-     * @return 子 Widget 树
+     * @param context the build context, carrying the player, GUI configuration, and similar info
+     * @return the child Widget tree
      */
     @NotNull
     public abstract Widget build(@NotNull BuildContext context);

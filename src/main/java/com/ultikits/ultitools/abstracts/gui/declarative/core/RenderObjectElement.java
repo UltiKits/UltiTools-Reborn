@@ -4,9 +4,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * RenderObjectElement 是对应 RenderNode 的 Element。
+ * RenderObjectElement is the Element that corresponds to a RenderNode.
  * <p>
- * 这是渲染树的叶子节点，最终会生成 RenderNode。
+ * This is a leaf node of the render tree, and ultimately produces a RenderNode.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -22,25 +22,24 @@ public abstract class RenderObjectElement extends Element {
     }
 
     /**
-     * 创建与此 Element 对应的 RenderNode。
+     * Creates the RenderNode corresponding to this Element.
      *
-     * @return 新的 RenderNode
+     * @return the new RenderNode
      */
     @NotNull
     protected abstract RenderNode createRenderNode();
 
     /**
-     * 更新 RenderNode。
+     * Updates the RenderNode.
      *
-     * @param renderNode 要更新的 RenderNode
+     * @param renderNode the RenderNode to update
      */
     protected abstract void updateRenderNode(@NotNull RenderNode renderNode);
 
     /**
-     * 获取 RenderNode。
-     * 如果尚未创建，则创建它。
+     * Gets the RenderNode, creating it first if it has not been created yet.
      *
-     * @return RenderNode
+     * @return the RenderNode
      */
     @NotNull
     public RenderNode getRenderNode() {
