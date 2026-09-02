@@ -9,8 +9,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -30,7 +30,7 @@ import net.kyori.adventure.text.format.TextColor;
 
 @CmdExecutor(description = "UltiTools Plugin Management Commands", alias = "upm", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-public class PluginInstallCommands extends AbstractCommandExecutor {
+public class PluginInstallCommands extends BaseCommandExecutor {
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {

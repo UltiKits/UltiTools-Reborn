@@ -60,7 +60,6 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 
 /**
  * Unit tests for BaseCommandExecutor.
@@ -80,9 +79,6 @@ class BaseCommandExecutorTest {
     
     @Mock
     private UltiTools mockUltiTools;
-    
-    @Mock
-    private VersionWrapper mockVersionWrapper;
 
     private MockedStatic<UltiTools> ultiToolsMock;
 
@@ -91,7 +87,6 @@ class BaseCommandExecutorTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(mockUltiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
         lenient().when(mockCommand.getName()).thenReturn("test");
     }
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- A real emitter's root element shape with zero classes - the GEN-04 empty-input edge (07-03, Task 1). -->
+<japicmp xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" accessModifier="PROTECTED"
+         xsi:noNamespaceSchemaLocation="japicmp.xsd">
+    <classes/>
+</japicmp>

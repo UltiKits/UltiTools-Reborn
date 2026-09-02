@@ -27,6 +27,7 @@ public interface TransactionManager {
      *             base interface.
      * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
      *        removal.
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     default Connection getConnection() {
@@ -80,6 +81,7 @@ public interface TransactionManager {
      *             implements the base interface.
      * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
      *        removal.
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     default void setIsolationLevel(int level) {
@@ -99,6 +101,7 @@ public interface TransactionManager {
      *             implements the base interface.
      * @since 6.3.0 demoted from an abstract method to a {@code default} one (D-04); zero binary
      *        removal.
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     default void setReadOnly(boolean readOnly) {

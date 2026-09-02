@@ -41,6 +41,7 @@ public class AnnotationUtils {
      *             请改用
      *             {@link com.ultikits.ultitools.context.MergedAnnotationResolver#find}，
      *             它会遍历整棵注解树，并应用沿途发现的任何 {@code @AliasFor} 覆盖。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public static <T extends Annotation> T findAnnotation(Class<?> clazz, Class<T> annotationType) {

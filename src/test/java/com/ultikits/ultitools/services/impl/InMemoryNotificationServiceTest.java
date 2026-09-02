@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.widgets.Toast;
@@ -55,11 +54,8 @@ class InMemoryNotificationServiceTest {
         // Mock logger
         mockLogger = mock(Logger.class);
 
-        // Mock VersionWrapper - local variable as only used for stubbing
-        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
-            when(ultiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
         });
 
         notificationService = new InMemoryNotificationService();

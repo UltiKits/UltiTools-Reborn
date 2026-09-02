@@ -270,11 +270,22 @@
                     </excludes>
                 </configuration>
             </plugin>
-            <!-- japicmp binary-compatibility gate (GATE-01, stage 1 of 3). Report-only: it never
-                 breaks the build. Diffs against the last released 6.2.5 artifact, watching only
-                 com.ultikits.ultitools itself.
-                 japicmp 二进制兼容性门（GATE-01，阶段 1/3）。仅报告，不阻断构建。
-                 对比对象是上一个已发布的 6.2.5，比较范围仅限 com.ultikits.ultitools 本身。 -->
+            <!-- japicmp binary-compatibility gate (GATE-01, stage 2 of 3). Build-breaking as of
+                 6.3.0: any binary-incompatible change to a public or protected member of
+                 com.ultikits.ultitools fails `mvn verify` unless the exact symbol is named in the
+                 <excludes> list below. accessModifier is `protected`, not `public`, because
+                 BaseCommandExecutor#handleHelp is itself `protected abstract` - the framework
+                 already requires every downstream command class to bind to a protected member,
+                 so protected is part of the public contract by construction. The <excludes> list
+                 is Phase 7's authored removal record, one entry per symbol this milestone removes;
+                 Phase 8 deletes the whole list and locks the gate to zero tolerance.
+                 japicmp 二进制兼容性门（GATE-01，阶段 2/3）。自 6.3.0 起阻断构建：
+                 com.ultikits.ultitools 中任何公共或受保护成员的二进制不兼容变更都会导致
+                 `mvn verify` 失败，除非该符号已在下方 <excludes> 中列出。accessModifier 取
+                 `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp 本身就是
+                 `protected abstract`——框架已经要求每个下游命令类绑定到一个受保护成员，所以
+                 protected 本就是公共契约的一部分。下方 <excludes> 列表是 Phase 7 逐条记录的删除
+                 清单，Phase 8 会整体删除该列表并将门禁收紧为零容忍。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
@@ -294,7 +305,7 @@
                         </file>
                     </newVersion>
                     <parameter>
-                        <accessModifier>public</accessModifier>
+                        <accessModifier>protected</accessModifier>
                         <!-- The 6.2.5 baseline jar predates several planned removals; without this flag
                              japicmp fails outright instead of reporting a clean diff for any symbol that
                              genuinely did not exist on the old side. -->
@@ -309,9 +320,226 @@
                              reporting a diff; this is a classpath-resolution gap for the comparison
                              tool itself, not a build or gate defect. -->
                         <ignoreMissingClasses>true</ignoreMissingClasses>
+                        <!-- Absent by default (=false). Flipping this to true (D-03) makes
+                             every binary-incompatible change to a member NOT named below fail
+                             `mvn verify` - the merge blocker that gives the excludes list below
+                             its teeth (proven by Task 2's delete-one-entry transcript). -->
+                        <breakBuildOnBinaryIncompatibleModifications>true</breakBuildOnBinaryIncompatibleModifications>
                         <includes>
                             <include>com.ultikits.ultitools</include>
                         </includes>
+                        <!-- Pre-existing Phases 2-6 breaks (D-04), authored member by member -
+                             measured at HEAD under accessModifier=protected: 13 classes / 20
+                             members. No entry here is package-wide (criterion 3 forbids it):
+                             every entry is either a bare fully-qualified class name (a whole-
+                             class removal - japicmp's class filter appends (\$.*)? internally,
+                             so nested/inner classes need no separate entry) or a
+                             Class#member(paramTypes) key naming one member removed from a class
+                             that otherwise survives. Full justification per entry, and the
+                             delete-one-entry proof transcript, are in
+                             .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. -->
+                        <excludes>
+                            <!-- Whole-class removals: one entry covers the class and every one
+                                 of its members. -->
+                            <exclude>com.ultikits.ultitools.aop.AopProxyBeanPostProcessor</exclude>
+                            <exclude>com.ultikits.ultitools.aop.CglibProxyFactory</exclude>
+                            <!-- Members removed from a class that otherwise survives: fully-
+                                 qualified parameter types are required by japicmp's own filter
+                                 parser (JApiCmpException otherwise). -->
+                            <exclude>com.ultikits.ultitools.abstracts.command.BaseCommandExecutor#executeCommand(com.ultikits.ultitools.abstracts.command.CommandContext, java.lang.reflect.Method, java.lang.Object[])</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer#initialize(com.ultikits.ultitools.abstracts.gui.declarative.core.Widget, com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext)</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container#getBackground()</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container$Builder#background(com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper)</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView#getMaxRows()</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView$Builder#rows(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandExecutionManager#isCommandAllowed(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.FileOperationManager#isPathAllowed(java.lang.String)</exclude>
+                            <!-- Field removed from a surviving class: japicmp's field-filter
+                                 syntax is Class#fieldName with no parameter list at all -
+                                 confirmed via javap decompilation of japicmp's own
+                                 JavadocLikeFieldFilter, which splits only on '#' and requires
+                                 exactly two parts (Options.createFilterList routes any '#'
+                                 entry containing '(' to the behavior filter, everything else to
+                                 the field filter - confirmed in japicmp-0.26.1.jar). -->
+                            <exclude>com.ultikits.ultitools.annotations.Propagation#NESTED</exclude>
+                            <!-- D-02 allowlist (D-21's mechanical clause): the only reported
+                                 change here is METHOD_NOW_STATIC, and japicmp's own report shows
+                                 the old-side modifier as PRIVATE (<modifier oldValue="PRIVATE">
+                                 in target/japicmp/japicmp.xml) - no downstream binary can hold a
+                                 reference to a private member, so this is excluded but
+                                 deliberately NOT recorded in COMPATIBILITY.md; recording it would
+                                 tell third-party authors something will break them when nothing
+                                 can. -->
+                            <exclude>com.ultikits.ultitools.commands.tabcomplete.MethodInvocationCompleter#getSuggestMethodsByName(java.lang.Object, java.lang.String)</exclude>
+                            <!-- 07-13-PLAN.md (GEN-04, maintainer decision "proceed" — expanded
+                                 scope). Whole-class removals: one bare-FQN entry each covers the
+                                 class and every one of its members/constructors, including any
+                                 reported SUPERCLASS_REMOVED/INTERFACE_REMOVED for the class under
+                                 its own name (confirmed against target/japicmp/japicmp.xml for
+                                 each entry below, per 07-03's documented blind spot: its staleness
+                                 evaluator cannot see class-level entries, so this is hand-checked). -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractDataEntity</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.guis.OkCancelPage</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.guis.PagingPage</exclude>
+                            <exclude>com.ultikits.ultitools.annotations.command.OptionalParam</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper</exclude>
+                            <!-- RemovalConsistencyEvaluator's D-22 pom-sync check does an exact
+                                 RegistryKey match, not a "does an enclosing class-level exclude
+                                 already cover this" check — so a whole-class entry above suppresses
+                                 japicmp's own report for these methods, but does NOT satisfy the
+                                 evaluator's sync check for the individually-@Deprecated registry
+                                 entries every VersionWrapper default method carries (measured: this
+                                 evaluator has no such recognition of the (\$.*)? class-filter
+                                 japicmp itself applies). Each one needs its own member-level entry
+                                 too. UltiTools#versionWrapper (below, near its class's own excludes)
+                                 is the same situation for a field. Neither PlayerTempListener nor
+                                 TempListener$PlayerTempListenerBuilder needs this treatment — their
+                                 individual Lombok-generated members carry no per-member @Deprecated
+                                 of their own, only the enclosing class does, so the registry has no
+                                 individual entries to sync for them. -->
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getBed(com.ultikits.ultitools.entities.Colors)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getBlockFace(org.bukkit.block.Block)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getColoredPlaneGlass(com.ultikits.ultitools.entities.Colors)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getEmailMaterial(boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getEndEye()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getGrassBlock()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getHead(org.bukkit.OfflinePlayer)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getItemDurability(org.bukkit.inventory.ItemStack)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getItemInHand(org.bukkit.entity.Player, boolean)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getSign()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#getSound(com.ultikits.ultitools.entities.Sounds)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#registerNewObjective(org.bukkit.scoreboard.Scoreboard, java.lang.String, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#sendActionBar(org.bukkit.entity.Player, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.VersionWrapper#sendPlayerList(org.bukkit.entity.Player, java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.impl.PlayerTempListener</exclude>
+                            <!-- Nested class of a class that itself survives (TempListener) —
+                                 TempListener's own FQN is NOT excluded here, so this needs its own
+                                 entry naming the nested ($) form; see 07-01-SUMMARY.md's D-04 note
+                                 on japicmp's internal (\$.*)? class-filter suffix. -->
+                            <exclude>com.ultikits.ultitools.interfaces.TempListener$PlayerTempListenerBuilder</exclude>
+                            <!-- Members removed from classes that otherwise survive. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#getVersionWrapper()</exclude>
+                            <!-- The private backing field, individually @Deprecated in its own
+                                 right (not just the accessor). japicmp never sees it at all —
+                                 accessModifier=protected means a private member is outside its
+                                 scan surface entirely, not merely "unchanged" — so this entry
+                                 exists purely to satisfy RemovalConsistencyEvaluator's D-22
+                                 pom-sync check for the registry entry
+                                 DeprecationRegistryGenerator#impliedRemovedByPrivateVisibility
+                                 (07-13-PLAN.md, Rule 3 fix) allowed to flip to REMOVED without
+                                 japicmp corroboration, on the same zero-downstream-risk rationale
+                                 D-21 already applies to pom excludes. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#versionWrapper</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#getVersionWrapper()</exclude>
+                            <exclude>com.ultikits.ultitools.context.UltiToolsBean#getVersionWrapper()</exclude>
+                            <exclude>com.ultikits.ultitools.interfaces.TempListener#player(java.lang.Class)</exclude>
+                            <!-- BaseDataEntity survives AbstractDataEntity's deletion but no
+                                 longer extends it (it now owns its own id field directly) —
+                                 japicmp attributes SUPERCLASS_REMOVED to the subclass's own FQN,
+                                 not to the deleted superclass, so this needs its own entry even
+                                 though AbstractDataEntity is already excluded above. -->
+                            <exclude>com.ultikits.ultitools.abstracts.data.BaseDataEntity</exclude>
+                            <!-- InventoryConfirm survives OkCancelPage's deletion by migrating
+                                 onto BaseConfirmationPage (07-13-PLAN.md's expanded scope): its
+                                 superclass changed and three hook methods were renamed/re-scoped
+                                 (getOkName/getCancelName -> getOkButtonName/getCancelButtonName,
+                                 onOk -> onConfirm, onCancel narrowed from public to protected) as
+                                 one coordinated migration, not independent member removals — one
+                                 class-level entry covers the whole reported set (confirmed against
+                                 target/japicmp/japicmp.xml: SUPERCLASS_REMOVED + 4 method changes,
+                                 all under InventoryConfirm's own FQN, nothing else). -->
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm</exclude>
+                            <!-- Pre-existing gap from plan 07-05 (GEN-01, commit 4706bff), not
+                                 part of this plan's (07-13, GEN-04) declared symbol set. 07-05
+                                 migrated these three core commands from AbstractCommandExecutor to
+                                 BaseCommandExecutor but never ran `mvn -B -o clean verify
+                                 -DskipTests` (only `mvn -B test`), so the japicmp gate — live and
+                                 build-breaking since plan 07-01, which landed before 07-05 — never
+                                 saw this SUPERCLASS_REMOVED change until this plan's own verify
+                                 run. Fixed here under Rule 3 (blocking issue): every later Phase 7
+                                 plan's verify step would otherwise inherit this same red build.
+                                 AbstractCommandExecutor itself is untouched by this plan; only
+                                 these three framework-owned command classes' own supertype changed. -->
+                            <exclude>com.ultikits.ultitools.commands.CloudLoginCommand</exclude>
+                            <exclude>com.ultikits.ultitools.commands.PluginInstallCommands</exclude>
+                            <exclude>com.ultikits.ultitools.commands.UltiToolsCommands</exclude>
+                            <!-- 07-14-PLAN.md (GEN-04, second half — the deprecated overloads
+                                 living inside classes that otherwise survive; cluster A's whole-
+                                 type removals are the entries above). Every entry here is member-
+                                 level with fully-qualified parameter types — two of these
+                                 (CommandManager's two register(CommandExecutor, ...) overloads)
+                                 collide on name alone, so each needs its own distinct key or one
+                                 would silently suppress japicmp's report for the other while
+                                 leaving it unrecorded. Constructor keys use the JavadocLikeBehavior
+                                 filter's convention of the simple class name as the "method" name
+                                 (Class#Class(paramTypes)), matching {@code {@link Class#Class(args)}}
+                                 javadoc syntax — confirmed against target/japicmp/japicmp.xml,
+                                 which reports removed constructors the same way it reports removed
+                                 methods (JavadocLikeBehaviorFilter backs both). -->
+                            <exclude>com.ultikits.ultitools.manager.PluginManager#register(java.lang.Class, java.lang.String, java.lang.String, java.util.List, java.util.List, int, java.lang.String)</exclude>
+                            <!-- The private with-args initializePlugin overload this seven-argument
+                                 register(...) exclusively called. japicmp never sees it at all;
+                                 accessModifier=protected puts a private member outside its scan
+                                 surface entirely, so this entry exists purely to satisfy
+                                 RemovalConsistencyEvaluator's D-22 pom-sync check for the registry
+                                 entry the DeprecationRegistryGenerator produced for its own
+                                 individually-@Deprecated(forRemoval=true) annotation, on the same
+                                 zero-downstream-risk rationale D-21 already applies to pom excludes
+                                 (mirrors UltiTools#versionWrapper's private-field treatment above). -->
+                            <exclude>com.ultikits.ultitools.manager.PluginManager#initializePlugin(java.lang.ClassLoader, java.lang.Class, java.lang.Object[])</exclude>
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#UltiToolsPlugin(java.lang.String, java.lang.String, java.util.List, java.util.List, int, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandManager#register(org.bukkit.command.CommandExecutor, java.lang.String, java.lang.String, java.lang.String[])</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandManager#register(org.bukkit.command.CommandExecutor)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.CommandManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin, org.bukkit.event.Listener)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.ListenerManager#registerAll(com.ultikits.ultitools.abstracts.UltiToolsPlugin, java.lang.String)</exclude>
+                            <!-- 07-15-PLAN.md (GEN-02): the deprecated command-executor generation
+                                 itself, deleted in 6.3.0 after its 6.2.1 deprecation window closed.
+                                 japicmp reports both the class and every one of its 11 members on a
+                                 whole-class removal (D-04's granularity rule: one class-level entry
+                                 covers all of them, confirmed against target/japicmp/japicmp.xml —
+                                 CLASS_REMOVED plus 11 member-level entries, all folded under this
+                                 one FQN, nothing left unaccounted for). Removed with all six
+                                 maintained downstream modules' migration pull requests OPEN and
+                                 UNMERGED (maintainer decision, 2026-09-02): merging to -SNAPSHOT
+                                 alpha is not releasing, and the "all six downstream published"
+                                 precondition this plan originally carried is transferred to the
+                                 6.3.0 framework release gate (Phase 8) rather than discharged here
+                                 — see .planning/phases/07-generational-removals/
+                                 07-DOWNSTREAM-PREFLIGHT.md's "Publication confirmed" and "Removal
+                                 authorized" sections. -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractCommandExecutor</exclude>
+                            <!-- The misspelled empty @Deprecated shim that extended the class
+                                 above; also deleted in 6.3.0. A single class-level entry — it
+                                 declared no members of its own beyond the inherited getInstance()
+                                 override, confirmed against target/japicmp/japicmp.xml. -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractCommendExecutor</exclude>
+                            <!-- 07-17-PLAN.md (GEN-11): the seven-type WIRE-17 WebSocket dispatch
+                                 cluster japicmp replaced with the PluginInitiationUtils dispatch
+                                 table back in Phase 1 (plan 01-05), but which stayed in the tree
+                                 unreferenced until this plan deleted it. All seven are
+                                 `@ApiStatus.Internal` (websocket/package-info.java and
+                                 websocket/handlers/package-info.java before its own deletion), so
+                                 removing them is NOT a public-API compatibility event per
+                                 COMPATIBILITY.md:128-133 and they carry no COMPATIBILITY.md
+                                 removal-list entry — but japicmp reads bytecode, not
+                                 `@ApiStatus`, so it reports these exactly as it would a public
+                                 removal, which is why they still need entries here (06-CONTEXT
+                                 D-30's precedent, D-15 in 07-CONTEXT). Each is a whole-class
+                                 removal — one entry per type covers the class and every one of
+                                 its members, confirmed against target/japicmp/japicmp.xml. -->
+                            <exclude>com.ultikits.ultitools.websocket.MessageHandlerRegistry</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.WebSocketMessageHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.CommandExecutionHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.FileOperationHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
+                            <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                        </excludes>
                     </parameter>
                 </configuration>
                 <executions>
@@ -319,6 +547,39 @@
                         <phase>verify</phase>
                         <goals>
                             <goal>cmp</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Deprecation registry generator (GEN-12, D-08). Regenerates
+                 compatibility/deprecations.json and compatibility/DEPRECATIONS.md from the
+                 @Deprecated annotations plus @deprecated/@removeIn javadoc tags in src/main/java,
+                 cross-checked against japicmp's own report (D-22). Declared textually AFTER the
+                 japicmp <plugin> block above - Maven runs same-phase executions in POM
+                 declaration order, and that ordering is the only thing that guarantees
+                 target/japicmp/japicmp.xml exists when the generator reads it.
+                 Build-time only: never a dependency of the published artifact, never shaded.
+                 废弃注记表生成器（GEN-12，D-08）。从 src/main/java 中的
+                 @Deprecated 注解以及 @deprecated/@removeIn javadoc 标签重新生成
+                 compatibility/deprecations.json 和 compatibility/DEPRECATIONS.md，并与 japicmp
+                 自身的报告交叉校验（D-22）。文本上写在上方 japicmp <plugin> 块之后——
+                 Maven 在同一阶段按 POM 声明顺序执行执行项，而这个顺序是唯一能保证生成器读取
+                 target/japicmp/japicmp.xml 时该文件已经存在的机制。仅用于构建时：
+                 从不作为已发布制作物的依赖，也从不被 shade 。 -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <mainClass>com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator</mainClass>
+                    <classpathScope>test</classpathScope>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>generate-deprecation-registry</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>java</goal>
                         </goals>
                     </execution>
                 </executions>
@@ -469,6 +730,22 @@
                     <docencoding>UTF-8</docencoding>
                     <locale>en_US</locale>
                     <failOnWarnings>false</failOnWarnings>
+                    <!-- Registers the @removeIn block tag (D-27) so the registry generator's
+                         javadoc convention does not fail `mvn package` with "error: unknown
+                         tag: removeIn" - an unregistered custom javadoc tag is a fatal error,
+                         not a warning (07-RESEARCH.md Priority 4); this registration lands in
+                         the same commit as the first @removeIn site.
+                         注册 @removeIn 块标签（D-27），避免废弃注记表生成器的 javadoc 约定让
+                         `mvn package` 报 "error: unknown tag: removeIn" 而失败——未注册的自定义
+                         javadoc 标签是致命错误，而非警告；本次注册与第一个 @removeIn 站点
+                         在同一个提交中落地。 -->
+                    <tags>
+                        <tag>
+                            <name>removeIn</name>
+                            <placement>a</placement>
+                            <head>Scheduled removal version:</head>
+                        </tag>
+                    </tags>
                 </configuration>
                 <executions>
                     <execution>

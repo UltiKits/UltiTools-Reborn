@@ -21,7 +21,7 @@ import java.lang.annotation.Target;
  * <pre>{@code
  * @CmdExecutor(alias = {"warp"}, permission = "ultikits.tools.command.warp")
  * @ConditionalOnConfig(value = "config/config.yml", path = "enableWarp")
- * public class WarpCommands extends AbstractCommandExecutor {
+ * public class WarpCommands extends BaseCommandExecutor {
  *     // Only registered if enableWarp: true in config.yml
  * }
  * }</pre>

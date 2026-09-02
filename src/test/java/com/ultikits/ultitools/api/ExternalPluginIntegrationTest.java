@@ -302,6 +302,38 @@ public class ExternalPluginIntegrationTest {
         }
 
         @Test
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void registerExternal_setsContainerDisplayName_forModuleScanDiagnostics()
+                throws Exception {
+            JavaPlugin plugin = createMockPlugin("DiagName", "com.ext.diag.Main");
+            ExternalPluginAdapter adapter = new ExternalPluginAdapter(plugin);
+
+            DependenceManagers mockDepManagers = mock(DependenceManagers.class);
+            SimpleContainer parentContext = new SimpleContainer();
+            parentContext.refresh();
+            when(mockDepManagers.getContext()).thenReturn(parentContext);
+            when(mockUltiTools.getDependenceManagers()).thenReturn(mockDepManagers);
+
+            PluginManager pm = new PluginManager();
+            when(mockUltiTools.getPluginManager()).thenReturn(pm);
+
+            pm.registerExternal(adapter);
+
+            // Pins call site 3 (registerExternal) for the 07-21 D-19 diagnostic identifier,
+            // exactly as the wireAop assertion above pins call site 3 for AOP parity.
+            // assemblePluginContainer sets it for both UltiToolsPlugin load paths;
+            // registerExternal does not go through that method, so it must set it itself.
+            // With displayName null, ModuleScanDiagnostics' isBlank guard drops every
+            // recordSkippedClass call AND suppresses emitSummary, so a bean-creation-time
+            // linkage failure on this path would emit no SEVERE module summary at all --
+            // the operator-matchable signature compatibility/records/6.3.0.md documents.
+            // displayName has no getter, so the field is read directly.
+            Field displayName = SimpleContainer.class.getDeclaredField("displayName");
+            displayName.setAccessible(true);
+            assertThat(displayName.get(adapter.getContext())).isEqualTo("DiagName");
+        }
+
+        @Test
         void unregisterExternal_closesContext() {
             JavaPlugin plugin = createMockPlugin("ExtTest", "com.ext.test.Main");
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(plugin);

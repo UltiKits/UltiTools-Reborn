@@ -76,6 +76,7 @@ import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependencyException;
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
@@ -211,68 +212,6 @@ public class PluginManager {
             return false;
         }
         // null 表示兼容性门禁拒了它，拒绝理由已经打过日志，这里不要再包一层通用错误。
-        if (plugin == null) {
-            return false;
-        }
-        boolean result = attemptPluginRegistration(plugin);
-        if (result) {
-            registerBukkit(plugin);
-        }
-        return result;
-    }
-
-    /**
-     * Register plugin.
-     * <br>
-     * 注册插件。
-     *
-     * @param pluginClass         UltiTools plugin class <br> UltiTools模块类
-     * @param pluginName          Plugin name <br> 插件名称
-     * @param version             Plugin version <br> 插件版本
-     * @param authors             Plugin authors <br> 插件作者
-     * @param loadAfter           Load after plugins <br> 加载在此插件之后的插件
-     * @param minUltiToolsVersion Min UltiTools version <br> 最低UltiTools版本
-     * @param mainClass           Main class <br> 主类
-     * @return Register result <br> 注册结果
-     * @deprecated This overload's reflective, with-args construction has failed on every
-     *             release since 6.2.0 (Phase 1 D-15, measured): {@link
-     *             SecurityPolicy#isSafeParameterType} rejects the runtime types
-     *             {@code authors} and {@code loadAfter} actually are ({@code
-     *             Arrays.asList(...)}'s {@code java.util.Arrays$ArrayList}, or any {@code
-     *             Collections.*} wrapper) before the module's constructor ever runs. This
-     *             overload existed to bypass {@code plugin.yml}-based metadata for connector
-     *             callers; use {@link #register(UltiToolsPlugin)} instead, which takes an
-     *             already-constructed plugin instance and has no reflective construction path
-     *             of its own. See issue #332.
-     *             <p>
-     *             这个重载的带参数反射构造自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
-     *             {@link SecurityPolicy#isSafeParameterType} 会在模块构造函数运行之前，就
-     *             拒绝 {@code authors} 与 {@code loadAfter} 实际的运行期类型（{@code
-     *             Arrays.asList(...)} 的 {@code java.util.Arrays$ArrayList}，或任何 {@code
-     *             Collections.*} 包装类型）。这个重载原本是为了绕开 {@code plugin.yml} 元数据，
-     *             供连接器调用方使用；请改用 {@link #register(UltiToolsPlugin)} —— 它接收一个
-     *             已经构造好的插件实例，自身不涉及任何反射构造路径。见 issue #332。
-     */
-    @Deprecated(since = "6.3.0", forRemoval = true)
-    public boolean register(
-            Class<? extends UltiToolsPlugin> pluginClass,
-            String pluginName,
-            String version,
-            List<String> authors,
-            List<String> loadAfter,
-            int minUltiToolsVersion,
-            String mainClass
-    ) {
-        UltiToolsPlugin plugin;
-        try {
-            plugin = initializePlugin(
-                    classLoader, pluginClass, pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass
-            );
-        } catch (Exception | Error e) {
-            logPluginInitializationFailure(pluginClass.getName(), e);
-            return false;
-        }
-        // 同上：null 是门禁拒绝，不是初始化失败。
         if (plugin == null) {
             return false;
         }
@@ -528,6 +467,11 @@ public class PluginManager {
                 }
                 
                 try {
+                    // GEN-07 (D-14): records what the removed classload filter layers would have
+                    // refused for className, independent of whether loadClass below succeeds,
+                    // throws ClassNotFoundException, or throws SecurityException -- classify() is
+                    // a pure function of the name alone. Purely observational; never refuses.
+                    ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);
                     // Use security-validated class loading (checks dangerous classes/packages)
                     // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
                     Class<?> aClass = ClassLoaderUtils.loadClass(className);
@@ -538,6 +482,9 @@ public class PluginManager {
                     }
                 } catch (ClassNotFoundException | LinkageError e) {
                     // 记录但不中断，继续扫描其他类
+                    // D-19: also accumulated for the one-SEVERE-per-module summary this method's
+                    // finally block emits below -- skip-and-continue itself is unchanged.
+                    ModuleScanDiagnostics.recordSkippedClass(pluginJar.getName(), className, e);
                     Bukkit.getLogger().log(Level.FINE,
                         "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
                 } catch (SecurityException e) {
@@ -547,8 +494,16 @@ public class PluginManager {
                 }
             }
         } catch (IOException | LinkageError | RuntimeException e) {
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
+        } finally {
+            // D-19: fires whether the method returned early (main class found), fell through
+            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
+            // exactly once per call, after the scan loop, naming pluginJar as the module.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return null;
     }
@@ -598,11 +553,23 @@ public class PluginManager {
                             + "not enforced, so no entity is silently dropped).");
                 }
 
-                resolveEntityClass(className).ifPresent(entities::add);
+                resolveEntityClass(className, pluginJar.getName()).ifPresent(entities::add);
             }
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to scan jar for entities: " + pluginJar.getName(), e);
+        } finally {
+            // D-19: fires after the entity scan loop finishes, whether it completed normally or
+            // the jar itself could not be read -- exactly once per call, naming pluginJar as the
+            // module. Independent of loadPluginMainClass's own emitSummary call above: the two
+            // scan the same jar for different purposes and may run at different times, so each
+            // owns its own accumulator lifecycle for the classes it individually recorded.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two. Same independence rationale as
+            // ModuleScanDiagnostics above -- this scan owns its own ClassloadFilterAudit
+            // accumulator lifecycle, separate from loadPluginMainClass's.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
     }
@@ -638,17 +605,29 @@ public class PluginManager {
      * {@link #scanEntitiesInJar} 逐条目使用。永不抛出异常：无法加载的类，或加载成功但不是实体的类，
      * 都会解析为 {@code Optional.empty()}。
      *
-     * @param className the dotted class name to load <br> 待加载的点分隔类名
+     * @param className  the dotted class name to load <br> 待加载的点分隔类名
+     * @param moduleName the D-19 diagnostic identifier for the enclosing {@link
+     *                   #scanEntitiesInJar}'s jar, threaded through so this method's own catch
+     *                   block can accumulate into the correct module <br>
+     *                   外层 {@link #scanEntitiesInJar} 所在 jar 的 D-19 诊断标识，一并传入以便
+     *                   本方法自身的 catch 块能累加到正确的模块下
      * @return the loaded class if it is a {@code @Table} entity, otherwise empty <br>
      *         若加载的类是 {@code @Table} 实体则返回该类，否则为空
      */
-    private static Optional<Class<?>> resolveEntityClass(String className) {
+    private static Optional<Class<?>> resolveEntityClass(String className, String moduleName) {
         try {
+            // GEN-07 (D-14): records what the removed classload filter layers would have refused
+            // for className, independent of whether loadClass below succeeds or throws. Purely
+            // observational; never refuses.
+            ClassLoaderUtils.recordClassloadFilterAudit(moduleName, className);
             Class<?> aClass = ClassLoaderUtils.loadClass(className);
             if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
                 return Optional.of(aClass);
             }
         } catch (ClassNotFoundException | LinkageError e) {
+            // D-19: also accumulated for scanEntitiesInJar's one-SEVERE-per-module summary --
+            // skip-and-continue itself is unchanged.
+            ModuleScanDiagnostics.recordSkippedClass(moduleName, className, e);
             Bukkit.getLogger().log(Level.FINE,
                 "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
         } catch (SecurityException e) {
@@ -1516,84 +1495,10 @@ public class PluginManager {
     }
 
     /**
-     * Initialize module using caller-supplied constructor arguments, resolved reflectively.
-     * A zero-length {@code constructorArgs} carries nothing to validate reflectively, so it is
-     * routed straight through {@link #initializePlugin(ClassLoader, Class)} -- the live,
-     * undeprecated path -- instead of running this method's with-args checks against an empty
-     * array (SILENT-17).
+     * Run the construction-independent second half after {@code initializePlugin} completes
+     * construction: the compatibility gate, then container assembly.
      * <br>
-     * 使用调用方提供的构造器参数，通过反射初始化模块。若 {@code constructorArgs} 长度为零，
-     * 没有任何东西需要反射校验，因此直接转发给 {@link #initializePlugin(ClassLoader, Class)}
-     * ——当前有效、未废弃的路径——而不是对空数组运行这个方法的带参数校验逻辑（SILENT-17）。
-     *
-     * @param classLoader     Class loader <br> 类加载器
-     * @param pluginClass     Plugin class <br> 插件类
-     * @param constructorArgs Constructor arguments <br> 构造器参数
-     * @return the initialized module, or {@code null} if a compatibility gate rejected it
-     *         <br> 初始化好的模块；被兼容性门禁拒绝时返回 {@code null}
-     * @deprecated This reflective, with-args construction path has failed on every release
-     *             since 6.2.0 (Phase 1 D-15, measured): {@link SecurityPolicy#isSafeParameterType}
-     *             matches collection arguments by exact runtime-class-name prefix
-     *             ({@code java.util.List}, {@code java.util.ArrayList}, ...), and neither
-     *             {@code Arrays.asList(...)}'s runtime type ({@code java.util.Arrays$ArrayList})
-     *             nor any {@code Collections.*} wrapper type matches any of those prefixes --
-     *             the list-typed arguments a caller actually supplies are rejected before
-     *             construction ever runs. This path is scheduled for removal (issue #332)
-     *             rather than repair; only the seven-argument {@link #register(Class, String,
-     *             String, List, List, int, String)} calls it with a non-empty argument array.
-     *             <p>
-     *             这条带参数的反射构造路径自 6.2.0 起从未成功过（Phase 1 D-15，已实测）：
-     *             {@link SecurityPolicy#isSafeParameterType} 按运行期类名的精确前缀（
-     *             {@code java.util.List}、{@code java.util.ArrayList} 等）匹配集合参数，而
-     *             {@code Arrays.asList(...)} 的运行期类型（{@code java.util.Arrays$ArrayList}）
-     *             和任何 {@code Collections.*} 包装类型都不匹配这些前缀——调用方实际能传入的
-     *             List 类型参数因此在构造之前就会被拒绝。这条路径计划移除（issue #332）而非
-     *             修复；只有传入非空参数数组的七参 {@link #register(Class, String, String,
-     *             List, List, int, String)} 会调用它。
-     */
-    @Deprecated(since = "6.3.0", forRemoval = true)
-    private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass, Object... constructorArgs) {
-        if (constructorArgs.length == 0) {
-            return initializePlugin(classLoader, pluginClass);
-        }
-
-        // 验证构造器参数安全性
-        if (!validateConstructorArgs(constructorArgs)) {
-            throw new SecurityException("Invalid constructor arguments provided");
-        }
-
-        UltiToolsPlugin plugin;
-        try {
-            // 验证构造器参数类型安全性
-            Class<?>[] paramTypes = new Class<?>[constructorArgs.length];
-            for (int i = 0; i < constructorArgs.length; i++) {
-                if (constructorArgs[i] == null) {
-                    throw new SecurityException("Null constructor argument not allowed at index: " + i);
-                }
-                paramTypes[i] = constructorArgs[i].getClass();
-
-                // 验证参数类型是否安全
-                if (!isSafeParameterType(paramTypes[i])) {
-                    throw new SecurityException("Unsafe parameter type: " + paramTypes[i].getName());
-                }
-            }
-
-            Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor(paramTypes);
-            plugin = constructor.newInstance(constructorArgs);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
-        }
-
-        return finishInitializingPlugin(classLoader, pluginClass, plugin);
-    }
-
-    /**
-     * Run the construction-independent second half shared by both {@code initializePlugin}
-     * overloads: the compatibility gate, then container assembly. Neither overload forks after
-     * construction -- both funnel through this one method.
-     * <br>
-     * 运行两个 {@code initializePlugin} 重载共用的、与构造过程无关的后半段：先跑兼容性门禁，
-     * 再组装容器。两个重载在构造完成之后都不再分叉——都汇入这一个方法。
+     * 在 {@code initializePlugin} 完成构造之后，运行与构造过程无关的后半段：先跑兼容性门禁，再组装容器。
      *
      * @param classLoader Class loader to attach to the assembled container <br> 挂到组装好的
      *        容器上的类加载器
@@ -1664,6 +1569,12 @@ public class PluginManager {
         // initializePlugin previously set this AFTER refresh(), so every @PostConstruct method
         // on that path silently observed a null context.
         plugin.setContext(pluginContext);
+
+        // 07-21 D-19: the per-container diagnostic identifier for
+        // SimpleContainer.preInstantiateSingletons' own SEVERE summary -- set before
+        // scanComponents/refresh() run, so both register(Class) (via initializePlugin) and
+        // register(UltiToolsPlugin) get it for free through this one shared method.
+        pluginContext.setDisplayName(plugin.getPluginName());
 
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         pluginContext.registerShutdownHook();
@@ -1763,7 +1674,7 @@ public class PluginManager {
      * freshly built default one) holds no instance of the corresponding validator type
      * (SILENT-11 / D-01 half 2, D-04). Every {@link CommandExecutor} bean in {@code pluginContext}
      * is checked; a bean that is not a {@link BaseCommandExecutor} (the legacy
-     * {@code AbstractCommandExecutor} generation has no {@link
+     * {@code AbstractCommandExecutor} generation -- removed in 6.3.0 -- never had a {@link
      * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain} at all) is skipped.
      * <p>
      * This is a STRUCTURAL check only -- it asks whether the required validator TYPE is present
@@ -1778,7 +1689,7 @@ public class PluginManager {
      * 所经过的那一条，而不是重新构建的默认链）中不包含对应验证器类型的实例
      * （SILENT-11 / D-01 第二部分, D-04）。{@code pluginContext} 中每一个 {@link CommandExecutor}
      * bean 都会被检查；不是 {@link BaseCommandExecutor} 的 bean（旧一代
-     * {@code AbstractCommandExecutor} 根本没有 {@link
+     * {@code AbstractCommandExecutor}——已在 6.3.0 中移除——从来就没有 {@link
      * com.ultikits.ultitools.abstracts.command.validation.ValidatorChain}）会被跳过。
      * <p>
      * 这只是一个结构性检查——只问链中是否存在所需验证器的类型，从不问某次具体调用是否真的会被
@@ -2055,55 +1966,6 @@ public class PluginManager {
     }
 
     /**
-     * Validate constructor arguments for security.
-     * <br>
-     * 验证构造器参数的安全性。
-     *
-     * @param args constructor arguments <br> 构造器参数
-     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
-     */
-    private boolean validateConstructorArgs(Object... args) {
-        if (args == null) {
-            return true; // null args array is acceptable
-        }
-        
-        // 限制参数数量
-        if (args.length > 10) {
-            Bukkit.getLogger().log(Level.WARNING, 
-                "[UltiTools-API] Too many constructor arguments: " + args.length);
-            return false;
-        }
-        
-        for (Object arg : args) {
-            if (arg == null) {
-                continue; // null individual args will be checked later
-            }
-            
-            // 检查是否是危险类型
-            Class<?> argClass = arg.getClass();
-            if (!isSafeParameterType(argClass)) {
-                Bukkit.getLogger().log(Level.WARNING, 
-                    "[UltiTools-API] Unsafe constructor argument type: " + argClass.getName());
-                return false;
-            }
-        }
-        
-        return true;
-    }
-    
-    /**
-     * Check if parameter type is safe for constructor injection.
-     * <br>
-     * 检查参数类型是否对构造器注入安全。
-     *
-     * @param clazz parameter class <br> 参数类
-     * @return true if safe, false otherwise <br> 如果安全则为true，否则为false
-     */
-    private boolean isSafeParameterType(Class<?> clazz) {
-        return SecurityPolicy.isSafeParameterType(clazz);
-    }
-
-    /**
      * Register bukkit commands or listeners.
      * <p>
      * Both registration entry points ({@link #register(Class)} and {@link
@@ -2314,6 +2176,17 @@ public class PluginManager {
         context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         context.registerShutdownHook();
         context.setClassLoader(adapter.getPluginClassLoader());
+
+        // 07-fix: the per-container diagnostic identifier for
+        // SimpleContainer.preInstantiateSingletons' own SEVERE summary (07-21 D-19).
+        // assemblePluginContainer sets it at :1577 for both UltiToolsPlugin load paths, but
+        // registerExternal is a third container-assembly path that never goes through that
+        // method -- leaving displayName null, which ModuleScanDiagnostics' isBlank guard turns
+        // into a silently dropped record AND a suppressed summary. Set before
+        // scanComponents/refresh() so a bean-creation-time linkage failure here produces the
+        // same operator-matchable signature compatibility/records/6.3.0.md documents for
+        // module JARs, instead of only the per-bean WARNING createBean logs.
+        context.setDisplayName(adapter.getPluginName());
 
         // Register the connector's own JavaPlugin so services can inject it via constructor.
         // Must run BEFORE scanComponents, mirroring initializePlugin's own T-03-27 fix

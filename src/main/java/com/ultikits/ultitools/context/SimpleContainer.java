@@ -28,6 +28,7 @@ import com.ultikits.ultitools.aop.AopEligibility;
 import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import org.jetbrains.annotations.ApiStatus;
@@ -67,11 +68,25 @@ public class SimpleContainer {
     private final List<BeanPostProcessor> beanPostProcessors = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final Map<String, BeanDefinition> beanDefinitions = new ConcurrentHashMap<>();
     private final Set<String> currentlyCreating = ConcurrentHashMap.newKeySet();
+    // The container's own memory of a bean whose creation is DETERMINISTICALLY unresolvable for
+    // the lifetime of this container's classloader (07-23) -- keyed by bean name, valued by the
+    // EXACT LinkageError/TypeNotPresentException createBean already caught for that name. Once a
+    // name is present here, getBean(String) fails fast and createBean is never re-invoked for it,
+    // so a later, independent caller (e.g. PluginManager.validateCommandExecutorContracts's
+    // second getBean() call after preInstantiateSingletons already tried and skipped the same
+    // bean once) never re-attempts creation and never re-throws uncaught. Distinct from
+    // currentlyCreating's transient in-progress tracking: this map records a PERMANENT, terminal
+    // failure, not work still underway.
+    private final Map<String, Throwable> unresolvableBeans = new ConcurrentHashMap<>();
     // Cache for supplier types to avoid instantiation in getBeanNamesForType
     private final Map<String, Class<?>> supplierTypes = new ConcurrentHashMap<>();
     private SimpleContainer parent;
     private ClassLoader classLoader;
     private boolean isStarted = false;
+    // The 07-21 D-19 diagnostic identifier for this container's own bean-creation phase --
+    // independently keyed from ComponentScanner's basePackage-keyed summary. Set (for real) via
+    // setDisplayName, wired from PluginManager.assemblePluginContainer.
+    private String displayName;
     /**
      * Resolves which class to instantiate for a bean. Null means AOP is not wired for this
      * container, in which case every bean is instantiated as its declared class.
@@ -231,6 +246,13 @@ public class SimpleContainer {
     public void registerSingleton(String name, Object instance) {
         refuseIfAopAnnotated(instance);
 
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
+
         Object bean = instance;
         for (BeanPostProcessor processor : beanPostProcessors) {
             bean = processor.postProcessBeforeInitialization(bean, name);
@@ -290,6 +312,12 @@ public class SimpleContainer {
      * @param supplier supplier function <br> 供应商函数
      */
     public void registerSupplier(String name, Supplier<Object> supplier) {
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
         suppliers.put(name, supplier);
     }
 
@@ -341,6 +369,25 @@ public class SimpleContainer {
      * @return bean instance <br> Bean实例
      */
     public Object getBean(String name) {
+        // Fast-path: a bean already proven deterministically unresolvable (07-23) is never
+        // retried -- rethrow its ORIGINAL exception type, never null. A null return would flow
+        // into AutowireFactory.autowireBean's `dependency == null` branch and, for any OTHER bean
+        // with a required=true field of the SAME poisoned type, convert what is today a reliably
+        // caught LinkageError into an uncaught ContainerException that
+        // preInstantiateSingletons's narrow catch does NOT catch -- silently turning today's
+        // correct per-bean skip into a NEW whole-module abort for a different bean. Only these
+        // two types are ever stored (see createBean's catch below), so the two checks are
+        // exhaustive.
+        Throwable memoized = unresolvableBeans.get(name);
+        if (memoized != null) {
+            if (memoized instanceof RuntimeException) {
+                throw (RuntimeException) memoized;
+            }
+            if (memoized instanceof Error) {
+                throw (Error) memoized;
+            }
+        }
+
         // Try three-level cache for singletons
         Object bean = getSingleton(name, true);
         if (bean != null) {
@@ -536,6 +583,13 @@ public class SimpleContainer {
         
         // Check bean definitions by class type (no instantiation needed)
         for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
+            // 07-23: never offer a name already proven deterministically unresolvable -- this is
+            // the fix for PluginManager.validateCommandExecutorContracts's uncaught retry (and
+            // the identically-shaped CommandManager.registerAll/ListenerManager.registerAll):
+            // all three enumerate via this method, then call getBean() per returned name.
+            if (unresolvableBeans.containsKey(entry.getKey())) {
+                continue;
+            }
             if (type.isAssignableFrom(entry.getValue().getBeanClass())) {
                 beanNames.add(entry.getKey());
             }
@@ -600,6 +654,9 @@ public class SimpleContainer {
         // exactly the kind of reference every other Class/instance-keyed collection above is
         // cleared to stop pinning after a plugin unloads.
         resolvedTypeCache.clear();
+        // 07-23: release the failed-bean memo too -- instance-scoped bookkeeping, cleared exactly
+        // like every other per-container structure above.
+        unresolvableBeans.clear();
         isStarted = false;
         
         LOGGER.info("Container closed.");
@@ -710,7 +767,7 @@ public class SimpleContainer {
      * @param displayName display name <br> 显示名称
      */
     public void setDisplayName(String displayName) {
-        // No-op for now
+        this.displayName = displayName;
     }
 
     /**
@@ -790,6 +847,12 @@ public class SimpleContainer {
      * @param definition bean definition <br> Bean定义
      */
     public void registerBeanDefinition(String name, BeanDefinition definition) {
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
         beanDefinitions.put(name, definition);
         beanTypes.put(name, definition.getBeanClass());
         // A newly registered bean definition may be a new candidate for some already-resolved
@@ -910,6 +973,34 @@ public class SimpleContainer {
             singletonFactories.remove(name);
             earlySingletonObjects.remove(name);
             LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
+            throw e;
+        } catch (LinkageError | TypeNotPresentException e) {
+            // A symbol this bean's own method signatures reference is absent from the classpath
+            // (e.g. a module JAR compiled against an older UltiTools-API, referencing a removed
+            // symbol) -- AopProxyResolver.resolve (called above) triggers
+            // ReflectionUtil.getAllMethods -> Class.getDeclaredMethods, which the JVM resolves
+            // eagerly, throwing NoClassDefFoundError/TypeNotPresentException right there rather
+            // than at bean-construction time. Mirrors FinalContractValidator's own, already-
+            // reviewed catch (NoClassDefFoundError | TypeNotPresentException e) for the identical
+            // hazard, one call away from this one (07-21).
+            //
+            // Deliberately does NOT widen to Error or Throwable: OutOfMemoryError and
+            // StackOverflowError are VirtualMachineError, a sibling branch of Error and not a
+            // LinkageError subtype, and must keep propagating and aborting rather than letting
+            // bean creation continue in a possibly corrupted VM state.
+            singletonFactories.remove(name);
+            earlySingletonObjects.remove(name);
+            // 07-23: remember this bean is deterministically unresolvable so getBean(String)'s
+            // fast-path above short-circuits any later, independent caller instead of
+            // re-invoking createBean and re-throwing. Because the fast-path means createBean can
+            // now only ever run its real body once per bean name per container lifetime, this
+            // single put is sufficient on its own -- no separate dedup guard is needed, and the
+            // recordSkippedClass call below now fires exactly once per distinct poisoned bean
+            // name rather than once per encounter.
+            unresolvableBeans.put(name, e);
+            ModuleScanDiagnostics.recordSkippedClass(displayName, definition.getBeanClass().getName(), e);
+            LOGGER.log(Level.WARNING, "Skipping bean '" + name + "' -- its class references a "
+                    + "symbol absent from the classpath", e);
             throw e;
         } catch (Exception e) {
             // Clean up caches on failure
@@ -1159,6 +1250,18 @@ public class SimpleContainer {
      * @param type bean type <br> Bean类型
      * @return beans map <br> Bean映射
      */
+    // 07-23: deliberately NOT filtered against unresolvableBeans the way getBeanNamesForType is.
+    // getBeanNamesForType is what PluginManager.validateCommandExecutorContracts and its two
+    // identically-shaped siblings enumerate before an ordinary per-name getBean() lookup, where
+    // excluding a poisoned name only removes redundant, already-doomed work. Filtering here would
+    // be different in kind, not degree: this method backs getOrderedBeansOfType, getBean(Class)'s
+    // ambiguous-candidate path, and getHighestPriorityBean -- for an interface-typed
+    // @Autowired(required = true) dependency whose SOLE implementor is poisoned, filtering the
+    // poisoned candidate OUT of this result turns getBean(Class)'s candidates.isEmpty() branch
+    // into a null return, which AutowireFactory.autowireBean then converts into an uncaught
+    // ContainerException for a DIFFERENT bean -- reintroducing the exact regression getBean(String)'s
+    // fast-path above exists to prevent. Left throwing exactly as it does today, this method still
+    // benefits from that same fast-path (faster, deduplicated) without needing its own filter.
     @SuppressWarnings("unchecked")
     public <T> Map<String, T> getBeansOfType(Class<T> type) {
         Map<String, T> result = new HashMap<>();
@@ -1322,12 +1425,29 @@ public class SimpleContainer {
      * 初始化所有单例。
      */
     public void preInstantiateSingletons() {
-        String[] beanNames = getBeanDefinitionNames();
-        for (String beanName : beanNames) {
-            BeanDefinition definition = beanDefinitions.get(beanName);
-            if (definition != null && definition.isSingleton() && !definition.isLazyInit()) {
-                getBean(beanName);
+        try {
+            String[] beanNames = getBeanDefinitionNames();
+            for (String beanName : beanNames) {
+                BeanDefinition definition = beanDefinitions.get(beanName);
+                if (definition != null && definition.isSingleton() && !definition.isLazyInit()) {
+                    try {
+                        getBean(beanName);
+                    } catch (LinkageError | TypeNotPresentException e) {
+                        // createBean already recorded the skip via ModuleScanDiagnostics and
+                        // logged a local WARNING (07-21) -- this catch only needs to move on to
+                        // the next bean, so one poisoned bean no longer takes the whole module
+                        // (and every other bean it declares) down with it.
+                        continue;
+                    }
+                }
             }
+        } finally {
+            // D-19: one SEVERE summary for this container's bean-creation phase, independently
+            // keyed from ComponentScanner's own basePackage-keyed summary and from any
+            // PluginManager-keyed one -- three independent accumulator keys, matching the
+            // multi-keyed-accumulator design plan 07-04 already established. A container with no
+            // skipped bean never invokes the emitter at all.
+            ModuleScanDiagnostics.emitSummary(displayName);
         }
     }
 

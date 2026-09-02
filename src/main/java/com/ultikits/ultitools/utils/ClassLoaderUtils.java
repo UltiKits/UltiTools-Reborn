@@ -17,20 +17,25 @@ public class ClassLoaderUtils {
     private static final Pattern VALID_CLASS_NAME_PATTERN = Pattern.compile("^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$");
     
     /**
-     * Validate class name for security.
+     * Validate class name format.
      * <br>
-     * 验证类名的安全性。
+     * 验证类名格式。
+     *
+     * <p><b>GEN-07 (D-13, since 6.3.0):</b> this method no longer calls into
+     * {@link SecurityPolicy} at all -- that class's four name-based checks are now unconditional
+     * no-ops (D-12), and the framework must not call a method it has just declared to do nothing.
+     * {@link #VALID_CLASS_NAME_PATTERN} is the only check left here, and it is input validation,
+     * not security: a {@code null} is guarded explicitly before the regex runs (a bare
+     * {@code Pattern.matcher(null)} throws {@link NullPointerException} rather than failing to
+     * match), so a {@code null}/blank/malformed class name is still rejected, just for a
+     * different reason than before.</p>
      *
      * @param className class name to validate <br> 要验证的类名
-     * @throws SecurityException if class name is invalid or dangerous <br> 如果类名无效或危险
+     * @throws SecurityException if the class name is null or does not match the expected format
+     *                           <br> 如果类名为 null 或不符合预期格式
      */
     private static void validateClassName(String className) throws SecurityException {
-        if (!SecurityPolicy.isSafeClassName(className)) {
-            throw new SecurityException("Class loading blocked by security policy: " + className);
-        }
-        
-        // 额外的格式验证
-        if (!VALID_CLASS_NAME_PATTERN.matcher(className).matches()) {
+        if (className == null || !VALID_CLASS_NAME_PATTERN.matcher(className).matches()) {
             throw new SecurityException("Invalid class name format: " + className);
         }
     }
@@ -121,6 +126,50 @@ public class ClassLoaderUtils {
         return clazz;
     }
     
+    /**
+     * GEN-07 (D-14) package-boundary bridge into the package-private {@code ClassloadFilterAudit}
+     * evaluator, for {@code PluginManager} (a different package, {@code manager}) to record what
+     * the removed classload filter layers would have refused for {@code className} during
+     * {@code moduleName}'s scan. {@code ClassloadFilterAudit} stays package-private per D-14 (its
+     * four relocated lists must not become part of the public surface); this method is the one
+     * public seam a caller outside {@code utils} needs, mirroring the position of the
+     * {@link #loadClass(String)} call site it is always paired with. Purely observational: never
+     * throws, never refuses, and does not affect whether {@code className} loads.
+     * <br>
+     * GEN-07（D-14）跨包桥接：让 {@code PluginManager}（不同包 {@code manager}）能够记录被移除的
+     * 类加载过滤层原本会对 {@code moduleName} 扫描中的 {@code className} 做出什么裁决。
+     * {@code ClassloadFilterAudit} 依 D-14 保持包私有；这是包外调用方唯一需要的公开入口，
+     * 总是与其配对的 {@link #loadClass(String)} 调用点放在一起。纯观察性：从不抛出异常，
+     * 从不拒绝，也不影响 {@code className} 是否被加载。
+     *
+     * @param moduleName the module (or scan unit) currently being evaluated <br> 正在评估的模块
+     * @param className  the class name being evaluated <br> 正在评估的类名
+     * @since 6.3.0
+     */
+    public static void recordClassloadFilterAudit(String moduleName, String className) {
+        ClassloadFilterAudit.record(moduleName, className);
+    }
+
+    /**
+     * GEN-07 (D-14) package-boundary bridge: emits the package-private
+     * {@code ClassloadFilterAudit}'s one-INFO-per-module summary for {@code moduleName}, always --
+     * even when nothing was recorded (a module the removed layers would have refused nothing from
+     * is itself the measurement, not silence). Call once, at the same point
+     * {@code ModuleScanDiagnostics.emitSummary} is called for the same module, so the two
+     * diagnostics land together.
+     * <br>
+     * GEN-07（D-14）跨包桥接：为 {@code moduleName} 触发包私有 {@code ClassloadFilterAudit} 的
+     * 单条 INFO 汇总——始终触发，即便没有记录到任何内容（被移除的层原本不会拒绝任何东西，
+     * 这个「零」本身就是度量结果，而非沉默）。应在与该模块的 {@code ModuleScanDiagnostics.emitSummary}
+     * 同一位置调用一次，使两种诊断一并落地。
+     *
+     * @param moduleName the module whose scan just finished <br> 刚完成扫描的模块
+     * @since 6.3.0
+     */
+    public static void emitClassloadFilterAuditSummary(String moduleName) {
+        ClassloadFilterAudit.emitSummary(moduleName);
+    }
+
     /**
      * Validate that a class loader has the correct parent hierarchy.
      * <br>

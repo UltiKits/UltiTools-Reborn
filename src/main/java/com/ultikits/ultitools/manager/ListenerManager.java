@@ -4,14 +4,11 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
-import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
-import com.ultikits.ultitools.utils.PackageScanUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 
-import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
 /**
@@ -33,77 +30,7 @@ public class ListenerManager {
      */
     public void register(UltiToolsPlugin plugin, Class<? extends Listener> listenerClass) {
         Listener listener = plugin.getContext().getBean(listenerClass);
-        register(plugin, listener);
-    }
-
-    /**
-     * Register listener. No auto injection. Please use {@link #register(UltiToolsPlugin, Class)} instead.
-     * <br>
-     * 注册监听器。无自动注入。请使用 {@link #register(UltiToolsPlugin, Class)} 代替。
-     *
-     * @param plugin   UltiTools plugin instance <br> UltiTools模块实例
-     * @param listener Listener <br> 监听器
-     * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead; this overload takes an
-     *             already-constructed instance and therefore performs no dependency injection.
-     *             <p>
-     *             请改用 {@link #register(UltiToolsPlugin, Class)}；此重载接收已经构造好的实例，
-     *             因此不会执行任何依赖注入。
-     */
-    @Deprecated(since = "6.0.5", forRemoval = true)
-    public void register(UltiToolsPlugin plugin, Listener listener) {
-        List<Listener> listeners = listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
-        Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
-        if (!listeners.contains(listener)) {
-            listeners.add(listener);
-        }
-    }
-
-    /**
-     * Register all listeners in the package.
-     * <p>
-     * 注册包中的所有监听器。
-     *
-     * @param plugin      UltiTools plugin instance <br> UltiTools模块实例
-     * @param packageName Package name <br> 包名
-     * @deprecated This overload reflectively scans and instantiates every {@code @EventListener}
-     *             class in {@code packageName} without ever consulting {@link
-     *             EventListener#manualRegister()} -- a listener its author deliberately withheld
-     *             from auto-registration is registered anyway. After plan 04-08, {@link
-     *             PluginManager#registerBukkit} no longer has an in-framework caller for this
-     *             overload either; both registration entry points resolve listeners as beans from
-     *             the module's own container instead. Use {@link #registerAll(UltiToolsPlugin)},
-     *             which does honour {@code manualRegister()}.
-     *             See issue #337.
-     *             <p>
-     *             这个重载对 {@code packageName} 下每一个 {@code @EventListener} 类做反射式扫描
-     *             并实例化，从不查询 {@link EventListener#manualRegister()}——一个作者刻意不让其
-     *             自动注册的监听器仍然会被注册。计划 04-08 之后，{@link
-     *             PluginManager#registerBukkit} 在框架内也不再有这个重载的调用方；两个注册入口点
-     *             都改为从模块自身的容器中按 bean 解析监听器。请改用
-     *             {@link #registerAll(UltiToolsPlugin)}——它确实遵循 {@code manualRegister()}。
-     *             见 issue #337。
-     */
-    @Deprecated(since = "6.3.0", forRemoval = true)
-    public void registerAll(UltiToolsPlugin plugin, String packageName) {
-        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
-                EventListener.class,
-                packageName,
-                Objects.requireNonNull(plugin.getClass().getClassLoader())
-        );
-        for (Class<?> clazz : classes) {
-            if (!ConditionalRegistrationEvaluator.shouldRegister(clazz, plugin.getContext())) {
-                continue;
-            }
-            try {
-                Listener listener = (Listener) clazz.getDeclaredConstructor().newInstance();
-                plugin.getContext().getAutowireCapableBeanFactory().autowireBean(listener);
-                register(plugin, listener);
-            } catch (InstantiationException |
-                     InvocationTargetException |
-                     IllegalAccessException |
-                     NoSuchMethodException ignored) {
-            }
-        }
+        registerListener(plugin, listener);
     }
 
     /**
@@ -119,7 +46,34 @@ public class ListenerManager {
             if (listener == null) continue;
             EventListener annotation = MergedAnnotationResolver.find(listener.getClass(), EventListener.class);
             if (annotation == null || annotation.manualRegister()) continue;
-            register(plugin, listener);
+            registerListener(plugin, listener);
+        }
+    }
+
+    /**
+     * Registers an already-constructed {@code listener} for {@code plugin} with Bukkit and
+     * tracks it for later {@link #unregisterAll}. The shared registration step behind both
+     * {@link #register(UltiToolsPlugin, Class)} (which resolves the listener as a bean first)
+     * and {@link #registerAll(UltiToolsPlugin)}. Plan 07-14 (GEN-04) removed the public
+     * {@code register(UltiToolsPlugin, Listener)} overload this logic used to live in -- that
+     * overload took an already-constructed instance and therefore performed no dependency
+     * injection of its own, so its actual registration behaviour is unchanged here, only its
+     * public, unvalidated entry point is gone.
+     * <br>
+     * 为 {@code plugin} 向 Bukkit 注册一个已经构造好的 {@code listener}，并记录下来供之后
+     * {@link #unregisterAll} 使用。是 {@link #register(UltiToolsPlugin, Class)}（先把监听器解析
+     * 为 bean）与 {@link #registerAll(UltiToolsPlugin)} 共用的注册步骤。计划 07-14（GEN-04）移除了
+     * 这段逻辑原先所在的公开 {@code register(UltiToolsPlugin, Listener)} 重载——那个重载接收已经
+     * 构造好的实例，本就不做依赖注入，因此这里的实际注册行为不变，变的只是它未经校验的公开入口。
+     *
+     * @param plugin   UltiTools plugin instance <br> UltiTools模块实例
+     * @param listener Listener <br> 监听器
+     */
+    private void registerListener(UltiToolsPlugin plugin, Listener listener) {
+        List<Listener> listeners = listenerListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
+        Bukkit.getServer().getPluginManager().registerEvents(listener, UltiTools.getInstance());
+        if (!listeners.contains(listener)) {
+            listeners.add(listener);
         }
     }
 

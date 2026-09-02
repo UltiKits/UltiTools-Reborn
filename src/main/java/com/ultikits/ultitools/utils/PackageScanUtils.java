@@ -42,16 +42,41 @@ public class PackageScanUtils {
     ) {
         Set<Class<?>> classes = new HashSet<>();
         try {
+            // Scan-level failures (a malformed classloader, a genuine OutOfMemoryError while
+            // enumerating classpath entries) are a different condition from "one class in the
+            // package is unresolvable" -- this catch stays deliberately broad, scoped to
+            // building the ClassPath and enumerating its top-level classes. Do not fold the
+            // narrower per-class catch below back into this one -- see that catch's own
+            // comment for why they are split.
             ClassPath classPath = ClassPath.from(classLoader);
             for (ClassPath.ClassInfo classInfo : classPath.getTopLevelClassesRecursive(packageName)) {
-                // codacy:ignore - Reflection required for annotation scanning, classInfo.getName() is from ClassPath scan
-                Class<?> c = Class.forName(classInfo.getName(), true, classLoader);
-                if (c.isAnnotationPresent(targetAnnotation)) {
-                    classes.add(c);
+                try {
+                    // codacy:ignore - Reflection required for annotation scanning, classInfo.getName() is from ClassPath scan
+                    Class<?> c = Class.forName(classInfo.getName(), true, classLoader);
+                    if (c.isAnnotationPresent(targetAnnotation)) {
+                        classes.add(c);
+                    }
+                } catch (ClassNotFoundException | LinkageError e) {
+                    // Skip-and-continue: a single class in this package that references a
+                    // symbol absent from the classpath (e.g. a module built against an older
+                    // UltiTools-API version) must not abort discovery of every other class in
+                    // the package -- mirrors ComponentScanner's own per-class catch (D-25,
+                    // D-26). Deliberately narrower than the outer catch above:
+                    // OutOfMemoryError/StackOverflowError are VirtualMachineError, not
+                    // LinkageError, and must keep propagating rather than being swallowed
+                    // here.
+                    ModuleScanDiagnostics.recordSkippedClass(packageName, classInfo.getName(), e);
+                    Bukkit.getLogger().log(Level.WARNING,
+                            "Failed to load scanned class: " + classInfo.getName(), e);
                 }
             }
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.SEVERE, "Failed to scan annotated classes", e);
+        } finally {
+            // D-19: one SEVERE summary for this package's scan, if (and only if) the
+            // per-class catch above recorded a skipped class. A healthy scan never invokes
+            // the emitter -- see ModuleScanDiagnostics' own class javadoc.
+            ModuleScanDiagnostics.emitSummary(packageName);
         }
         return classes;
     }

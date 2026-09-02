@@ -69,6 +69,22 @@ class ListenerManagerTest {
     }
 
     /**
+     * Registers {@code instance} for {@code plugin} through the surviving
+     * {@code register(UltiToolsPlugin, Class)} entry point, stubbing {@code plugin.getContext()}
+     * to hand back {@code instance} for {@code listenerClass}. Plan 07-14 (GEN-04) removed the
+     * public {@code register(UltiToolsPlugin, Listener)} overload these tests used to call
+     * directly on an already-constructed instance; this helper drives the same underlying
+     * tracking behaviour (map population, dedup, per-plugin isolation) through the class-based
+     * path so that coverage is preserved rather than dropped.
+     */
+    private <T extends Listener> void registerViaClass(UltiToolsPlugin plugin, Class<T> listenerClass, T instance) {
+        SimpleContainer mockContext = mock(SimpleContainer.class);
+        when(plugin.getContext()).thenReturn(mockContext);
+        when(mockContext.getBean(listenerClass)).thenReturn(instance);
+        listenerManager.register(plugin, listenerClass);
+    }
+
+    /**
      * 测试用监听器 - 有 @EventListener 注解
      */
     @EventListener
@@ -89,7 +105,7 @@ class ListenerManagerTest {
     }
 
     @Nested
-    @DisplayName("register(plugin, listener) 测试")
+    @DisplayName("register(plugin, class) 的监听器跟踪行为测试 (GEN-04：register(plugin, listener) 已移除)")
     class RegisterWithListenerTests {
 
         @Test
@@ -99,7 +115,7 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -118,8 +134,8 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -138,8 +154,8 @@ class ListenerManagerTest {
             NoAnnotationListener listener2 = new NoAnnotationListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener1);
-            listenerManager.register(mockPlugin, listener2);
+            registerViaClass(mockPlugin, TestListener.class, listener1);
+            registerViaClass(mockPlugin, NoAnnotationListener.class, listener2);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -187,7 +203,7 @@ class ListenerManagerTest {
         void shouldUnregisterListener() {
             // Arrange
             TestListener listener = new TestListener();
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Act & Assert - 不应该抛出异常
             assertDoesNotThrow(() -> listenerManager.unregister(listener));
@@ -310,159 +326,6 @@ class ListenerManagerTest {
     }
 
     @Nested
-    @DisplayName("registerAll(plugin, packageName) 测试")
-    class RegisterAllWithPackageTests {
-
-        @Test
-        @DisplayName("扫描空包不应该注册任何监听器")
-        void emptyPackageShouldNotRegisterAnyListeners() throws Exception {
-            // Arrange
-            SimpleContainer mockContext = mock(SimpleContainer.class);
-            AutowireFactory mockFactory = mock(AutowireFactory.class);
-            when(mockPlugin.getContext()).thenReturn(mockContext);
-            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
-
-            // Act - 使用一个不存在的包名
-            listenerManager.registerAll(mockPlugin, "com.nonexistent.package");
-
-            // Assert
-            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
-            mapField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Map<UltiToolsPlugin, List<Listener>> map = (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
-
-            assertThat(map.get(mockPlugin)).isNull();
-        }
-
-        /**
-         * WIRE-07 / D-17: registerAll(plugin, packageName) must consult
-         * {@code @ConditionalOnConfig} before instantiating a scanned listener, exactly like
-         * {@code ComponentScanner} already does on the IoC-scan path. Scans a real fixture
-         * package (see {@code com.ultikits.testfixtures.conditionallistener}) containing one
-         * false-condition and one true-condition {@code @EventListener} class, over a real
-         * {@link SimpleContainer} (not a mock) so the evaluator can actually resolve the plugin
-         * and read a real config file. This is the registration-bookkeeping half of the proof;
-         * the event-dispatch half lives in
-         * {@code ConditionalOnConfigRegistrationIntegrationTest} (Task 2).
-         * <br>
-         * WIRE-07 / D-17：registerAll(plugin, packageName) 必须在实例化被扫描到的监听器之前
-         * 查询 {@code @ConditionalOnConfig}，就像 {@code ComponentScanner} 在 IoC 扫描路径上
-         * 已经做的那样。本用例扫描一个真实的 fixture 包
-         * （见 {@code com.ultikits.testfixtures.conditionallistener}），其中包含一个 false 条件
-         * 与一个 true 条件的 {@code @EventListener} 类，并使用真实的 {@link SimpleContainer}
-         * （而非 mock），以便判定器能够真正解析插件并读取真实的配置文件。这是"注册台账"这一半的
-         * 证明；事件分发那一半的证明在 {@code ConditionalOnConfigRegistrationIntegrationTest}
-         * （Task 2）中。
-         */
-        @Test
-        @DisplayName("应该跳过 @ConditionalOnConfig 条件为 false 的监听器，只注册条件为 true 的")
-        void conditionalListenersAreGatedByConditionalOnConfig(@TempDir File tempDir) throws Exception {
-            // Arrange
-            File configFile = new File(tempDir, "config/config.yml");
-            configFile.getParentFile().mkdirs();
-            try (FileWriter writer = new FileWriter(configFile)) {
-                writer.write("enableFalseListener: false\nenableTrueListener: true\n");
-            }
-
-            SimpleContainer realContainer = new SimpleContainer();
-            when(mockPlugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-            realContainer.registerType(UltiToolsPlugin.class, mockPlugin);
-            when(mockPlugin.getContext()).thenReturn(realContainer);
-
-            try {
-                // Act
-                listenerManager.registerAll(mockPlugin, "com.ultikits.testfixtures.conditionallistener");
-
-                // Assert
-                Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
-                mapField.setAccessible(true);
-                @SuppressWarnings("unchecked")
-                Map<UltiToolsPlugin, List<Listener>> map =
-                        (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
-
-                List<Listener> registered = map.get(mockPlugin);
-                assertThat(registered).isNotNull();
-                assertThat(registered).hasSize(1);
-                assertThat(registered.get(0).getClass().getSimpleName()).isEqualTo("TrueConditionListener");
-            } finally {
-                realContainer.close();
-            }
-        }
-    }
-
-    /**
-     * GEN-05 (04-08 Task 3): {@code registerAll(UltiToolsPlugin, String)} is deprecated in step
-     * with {@code CommandManager}'s symmetric {@code registerAll(UltiToolsPlugin, String)} -- both
-     * package-scanning overloads now have zero in-framework callers (04-08 Task 1) and both carry
-     * {@code @Deprecated(since = "6.3.0", forRemoval = true)}.
-     */
-    @Nested
-    @DisplayName("registerAll(plugin, packageName) 弃用标注测试 (GEN-05)")
-    class RegisterAllWithPackageDeprecationTests {
-
-        @Test
-        @DisplayName("registerAll(plugin, packageName) 应该带着 forRemoval 标注，registerAll(plugin) 不应该")
-        void packageScanOverloadShouldBeMarkedForRemoval() throws Exception {
-            Method deprecatedMethod = ListenerManager.class.getDeclaredMethod(
-                    "registerAll", UltiToolsPlugin.class, String.class);
-            Deprecated deprecated = deprecatedMethod.getAnnotation(Deprecated.class);
-
-            assertThat(deprecated)
-                    .as("registerAll(UltiToolsPlugin, String) 的 @Deprecated 标注不见了")
-                    .isNotNull();
-            assertThat(deprecated.forRemoval())
-                    .as("forRemoval 被改成了 false，下游将只收到不含 API 名的笼统提示")
-                    .isTrue();
-
-            Method currentMethod = ListenerManager.class.getDeclaredMethod("registerAll", UltiToolsPlugin.class);
-            assertThat(currentMethod.getAnnotation(Deprecated.class))
-                    .as("registerAll(UltiToolsPlugin) 是当前推荐的重载，不应该被标注为弃用")
-                    .isNull();
-        }
-
-        @Test
-        @DisplayName("registerAll(plugin, \"\") 不应该抛出异常，也不应该注册任何监听器")
-        void emptyPackageNameShouldNotThrowAndRegisterNothing() throws Exception {
-            SimpleContainer mockContext = mock(SimpleContainer.class);
-            AutowireFactory mockFactory = mock(AutowireFactory.class);
-            when(mockPlugin.getContext()).thenReturn(mockContext);
-            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
-
-            assertDoesNotThrow(() -> listenerManager.registerAll(mockPlugin, ""));
-
-            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
-            mapField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Map<UltiToolsPlugin, List<Listener>> map =
-                    (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
-
-            assertThat(map.get(mockPlugin)).isNull();
-        }
-
-        @Test
-        @DisplayName("扫描一个不含 @EventListener 类的真实包不应该抛出异常，也不应该注册任何监听器")
-        void packageWithZeroEventListenerClassesShouldNotThrowAndRegisterNothing() throws Exception {
-            SimpleContainer mockContext = mock(SimpleContainer.class);
-            AutowireFactory mockFactory = mock(AutowireFactory.class);
-            when(mockPlugin.getContext()).thenReturn(mockContext);
-            when(mockContext.getAutowireCapableBeanFactory()).thenReturn(mockFactory);
-
-            // com.ultikits.ultitools.exceptions holds exception types, none of which is
-            // annotated @EventListener -- a real, non-empty package with a zero-class result set.
-            assertDoesNotThrow(() ->
-                    listenerManager.registerAll(mockPlugin, "com.ultikits.ultitools.exceptions"));
-
-            Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
-            mapField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Map<UltiToolsPlugin, List<Listener>> map =
-                    (Map<UltiToolsPlugin, List<Listener>>) mapField.get(listenerManager);
-
-            assertThat(map.get(mockPlugin)).isNull();
-        }
-    }
-
-    @Nested
     @DisplayName("listenerListMap 字段测试")
     class ListenerListMapFieldTests {
 
@@ -502,7 +365,7 @@ class ListenerManagerTest {
             TestListener listener = new TestListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener);
+            registerViaClass(mockPlugin, TestListener.class, listener);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");
@@ -523,8 +386,8 @@ class ListenerManagerTest {
             NoAnnotationListener listener2 = new NoAnnotationListener();
 
             // Act
-            listenerManager.register(mockPlugin, listener1);
-            listenerManager.register(plugin2, listener2);
+            registerViaClass(mockPlugin, TestListener.class, listener1);
+            registerViaClass(plugin2, NoAnnotationListener.class, listener2);
 
             // Assert
             Field mapField = ListenerManager.class.getDeclaredField("listenerListMap");

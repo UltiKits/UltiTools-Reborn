@@ -5,20 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 
-import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 
 class ViewTypeTest {
 
@@ -34,14 +31,8 @@ class ViewTypeTest {
 
         // Mock UltiTools
         UltiTools mockUltiTools = mock(UltiTools.class);
-        VersionWrapper mockVersionWrapper = mock(VersionWrapper.class);
-        ItemStack mockItemStack = mock(ItemStack.class);
 
         when(mockUltiTools.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-        when(mockUltiTools.getVersionWrapper()).thenReturn(mockVersionWrapper);
-        when(mockVersionWrapper.getColoredPlaneGlass(any())).thenReturn(mockItemStack);
-        when(mockVersionWrapper.getSign()).thenReturn(mockItemStack);
-        when(mockVersionWrapper.getEndEye()).thenReturn(mockItemStack);
 
         // Set mock instance
         instanceField.set(null, mockUltiTools);

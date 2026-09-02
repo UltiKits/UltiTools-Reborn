@@ -226,9 +226,9 @@ class PluginInitiationUtilsWebSocketTest {
 
         @Test
         @DisplayName("应该有处理 ping/pong 的方法")
-        void shouldHavePingPongHandlers() {
+        void shouldHaveHandlePingAndHandlePongMethods() {
             List<String> handlers = getHandlerMethodNames();
-            
+
             assertThat(handlers).contains("handlePing", "handlePong");
         }
 

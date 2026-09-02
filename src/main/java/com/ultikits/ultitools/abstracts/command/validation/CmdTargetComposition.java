@@ -11,11 +11,11 @@ import java.util.List;
  * The single implementation of {@code @CmdTarget}'s class-versus-method composition rule.
  * <p>
  * Before this class existed, the rule was implemented twice and disagreed with itself:
- * {@code AbstractCommandExecutor} required both the class-level and method-level checks to pass
- * (intersection), while {@code SenderTypeValidator} let the method-level value fully replace the
- * class-level one with no check at all (unguarded override). Migrating a command class between
- * the two executor generations silently changed who could invoke it - no compiler signal on
- * either side. See issue #320 and D-01 in
+ * {@code AbstractCommandExecutor} (removed in 6.3.0) required both the class-level and
+ * method-level checks to pass (intersection), while {@code SenderTypeValidator} let the
+ * method-level value fully replace the class-level one with no check at all (unguarded
+ * override). Migrating a command class between the two executor generations silently changed
+ * who could invoke it - no compiler signal on either side. See issue #320 and D-01 in
  * {@code .planning/phases/01-adjudication-foundations-compatibility-baseline/01-ADJUDICATION.md}.
  * <p>
  * D-01 settles this as <b>narrowing-only override</b>: a method-level value may only narrow the

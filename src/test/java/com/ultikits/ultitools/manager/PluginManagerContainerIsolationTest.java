@@ -180,12 +180,19 @@ class PluginManagerContainerIsolationTest {
         return pluginManager;
     }
 
+    /**
+     * Plan 07-14 (GEN-04) removed the deprecated with-args initializePlugin(ClassLoader, Class,
+     * Object...) overload; every call site here always passed an empty constructorArgs array,
+     * which that overload's own javadoc documented as routing straight through to the
+     * two-argument overload anyway (SILENT-17) -- retargeting the reflection changes nothing
+     * about what this test class observes.
+     */
     private Object invokeInitializePlugin(PluginManager pluginManager, ClassLoader loader, Class<?> pluginClass)
             throws Exception {
         Method initializePlugin = PluginManager.class.getDeclaredMethod(
-                "initializePlugin", ClassLoader.class, Class.class, Object[].class);
+                "initializePlugin", ClassLoader.class, Class.class);
         initializePlugin.setAccessible(true);
-        return initializePlugin.invoke(pluginManager, loader, pluginClass, new Object[0]);
+        return initializePlugin.invoke(pluginManager, loader, pluginClass);
     }
 
     private List<String> beanNames(SimpleContainer container) {

@@ -38,7 +38,6 @@ import com.ultikits.ultitools.interfaces.Configurable;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
 import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
@@ -217,30 +216,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
      * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
      * @param mainClass           the main class of the plugin <br> 插件的主类
-     * @deprecated Use the seven-argument constructor and pass {@code resourceFolderPath}
-     *             explicitly. This overload hard-codes it to
-     *             {@code <dataFolder>/pluginConfig/<pluginName>}.
-     *             <p>
-     *             请改用七参数构造函数并显式传入 {@code resourceFolderPath}。
-     *             此重载把它硬编码成了 {@code <dataFolder>/pluginConfig/<插件名>}。
-     */
-    @Deprecated(since = "6.0.8", forRemoval = true)
-    public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass) {
-        this(pluginName, version, authors, loadAfter, minUltiToolsVersion, mainClass,
-             UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/pluginConfig/" + pluginName);
-    }
-
-    /**
-     * Constructor for UltiToolsPlugin. For plugin connector.
-     * <p>
-     * UltiToolsPlugin的构造函数。用于插件连接器。
-     *
-     * @param pluginName          the name of the plugin <br> 插件名称
-     * @param version             the version of the plugin <br> 插件版本
-     * @param authors             the authors of the plugin <br> 插件作者
-     * @param loadAfter           the plugins which should be loaded before this plugin <br> 在这个插件之前加载的插件
-     * @param minUltiToolsVersion the minimum version of UltiTools required by this plugin <br> 这个插件所需的UltiTools最低版本
-     * @param mainClass           the main class of the plugin <br> 插件的主类
      * @param resourceFolderPath  the path to the resource folder <br> 资源文件夹的路径
      */
     public UltiToolsPlugin(String pluginName, String version, List<String> authors, List<String> loadAfter, int minUltiToolsVersion, String mainClass, String resourceFolderPath) {
@@ -345,15 +320,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
-    }
-
-    /**
-     * @return the version wrapper <br> 版本包装器
-     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
-     */
-    @Deprecated(since = "6.2.0", forRemoval = true)
-    public static VersionWrapper getVersionWrapper() {
-        return UltiTools.getInstance().getVersionWrapper();
     }
 
     /**

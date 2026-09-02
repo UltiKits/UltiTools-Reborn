@@ -583,51 +583,6 @@ class TempListenerTest {
     }
 
     @Nested
-    @DisplayName("PlayerTempListenerBuilder 测试 (已弃用)")
-    @SuppressWarnings("deprecation")
-    class PlayerTempListenerBuilderTests {
-
-        @Test
-        @DisplayName("应该创建玩家特定的监听器")
-        void shouldCreatePlayerSpecificListener() {
-            // Arrange
-            PlayerMock player = server.addPlayer("TargetPlayer");
-
-            // Act
-            TempListener listener = TempListener.player(PlayerQuitEvent.class)
-                    .player(player)
-                    .eventHandler(event -> false)
-                    .priority(EventPriority.NORMAL)
-                    .build();
-
-            // Assert
-            assertThat(listener).isNotNull();
-        }
-
-        @Test
-        @DisplayName("listen 方法应该注册监听器")
-        void listenShouldRegister() {
-            // Arrange
-            PlayerMock player = server.addPlayer("TargetPlayer");
-            AtomicBoolean handled = new AtomicBoolean(false);
-
-            // Act
-            TempListener.player(PlayerQuitEvent.class)
-                    .player(player)
-                    .listen(event -> {
-                        handled.set(true);
-                        return true;
-                    });
-
-            // 触发事件
-            player.disconnect();
-
-            // Assert
-            assertThat(handled.get()).isTrue();
-        }
-    }
-
-    @Nested
     @DisplayName("多事件类型测试")
     class MultipleEventTypesTests {
 

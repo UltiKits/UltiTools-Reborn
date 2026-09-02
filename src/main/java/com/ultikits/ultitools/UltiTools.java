@@ -39,8 +39,6 @@ import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
-import com.ultikits.ultitools.interfaces.VersionWrapper;
-import com.ultikits.ultitools.interfaces.impl.DefaultVersionWrapper;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
@@ -115,11 +113,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
     // The six constants above are declared here, at the top of the class alongside the other
     // static final constants, rather than at their original position (immediately before
     // migrateCapabilitiesConfig()/migrateKeyIfAbsent(), the only methods that use them) — so that
-    // they precede all methods (PMD FieldDeclarationsShouldBeAtStartOfClass). They are brand new
-    // this phase, isolated from the pre-existing instance-field block below (which already
-    // violates this rule around getVersionWrapper() on origin/alpha and is out of this fix's
-    // scope), and every initializer here is a literal / static-method-call expression with no
-    // dependency on declaration order relative to any other member.
+    // they precede all methods (PMD FieldDeclarationsShouldBeAtStartOfClass). The instance-field
+    // block below used to violate this rule around getVersionWrapper() (an accessor method that
+    // sat between two fields); that method was removed in 6.3.0 (GEN-04) along with the
+    // VersionWrapper cluster it belonged to, so the block is contiguous again as of this change.
     private static UltiTools ultiTools;
     @Getter
     private final ListenerManager listenerManager = new ListenerManager();
@@ -128,34 +125,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     private DependenceManagers dependenceManagers;
     private URLClassLoader ultiToolsClassLoader;
-    /**
-     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
-     */
-    @Deprecated(since = "6.2.0", forRemoval = true)
-    private VersionWrapper versionWrapper;
-
-    /**
-     * 手写而不是用 Lombok 的 {@code @Getter}。Lombok 会把 {@code @Deprecated} 复制到生成的
-     * accessor 上，但<b>丢掉 {@code since} 与 {@code forRemoval} 两个元素</b>，编译产物里只剩一个
-     * 裸 {@code @Deprecated}。而 javac 的 {@code -Xlint:removal} 自 JDK 9 起默认开启、
-     * {@code -Xlint:deprecation} 默认关闭，所以下游用默认参数编译时收不到点名的移除警告，
-     * 只会看到一句不含 API 名的笼统提示。字段上标了 {@code forRemoval} 不解决问题 ——
-     * 对外的入口是这个 getter，标注必须落在它身上。改回 {@code @Getter} 会让
-     * COMPATIBILITY.md 的移除清单对这一项失真。
-     *
-     * <p>Hand-written rather than Lombok's {@code @Getter}: Lombok copies
-     * {@code @Deprecated} onto the generated accessor but drops the {@code since}
-     * and {@code forRemoval} elements, so downstream compiling with default flags
-     * never sees the named {@code [removal]} warning for this API.
-     *
-     * @return the version wrapper <br> 版本适配器
-     * @deprecated Use {@link com.ultikits.ultitools.utils.XVersionUtils} instead.
-     */
-    @Deprecated(since = "6.2.0", forRemoval = true)
-    public VersionWrapper getVersionWrapper() {
-        return versionWrapper;
-    }
-
     @Getter
     private Language language;
     @Getter
@@ -189,13 +158,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * {@link Getter} above).
      */
     // PMD.FieldDeclarationsShouldBeAtStartOfClass: deliberately grouped with its sibling manager
-    // fields (language ... errorReportCollector above), a pre-existing block of 13 fields that
-    // already violates this rule around getVersionWrapper() on origin/alpha — not a pattern this
-    // phase introduced. Reorganizing that whole bootstrap-class field block is out of this fix's
-    // scope (see the six List<String> constants moved above for the fields that WERE safe and
-    // isolated enough to relocate); fragmenting only these two out of their domain-grouped,
-    // narratively-documented neighbors would not restore the class to compliance and would
-    // scatter a related field pair for no readability gain.
+    // fields (language ... errorReportCollector above). This block previously violated the rule
+    // because getVersionWrapper() (a method) sat between two of these fields; that method was
+    // removed in 6.3.0 (GEN-04) along with the VersionWrapper cluster, so the field block is now
+    // contiguous. The @SuppressWarnings below is left in place pending re-verification by the
+    // Codacy gate itself rather than removed on inference — this comment no longer claims a live
+    // violation, only records why the annotation exists.
     @Getter
     @SuppressWarnings("PMD.FieldDeclarationsShouldBeAtStartOfClass")
     private RemoteActionLog remoteActionLog;
@@ -301,7 +269,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
         if (!initDependencies()) return;
         initLanguage();
-        this.versionWrapper = new DefaultVersionWrapper();
         initDataStore();
         initPluginModules();
         migrateCapabilitiesConfig();

@@ -8,8 +8,8 @@ import java.util.List;
 import org.bukkit.command.CommandSender;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -24,7 +24,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  */
 @CmdExecutor(description = "UltiToolsCommands", alias = {"ul", "ultitools", "ulti"}, requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
-public class UltiToolsCommands extends AbstractCommandExecutor {
+public class UltiToolsCommands extends BaseCommandExecutor {
     @CmdMapping(format = "reload")
     public void reloadPlugins() {
         try {

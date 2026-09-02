@@ -3,19 +3,19 @@ package com.ultikits.ultitools.widgets.impl;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 
-import com.ultikits.ultitools.abstracts.guis.OkCancelPage;
+import com.ultikits.ultitools.abstracts.gui.BaseConfirmationPage;
 import com.ultikits.ultitools.widgets.Confirm;
 
 /**
  * A GUI inventory-based confirmation dialog implementation.
  * <p>
  * This widget displays a 3-row inventory GUI with OK and Cancel buttons.
- * Extends {@link OkCancelPage} to inherit the standard OK/Cancel button layout.
+ * Extends {@link BaseConfirmationPage} to inherit the standard OK/Cancel button layout.
  * </p>
  * <p>
  * 基于 GUI 物品栏的确认对话框实现。
  * 该组件显示一个带有确定和取消按钮的 3 行物品栏界面。
- * 继承 {@link OkCancelPage} 以获得标准的确定/取消按钮布局。
+ * 继承 {@link BaseConfirmationPage} 以获得标准的确定/取消按钮布局。
  * </p>
  *
  * <p><strong>Example Usage / 使用示例:</strong></p>
@@ -29,19 +29,19 @@ import com.ultikits.ultitools.widgets.Confirm;
  * @author wisdomme
  * @see Confirm
  * @see ChatConfirm
- * @see OkCancelPage
+ * @see BaseConfirmationPage
  * @since 6.0.0
  */
-public class InventoryConfirm extends OkCancelPage implements Confirm {
-    /** Custom confirm button text, null uses OkCancelPage default / 自定义确认按钮文本，null 使用 OkCancelPage 默认值 */
+public class InventoryConfirm extends BaseConfirmationPage implements Confirm {
+    /** Custom confirm button text, null uses BaseConfirmationPage default / 自定义确认按钮文本，null 使用 BaseConfirmationPage 默认值 */
     private String confirmText;
-    /** Custom cancel button text, null uses OkCancelPage default / 自定义取消按钮文本，null 使用 OkCancelPage 默认值 */
+    /** Custom cancel button text, null uses BaseConfirmationPage default / 自定义取消按钮文本，null 使用 BaseConfirmationPage 默认值 */
     private String cancelText;
 
     /** Callback executed when player clicks OK button / 玩家点击确定按钮时执行的回调 */
-    private final Runnable onConfirm;
+    private final Runnable onConfirmCallback;
     /** Callback executed when player clicks Cancel button / 玩家点击取消按钮时执行的回调 */
-    private final Runnable onCancel;
+    private final Runnable onCancelCallback;
 
     /** The unique GUI identifier / GUI 唯一标识符 */
     private static final String GUI_ID = "confirm_gui";
@@ -61,8 +61,8 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
      */
     public InventoryConfirm(Player player, String title, String description, Runnable onConfirm, Runnable onCancel) {
         super(player, GUI_ID, title + " - " + description, GUI_ROWS);
-        this.onConfirm = onConfirm;
-        this.onCancel = onCancel;
+        this.onConfirmCallback = onConfirm;
+        this.onCancelCallback = onCancel;
     }
 
     /**
@@ -85,23 +85,23 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
     }
 
     @Override
-    public String getOkName() {
+    protected String getOkButtonName() {
         return getConfirmText();
     }
 
     @Override
-    public String getCancelName() {
+    protected String getCancelButtonName() {
         return getCancelText();
     }
 
     @Override
     public String getConfirmText() {
-        return confirmText == null ? super.getOkName() : confirmText;
+        return confirmText == null ? super.getOkButtonName() : confirmText;
     }
 
     @Override
     public String getCancelText() {
-        return cancelText == null ? super.getCancelName() : cancelText;
+        return cancelText == null ? super.getCancelButtonName() : cancelText;
     }
 
     @Override
@@ -110,12 +110,12 @@ public class InventoryConfirm extends OkCancelPage implements Confirm {
     }
 
     @Override
-    public void onOk(InventoryClickEvent clickEvent) {
-        onConfirm.run();
+    protected void onConfirm(InventoryClickEvent clickEvent) {
+        onConfirmCallback.run();
     }
 
     @Override
-    public void onCancel(InventoryClickEvent clickEvent) {
-        onCancel.run();
+    protected void onCancel(InventoryClickEvent clickEvent) {
+        onCancelCallback.run();
     }
 }

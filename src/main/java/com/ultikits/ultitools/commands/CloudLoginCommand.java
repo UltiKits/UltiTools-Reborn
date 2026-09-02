@@ -3,7 +3,7 @@ package com.ultikits.ultitools.commands;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
@@ -26,7 +26,7 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  */
 @CmdExecutor(description = "UltiCloud Authentication Commands", alias = "ulticloud", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
-public class CloudLoginCommand extends AbstractCommandExecutor {
+public class CloudLoginCommand extends BaseCommandExecutor {
 
     @CmdMapping(format = "login")
     @RunAsync

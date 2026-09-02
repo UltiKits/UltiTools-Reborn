@@ -9,24 +9,27 @@
  * </ul>
  * 
  * <h2>Migration from Old GUI Classes:</h2>
+ * <p>
+ * {@code PagingPage} and {@code OkCancelPage} were removed in 6.3.0 (GEN-04); the shapes below
+ * show what a class that extended either one had to become.
  * <pre>{@code
- * // Old way - PagingPage (deprecated)
+ * // Old way - PagingPage (removed in 6.3.0)
  * public class MyPage extends PagingPage {
  *     public List<Icon> setAllItems() { return items; }
  * }
- * 
+ *
  * // New way - BasePaginationPage
  * public class MyPage extends BasePaginationPage {
  *     @Override
  *     protected List<Icon> provideItems() { return items; }
  * }
- * 
- * // Old way - OkCancelPage (deprecated)
+ *
+ * // Old way - OkCancelPage (removed in 6.3.0)
  * public class MyDialog extends OkCancelPage {
  *     public void onOk(InventoryClickEvent e) { }
  *     public void onCancel(InventoryClickEvent e) { }
  * }
- * 
+ *
  * // New way - BaseConfirmationPage with builder
  * BaseConfirmationPage.builder(player)
  *     .title("Confirm Action")
@@ -44,7 +47,5 @@
  * </ul>
  *
  * @since 6.2.0
- * @see com.ultikits.ultitools.abstracts.guis.PagingPage
- * @see com.ultikits.ultitools.abstracts.guis.OkCancelPage
  */
 package com.ultikits.ultitools.abstracts.gui;

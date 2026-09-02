@@ -284,13 +284,6 @@ class UltiToolsTest {
         }
 
         @Test
-        @DisplayName("Should have getVersionWrapper method")
-        void shouldHaveGetVersionWrapperMethod() throws NoSuchMethodException {
-            Method method = UltiTools.class.getMethod("getVersionWrapper");
-            assertThat(method.getReturnType()).isEqualTo(com.ultikits.ultitools.interfaces.VersionWrapper.class);
-        }
-
-        @Test
         @DisplayName("Should have getDependenceManagers method")
         void shouldHaveGetDependenceManagersMethod() throws NoSuchMethodException {
             Method method = UltiTools.class.getMethod("getDependenceManagers");

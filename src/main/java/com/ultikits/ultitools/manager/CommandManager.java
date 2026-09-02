@@ -2,13 +2,11 @@ package com.ultikits.ultitools.manager;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
@@ -20,12 +18,10 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.SimplePluginManager;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
-import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
  * Command manager.
@@ -64,7 +60,7 @@ public class CommandManager {
      * @param aliases         Aliases <br> 别名
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
-        register(commandExecutor, permission, plugin.i18n(description), aliases);
+        registerCommandDirect(commandExecutor, permission, plugin.i18n(description), aliases);
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
         List<Command> commands = commandListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         if (!commands.contains(command)) {
@@ -103,50 +99,53 @@ public class CommandManager {
         }
         Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         plugin.getContext().getAutowireCapableBeanFactory().autowireBean(commandExecutor);
-        register(commandExecutor);
+        registerCommandDirect(commandExecutor);
     }
 
     /**
-     * Register all classes annotated with @CmdExecutor in the specified package. Dependencies will be injected automatically.
+     * Registers {@code commandExecutor} with Bukkit's command map directly, with no plugin
+     * container involvement -- the primitive behind {@link #registerCoreCommand(CommandExecutor)},
+     * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}, and the
+     * unannotated-class fallback in {@link #register(UltiToolsPlugin, CommandExecutor)}.
      * <p>
-     * 注册指定包下所有被@CmdExecutor注解的类。会自动注入依赖。
+     * 直接向 Bukkit 的命令表注册 {@code commandExecutor}，不涉及任何插件容器——是
+     * {@link #registerCoreCommand(CommandExecutor)}、
+     * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}，以及
+     * {@link #register(UltiToolsPlugin, CommandExecutor)} 中未注解类回退路径共用的底层原语。
      *
-     * @param plugin      UltiTools Plugin instance <br> 模块实例
-     * @param packageName Package name <br> 包名
-     * @deprecated This overload casts every scanned class to {@link AbstractCommandExecutor},
-     *             which is itself scheduled for removal in 6.3.0. A command class written
-     *             against the current {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
-     *             does not extend that type, so the cast throws {@link ClassCastException} —
-     *             and the surrounding catch lists only the four reflective checked exceptions,
-     *             so it escapes. Use {@link #registerAll(UltiToolsPlugin)}, which resolves
-     *             command classes as beans from the plugin's container and performs no cast.
-     *             See issue #272.
-     *             <p>
-     *             这个重载把扫描到的每个类都强转为 {@link AbstractCommandExecutor}，
-     *             而后者本身已计划在 6.3.0 移除。按当前推荐写法继承
-     *             {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}
-     *             的命令类不属于那个类型，强转必抛 {@link ClassCastException}，
-     *             且外层 catch 只列了四个反射类受检异常，异常会逃出去。
-     *             请改用 {@link #registerAll(UltiToolsPlugin)} —— 它从模块容器里按 bean
-     *             解析命令类，不做强转。见 issue #272。
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param permission      Permission <br> 权限
+     * @param description     Description <br> 描述
+     * @param aliases         Aliases <br> 别名
      */
-    @Deprecated(since = "6.2.5", forRemoval = true)
-    public void registerAll(UltiToolsPlugin plugin, String packageName) {
-        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
-                CmdExecutor.class,
-                packageName,
-                UltiTools.getJavaPluginClassLoader()
-        );
-        for (Class<?> clazz : classes) {
-            try {
-                AbstractCommandExecutor commandExecutor =
-                        (AbstractCommandExecutor) clazz.getDeclaredConstructor().newInstance();
-                register(plugin, commandExecutor);
-            } catch (InstantiationException |
-                     InvocationTargetException |
-                     IllegalAccessException |
-                     NoSuchMethodException ignored) {
-            }
+    private void registerCommandDirect(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+        PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
+        command.setAliases(Arrays.asList(aliases));
+        command.setPermission(permission);
+        command.setDescription(description);
+        getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
+        command.setExecutor(commandExecutor);
+    }
+
+    /**
+     * Resolves {@code commandExecutor}'s {@code @CmdExecutor} annotation (if present) and
+     * dispatches to {@link #registerCommandDirect(CommandExecutor, String, String, String...)};
+     * logs and does nothing otherwise.
+     * <p>
+     * 解析 {@code commandExecutor} 的 {@code @CmdExecutor} 注解（如果存在）并派发给
+     * {@link #registerCommandDirect(CommandExecutor, String, String, String...)}；否则记录日志
+     * 并且不做任何事。
+     *
+     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     */
+    private void registerCommandDirect(CommandExecutor commandExecutor) {
+        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
+
+        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
+            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
+            registerCommandDirect(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
+        } else {
+            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
         }
     }
 
@@ -214,51 +213,6 @@ public class CommandManager {
     }
 
     /**
-     * Don't use this method to register commands, use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
-     * <p>
-     * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class, String, String, String...)}代替。
-     *
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
-     * @param permission      Permission <br> 权限
-     * @param description     Description <br> 描述
-     * @param aliases         Aliases <br> 别名
-     * @deprecated Use {@link #register(UltiToolsPlugin, Class, String, String, String...)} instead.
-     *             <p>
-     *             请改用 {@link #register(UltiToolsPlugin, Class, String, String, String...)}。
-     */
-    @Deprecated(since = "6.0.5", forRemoval = true)
-    public void register(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
-        PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
-        command.setAliases(Arrays.asList(aliases));
-        command.setPermission(permission);
-        command.setDescription(description);
-        getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
-        command.setExecutor(commandExecutor);
-    }
-
-    /**
-     * Don't use this method to register commands, use {@link #register(UltiToolsPlugin, Class)} instead.
-     * <p>
-     * 不要使用此方法注册命令，使用{@link #register(UltiToolsPlugin, Class)}代替。
-     *
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
-     * @deprecated Use {@link #register(UltiToolsPlugin, Class)} instead.
-     *             <p>
-     *             请改用 {@link #register(UltiToolsPlugin, Class)}。
-     */
-    @Deprecated(since = "6.0.5", forRemoval = true)
-    public void register(CommandExecutor commandExecutor) {
-        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
-
-        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
-            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
-            register(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
-        } else {
-            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
-        }
-    }
-
-    /**
      * Register command for core UltiTools commands that don't belong to a specific plugin module.
      * This method is specifically for commands that are part of the main UltiTools plugin.
      * <p>
@@ -268,14 +222,7 @@ public class CommandManager {
      * @param commandExecutor Command executor instance <br> 命令执行器实例
      */
     public void registerCoreCommand(CommandExecutor commandExecutor) {
-        Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
-
-        if (clazz.isAnnotationPresent(CmdExecutor.class)) {
-            CmdExecutor cmdExecutor = clazz.getAnnotation(CmdExecutor.class);
-            register(commandExecutor, cmdExecutor.permission(), cmdExecutor.description(), cmdExecutor.alias());
-        } else {
-            Bukkit.getLogger().warning("CommandExecutor " + clazz.getName() + " is not annotated with @CmdExecutor, please use legacy method to register command.");
-        }
+        registerCommandDirect(commandExecutor);
     }
 
     /**
@@ -315,7 +262,7 @@ public class CommandManager {
     }
 
     private void registerExternalCommand(String pluginName, CommandExecutor executor, CmdExecutor annotation) {
-        register(executor, annotation.permission(), annotation.description(), annotation.alias());
+        registerCommandDirect(executor, annotation.permission(), annotation.description(), annotation.alias());
         PluginCommand command = getCommand(annotation.alias()[0], UltiTools.getInstance());
         externalCommandMap.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(command);
     }

@@ -633,8 +633,9 @@ class ReflectionUtilTest {
             // bridge-skip behavior from the separate (and out of scope) question of recognizing an
             // override across generic-erasure boundaries between two *classes*. A raw
             // getDeclaredMethods() walk returns both the real method and the bridge as separate
-            // "compareTo" hits - the shape that let AbstractCommandExecutor#getMethod invoke every
-            // hit and produce a duplicate tab-completion entry for an overridden generic method.
+            // "compareTo" hits - the shape that let the removed (6.3.0) AbstractCommandExecutor's
+            // own #getMethod invoke every hit and produce a duplicate tab-completion entry for an
+            // overridden generic method.
             Predicate<Method> filter = m -> m.getName().equals("compareTo");
             Method[] methods = ReflectionUtil.getMethods(ComparableFixture.class, filter);
 

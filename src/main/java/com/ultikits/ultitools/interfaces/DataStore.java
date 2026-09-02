@@ -41,6 +41,7 @@ public interface DataStore {
      *             第一条语句调用，才能得到拒绝校验；本框架自带的三个后端都是如此（02-12）。
      *             框架内部调用方（{@code UltiToolsPlugin.getDataOperator}）在调用它之前已经
      *             自行做过所有权校验。请改用 {@link #getOperator(DataScope, Class)}。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     <T extends BaseDataEntity<String>> DataOperator<T> getOperator(UltiToolsPlugin plugin, Class<T> dataEntity);
@@ -78,6 +79,7 @@ public interface DataStore {
      *             辅助方法才能得到拒绝校验；本框架自带的三个后端都是如此（02-12）。框架内部调用方
      *             （{@code UltiToolsAPI.getDataOperator}）在调用它之前已经自行做过所有权校验。
      *             请改用 {@link #getOperator(DataScope, Class)}。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     default <T extends BaseDataEntity<String>> DataOperator<T> getOperator(java.io.File dataFolder, Class<T> dataEntity) {

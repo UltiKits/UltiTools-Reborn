@@ -26,7 +26,6 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.Answers;
 import org.mockito.MockedStatic;
 
-import com.ultikits.ultitools.abstracts.AbstractCommandExecutor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -42,13 +41,16 @@ import com.ultikits.ultitools.utils.TestHelper;
  * with no uncaught {@link ClassCastException}, whether thrown directly or wrapped, AND that it
  * actually registers the command rather than merely completing silently.
  * <p>
- * GEN-03's acceptance is already satisfied by Phase 4's plan 04-08: {@code registerBukkit}'s
+ * GEN-03's acceptance was already satisfied by Phase 4's plan 04-08: {@code registerBukkit}'s
  * {@code boolean} fork is gone and both entry points bean-resolve without casting to the legacy
- * {@link AbstractCommandExecutor}. This class is therefore a REGRESSION GUARD, not evidence of a
- * change made in this plan -- 05-VALIDATION.md's GEN-03 row and CONTEXT.md D-15 both require the
- * assertion be taken at the connector path itself (never a reference count, never an
- * instantiation-only check), so that Phase 7's removal of {@code AbstractCommandExecutor} cannot
- * silently reintroduce the cast this class pins as absent.
+ * generation. This class is therefore a REGRESSION GUARD, not evidence of a change made in this
+ * plan -- 05-VALIDATION.md's GEN-03 row and CONTEXT.md D-15 both require the assertion be taken
+ * at the connector path itself (never a reference count, never an instantiation-only check).
+ * Plan 07-15 removed {@code AbstractCommandExecutor} entirely in 6.3.0, discharging the "cannot
+ * silently reintroduce the cast" concern this class originally guarded against by construction
+ * (there is no legacy class left to cast to); the legacy fixture and its three dedicated tests
+ * were removed in the same change, and the surviving tests below continue to pin the
+ * {@link BaseCommandExecutor} half of the connector path.
  * <p>
  * Reuses {@link PluginManagerAutoRegisterAliasTest}'s exact {@code registerBukkit} reflective-
  * invoke plus real {@link CommandManager} plus real Bukkit {@link SimpleCommandMap} harness shape
@@ -58,7 +60,8 @@ import com.ultikits.ultitools.utils.TestHelper;
  * GEN-03（D-15）：钉住连接器注册路径——{@code PluginManager.registerBukkit(UltiToolsPlugin)}
  * 进入单参数的 {@code CommandManager.registerAll(UltiToolsPlugin)}——能接受一个
  * {@link BaseCommandExecutor} 子类而不抛出未捕获的 {@link ClassCastException}（无论是直接抛出还是被包
- * 装），并且确实注册了该命令，而不只是静默地跑完。
+ * 装），并且确实注册了该命令，而不只是静默地跑完。旧一代 {@code AbstractCommandExecutor} 已在
+ * 计划 07-15 中于 6.3.0 移除，其专属夹具与三个测试已随之删除。
  */
 @DisplayName("Connector-path command registration accepts BaseCommandExecutor (GEN-03/D-15)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -66,7 +69,6 @@ import com.ultikits.ultitools.utils.TestHelper;
 class ConnectorPathRegistrationTest {
 
     private static final String BASE_COMMAND_ALIAS = "connectorpathbasecmd";
-    private static final String LEGACY_COMMAND_ALIAS = "connectorpathlegacycmd";
 
     private PluginManager pluginManager;
     private ListenerManager mockListenerManager;
@@ -85,15 +87,6 @@ class ConnectorPathRegistrationTest {
         @Override
         protected void handleHelp(CommandSender sender) {
             sender.sendMessage("base command help");
-        }
-    }
-
-    /** The legacy generation: a command class extending {@link AbstractCommandExecutor}. */
-    @CmdExecutor(alias = {LEGACY_COMMAND_ALIAS}, permission = "test.connectorpath.legacy")
-    static class LegacyCommandFixture extends AbstractCommandExecutor {
-        @Override
-        protected void handleHelp(CommandSender sender) {
-            sender.sendMessage("legacy command help");
         }
     }
 
@@ -180,55 +173,18 @@ class ConnectorPathRegistrationTest {
         });
     }
 
-    @Test
-    @DisplayName("Test 3: a legacy AbstractCommandExecutor also registers through the same "
-            + "connector path -- Phase 4's fix did not trade one generation for the other")
-    // Same PMD lambda-visibility limitation as the previous test -- the real
-    // assertThat(...).isNotNull() is inside withRealBukkitCommandMap(...)'s lambda argument.
-    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
-    void legacyAbstractCommandExecutor_alsoRegistersThroughConnectorPath() {
-        SimpleContainer container = new SimpleContainer();
-        container.registerSingleton("legacyCommandFixture", new LegacyCommandFixture());
-        UltiToolsPlugin plugin = newModulePlugin(container);
-
-        withRealBukkitCommandMap(() -> {
-            assertDoesNotThrow(() -> invokeRegisterBukkit(plugin),
-                    "a legacy AbstractCommandExecutor must still register through the connector "
-                            + "path with no uncaught exception");
-
-            assertThat(realCommandMap.getCommand(LEGACY_COMMAND_ALIAS))
-                    .as("registration must actually happen for the legacy generation too")
-                    .isNotNull();
-        });
-    }
-
-    @Test
-    @DisplayName("Test 4: a module holding one BaseCommandExecutor and one AbstractCommandExecutor "
-            + "registers both through the connector path")
-    // Same PMD lambda-visibility limitation -- both assertThat(...).isNotNull() calls are inside
-    // withRealBukkitCommandMap(...)'s lambda argument.
-    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
-    void moduleWithBothGenerations_registersBothThroughConnectorPath() {
-        SimpleContainer container = new SimpleContainer();
-        container.registerSingleton("baseCommandFixture", new BaseCommandFixture());
-        container.registerSingleton("legacyCommandFixture", new LegacyCommandFixture());
-        UltiToolsPlugin plugin = newModulePlugin(container);
-
-        withRealBukkitCommandMap(() -> {
-            assertDoesNotThrow(() -> invokeRegisterBukkit(plugin),
-                    "a module mixing both command generations must register through the "
-                            + "connector path with no uncaught exception");
-
-            assertThat(realCommandMap.getCommand(BASE_COMMAND_ALIAS)).isNotNull();
-            assertThat(realCommandMap.getCommand(LEGACY_COMMAND_ALIAS)).isNotNull();
-        });
-    }
+    // Test 3 ("a legacy AbstractCommandExecutor also registers through the same connector path")
+    // and Test 4 ("a module holding one BaseCommandExecutor and one AbstractCommandExecutor
+    // registers both through the connector path") were removed by plan 07-15: their entire
+    // subject -- the legacy AbstractCommandExecutor generation and its LegacyCommandFixture --
+    // was deleted from the framework in 6.3.0. There is no longer a legacy generation for these
+    // tests to compare against.
 
     @Test
     @DisplayName("Test 5: the connector path with an empty container completes without throwing "
             + "and registers nothing")
-    // Same PMD lambda-visibility limitation -- both assertThat(...).isNull() calls are inside
-    // withRealBukkitCommandMap(...)'s lambda argument.
+    // Same PMD lambda-visibility limitation as the earlier test -- the real
+    // assertThat(...).isNull() call is inside withRealBukkitCommandMap(...)'s lambda argument.
     @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void emptyContainer_completesWithoutThrowing_registersNothing() {
         SimpleContainer container = new SimpleContainer();
@@ -239,7 +195,6 @@ class ConnectorPathRegistrationTest {
                     "an empty container must complete the connector path without throwing");
 
             assertThat(realCommandMap.getCommand(BASE_COMMAND_ALIAS)).isNull();
-            assertThat(realCommandMap.getCommand(LEGACY_COMMAND_ALIAS)).isNull();
         });
     }
 }

@@ -119,7 +119,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      *
      * @param entityType the entity class
      * @return an unmodifiable set of every {@code @Column} SQL name declared on {@code entityType}
-     *         (including inherited fields, e.g. {@code AbstractDataEntity}'s {@code id})
+     *         (including inherited fields, e.g. {@code BaseDataEntity}'s {@code id})
      */
     private static Set<String> buildKnownColumns(Class<?> entityType) {
         Set<String> columns = new HashSet<>();
