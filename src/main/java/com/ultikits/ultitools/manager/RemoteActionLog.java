@@ -40,11 +40,6 @@ import com.ultikits.ultitools.entities.Capability;
  * {@link System#err}, never through any {@link Logger} — the same discipline
  * {@code ErrorReportCollector} uses for its own internal failures, for the same reason: a failure
  * in the thing that logs must not try to log itself.
- * <p>
- * 本框架自身对面板实际行为的持久化记录——每一次能力网关的裁决，无论放行还是拒绝，都作为一行
- * JSON 写入 {@code plugins/UltiTools/security/action.log.<代数>} 中当前活跃的那个文件——代数 0
- * 始终是当前活跃文件，磁盘上不存在不带后缀的 {@code action.log}，见 {@link #init(File)}。它在
- * {@code UltiTools.initWebSocketManagers()} 中被无条件构造，不受任何 {@link Capability} 拦截（D-32）。
  *
  * @since 6.3.0
  */
