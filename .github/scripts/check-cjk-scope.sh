@@ -18,8 +18,8 @@
 #     - Hiragana / Katakana (kana)            U+3040-U+30FF
 #     - CJK Unified Ideographs Extension A    U+3400-U+4DBF
 #     - CJK Unified Ideographs Extension B+   U+20000 and upward (supplementary plane)
-#   Widening the range is a deliberate edit, not a silent drift — the fixture self-test added
-#   alongside .github/scripts/testdata/ pins this boundary.
+#   Widening the range is a deliberate edit, not a silent drift — --self-test pins this boundary
+#   (assertion 4: a kana-only or full-width-punctuation-only line must report zero violations).
 #
 #   The script forces a UTF-8 locale before any matching so the range behaves identically on a
 #   runner whose default locale is C/POSIX, where grep's byte-oriented matching would otherwise
@@ -51,13 +51,14 @@
 #
 # Usage:
 #   check-cjk-scope.sh [--allowlist <path>] [--scope <path> ...]
-#                       [--report-only] [--max-violations <n>]
+#                       [--report-only] [--max-violations <n>] [--self-test]
 #
 #   --allowlist <path>     Path to the allowlist file (default: .github/cjk-allowlist.txt)
 #   --scope <path>         Repeatable. Overrides the three default scopes entirely when given.
 #   --report-only          Print violations, always exit 0 (for measurement/inspection).
 #   --max-violations <n>   Exit 0 while the violation count is at or below n (migration aid;
 #                           lets the gate be introduced before the conversion finishes). Default 0.
+#   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
 #             64 = usage error (unknown flag).
@@ -91,11 +92,12 @@ ALLOWLIST=".github/cjk-allowlist.txt"
 SCOPES=()
 REPORT_ONLY=0
 MAX_VIOLATIONS=0
+SELF_TEST=0
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: check-cjk-scope.sh [--allowlist <path>] [--scope <path> ...]
-                           [--report-only] [--max-violations <n>]
+                           [--report-only] [--max-violations <n>] [--self-test]
 USAGE
 }
 
@@ -105,6 +107,7 @@ while [ $# -gt 0 ]; do
         --scope)          SCOPES+=("$2"); shift 2 ;;
         --report-only)    REPORT_ONLY=1; shift ;;
         --max-violations) MAX_VIOLATIONS="$2"; shift 2 ;;
+        --self-test)      SELF_TEST=1; shift ;;
         -h|--help)        usage; exit 0 ;;
         *)
             echo "Unknown flag: $1" >&2
@@ -206,6 +209,79 @@ run_scan() {
     done
     return 0
 }
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+run_self_test() {
+    local failures=0
+    local violating_fixture=".github/scripts/testdata/cjk-fixture-violating.txt"
+    local allowlisted_fixture=".github/scripts/testdata/cjk-fixture-allowlisted.txt"
+
+    # Assertion 1: the violating fixture yields exactly one violation, with no allowlist active.
+    ALLOW_GLOBS=()
+    ALLOW_REGEXES=()
+    local n1
+    n1=$(scan_file "$violating_fixture" | grep -c . || true)
+    if [ "$n1" -eq 1 ]; then
+        echo "PASS: assertion 1 — violating fixture yields exactly 1 violation."
+    else
+        echo "FAIL: assertion 1 — violating fixture yields exactly 1 violation (got ${n1})."
+        failures=1
+    fi
+
+    # Assertion 2: a temporary in-memory allowlist exempting only the allowlisted fixture's first
+    # CJK line leaves exactly one violation (the unmatched line, not the exempted one).
+    ALLOW_GLOBS=("$allowlisted_fixture")
+    ALLOW_REGEXES=('会被本次自测的临时白名单豁免')
+    local n2
+    n2=$(scan_file "$allowlisted_fixture" | grep -c . || true)
+    ALLOW_GLOBS=()
+    ALLOW_REGEXES=()
+    if [ "$n2" -eq 1 ]; then
+        echo "PASS: assertion 2 — allowlist exempts the matched line, leaves the other as a violation."
+    else
+        echo "FAIL: assertion 2 — allowlist exempts the matched line, leaves the other as a violation (got ${n2})."
+        failures=1
+    fi
+
+    # Assertion 3: a scope matching zero tracked files yields zero violations, with the explicit
+    # empty-scope message printed — never a silent pass.
+    local saved_scopes=("${SCOPES[@]}")
+    SCOPES=("no/such/scope/at/all/for/self/test")
+    local stderr_capture
+    stderr_capture="$(mktemp)"
+    local n3
+    n3=$(run_scan 2>"$stderr_capture" | grep -c . || true)
+    local msg3
+    msg3="$(cat "$stderr_capture")"
+    rm -f "$stderr_capture"
+    SCOPES=("${saved_scopes[@]}")
+    if [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
+        echo "PASS: assertion 3 — empty scope yields zero violations with an explicit message."
+    else
+        echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message."
+        failures=1
+    fi
+
+    # Assertion 4: the encoding boundary itself — kana and full-width punctuation are OUTSIDE the
+    # U+4E00-U+9FFF contract and must not match, pinning the range against silent future widening.
+    local kana='ひらがなカタカナ'
+    local fullwidth='。、！？（）'
+    if printf '%s\n%s\n' "$kana" "$fullwidth" | grep -P "$CJK_RANGE" > /dev/null; then
+        echo "FAIL: assertion 4 — kana/full-width punctuation must not match U+4E00-U+9FFF."
+        failures=1
+    else
+        echo "PASS: assertion 4 — kana/full-width punctuation must not match U+4E00-U+9FFF."
+    fi
+
+    return "$failures"
+}
+
+if [ "$SELF_TEST" -eq 1 ]; then
+    run_self_test
+    exit $?
+fi
 
 # ---------------------------------------------------------------------------
 # Main scan
