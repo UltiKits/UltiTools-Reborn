@@ -35,8 +35,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
- * <br>
- * 简单的依赖注入容器，用于替换Spring ApplicationContext。
  */
 @ApiStatus.Internal
 public class SimpleContainer {
@@ -107,12 +105,10 @@ public class SimpleContainer {
     /**
      * Get singleton from three-level cache.
      * This method implements the circular dependency resolution through early singleton exposure.
-     * <br>
-     * 从三级缓存获取单例。此方法通过提前暴露单例来实现循环依赖解析。
      *
-     * @param beanName bean name <br> Bean名称
-     * @param allowEarlyReference whether to allow early reference (level 2/3 cache) <br> 是否允许早期引用（二/三级缓存）
-     * @return singleton instance or null if not found <br> 单例实例，如果未找到则返回null
+     * @param beanName bean name
+     * @param allowEarlyReference whether to allow early reference (level 2/3 cache)
+     * @return singleton instance or null if not found
      */
     protected Object getSingleton(String beanName, boolean allowEarlyReference) {
         // Level 1: Check complete singletons
@@ -145,11 +141,9 @@ public class SimpleContainer {
     
     /**
      * Add a singleton factory to level 3 cache for early reference support.
-     * <br>
-     * 向三级缓存添加单例工厂以支持早期引用。
      *
-     * @param beanName bean name <br> Bean名称
-     * @param singletonFactory factory for creating early reference <br> 创建早期引用的工厂
+     * @param beanName bean name
+     * @param singletonFactory factory for creating early reference
      */
     protected void addSingletonFactory(String beanName, Supplier<Object> singletonFactory) {
         if (!singletonObjects.containsKey(beanName)) {
@@ -161,11 +155,9 @@ public class SimpleContainer {
     /**
      * Add a fully initialized singleton to level 1 cache.
      * Clears from level 2 and level 3 caches.
-     * <br>
-     * 向一级缓存添加完全初始化的单例。从二级和三级缓存清除。
      *
-     * @param beanName bean name <br> Bean名称
-     * @param singletonObject fully initialized singleton <br> 完全初始化的单例
+     * @param beanName bean name
+     * @param singletonObject fully initialized singleton
      */
     protected void addSingleton(String beanName, Object singletonObject) {
         singletonObjects.put(beanName, singletonObject);
@@ -225,20 +217,9 @@ public class SimpleContainer {
      * possible -- register the pair through component scanning instead
      * ({@code @Service}/{@code @Component}), where {@link #createBean}'s three-level cache does
      * apply.
-     * <p>
-     * 注册单例实例，在存储前完成完整装配。运行与 {@link #createBean} 为容器自行构造的 Bean
-     * 所执行的同一套顺序——postProcessBeforeInitialization -> autowireBean -> @PostConstruct ->
-     * postProcessAfterInitialization——且无条件执行，与 {@link #refresh()} 是否已调用无关。
-     * 当 {@code instance} 的类携带其永远无法生效的 {@code @Transactional} 或
-     * {@code @ExceptionCatch}（方法级或类级）时直接拒绝注册（D-15）。
-     * 两个通过 registerSingleton 注册的对象之间不支持循环依赖（WR-02）：与 createBean 不同，
-     * 本方法在自动装配前不会向三级缓存暴露早期引用，且结构上也无法从中受益——createBean
-     * 的早期暴露之所以有效，是因为容器自己在同一调用栈内递归地、惰性地触发了依赖对象的构造；
-     * 而 registerSingleton 的调用方传入的是一个已经在容器之外完全构造好的对象，容器从未构造过
-     * 第二个对象，也没有任何钩子能代替它去触发第二个（尚未注册的）对象的构造。
      *
-     * @param name instance name <br> 实例名称
-     * @param instance instance object <br> 实例对象
+     * @param name instance name
+     * @param instance instance object
      * @throws com.ultikits.ultitools.exceptions.ContainerException if {@code instance}'s class
      *         carries an AOP annotation it can never honour (D-15), or if a required
      *         {@code @Autowired} dependency on it cannot be resolved (D-08)
@@ -305,11 +286,9 @@ public class SimpleContainer {
 
     /**
      * Register a supplier for lazy initialization.
-     * <br>
-     * 注册供应商用于延迟初始化。
      *
-     * @param name supplier name <br> 供应商名称
-     * @param supplier supplier function <br> 供应商函数
+     * @param name supplier name
+     * @param supplier supplier function
      */
     public void registerSupplier(String name, Supplier<Object> supplier) {
         // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
@@ -323,12 +302,10 @@ public class SimpleContainer {
 
     /**
      * Register a supplier for lazy initialization with type information.
-     * <br>
-     * 注册带类型信息的供应商用于延迟初始化。
      *
-     * @param name supplier name <br> 供应商名称
-     * @param supplier supplier function <br> 供应商函数
-     * @param type the type of bean this supplier produces <br> 供应商生成的Bean类型
+     * @param name supplier name
+     * @param supplier supplier function
+     * @param type the type of bean this supplier produces
      */
     public void registerSupplier(String name, Supplier<Object> supplier, Class<?> type) {
         suppliers.put(name, supplier);
@@ -337,11 +314,9 @@ public class SimpleContainer {
 
     /**
      * Register a type mapping.
-     * <br>
-     * 注册类型映射。
      *
-     * @param type class type <br> 类类型
-     * @param instance instance object <br> 实例对象
+     * @param type class type
+     * @param instance instance object
      */
     public <T> void registerType(Class<T> type, T instance) {
         typeMappings.put(type, instance);
@@ -349,11 +324,9 @@ public class SimpleContainer {
 
     /**
      * Register a type supplier.
-     * <br>
-     * 注册类型供应商。
      *
-     * @param type class type <br> 类类型
-     * @param supplier supplier function <br> 供应商函数
+     * @param type class type
+     * @param supplier supplier function
      */
     @SuppressWarnings("unchecked")
     public <T> void registerTypeSupplier(Class<T> type, Supplier<T> supplier) {
@@ -362,11 +335,9 @@ public class SimpleContainer {
 
     /**
      * Get bean by name.
-     * <br>
-     * 通过名称获取Bean。
      *
-     * @param name bean name <br> Bean名称
-     * @return bean instance <br> Bean实例
+     * @param name bean name
+     * @return bean instance
      */
     public Object getBean(String name) {
         // Fast-path: a bean already proven deterministically unresolvable (07-23) is never
@@ -439,11 +410,9 @@ public class SimpleContainer {
 
     /**
      * Get bean by type.
-     * <br>
-     * 通过类型获取Bean。
      *
-     * @param type bean type <br> Bean类型
-     * @return bean instance <br> Bean实例
+     * @param type bean type
+     * @return bean instance
      */
     @SuppressWarnings("unchecked")
     public <T> T getBean(Class<T> type) {
@@ -547,12 +516,10 @@ public class SimpleContainer {
 
     /**
      * Get bean by name and type.
-     * <br>
-     * 通过名称和类型获取Bean。
      *
-     * @param name bean name <br> Bean名称
-     * @param type bean type <br> Bean类型
-     * @return bean instance <br> Bean实例
+     * @param name bean name
+     * @param type bean type
+     * @return bean instance
      */
     @SuppressWarnings("unchecked")
     public <T> T getBean(String name, Class<T> type) {
@@ -565,11 +532,9 @@ public class SimpleContainer {
 
     /**
      * Get bean names for type.
-     * <br>
-     * 获取指定类型的Bean名称。
      *
-     * @param type bean type <br> Bean类型
-     * @return bean names <br> Bean名称数组
+     * @param type bean type
+     * @return bean names
      */
     public String[] getBeanNamesForType(Class<?> type) {
         Set<String> beanNames = new HashSet<>();
@@ -613,10 +578,8 @@ public class SimpleContainer {
 
     /**
      * Get autowire capable bean factory.
-     * <br>
-     * 获取自动装配Bean工厂。
      *
-     * @return autowire factory <br> 自动装配工厂
+     * @return autowire factory
      */
     public AutowireFactory getAutowireCapableBeanFactory() {
         return new AutowireFactory(this);
@@ -624,8 +587,6 @@ public class SimpleContainer {
 
     /**
      * Close the container.
-     * <br>
-     * 关闭容器。
      */
     public void close() {
         LOGGER.info("Closing container...");
@@ -664,11 +625,9 @@ public class SimpleContainer {
 
     /**
      * Check if container contains bean.
-     * <br>
-     * 检查容器是否包含Bean。
      *
-     * @param name bean name <br> Bean名称
-     * @return true if contains <br> 如果包含则返回true
+     * @param name bean name
+     * @return true if contains
      */
     public boolean containsBean(String name) {
         return singletons.containsKey(name) || suppliers.containsKey(name) ||
@@ -678,11 +637,9 @@ public class SimpleContainer {
 
     /**
      * Register bean with constructor arguments.
-     * <br>
-     * 使用构造器参数注册Bean。
      *
-     * @param type bean type <br> Bean类型
-     * @param constructorArgs constructor arguments <br> 构造器参数
+     * @param type bean type
+     * @param constructorArgs constructor arguments
      */
     public <T> void registerBean(Class<T> type, Object... constructorArgs) {
         try {
@@ -699,8 +656,6 @@ public class SimpleContainer {
 
     /**
      * Generate bean name for class.
-     * <br>
-     * 为类生成Bean名称。
      */
     private <T> String getBeanName(Class<T> type) {
         Component component = type.getAnnotation(Component.class);
@@ -741,8 +696,6 @@ public class SimpleContainer {
 
     /**
      * Refresh the container.
-     * <br>
-     * 刷新容器。
      */
     public void refresh() {
         preInstantiateSingletons();
@@ -750,8 +703,6 @@ public class SimpleContainer {
 
     /**
      * Get all singleton bean instances registered in this container (not including parent).
-     * <p>
-     * 获取此容器中注册的所有单例 Bean 实例（不包含父容器）。
      *
      * @return unmodifiable collection of singleton beans
      */
@@ -761,10 +712,8 @@ public class SimpleContainer {
 
     /**
      * Set display name.
-     * <br>
-     * 设置显示名称。
      *
-     * @param displayName display name <br> 显示名称
+     * @param displayName display name
      */
     public void setDisplayName(String displayName) {
         this.displayName = displayName;
@@ -772,10 +721,8 @@ public class SimpleContainer {
 
     /**
      * Set ID.
-     * <br>
-     * 设置ID。
      *
-     * @param id container ID <br> 容器ID
+     * @param id container ID
      */
     public void setId(String id) {
         // No-op for now
@@ -783,10 +730,8 @@ public class SimpleContainer {
 
     /**
      * Set class loader.
-     * <br>
-     * 设置类加载器。
      *
-     * @param classLoader class loader <br> 类加载器
+     * @param classLoader class loader
      */
     public void setClassLoader(ClassLoader classLoader) {
         this.classLoader = classLoader;
@@ -794,8 +739,6 @@ public class SimpleContainer {
 
     /**
      * Register shutdown hook.
-     * <br>
-     * 注册关闭钩子。
      */
     public void registerShutdownHook() {
         Runtime.getRuntime().addShutdownHook(new Thread(this::close));
@@ -803,10 +746,8 @@ public class SimpleContainer {
 
     /**
      * Set parent container.
-     * <br>
-     * 设置父容器。
      *
-     * @param parent parent container <br> 父容器
+     * @param parent parent container
      */
     public void setParent(SimpleContainer parent) {
         this.parent = parent;
@@ -814,10 +755,8 @@ public class SimpleContainer {
 
     /**
      * Get bean factory.
-     * <br>
-     * 获取Bean工厂。
      *
-     * @return bean factory <br> Bean工厂
+     * @return bean factory
      */
     public BeanFactory getBeanFactory() {
         return new BeanFactory(this);
@@ -825,10 +764,8 @@ public class SimpleContainer {
 
     /**
      * Get class loader.
-     * <br>
-     * 获取类加载器。
      *
-     * @return class loader <br> 类加载器
+     * @return class loader
      */
     public ClassLoader getClassLoader() {
         if (classLoader != null) {
@@ -840,11 +777,9 @@ public class SimpleContainer {
 
     /**
      * Register bean definition.
-     * <br>
-     * 注册Bean定义。
      *
-     * @param name bean name <br> Bean名称
-     * @param definition bean definition <br> Bean定义
+     * @param name bean name
+     * @param definition bean definition
      */
     public void registerBeanDefinition(String name, BeanDefinition definition) {
         // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
@@ -878,12 +813,10 @@ public class SimpleContainer {
     /**
      * Create bean from definition.
      * Uses three-level cache to support circular dependency resolution for setter injection.
-     * <br>
-     * 从定义创建Bean。使用三级缓存支持 setter 注入的循环依赖解析。
      *
-     * @param name bean name <br> Bean名称
-     * @param definition bean definition <br> Bean定义
-     * @return created bean <br> 创建的Bean
+     * @param name bean name
+     * @param definition bean definition
+     * @return created bean
      */
     private Object createBean(String name, BeanDefinition definition) {
         try {
@@ -1016,11 +949,9 @@ public class SimpleContainer {
     /**
      * Create bean using constructor auto-wiring.
      * Resolves constructor parameters from the container.
-     * <br>
-     * 使用构造器自动装配创建Bean。从容器中解析构造器参数。
      *
-     * @param beanClass the class to instantiate <br> 要实例化的类
-     * @return new bean instance <br> 新的Bean实例
+     * @param beanClass the class to instantiate
+     * @return new bean instance
      */
     private Object createBeanWithConstructorInjection(Class<?> beanClass) {
         Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
@@ -1057,12 +988,10 @@ public class SimpleContainer {
     /**
      * Find a matching constructor for the given arguments.
      * Supports interface/superclass parameter types and primitive type boxing.
-     * <br>
-     * 为给定参数查找匹配的构造器。支持接口/父类参数类型和基本类型装箱。
      *
-     * @param beanClass the class to find constructor for <br> 要查找构造器的类
-     * @param args constructor arguments <br> 构造器参数
-     * @return matching constructor <br> 匹配的构造器
+     * @param beanClass the class to find constructor for
+     * @param args constructor arguments
+     * @return matching constructor
      */
     private Constructor<?> findMatchingConstructor(Class<?> beanClass, Object[] args) throws NoSuchMethodException {
         Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
@@ -1097,12 +1026,10 @@ public class SimpleContainer {
     /**
      * Check if a value can be assigned to a parameter type.
      * Handles primitive types, interfaces, and inheritance.
-     * <br>
-     * 检查值是否可以分配给参数类型。处理基本类型、接口和继承。
      *
-     * @param paramType the parameter type <br> 参数类型
-     * @param value the value to check <br> 要检查的值
-     * @return true if assignable <br> 如果可分配则返回true
+     * @param paramType the parameter type
+     * @param value the value to check
+     * @return true if assignable
      */
     private boolean isAssignable(Class<?> paramType, Object value) {
         if (value == null) {
@@ -1131,8 +1058,6 @@ public class SimpleContainer {
 
     /**
      * Check if wrapper is the wrapper class for primitive type.
-     * <br>
-     * 检查wrapper是否是primitive类型的包装类。
      */
     private boolean isPrimitiveWrapperOf(Class<?> primitive, Class<?> wrapper) {
         if (primitive == int.class) return wrapper == Integer.class;
@@ -1148,10 +1073,8 @@ public class SimpleContainer {
 
     /**
      * Invoke methods annotated with @PostConstruct.
-     * <br>
-     * 调用带有@PostConstruct注解的方法。
      *
-     * @param bean the bean instance <br> Bean实例
+     * @param bean the bean instance
      */
     private void invokePostConstructMethods(Object bean) {
         // Walk the hierarchy with override de-duplication. Iterating getDeclaredMethods() level by
@@ -1172,10 +1095,8 @@ public class SimpleContainer {
 
     /**
      * Invoke methods annotated with @PreDestroy on a bean.
-     * <br>
-     * 调用Bean上带有@PreDestroy注解的方法。
      *
-     * @param bean the bean instance <br> Bean实例
+     * @param bean the bean instance
      */
     private void invokePreDestroyMethods(Object bean) {
         // Same hierarchy walk and de-dup as invokePostConstructMethods; see the comment there.
@@ -1194,10 +1115,8 @@ public class SimpleContainer {
 
     /**
      * Add bean post processor.
-     * <br>
-     * 添加Bean后处理器。
      *
-     * @param processor bean post processor <br> Bean后处理器
+     * @param processor bean post processor
      */
     public void addBeanPostProcessor(BeanPostProcessor processor) {
         beanPostProcessors.add(processor);
@@ -1208,9 +1127,6 @@ public class SimpleContainer {
      * <p>
      * Must be called before {@link #refresh()}: the resolver participates in bean instantiation,
      * not in post-processing, so beans created earlier would not be proxied.
-     * <p>
-     * 必须在 refresh() 之前调用。解析器参与的是 bean 实例化而非后置处理，
-     * 更早创建的 bean 不会被代理。
      *
      * @param resolver the resolver, or null to disable AOP for this container
      */
@@ -1229,10 +1145,8 @@ public class SimpleContainer {
 
     /**
      * Get all bean names.
-     * <br>
-     * 获取所有Bean名称。
      *
-     * @return bean names <br> Bean名称数组
+     * @return bean names
      */
     public String[] getBeanDefinitionNames() {
         Set<String> names = new HashSet<>();
@@ -1244,11 +1158,9 @@ public class SimpleContainer {
 
     /**
      * Get beans of type.
-     * <br>
-     * 获取指定类型的Bean。
      *
-     * @param type bean type <br> Bean类型
-     * @return beans map <br> Bean映射
+     * @param type bean type
+     * @return beans map
      */
     // 07-23: deliberately NOT filtered against unresolvableBeans the way getBeanNamesForType is.
     // getBeanNamesForType is what PluginManager.validateCommandExecutorContracts and its two
@@ -1292,12 +1204,9 @@ public class SimpleContainer {
     /**
      * Get beans of type ordered by @Service priority.
      * Higher priority beans come first.
-     * <br>
-     * 按 @Service 优先级排序获取指定类型的Bean。
-     * 优先级高的Bean排在前面。
      *
-     * @param type bean type <br> Bean类型
-     * @return ordered list of beans <br> 排序后的Bean列表
+     * @param type bean type
+     * @return ordered list of beans
      */
     public <T> List<T> getOrderedBeansOfType(Class<T> type) {
         Map<String, T> beans = getBeansOfType(type);
@@ -1334,11 +1243,9 @@ public class SimpleContainer {
 
     /**
      * Get the highest priority bean of the given type.
-     * <br>
-     * 获取指定类型中优先级最高的Bean。
      *
-     * @param type bean type <br> Bean类型
-     * @return highest priority bean or null <br> 优先级最高的Bean或null
+     * @param type bean type
+     * @return highest priority bean or null
      */
     public <T> T getHighestPriorityBean(Class<T> type) {
         java.util.List<T> ordered = getOrderedBeansOfType(type);
@@ -1347,11 +1254,9 @@ public class SimpleContainer {
 
     /**
      * Get service priority from @Service annotation.
-     * <br>
-     * 从 @Service 注解获取服务优先级。
      *
-     * @param clazz the class to check <br> 要检查的类
-     * @return priority value (default 0) <br> 优先级值（默认0）
+     * @param clazz the class to check
+     * @return priority value (default 0)
      */
     private int getServicePriority(Class<?> clazz) {
         Service service = clazz.getAnnotation(Service.class);
@@ -1360,11 +1265,9 @@ public class SimpleContainer {
 
     /**
      * Check if bean is singleton.
-     * <br>
-     * 检查Bean是否是单例。
      *
-     * @param name bean name <br> Bean名称
-     * @return true if singleton <br> 如果是单例则返回true
+     * @param name bean name
+     * @return true if singleton
      */
     public boolean isSingleton(String name) {
         BeanDefinition definition = beanDefinitions.get(name);
@@ -1377,11 +1280,9 @@ public class SimpleContainer {
 
     /**
      * Check if bean is prototype.
-     * <br>
-     * 检查Bean是否是原型。
      *
-     * @param name bean name <br> Bean名称
-     * @return true if prototype <br> 如果是原型则返回true
+     * @param name bean name
+     * @return true if prototype
      */
     public boolean isPrototype(String name) {
         BeanDefinition definition = beanDefinitions.get(name);
@@ -1394,11 +1295,9 @@ public class SimpleContainer {
 
     /**
      * Get bean type.
-     * <br>
-     * 获取Bean类型。
      *
-     * @param name bean name <br> Bean名称
-     * @return bean type <br> Bean类型
+     * @param name bean name
+     * @return bean type
      */
     public Class<?> getType(String name) {
         Class<?> type = beanTypes.get(name);
@@ -1421,8 +1320,6 @@ public class SimpleContainer {
 
     /**
      * Initialize all singletons.
-     * <br>
-     * 初始化所有单例。
      */
     public void preInstantiateSingletons() {
         try {
@@ -1453,8 +1350,6 @@ public class SimpleContainer {
 
     /**
      * Start the container.
-     * <br>
-     * 启动容器。
      */
     public void start() {
         if (!isStarted) {
@@ -1465,8 +1360,6 @@ public class SimpleContainer {
 
     /**
      * Stop the container.
-     * <br>
-     * 停止容器。
      */
     public void stop() {
         isStarted = false;
@@ -1474,10 +1367,8 @@ public class SimpleContainer {
 
     /**
      * Check if container is running.
-     * <br>
-     * 检查容器是否正在运行。
      *
-     * @return true if running <br> 如果正在运行则返回true
+     * @return true if running
      */
     public boolean isRunning() {
         return isStarted;
@@ -1485,10 +1376,8 @@ public class SimpleContainer {
 
     /**
      * Scan components in packages.
-     * <br>
-     * 扫描包中的组件。
      *
-     * @param basePackages packages to scan <br> 要扫描的包
+     * @param basePackages packages to scan
      */
     public void scanComponents(String... basePackages) {
         ComponentScanner scanner = new ComponentScanner(this);
@@ -1506,18 +1395,8 @@ public class SimpleContainer {
      * is additive across {@code value()}, {@code basePackages()} and the packages named by
      * {@code basePackageClasses()} -- in that declaration order, with duplicates collapsed to
      * their first occurrence (GEN-06) -- not a first-match choice among them.
-     * <br>
-     * 处理配置类。
-     * <p>
-     * 通过 {@link MergedAnnotationResolver#find} 而非裸的
-     * {@code configClass.getAnnotation(ComponentScan.class)} 读取 {@code @ComponentScan}——一个
-     * 元注解了 {@code @UltiToolsModule} 的类，会通过其 {@code @AliasFor} 声明把
-     * {@code scanBasePackages()}/{@code scanBasePackageClasses()} 的值带入合并后的
-     * {@code @ComponentScan} 视图（D-01），裸查找会完全错过这一点。结果是在 {@code value()}、
-     * {@code basePackages()} 以及 {@code basePackageClasses()} 指名的包之间做累加——按此声明顺序，
-     * 重复项折叠为首次出现（GEN-06）——而不是在它们之间做首个匹配的选择。
      *
-     * @param configClass configuration class <br> 配置类
+     * @param configClass configuration class
      */
     public void processConfigurationClass(Class<?> configClass) {
         ComponentScan merged = MergedAnnotationResolver.find(configClass, ComponentScan.class);

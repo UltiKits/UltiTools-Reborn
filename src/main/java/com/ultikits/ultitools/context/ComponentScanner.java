@@ -30,8 +30,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Component scanner to find and register components.
- * <br>
- * 组件扫描器，用于查找和注册组件。
  */
 @ApiStatus.Internal
 public class ComponentScanner {
@@ -45,10 +43,8 @@ public class ComponentScanner {
 
     /**
      * Scan packages for components.
-     * <br>
-     * 扫描包以查找组件。
      *
-     * @param basePackages packages to scan <br> 要扫描的包
+     * @param basePackages packages to scan
      */
     public void scanPackages(String... basePackages) {
         for (String basePackage : basePackages) {
@@ -58,10 +54,8 @@ public class ComponentScanner {
 
     /**
      * Scan a single package for components.
-     * <br>
-     * 扫描单个包以查找组件。
      *
-     * @param basePackage package to scan <br> 要扫描的包
+     * @param basePackage package to scan
      */
     public void scanPackage(String basePackage) {
         try {
@@ -105,8 +99,6 @@ public class ComponentScanner {
 
     /**
      * Scan inside a JAR file for class files.
-     * <br>
-     * 扫描JAR文件中的类文件。
      */
     private void scanJar(URL resource, String basePackage, ClassLoader classLoader) {
         try {
@@ -149,23 +141,16 @@ public class ComponentScanner {
 
     /**
      * Scan directory for class files.
-     * <br>
-     * 扫描目录以查找类文件。
      *
-     * @param directory   the directory to scan <br> 待扫描的目录
+     * @param directory   the directory to scan
      * @param packageName the dotted package name for {@code directory}, growing with each
-     *                    recursive descent into a subdirectory <br>
-     *                    {@code directory} 对应的点分隔包名，随每次递归进入子目录而增长
-     * @param classLoader the class loader to load discovered classes with <br> 用于加载所发现类的类加载器
+     *                    recursive descent into a subdirectory
+     * @param classLoader the class loader to load discovered classes with
      * @param moduleName  the D-19 diagnostic identifier for this scan -- fixed at the original
      *                    {@code basePackage} for the whole recursion, deliberately NOT the
      *                    per-recursion {@code packageName} above, so a class three subdirectories
      *                    deep is still attributed to the same module {@code scanPackage}'s
-     *                    {@code finally} block will emit a summary for <br>
-     *                    本次扫描的 D-19 诊断标识——在整个递归过程中固定为最初的
-     *                    {@code basePackage}，刻意不使用上面逐层增长的 {@code packageName}，
-     *                    这样即便是三层子目录之下的类，也仍归属于 {@code scanPackage} 的
-     *                    {@code finally} 块最终会为之输出汇总的同一个模块
+     *                    {@code finally} block will emit a summary for
      */
     private void scanDirectory(File directory, String packageName, ClassLoader classLoader, String moduleName) {
         File[] files = directory.listFiles();
@@ -205,16 +190,6 @@ public class ComponentScanner {
      * throws today are the {@code @Final} contract violation below and a malformed
      * {@code @AliasFor} declaration surfaced by {@link MergedAnnotationResolver} during the same
      * scan; neither may ever be caught by a blanket handler.
-     * <br>
-     * 处理类的组件注解。
-     * <p>
-     * 传播规则（D-25），在此统一声明一次，而不是在 {@code scanJar}/{@code scanDirectory}
-     * 各自的逐类调用点重复：{@link ContainerException} 是唯一会无条件穿透本方法、中止模块扫描的
-     * 类型；注册单个类时抛出的其他任何异常都会被记录，仅跳过该类，包内其余类照常注册。规则就是
-     * 这一个类型名，因此无需维护任何白名单。当前两处刻意抛出 {@code ContainerException}
-     * 的地方分别是下方的 {@code @Final} 契约违规检查，以及同一次扫描中由
-     * {@link MergedAnnotationResolver} 发现的畸形 {@code @AliasFor} 声明；两者都绝不能被任何
-     * 万能捕获吞掉。
      */
     private void processClass(Class<?> clazz) {
         // The @Final contract is checked before anything else, including @ConditionalOnConfig:
@@ -251,11 +226,6 @@ public class ComponentScanner {
      * Delegates to {@link ConditionalRegistrationEvaluator}, the single shared implementation
      * of this decision (D-17) -- also consulted by {@code ListenerManager}'s package-scan
      * overload, so the annotation is honoured identically on both reflection paths.
-     * <br>
-     * 根据 @ConditionalOnConfig 检查类是否应被注册。
-     * <p>
-     * 委托给 {@link ConditionalRegistrationEvaluator}——该判定逻辑唯一的共享实现（D-17），
-     * 同时也被 {@code ListenerManager} 的包扫描重载调用，从而使该注解在两条反射路径上表现一致。
      *
      * @param clazz the class to check
      * @return true if the class should be registered
@@ -266,8 +236,6 @@ public class ComponentScanner {
 
     /**
      * Check if class is a component.
-     * <br>
-     * 检查类是否是组件。
      */
     private boolean isComponent(Class<?> clazz) {
         return clazz.isAnnotationPresent(Component.class) ||
@@ -300,25 +268,6 @@ public class ComponentScanner {
      * (`plugin.yml` re-parse, resource re-copy, a second config-entity registration under an
      * orphaned plugin instance) a second time. Excluded here rather than in {@link #isComponent},
      * whose own four-way disjunction stays untouched (D-03 scope).
-     * <br>
-     * 检查类是否在其整棵注解树上的任意位置携带元组件注解。
-     * <p>
-     * 相较此前手写实现的扩展（D-03，03-02）：旧实现只检查类上直接声明的注解，且只向上遍历一层
-     * 元注解，因此在 {@code @Component} 之上组合了两层的原型注解无法被识别。
-     * {@link MergedAnnotationResolver#isPresent} 会遍历整棵注解树，因此现在可以被识别。这是刻意
-     * 的——组合原型注解存在的意义正是要被识别——并由 03-10 记录进
-     * {@code COMPATIBILITY.md} 的行为变更判定标准。
-     * <p>
-     * <b>例外：{@link UltiToolsPlugin} 子类在此处永远不会被视为组件</b>，无论其注解树解析结果如何。
-     * {@code @UltiToolsModule} 组合了 {@code @Configuration}，而后者本身元注解了
-     * {@code @Component}——因此不加限定的整树遍历也会匹配到每个模块自身的主类。而该类在本次扫描
-     * 运行之前就已经被 {@code PluginManager} 构造并以单例注册（必须先读取其 `plugin.yml`
-     * 元数据），使用它原始的 {@code Class.getSimpleName()} 作为 bean 名称。{@code ComponentScanner}
-     * 自身的 bean 命名约定会把同一个名字首字母小写，因此这两次注册永远不会碰撞；若把模块主类也视为
-     * 可扫描的 {@code @Component}，就会在首字母小写的名字下为它注册*第二个* bean 定义——之后
-     * {@code preInstantiateSingletons} 会通过反射构造它，重新执行一遍整个无参构造函数
-     * （重新解析 `plugin.yml`、重新复制资源、在一个孤儿插件实例下再注册一遍配置实体）。在此处
-     * 排除，而非改动 {@link #isComponent} 自身的四路析取（保持 D-03 的范围不变）。
      */
     private boolean hasComponentAnnotation(Class<?> clazz) {
         if (UltiToolsPlugin.class.isAssignableFrom(clazz)) {
@@ -329,8 +278,6 @@ public class ComponentScanner {
 
     /**
      * Register a component class.
-     * <br>
-     * 注册组件类。
      * <p>
      * For a class carrying {@code @CmdExecutor}, the {@code @CmdTarget} class-versus-method
      * composition is checked here - pure reflection, before {@code registerBeanDefinition}, and
@@ -339,12 +286,6 @@ public class ComponentScanner {
      * own constructor (runs inside {@code preInstantiateSingletons}, no per-bean isolation, would
      * fail the whole plugin) would take down every command in the module instead of just this
      * one class. See T-01-01b in this plan's threat model and D-03.
-     * <br>
-     * 对携带 @CmdExecutor 的类，在此处——纯反射、先于 registerBeanDefinition、且在本方法
-     * 自身的 try/catch 内——检查 @CmdTarget 的类/方法组合，因为这里才是隔离原语：
-     * 放在 processClass（无 try/catch，整次扫描中止）或执行器自身构造函数
-     * （运行于 preInstantiateSingletons，无逐 bean 隔离，会拖垮整个插件）都会
-     * 把爆炸半径从一个指令类扩大到整个模块。
      */
     private void registerComponent(Class<?> clazz) {
         try {
@@ -371,8 +312,6 @@ public class ComponentScanner {
 
     /**
      * Register a configuration class.
-     * <br>
-     * 注册配置类。
      */
     private void registerConfiguration(Class<?> clazz) {
         try {
@@ -411,16 +350,6 @@ public class ComponentScanner {
      * {@link SimpleContainer#addSingleton(String, Object)} -- deliberately not a second
      * {@code registerSingleton} call per name, which after D-14 would re-run autowiring and
      * {@code @PostConstruct} once per alias on what should be one bean.
-     * <br>
-     * 处理@Bean方法。
-     * <p>
-     * Bean 名称通过 {@link #resolveBeanNames(Method)} 从 {@code @Bean} 的 {@code name()}/
-     * {@code value()} 派生（D-06），缺省时回退到方法自身的名称，与该属性生效前的行为一致。解析出的
-     * <b>第一个</b>名称通过 {@link SimpleContainer#registerSingleton(String, Object)} 注册，
-     * 该方法会完整装配实例（D-14）；其余名称则通过包内可见的
-     * {@link SimpleContainer#addSingleton(String, Object)} 绑定到<em>同一个已装配完成</em>的引用
-     * 上——刻意不对每个名称都调用一次 {@code registerSingleton}，因为在 D-14 之后那样做会让一个
-     * Bean 的自动装配与 {@code @PostConstruct} 按别名数量重复执行。
      */
     private void processBeanMethod(Object configInstance, Method method) {
         try {
@@ -461,21 +390,9 @@ public class ComponentScanner {
      * "absent" (D-02). No element is normalized: two names differing only by Unicode
      * normalization form are two distinct declared names, decided purely by
      * {@code String.equals}.
-     * <br>
-     * 为一个 {@code @Bean} 方法解析有效的 Bean 名称数组（D-06）：{@code name()} 非空则使用它，
-     * 否则 {@code value()} 非空则使用它，否则回退到方法自身的名称作为单元素数组。{@code name()}
-     * 与 {@code value()} 互为别名——两者都非空且内容不同即为畸形声明，会导致加载失败，错误信息
-     * 同时指出该方法与两个已声明的值，复用了 03-01 为畸形 {@code @AliasFor}
-     * 声明构建的同一个 {@link ContainerException#malformedAliasFor} 工厂（因此消息形态一致），
-     * 尽管 {@code @Bean} 自身刻意不在两个属性之间声明真正的 {@code @AliasFor}
-     * （见本方法所在类的 scope boundary）。两者内容相同则合法。解析出的每个元素都必须非空白——
-     * 空白或仅由空白字符组成的元素同样是畸形声明，因为一个无法命名任何东西的名称，不是"已声明"
-     * 与"缺省"之间可用的第三种状态（D-02）。不对任何元素做归一化：两个仅在 Unicode
-     * 规范化形式上不同的名称，是两个不同的已声明名称，纯粹由 {@code String.equals} 决定。
      *
-     * @param method the {@code @Bean}-annotated factory method <br> 携带 {@code @Bean} 的工厂方法
+     * @param method the {@code @Bean}-annotated factory method
      * @return the resolved name array; index 0 is the registered bean name, the rest are aliases
-     *         <br> 解析出的名称数组；索引 0 是注册的 Bean 名称，其余是别名
      */
     private String[] resolveBeanNames(Method method) {
         Bean beanAnnotation = method.getAnnotation(Bean.class);
@@ -513,8 +430,6 @@ public class ComponentScanner {
 
     /**
      * Get bean name from class.
-     * <br>
-     * 从类获取Bean名称。
      */
     private String getBeanName(Class<?> clazz) {
         if (clazz.isAnnotationPresent(Component.class)) {

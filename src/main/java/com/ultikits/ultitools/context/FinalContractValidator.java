@@ -47,23 +47,6 @@ import java.util.logging.Logger;
  * widening override interposed between {@code clazz} and a {@code @Final} ancestor no longer
  * defeats the check, and the walk also follows implemented interfaces, not only the superclass
  * chain, so a {@code @Final} default method or a {@code @Final} interface is enforced too.
- * <p>
- * 该校验在类加载期恢复 {@code @Final} 的约束。框架加载全部模块，因此跨模块有效。
- * 但它不在编译期生效；覆盖范围严格等于组件扫描实际走到的类。对插件模块而言，这个范围来自
- * {@code PluginManager#getPluginScanPackages} 的三层回退：模块声明的
- * {@code @UltiToolsModule(scanBasePackages)}，其次插件类上的 {@code @ComponentScan}，都未声明
- * 则默认扫插件类自己所在的包——两个注解都不声明的模块依然会被检查，只是回退到自己的包，而不是
- * 完全跳出扫描。框架自身的类在生产环境中<b>不会</b>被检查：从未有代码对
- * {@code com.ultikits.ultitools} 自身发起过 {@link ComponentScanner} 扫描。{@code ContextConfig}
- * 曾经为此声明 {@code @ComponentScan("com.ultikits.ultitools")}，但唯一会处理这个声明的
- * {@link SimpleContainer#processConfigurationClass(Class)} 在 {@code src/main} 里没有任何调用方，
- * 该声明因此在 6.3.0 被移除——只有测试（{@code ContextConfigTest}、{@code ScanTest}）会调用它。
- * 对插件模块而言，类只要落在自己扫描实际到达的包之外就不受检查；而框架自身的类，目前无条件地
- * 不受检查。
- * <p>
- * 方法级检查具备传递性：通过 {@link ReflectionUtil#overrides(Method, Method)} 累积真正构成覆盖链的
- * 声明，而不是只拿 {@code clazz} 自身声明与每一层祖先直接比较；遍历同时沿接口向上走，因此
- * {@code @Final} 默认方法与 {@code @Final} 接口也在检查范围内。
  *
  * @author wisdomme
  * @since 6.3.0
@@ -183,14 +166,6 @@ public final class FinalContractValidator {
      * declaration fails the package check, but comparing the widening override (already in the
      * chain because it was found first, one level up) against it succeeds, because that override
      * genuinely shares a package with the {@code @Final} declaration.
-     * <p>
-     * 按名称加参数类型匹配是不够的：{@code clazz} 中与祖先类的 {@code @Final} 方法签名相同的
-     * {@code private}、{@code static} 或跨包包私有方法，根据 JLS 8.4.8.1 根本不构成重写。比较对称
-     * 的签名 key 同样不够：覆盖是有方向的，key 比较会漏掉镜像的那一半——同包子类把祖先的包私有
-     * {@code @Final} 方法放宽为 {@code public}，那是真正的覆盖，也正是 {@code @Final} 要禁止的。
-     * 这里改用 {@link ReflectionUtil#overrides(Method, Method)}——该规则的唯一实现，与
-     * {@link ReflectionUtil#getAllMethods(Class)} 共用，让两处检查天然一致。遍历会累积链条中已确认
-     * 的每一条声明，新候选需要与链条中的<b>每一条</b>已有声明比较，而不只是最近加入的一条。
      */
     private static Method findOverriddenSealedMethod(Class<?> clazz, Method method) {
         List<Method> chain = new ArrayList<>();
