@@ -7,7 +7,7 @@ on:
     branches: [ "main", "alpha" ]
 
 jobs:
-  # ==================== 测试阶段 ====================
+  # ==================== Test Stage ====================
   test:
     name: 🧪 Test & Coverage
     runs-on: ubuntu-latest
@@ -26,9 +26,11 @@ jobs:
         cache: maven
 
     - name: 🧪 Build & Test with Coverage
-      # verify 而不是 test：shade 过滤器、资源过滤、jar 打包与 javadoc 生成都绑定在
-      # package 阶段，只跑 test 的话这些在合并之后才第一次执行。
-      # 不需要关签名：maven-gpg-plugin 只在 release profile 里，默认不激活。
+      # verify, not test: the shade filters, resource filtering, jar packaging and javadoc
+      # generation are all bound to the package phase, so running test alone would leave them
+      # to execute for the first time only after merging.
+      # No need to disable signing: maven-gpg-plugin lives only in the release profile and is
+      # not active by default.
       run: mvn -B clean verify
       
     - name: 📊 Generate JaCoCo Coverage Report
@@ -46,14 +48,14 @@ jobs:
         
     - name: 📋 Display Coverage Summary
       run: |
-        echo "## 📊 测试覆盖率报告" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| 指标 | 数值 |" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **行覆盖率** | ${{ steps.jacoco.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
-        echo "| **分支覆盖率** | ${{ steps.jacoco.outputs.branches }}% |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Line coverage** | ${{ steps.jacoco.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Branch coverage** | ${{ steps.jacoco.outputs.branches }}% |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📁 详细覆盖率数据" >> $GITHUB_STEP_SUMMARY
+        echo "### 📁 Detailed Coverage Data" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         cat target/site/jacoco/jacoco.csv | head -20 >> $GITHUB_STEP_SUMMARY
@@ -86,14 +88,14 @@ jobs:
       run: |
         COVERAGE=${{ steps.jacoco.outputs.coverage }}
         BRANCHES=${{ steps.jacoco.outputs.branches }}
-        echo "📊 当前行覆盖率: ${COVERAGE}%"
-        echo "📊 当前分支覆盖率: ${BRANCHES}%"
-        # 可以在这里设置覆盖率阈值检查
+        echo "📊 Current line coverage: ${COVERAGE}%"
+        echo "📊 Current branch coverage: ${BRANCHES}%"
+        # A coverage threshold check could be set here
         # if (( $(echo "$COVERAGE < 50" | bc -l) )); then
-        #   echo "❌ 覆盖率低于 50%，构建失败"
+        #   echo "❌ Coverage below 50%, build failed"
         #   exit 1
         # fi
-        echo "✅ 测试通过，覆盖率符合要求"
+        echo "✅ Tests passed, coverage meets requirements"
 
     - name: 📤 Upload Coverage to Codacy
       if: github.event_name == 'push'
@@ -104,7 +106,7 @@ jobs:
         CODACY_PROJECT_NAME: UltiTools-Reborn
       run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r target/site/jacoco/jacoco.xml
 
-  # ==================== 隔离测试阶段 ====================
+  # ==================== Isolated Test Stage ====================
   # TaskManagerTest is tagged @Tag("isolated") because it mutates global scheduler state, so it
   # is excluded from the default `mvn -B clean verify` run above (see pom.xml's excludedGroups
   # property). This job gives it its own Maven invocation and its own build directory - a
@@ -141,15 +143,15 @@ jobs:
         path: target/surefire-reports/
         retention-days: 30
 
-  # ==================== 构建 SNAPSHOT 阶段 ====================
+  # ==================== Build SNAPSHOT Stage ====================
   build-snapshot:
     name: 🔨 Build SNAPSHOT
     needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # alpha 是开发主干，SNAPSHOT 构件对它才有意义；main 上的正式产物由
-    # publish-packages.yml 在 release 时产出。
+    # alpha is the development trunk, so a SNAPSHOT artifact is only meaningful for it; the
+    # official artifact on main is produced by publish-packages.yml at release time.
     if: github.event_name == 'push' && github.ref == 'refs/heads/alpha'
     
     steps:
@@ -175,13 +177,13 @@ jobs:
       id: snapshot
       run: |
         BASE_VERSION=${{ steps.version.outputs.version }}
-        # 移除可能存在的 -SNAPSHOT 后缀，然后添加新的
+        # Remove any existing -SNAPSHOT suffix, then add the new one
         CLEAN_VERSION=${BASE_VERSION%-SNAPSHOT}
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
         SNAPSHOT_VERSION="${CLEAN_VERSION}-SNAPSHOT-${SHORT_SHA}"
         echo "snapshot_version=${SNAPSHOT_VERSION}" >> $GITHUB_OUTPUT
-        echo "📦 SNAPSHOT 版本: ${SNAPSHOT_VERSION}"
-        # 更新 pom.xml 中的版本号
+        echo "📦 SNAPSHOT version: ${SNAPSHOT_VERSION}"
+        # Update the version number in pom.xml
         mvn versions:set -DnewVersion=${SNAPSHOT_VERSION} -DgenerateBackupPoms=false
         
     - name: 🔨 Build SNAPSHOT with Maven
@@ -197,13 +199,13 @@ jobs:
 
     - name: 📝 SNAPSHOT Build Summary
       run: |
-        echo "## 📦 SNAPSHOT 构建完成" >> $GITHUB_STEP_SUMMARY
+        echo "## 📦 SNAPSHOT Build Complete" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| 信息 | 值 |" >> $GITHUB_STEP_SUMMARY
+        echo "| Info | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **版本** | \`${{ steps.snapshot.outputs.snapshot_version }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **提交** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **分支** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **触发者** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Version** | \`${{ steps.snapshot.outputs.snapshot_version }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Triggered by** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "💡 **提示**: SNAPSHOT 构件将保留 14 天，可在 Artifacts 中下载" >> $GITHUB_STEP_SUMMARY
+        echo "💡 **Tip**: SNAPSHOT artifacts are retained for 14 days and can be downloaded from Artifacts" >> $GITHUB_STEP_SUMMARY

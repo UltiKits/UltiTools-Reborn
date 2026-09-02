@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.entities;
 
 /**
- * 比较运算符枚举类
+ * Comparison operator enum class.
  *
  * @author wisdomme
  * @version 1.0.0

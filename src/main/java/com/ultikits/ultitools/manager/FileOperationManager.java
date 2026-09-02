@@ -475,7 +475,7 @@ public class FileOperationManager {
 
             int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull()
                 ? operationData.get("limit").getAsInt() : 0;
-            if (limit <= 0) limit = 1000; // 默认限制1000行
+            if (limit <= 0) limit = 1000; // Default limit of 1000 lines
 
             StringBuilder content = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new FileReader(file))) {

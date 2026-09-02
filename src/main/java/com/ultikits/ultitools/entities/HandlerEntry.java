@@ -10,8 +10,6 @@ import lombok.Getter;
 
 /**
  * Internal representation of a registered event handler.
- * <p>
- * 已注册事件处理器的内部表示。
  *
  * @since 6.2.2
  */

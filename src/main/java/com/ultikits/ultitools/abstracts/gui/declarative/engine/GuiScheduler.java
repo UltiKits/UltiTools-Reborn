@@ -130,7 +130,7 @@ public class GuiScheduler {
             } else {
                 // Schedule for the next frame
                 Bukkit.getScheduler().runTaskLater(plugin, this::executeFrame, 
-                        Math.max(1, delay / 50)); // 转换为 tick
+                        Math.max(1, delay / 50)); // Convert to ticks
             }
         }
     }
@@ -150,7 +150,7 @@ public class GuiScheduler {
                 } else {
                     // Not on the main thread -- reschedule
                     Bukkit.getScheduler().runTask(plugin, task);
-                    break; // 只处理一个，剩下的在下一次 tick 处理
+                    break; // Handle only one; the rest are handled on the next tick
                 }
             } catch (Exception e) {
                 plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());

@@ -170,7 +170,7 @@ public class LogStreamManager implements Listener {
         String clientId = data.has("clientId") && !data.get("clientId").isJsonNull() 
             ? data.get("clientId").getAsString() : null;
         String level = data.has("level") && !data.get("level").isJsonNull() 
-            ? data.get("level").getAsString() : null; // 可选的日志级别过滤
+            ? data.get("level").getAsString() : null; // Optional log-level filter
         
         if (clientId == null) {
             clientId = "default";
@@ -282,7 +282,7 @@ public class LogStreamManager implements Listener {
      * Pauses the log stream.
      */
     public void pauseLogStream(String clientId) {
-        subscribedClients.put(clientId, false); // 标记为暂停状态
+        subscribedClients.put(clientId, false); // Mark as paused
 
         UltiTools.getInstance().getLogger().info(
             String.format("LogStreamManager: 为客户端 %s 暂停日志流", clientId));

@@ -14,11 +14,6 @@ import com.ultikits.ultitools.UltiTools;
  * shipped default, and the comment lines the capability migration attaches when it writes the key
  * for the first time. {@link #isEnabled()} is the single config read every inbound and outbound
  * capability gate in this phase consults — see {@code PluginInitiationUtils.handleInboundMessage}.
- * <p>
- * 面板可见的远程能力面被切成八个可独立开关的能力，外加协议层消息使用的 {@link #NONE} 哨兵值。
- * 每个绑定配置的常量都拥有自己的 {@code ultipanel.capabilities.*} 键、自己的 D-08 出厂默认值，
- * 以及首次写入该键时迁移逻辑要附带的注释行。{@link #isEnabled()} 是本阶段每一处入站/出站能力
- * 网关唯一读取的配置入口。
  *
  * @since 6.3.0
  */
@@ -63,8 +58,6 @@ public enum Capability {
      * The D-10 sentinel for protocol-level and echo messages that carry no operator-facing policy.
      * Never written to config.yml and never gated — {@link #isEnabled()} always returns
      * {@code true} without touching config.
-     * <p>
-     * D-10 场景下协议层/回声消息使用的哨兵值。从不写入 config.yml，也从不被拦截。
      */
     NONE(null, true, Collections.emptyList());
 

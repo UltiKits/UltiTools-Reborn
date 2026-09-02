@@ -11,8 +11,8 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.*;
 
 /**
- * 增强的玩家事件监听器
- * 监听玩家相关事件并通过WebSocket发送到UltiPanel
+ * Enhanced player event listener.
+ * Listens for player-related events and sends them to UltiPanel over WebSocket.
  */
 @EventListener
 public class EnhancedPlayerEventListener implements Listener {

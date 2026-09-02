@@ -216,7 +216,7 @@ public class SystemLogHandler extends Handler {
                     sb.append(param).append(", ");
                 }
                 if (sb.length() > 2) {
-                    sb.setLength(sb.length() - 2); // 移除最后的 ", "
+                    sb.setLength(sb.length() - 2); // Remove the trailing ", "
                 }
                 sb.append("]");
                 message = sb.toString();

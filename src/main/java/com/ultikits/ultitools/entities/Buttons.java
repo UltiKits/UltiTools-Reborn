@@ -64,7 +64,7 @@ public enum Buttons {
     /**
      * Get name string.
      *
-     * @return Button 's name 按钮名称
+     * @return Button 's name
      */
     public String getName() {
         if (cachedName == null) {
@@ -76,7 +76,7 @@ public enum Buttons {
     /**
      * Get item stack item stack.
      *
-     * @return Button 's material 按钮材质
+     * @return Button 's material
      */
     public ItemStack getItemStack() {
         if (cachedItemStack == null) {

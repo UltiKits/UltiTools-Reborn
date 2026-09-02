@@ -40,9 +40,9 @@ public class ServerMonitorManager {
 
     // TPS calculation related
     private long lastTick = System.currentTimeMillis();
-    private final long[] tpsHistory1m = new long[60];   // 1分钟TPS历史
-    private final long[] tpsHistory5m = new long[300];  // 5分钟TPS历史
-    private final long[] tpsHistory15m = new long[900]; // 15分钟TPS历史
+    private final long[] tpsHistory1m = new long[60];   // 1-minute TPS history
+    private final long[] tpsHistory5m = new long[300];  // 5-minute TPS history
+    private final long[] tpsHistory15m = new long[900]; // 15-minute TPS history
     private int historyIndex = 0;
 
     // CPU sampling (sampled periodically on the Bukkit main thread, read by the batch_update thread)
@@ -150,7 +150,7 @@ public class ServerMonitorManager {
             if (webSocketClient != null && webSocketClient.isConnected()) {
                 sendBatchUpdate();
             }
-        }, 20L); // 等待1秒
+        }, 20L); // Wait 1 second
 
         // Enable the log transmitter's external drain mode (logs will be sent uniformly via batch_update)
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
@@ -323,7 +323,7 @@ public class ServerMonitorManager {
             message.addProperty("type", "server_status");
             message.addProperty("serverId", webSocketClient.getServerId());
             message.addProperty("timestamp", System.currentTimeMillis());
-            message.addProperty("requestId", requestId); // 包含请求ID
+            message.addProperty("requestId", requestId); // Includes the request ID
 
             JsonObject data = getCurrentServerStatusData();
             message.add("data", data);
@@ -735,10 +735,10 @@ public class ServerMonitorManager {
         // Task runs every 20 ticks. At 20 TPS, timeDiff ≈ 1000ms.
         // TPS = 20 ticks * (1000ms / actual_elapsed_ms)
         double currentTPS = 20000.0 / Math.max(timeDiff, 50.0);
-        currentTPS = Math.min(currentTPS, 20.0); // 限制最大TPS为20
+        currentTPS = Math.min(currentTPS, 20.0); // Cap the max TPS at 20
 
         // Store into the history arrays
-        long tpsAsLong = Math.round(currentTPS * 100); // 存储为百分制整数
+        long tpsAsLong = Math.round(currentTPS * 100); // Stored as an integer scaled by 100
         tpsHistory1m[historyIndex % tpsHistory1m.length] = tpsAsLong;
         tpsHistory5m[historyIndex % tpsHistory5m.length] = tpsAsLong;
         tpsHistory15m[historyIndex % tpsHistory15m.length] = tpsAsLong;
@@ -779,9 +779,9 @@ public class ServerMonitorManager {
         // If there isn't enough history yet, fall back to the realtime-computed TPS
         if (historyIndex < 60) {
             double realtimeTPS = calculateRealtimeTPS();
-            if (historyIndex < 1) tps[0] = realtimeTPS;  // 至少需要1秒数据
-            if (historyIndex < 60) tps[1] = realtimeTPS; // 至少需要60秒数据
-            if (historyIndex < 300) tps[2] = realtimeTPS; // 至少需要300秒数据
+            if (historyIndex < 1) tps[0] = realtimeTPS;  // Needs at least 1 second of data
+            if (historyIndex < 60) tps[1] = realtimeTPS; // Needs at least 60 seconds of data
+            if (historyIndex < 300) tps[2] = realtimeTPS; // Needs at least 300 seconds of data
         }
         
         return tps;
@@ -798,7 +798,7 @@ public class ServerMonitorManager {
             sum += history[i];
         }
 
-        return (sum / (double) count) / 100.0; // 转回小数形式
+        return (sum / (double) count) / 100.0; // Convert back to decimal form
     }
 
     /**
@@ -808,7 +808,7 @@ public class ServerMonitorManager {
         // If history data exists, use the most recent TPS record
         if (historyIndex > 0) {
             int recentIndex = (historyIndex - 1) % tpsHistory1m.length;
-            return tpsHistory1m[recentIndex] / 100.0; // 转回小数形式
+            return tpsHistory1m[recentIndex] / 100.0; // Convert back to decimal form
         }
 
         // If there is no history data, return the default value

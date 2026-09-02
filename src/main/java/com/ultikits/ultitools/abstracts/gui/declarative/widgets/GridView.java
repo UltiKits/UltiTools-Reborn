@@ -23,14 +23,14 @@ import java.util.function.Function;
  *
  * <p><strong>Usage example:</strong></p>
  * <pre>{@code
- * // 手动指定子 Widget
+ * // Manually specify child widgets
  * GridView.builder()
  *     .startSlot(10)
  *     .columns(7)
  *     .children(buttons)
  *     .build();
  *
- * // 从数据列表自动生成
+ * // Auto-generate from a data list
  * GridView.<ItemStack>builder()
  *     .startSlot(10)
  *     .columns(7)

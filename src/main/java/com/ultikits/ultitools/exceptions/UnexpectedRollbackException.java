@@ -10,13 +10,6 @@ package com.ultikits.ultitools.exceptions;
  * inner scope's decision was discarded silently - the outer {@code commit()} logged a WARNING and
  * returned normally, leaving the caller believing its work was persisted when it was not. Throwing
  * this instead makes that outcome observable.
- * <p>
- * 标记外层 {@code commit()} 发现事务已被内层作用域标记为「只能回滚」，因而执行了真正的回滚
- * 而非提交。这是 Spring 系容器中同类信号
- * （{@code org.springframework.transaction.UnexpectedRollbackException}）在本框架里的对应物：
- * 外层提交发现内层作用域已经判定整个事务无法成功。D-08 之前，内层的这一判定会被静默丢弃——
- * 外层 {@code commit()} 只记一条 WARNING 便正常返回，调用方会误以为自己的工作已经持久化，
- * 实际并未发生。改为抛出该异常后，这一结果不再是静默的。
  *
  * @author wisdomme
  * @since 6.3.0

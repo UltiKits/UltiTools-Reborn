@@ -27,8 +27,6 @@ import com.ultikits.ultitools.interfaces.DataOperator;
  *     }
  * }
  * </pre>
- * <p>
- * 外部 Bukkit 插件接入 UltiTools 框架的公开 API。
  *
  * @since 6.2.2
  */
@@ -40,8 +38,6 @@ public final class UltiToolsAPI {
     /**
      * Connect an external Bukkit plugin to UltiTools framework.
      * Scans the plugin's package for @Service, @CmdExecutor, @EventListener, etc.
-     * <p>
-     * 将外部 Bukkit 插件连接到 UltiTools 框架。
      *
      * @param plugin the external JavaPlugin to connect
      * @throws IllegalStateException if UltiTools is not loaded
@@ -67,24 +63,9 @@ public final class UltiToolsAPI {
      * is left behind -- {@code additionalEntities} cannot be used to obtain a working
      * {@link DataOperator} for another plugin's entity, only to declare entities this plugin
      * genuinely owns but does not package.
-     * <p>
-     * 将外部 Bukkit 插件连接到 UltiTools 框架，并声明合法存放在插件自身 JAR 之外的实体类
-     * （D-19）——共享库 JAR，或多模块构建的公共产物。插件自身 JAR 中的 {@code @Table} 类始终会
-     * 被自动扫描；{@code additionalEntities} 是对该扫描结果的补充，而非替代。单参数的
-     * {@link #connect(JavaPlugin)} 重载保持不变，以空数组委托到本方法。
-     * <p>
-     * <b>{@code additionalEntities} 会被校验，而非被信任（02-14）。</b>其中每一个类都必须存放在
-     * {@code plugin} 自身的 classpath 上——要么是它自己的 JAR，要么是一个尚未被记录为归属于
-     * 另一个当前已加载插件的 jar/模块。若某个类在结构上被确认属于另一个不同的插件（它自身的
-     * JAR，或已记录归属于另一个插件），则会被拒绝，抛出包裹了
-     * {@code com.ultikits.ultitools.exceptions.PluginModuleException} 的
-     * {@link IllegalStateException}，且不会留下任何部分注册的状态——{@code additionalEntities}
-     * 无法被用来获得另一个插件实体的可用 {@link DataOperator}，只能用来声明本插件确实拥有、
-     * 但未打包在自身 JAR 中的实体。
      *
-     * @param plugin            the external JavaPlugin to connect <br> 待连接的外部 JavaPlugin
+     * @param plugin            the external JavaPlugin to connect
      * @param additionalEntities entity classes owned by this plugin that live outside its own JAR
-     *                            <br> 该插件拥有、但存放在自身 JAR 之外的实体类
      * @throws IllegalStateException if UltiTools is not loaded, or if an entity in
      *                                {@code additionalEntities} does not live on {@code plugin}'s
      *                                own classpath (02-14)
@@ -116,8 +97,6 @@ public final class UltiToolsAPI {
 
     /**
      * Disconnect an external Bukkit plugin from UltiTools framework.
-     * <p>
-     * 断开外部 Bukkit 插件与 UltiTools 框架的连接。
      *
      * @param plugin the external JavaPlugin to disconnect
      */
@@ -159,21 +138,6 @@ public final class UltiToolsAPI {
      * {@code PluginManager.registerExternal} right after minting); the {@code null} fallback below
      * only covers an adapter that predates that wiring, where the deprecated overload's own {@code
      * checkOwnership(...)} call still refuses correctly on its own.
-     * <p>
-     * 获取外部插件的数据操作器。数据存储在插件自己的数据文件夹中。若 {@code dataEntity} 未向
-     * {@code plugin} 注册则直接拒绝（D-14）——校验依据是该插件 {@code connect(...)} 时铸造的同一个
-     * {@link com.ultikits.ultitools.manager.DataScope}，构造拒绝信息的方式与
-     * {@code DataStore.getOperator(DataScope, Class)} 完全相同，因此无论调用方走到哪一个入口，
-     * 异常类型、错误码和消息形态都一致。
-     * <p>
-     * <strong>02-13（CR-03）：</strong>在此之前，这里内联检查 {@code scope.owns(...)}，然后本方法
-     * 直接委托给已废弃的 {@code getOperator(File, Class)} 重载——于是
-     * {@code DataStore.getOperator(DataScope, Class)}，即 D-17/02-07 专门构建的、携带凭证的受支持
-     * 路径，在整个框架里没有任何真实调用方。现在改为通过它路由，生产环境真正用上了它当初构建的
-     * 目的。到已连接插件调用本方法时 {@code scope} 通常已经非空（由
-     * {@code PluginManager.registerExternal} 在铸造之后立即设置）；下面的 {@code null} 回退分支只
-     * 覆盖早于该接入逻辑的 adapter，此时已废弃重载自身的 {@code checkOwnership(...)} 调用依然能
-     * 正确拒绝。
      *
      * @param plugin the external JavaPlugin
      * @param dataEntity the data entity class (must have @Table annotation)
@@ -196,8 +160,6 @@ public final class UltiToolsAPI {
 
     /**
      * Get the UltiTools EventBus for inter-plugin communication.
-     * <p>
-     * 获取 UltiTools 事件总线。
      *
      * @return the EventBus instance
      */
@@ -238,8 +200,6 @@ public final class UltiToolsAPI {
     /**
      * Auto-disconnect a plugin when it is disabled.
      * Called by the PluginDisableEvent listener in PluginManager.
-     * <p>
-     * 插件禁用时自动断开连接。由 PluginManager 中的 PluginDisableEvent 监听器调用。
      *
      * @param plugin the plugin being disabled
      * @since 6.2.2
@@ -252,8 +212,6 @@ public final class UltiToolsAPI {
 
     /**
      * Disconnect all external plugins. Called during UltiTools shutdown.
-     * <p>
-     * 断开所有外部插件的连接。在 UltiTools 关闭时调用。
      *
      * @since 6.2.2
      */

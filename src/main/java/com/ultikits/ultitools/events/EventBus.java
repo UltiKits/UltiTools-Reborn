@@ -23,9 +23,6 @@ import com.ultikits.ultitools.entities.Subscription;
 /**
  * Central event bus for inter-module communication.
  * Supports sync and async dispatch, annotation and programmatic subscriptions.
- * <p>
- * 模块间通信的中央事件总线。
- * 支持同步和异步分发、注解和编程式订阅。
  *
  * @since 6.2.2
  */

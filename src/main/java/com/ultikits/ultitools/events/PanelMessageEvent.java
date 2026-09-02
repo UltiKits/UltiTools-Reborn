@@ -27,25 +27,6 @@ import com.google.gson.JsonObject;
  * event is constructed and again on every accessor call: this event crosses a thread hop and is
  * delivered to an unknown number of third-party handlers, and one handler mutating shared state
  * must not change what the next handler sees or what the framework already acted on.
- * <br>
- * 每一条框架已经处理完的入站面板消息都会发布一次此事件 —— 作为
- * {@code PluginInitiationUtils#handleInboundMessage(JsonObject)} 的最后一条语句追加，在框架自身的
- * 分发已经完成之后。模块通过订阅现有 {@link EventBus} 上的这个事件来观察面板流量，而不需要框架
- * 再长出第二个、模块可见的协议面。
- * <p>
- * 本事件刻意<b>不</b>实现 {@link Cancellable}。取消只有在结果尚未确定时才有意义；本事件是在框架
- * 已经处理完消息之后才发布的，此时挂一个取消标记只会是一个可调用却毫无实际效果的方法 —— 这正是
- * 6.3.0 这个里程碑要清除的"声明了却不生效"这一类缺陷。这与仓库里已有的约定一致，而不是一个孤立
- * 的例外：{@link EventBus#publishAsync(ModuleEvent)} 已经无条件拒绝任何 {@code Cancellable} 事件，
- * 依据的是同一条理由 —— 取消只对结果尚未确定的同步分发有意义。
- * <p>
- * 处理器运行在服务器主线程上 —— 发布点把 {@link EventBus#publish} 包在
- * {@code Bukkit.getScheduler().runTask(...)} 里 —— 因此处理器可以自由使用 Bukkit API。同一个
- * 线程跳转也意味着慢处理器会占用一个 tick；发布点针对每次慢发布记一条告警，注明耗时。
- * <p>
- * 本事件携带的 {@code data} 与原始信封都是防御性拷贝：构造时拷贝一次，每次调用 accessor 时再拷贝
- * 一次 —— 因为本事件跨越了一次线程跳转，会被投递给数量未知的第三方处理器，一个处理器修改共享状态
- * 不应当影响下一个处理器看到的内容，也不应当影响框架自己已经采取的动作。
  *
  * @since 6.3.0
  */

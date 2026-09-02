@@ -43,7 +43,7 @@
  * <p>
  * <h2>Quick Start:</h2>
  * <pre>{@code
- * // 1. 创建你的 GUI 页面
+ * // 1. Create your GUI page
  * public class ShopPage extends DeclarativeGui {
  *     private final List<ItemStack> items;
  *
@@ -56,13 +56,13 @@
  *     public Widget build(BuildContext context) {
  *         return Container.builder()
  *             .children(
- *                 // 标题
+ *                 // Title
  *                 TextButton.builder()
  *                     .text("§6§lItem Shop")
  *                     .slot(4)
  *                     .build(),
  *
- *                 // 物品网格
+ *                 // Item grid
  *                 GridView.<ItemStack>builder()
  *                     .startSlot(10)
  *                     .columns(7)
@@ -71,7 +71,7 @@
  *                         .build())
  *                     .build(),
  *
- *                 // 关闭按钮
+ *                 // Close button
  *                 TextButton.builder()
  *                     .text("§cClose")
  *                     .color("RED")
@@ -83,11 +83,11 @@
  *     }
  *
  *     private void buyItem(ItemStack item) {
- *         // 处理购买逻辑
+ *         // Handle purchase logic
  *     }
  * }
  *
- * // 2. 打开 GUI
+ * // 2. Open the GUI
  * new ShopPage(player, items).open();
  * }</pre>
  * <p>
@@ -107,7 +107,7 @@
  *                 .text("Count: " + count)
  *                 .slot(13)
  *                 .onClick(() -> {
- *                     // 修改状态并触发重建
+ *                     // Mutate state and trigger a rebuild
  *                     count++;
  *                     markNeedsBuild();
  *                 })

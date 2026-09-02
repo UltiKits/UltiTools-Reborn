@@ -45,7 +45,7 @@ public class UltiPanelLogTransmitter {
     @Getter @Setter
     private int batchSize = 10;
     @Getter @Setter
-    private int intervalMs = 5000; // 5秒间隔
+    private int intervalMs = 5000; // 5-second interval
 
     // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
@@ -295,7 +295,7 @@ public class UltiPanelLogTransmitter {
         }
 
         if (source.startsWith("plugin:")) {
-            return source.substring(7); // 移除 "plugin:" 前缀
+            return source.substring(7); // Remove the "plugin:" prefix
         } else if (source.equals("server")) {
             return "MinecraftServer";
         } else {

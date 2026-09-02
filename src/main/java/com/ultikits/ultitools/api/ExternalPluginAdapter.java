@@ -15,8 +15,6 @@ import lombok.Setter;
 /**
  * Wraps a regular Bukkit {@link JavaPlugin} to provide the information
  * UltiTools framework needs for annotation scanning, IoC, and data storage.
- * <p>
- * 包装普通的 Bukkit {@link JavaPlugin}，为 UltiTools 框架提供注解扫描、IoC 和数据存储所需的信息。
  *
  * @since 6.2.2
  */
@@ -45,9 +43,6 @@ public class ExternalPluginAdapter {
      * The credential {@code PluginManager.registerExternal} mints for this adapter (D-17), set
      * immediately after minting and before {@code wireAop} runs. {@code null} only in the brief
      * window between adapter construction and that assignment.
-     * <p>
-     * {@code PluginManager.registerExternal} 为该适配器铸造的凭证（D-17），铸造后、
-     * {@code wireAop} 运行前立即设置。仅在适配器构造完成到该赋值之间的短暂窗口内为 {@code null}。
      *
      * @since 6.3.0
      */
@@ -68,8 +63,6 @@ public class ExternalPluginAdapter {
 
     /**
      * Get the classloader of the wrapped JavaPlugin.
-     * <p>
-     * 获取被包装的 JavaPlugin 的类加载器。
      *
      * @return the plugin's classloader
      */
@@ -79,8 +72,6 @@ public class ExternalPluginAdapter {
 
     /**
      * Get the logger of the wrapped JavaPlugin.
-     * <p>
-     * 获取被包装的 JavaPlugin 的日志记录器。
      *
      * @return the plugin's logger
      */

@@ -5,8 +5,6 @@ import lombok.Setter;
 
 /**
  * Base class for all module events. Extend this to create custom events.
- * <p>
- * 所有模块事件的基类。扩展此类以创建自定义事件。
  *
  * @since 6.2.2
  */
