@@ -7,11 +7,19 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
@@ -142,5 +150,139 @@ class CredentialStoreTest {
                     .as("the parent directory must contain exactly the target file, no leftover temp file")
                     .containsExactly("data.json");
         }
+    }
+
+    // ---- Deterministic interleaving: no torn file, no lost update (D-14). Each case releases all
+    // threads together via a CyclicBarrier so contention is real, joins every thread, and asserts
+    // on file content AFTER the join -- the assertion after the join is the point; its absence is
+    // exactly what makes DataStoreManagerTest#concurrentReadWriteShouldBeSafe worthless (D-14). ----
+
+    private static void awaitBarrier(CyclicBarrier barrier) {
+        try {
+            barrier.await(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("Barrier wait failed", e);
+        }
+    }
+
+    @Test
+    @DisplayName("N concurrent write() calls leave a file that parses and equals exactly one payload, not a splice")
+    void concurrentWritesLeaveExactlyOnePayloadNoSplice() throws Exception {
+        int threadCount = 8;
+        List<String> payloads = IntStream.range(0, threadCount)
+                .mapToObj(i -> "payload-" + i)
+                .collect(Collectors.toList());
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (String payload : payloads) {
+                futures.add(pool.submit(() -> {
+                    awaitBarrier(barrier);
+                    Map<String, Object> doc = new LinkedHashMap<>();
+                    doc.put("marker", payload);
+                    CredentialStore.write(doc);
+                }));
+            }
+            for (Future<?> future : futures) {
+                future.get(20, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        // Assertion AFTER the join.
+        CredentialStore.ReadResult result = CredentialStore.read();
+        assertThat(result.isParsed())
+                .as("a spliced write would fail to parse -- Gson requires the entire document consumed")
+                .isTrue();
+        assertThat(result.data()).hasSize(1);
+        assertThat(payloads).contains((String) result.data().get("marker"));
+    }
+
+    @Test
+    @DisplayName("N concurrent update() calls each adding a distinct key leave a file containing all N keys (lost-update case)")
+    void concurrentUpdatesLoseNoKeys() throws Exception {
+        int threadCount = 8;
+        CredentialStore.write(new LinkedHashMap<>());
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < threadCount; i++) {
+                String key = "key-" + i;
+                futures.add(pool.submit(() -> {
+                    awaitBarrier(barrier);
+                    CredentialStore.update(existing -> {
+                        existing.put(key, "value-for-" + key);
+                        return existing;
+                    });
+                }));
+            }
+            for (Future<?> future : futures) {
+                future.get(20, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        // Assertion AFTER the join -- the two-monitor design loses keys here.
+        CredentialStore.ReadResult result = CredentialStore.read();
+        assertThat(result.isParsed()).isTrue();
+        assertThat(result.data()).hasSize(threadCount);
+        for (int i = 0; i < threadCount; i++) {
+            assertThat(result.data()).containsEntry("key-" + i, "value-for-key-" + i);
+        }
+    }
+
+    @Test
+    @DisplayName("a reader racing concurrent writers never observes a parse failure")
+    void concurrentReadNeverObservesPartialWrite() throws Exception {
+        int writerCount = 8;
+        CredentialStore.write(new LinkedHashMap<>());
+        ExecutorService pool = Executors.newFixedThreadPool(writerCount + 1);
+        CyclicBarrier barrier = new CyclicBarrier(writerCount + 1);
+        AtomicBoolean stop = new AtomicBoolean(false);
+        AtomicInteger parseFailures = new AtomicInteger(0);
+        AtomicInteger readsPerformed = new AtomicInteger(0);
+        try {
+            Future<?> readerFuture = pool.submit(() -> {
+                awaitBarrier(barrier);
+                while (!stop.get()) {
+                    CredentialStore.ReadResult result = CredentialStore.read();
+                    readsPerformed.incrementAndGet();
+                    if (result.isParseFailure()) {
+                        parseFailures.incrementAndGet();
+                    }
+                }
+            });
+
+            List<Future<?>> writers = new ArrayList<>();
+            for (int i = 0; i < writerCount; i++) {
+                int writerIndex = i;
+                writers.add(pool.submit(() -> {
+                    awaitBarrier(barrier);
+                    for (int iteration = 0; iteration < 50; iteration++) {
+                        Map<String, Object> doc = new LinkedHashMap<>();
+                        doc.put("writer", writerIndex);
+                        doc.put("iteration", iteration);
+                        CredentialStore.write(doc);
+                    }
+                }));
+            }
+            for (Future<?> writer : writers) {
+                writer.get(20, TimeUnit.SECONDS);
+            }
+            stop.set(true);
+            readerFuture.get(20, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdown();
+        }
+
+        // Assertion AFTER the join, with a control assertion so this cannot vacuously pass.
+        assertThat(readsPerformed.get()).as("the reader must actually have raced the writers").isPositive();
+        assertThat(parseFailures.get())
+                .as("every read must either parse or report absence -- never a parse failure from a torn write")
+                .isZero();
     }
 }
