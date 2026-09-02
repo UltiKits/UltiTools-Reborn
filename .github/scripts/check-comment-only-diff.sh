@@ -225,6 +225,7 @@ ASSERTION_A_VIOLATION_KEYS=()
 ASSERTION_A_REFUSALS=()
 
 declare -A RESCUE_KEYS
+RESCUE_KEYS=()
 
 # find_code_half TEXT — prints the substring of TEXT before the first `//` that is NOT inside a
 # double-quoted string literal (simple backslash-escape aware), or the whole TEXT if no such `//`
