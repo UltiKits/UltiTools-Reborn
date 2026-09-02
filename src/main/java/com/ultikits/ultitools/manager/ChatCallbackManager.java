@@ -36,6 +36,7 @@ import org.jetbrains.annotations.ApiStatus;
  * @see com.ultikits.ultitools.widgets.impl.ChatConfirm
  * @since 6.0.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Reaches Bukkit's own private CommandMap field -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class ChatCallbackManager {
     /** Thread-safe storage for pending callbacks */

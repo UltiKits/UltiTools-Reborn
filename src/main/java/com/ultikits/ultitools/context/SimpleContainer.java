@@ -36,6 +36,7 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Simple dependency injection container to replace Spring ApplicationContext.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // IoC container invokes constructors and lifecycle methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class SimpleContainer {
     private static final Logger LOGGER = Logger.getLogger(SimpleContainer.class.getName());

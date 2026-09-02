@@ -31,6 +31,7 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Component scanner to find and register components.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // IoC container invokes @Bean factory methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class ComponentScanner {
     private static final Logger LOGGER = Logger.getLogger(ComponentScanner.class.getName());

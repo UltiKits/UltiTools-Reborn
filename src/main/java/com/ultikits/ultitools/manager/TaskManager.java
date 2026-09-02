@@ -26,6 +26,7 @@ import org.jetbrains.annotations.ApiStatus;
  *
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes @Scheduled methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class TaskManager {
 

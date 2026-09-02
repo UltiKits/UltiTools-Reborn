@@ -60,6 +60,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * @author wisdomme
  * @since 6.3.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // AOP trampoline invocation on the generated proxy -- see 08-GATE05-TRIAGE.md
 public class ProxyFactory {
 
     /** Prefix for the generated super-call trampoline methods; see the class javadoc. */

@@ -85,6 +85,7 @@ import lombok.Getter;
 /**
  * UltiTools plugin manager.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Injects a plugin's private static instance field -- see 08-GATE05-TRIAGE.md
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load

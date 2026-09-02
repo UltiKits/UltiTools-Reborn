@@ -26,6 +26,7 @@ import com.ultikits.ultitools.context.MergedAnnotationResolver;
 /**
  * Command manager.
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Constructs Bukkit's PluginCommand and reaches its private CommandMap field -- see 08-GATE05-TRIAGE.md
 public class CommandManager {
     private final Map<UltiToolsPlugin, List<Command>> commandListMap = new HashMap<>();
     private final Map<String, List<Command>> externalCommandMap = new HashMap<>();

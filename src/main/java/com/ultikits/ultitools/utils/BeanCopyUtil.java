@@ -12,6 +12,7 @@ import java.util.List;
  * @author wisdomme
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Copies private fields between bean instances -- see 08-GATE05-TRIAGE.md
 public final class BeanCopyUtil {
     
     private BeanCopyUtil() {

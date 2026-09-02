@@ -26,6 +26,7 @@ import com.ultikits.ultitools.entities.Subscription;
  *
  * @since 6.2.2
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes @ModuleEventHandler methods -- see 08-GATE05-TRIAGE.md
 public class EventBus {
     private static final Logger LOGGER = Logger.getLogger(EventBus.class.getName());
 

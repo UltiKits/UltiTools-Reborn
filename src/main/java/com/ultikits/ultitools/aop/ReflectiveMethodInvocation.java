@@ -12,6 +12,7 @@ import java.util.concurrent.Callable;
  * @author wisdomme
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // AOP interceptor chain tail invokes the target method -- see 08-GATE05-TRIAGE.md
 public class ReflectiveMethodInvocation implements MethodInvocation {
 
     private final Object target;
