@@ -306,10 +306,12 @@
                     </newVersion>
                     <parameter>
                         <accessModifier>protected</accessModifier>
-                        <!-- The 6.2.5 baseline jar predates several planned removals; without this flag
-                             japicmp fails outright instead of reporting a clean diff for any symbol that
-                             genuinely did not exist on the old side. -->
-                        <ignoreMissingOldVersion>true</ignoreMissingOldVersion>
+                        <!-- Governs only whether an OLD artifact that fails to resolve is a warning
+                             or a build failure - not whether an individual symbol is absent on the
+                             old side (japicmp reports that natively as changeStatus=NEW). Strict
+                             (false) so an unresolvable baseline coordinate fails the build instead
+                             of silently reporting a clean diff against nothing (D-02). -->
+                        <ignoreMissingOldVersion>false</ignoreMissingOldVersion>
                         <!-- Default is true, which would make a class merely referencing an excluded class
                              still trip the gate - defeating the exclusion list Phase 7 will author. -->
                         <breakBuildIfCausedByExclusion>false</breakBuildIfCausedByExclusion>
@@ -328,16 +330,14 @@
                         <includes>
                             <include>com.ultikits.ultitools</include>
                         </includes>
-                        <!-- Pre-existing Phases 2-6 breaks (D-04), authored member by member -
-                             measured at HEAD under accessModifier=protected: 13 classes / 20
-                             members. No entry here is package-wide (criterion 3 forbids it):
-                             every entry is either a bare fully-qualified class name (a whole-
-                             class removal - japicmp's class filter appends (\$.*)? internally,
-                             so nested/inner classes need no separate entry) or a
-                             Class#member(paramTypes) key naming one member removed from a class
-                             that otherwise survives. Full justification per entry, and the
-                             delete-one-entry proof transcript, are in
-                             .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. -->
+                        <!-- Phase 7's authored removal record (D-04), one entry per removed
+                             symbol - 64 entries at HEAD under accessModifier=protected. No entry
+                             is package-wide (criterion 3 forbids it): a bare FQCN is a whole-class
+                             removal, a Class#member(paramTypes) key names one removed member.
+                             Full justification per entry is in
+                             .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. This
+                             list stays populated during the cycle and is emptied at the release
+                             boundary by ReleaseBoundaryInvariant (D-05). -->
                         <excludes>
                             <!-- Whole-class removals: one entry covers the class and every one
                                  of its members. -->
