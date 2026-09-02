@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -96,7 +97,7 @@ class ClassLoaderUtilsTest {
                     // toolchain this repository builds against. The point is that SecurityException
                     // (the removed exact-name blacklist layer) is never thrown.
                 } catch (SecurityException e) {
-                    org.junit.jupiter.api.Assertions.fail(
+                    fail(
                         "GEN-07: exact-name blacklist layer removed, should not block: " + className);
                 }
             }
@@ -116,7 +117,7 @@ class ClassLoaderUtilsTest {
                 } catch (ClassNotFoundException e) {
                     // Expected -- these packages do not exist.
                 } catch (SecurityException e) {
-                    org.junit.jupiter.api.Assertions.fail(
+                    fail(
                         "GEN-07: trusted-package whitelist layer removed, should not block: " + className);
                 }
             }

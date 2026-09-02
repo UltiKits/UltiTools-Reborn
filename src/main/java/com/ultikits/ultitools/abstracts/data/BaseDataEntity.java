@@ -36,6 +36,11 @@ import lombok.ToString;
  */
 @ToString
 @EqualsAndHashCode
+// PMD.GenericsNaming wants a single uppercase letter. ID is kept: it is the conventional
+// name for an identifier type parameter (cf. Spring Data's Repository<T, ID>), it appears
+// in this published type's generic signature, and it is unchanged from 6.2.0 -- the rule
+// only re-fired here because GEN-04 removed `extends AbstractDataEntity` from this same line.
+@SuppressWarnings("PMD.GenericsNaming")
 public abstract class BaseDataEntity<ID extends Serializable> implements Serializable {
 
     private static final long serialVersionUID = 1L;

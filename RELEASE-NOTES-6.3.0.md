@@ -112,6 +112,7 @@ worked before/after examples, and measurement evidence for every item below are 
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 **AOP and proxying.**
+
 - The AOP engine switched from CGLIB to ByteBuddy; generated proxy class names changed shape
   (`Foo$$EnhancerByCGLIB$$xxxx` → `Foo$ByteBuddy$xxxx`). Detect a proxy with
   `ProxyFactory.isProxyClass(Class<?>)`, not by pattern-matching the class name.
@@ -130,6 +131,7 @@ worked before/after examples, and measurement evidence for every item below are 
   AOP-annotated instance under the same rules.
 
 **Commands.**
+
 - `@CmdMapping` methods declared on a command executor's superclass are now registered — they
   were previously silently ignored.
 - `@CmdTarget` class/method composition changed from an undocumented intersection-vs-override
@@ -147,6 +149,7 @@ worked before/after examples, and measurement evidence for every item below are 
 - `@AsyncCommand.timeout()` is now honoured; the default path's double async dispatch is removed.
 
 **Persistence and data.**
+
 - `del()` called with no conditions is now refused outright (a security fix, no migration
   period) — it previously emptied the entire table.
 - Entity ownership is now enforced: `getDataOperator(Class)` on another module's entity now
@@ -160,6 +163,7 @@ worked before/after examples, and measurement evidence for every item below are 
   removal-eligible.
 
 **Container, injection, and module loading.**
+
 - `scanBasePackageClasses()` now takes effect; package-source resolution becomes additive rather
   than first-match-wins.
 - The `eventListener`/`cmdExecutor`/`config` `@AliasFor` switches on `@UltiToolsModule` now take
@@ -176,6 +180,7 @@ worked before/after examples, and measurement evidence for every item below are 
   resolution.
 
 **Declarative GUI.**
+
 - The repaint pipeline actually repaints now — before 6.3.0, a change to widget state after
   first render silently never showed up. `GuiRenderer.initialize`'s signature changes to accept a
   `Supplier<Widget>` instead of a single `Widget`.
@@ -188,6 +193,7 @@ worked before/after examples, and measurement evidence for every item below are 
   implementation — they were previously accepted and silently ignored.
 
 **Remote/panel surface.**
+
 - Eight `ultipanel.capabilities.*` switches now gate every panel-facing capability, with a split
   default (read capabilities default open, write/execute capabilities default closed).
 - A recursive directory delete through the remote file API now requires an explicit

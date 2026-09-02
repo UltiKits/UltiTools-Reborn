@@ -53,6 +53,11 @@ public final class RemovalConsistencyEvaluator {
         return "PRIVATE".equals(modifier) || "PACKAGE_PROTECTED".equals(modifier);
     }
 
+    // PMD.NPathComplexity: each `if` in this method is one named D-01/D-21/D-22 consistency
+    // rule, applied independently to every key. Read top to bottom, the method IS the rule
+    // list -- which is what makes a build gate auditable. Splitting it into per-rule helpers
+    // would lower the number while removing the property that the rules can be read in order.
+    @SuppressWarnings("PMD.NPathComplexity")
     public static List<Finding> evaluate(Set<RegistryKey> excludeKeys, JapicmpReportReader.Report report,
             RegistryLedger registry) {
         List<Finding> findings = new ArrayList<>();

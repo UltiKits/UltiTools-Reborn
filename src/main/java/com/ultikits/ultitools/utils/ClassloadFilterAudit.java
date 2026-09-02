@@ -174,6 +174,12 @@ final class ClassloadFilterAudit {
      * @param className the fully-qualified class name to classify, or {@code null}/blank
      * @return the first layer that would have refused {@code className}, or {@code null}
      */
+    // PMD.NPathComplexity multiplies branch counts across the four sequential guard blocks
+    // below. They do not nest and share no state: each is one layer of SecurityPolicy's
+    // documented five-layer model, evaluated in the order the model defines, with an early
+    // return. That order IS the semantics -- extracting each block into a helper would scatter
+    // the one property a reader needs to check. NPath measures the wrong thing here.
+    @SuppressWarnings("PMD.NPathComplexity")
     static Layer classify(String className) {
         if (className == null || className.trim().isEmpty()) {
             return null;

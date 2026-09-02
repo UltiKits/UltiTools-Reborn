@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Timeout;
 class RemovalConsistencyEvaluatorTest {
 
     /** Builds a report entry via reflection on {@link JapicmpReportReader.Entry}'s package-private constructor. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static JapicmpReportReader.Entry entry(String changeStatus, String oldAccessModifier, boolean binaryCompatible) {
         try {
             Constructor<JapicmpReportReader.Entry> ctor = JapicmpReportReader.Entry.class.getDeclaredConstructor(

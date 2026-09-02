@@ -49,6 +49,10 @@ import org.bukkit.command.CommandExecutor;
 @DisplayName("SimpleContainer LinkageError resilience (07-21)")
 class SimpleContainerLinkageResilienceTest {
 
+    private final List<LogRecord> diagnosticsCaptured = new ArrayList<>();
+    private Logger diagnosticsLogger;
+    private Handler diagnosticsHandler;
+
     /** A healthy fixture bean with no reference to any missing type. */
     public static class SurvivorBean {
         public String ping() {
@@ -56,9 +60,6 @@ class SimpleContainerLinkageResilienceTest {
         }
     }
 
-    private final List<LogRecord> diagnosticsCaptured = new ArrayList<>();
-    private Logger diagnosticsLogger;
-    private Handler diagnosticsHandler;
 
     @BeforeEach
     void captureDiagnostics() {
@@ -105,7 +106,7 @@ class SimpleContainerLinkageResilienceTest {
     // .equals()/mutually assignable in the JVM's eyes.
     private static final class BlockingClassLoader extends URLClassLoader {
         private final String blockedClassName;
-        private final java.util.List<String> selfDefinedClassNames;
+        private final List<String> selfDefinedClassNames;
 
         BlockingClassLoader(URL[] urls, ClassLoader parent, String blockedClassName,
                 String... selfDefinedClassNames) {

@@ -48,6 +48,7 @@ public final class DeprecationRegistryGenerator {
     private static final Path POM_XML = Paths.get("pom.xml");
     private static final Path LEDGER_JSON = Paths.get("compatibility/deprecations.json");
     private static final Path LEDGER_MARKDOWN = Paths.get("compatibility/DEPRECATIONS.md");
+    private static final Pattern MEMBER_KEY = Pattern.compile("^(.+)#([^(]+)\\((.*)\\)$");
 
     private DeprecationRegistryGenerator() {
     }
@@ -157,7 +158,6 @@ public final class DeprecationRegistryGenerator {
         return el == null || el.isJsonNull() ? null : el.getAsString();
     }
 
-    private static final Pattern MEMBER_KEY = Pattern.compile("^(.+)#([^(]+)\\((.*)\\)$");
 
     private static RegistryKey parseMemberKeyWithParams(String keyString) {
         Matcher m = MEMBER_KEY.matcher(keyString);

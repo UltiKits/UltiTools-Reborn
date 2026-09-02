@@ -232,7 +232,6 @@ When to migrate depends on who you are:
   leaves you a real transition window — the release that completes tab completion (6.3.0) is the same
   release that removes the old base class, so migrating at that point leaves no buffer at all.
 
-
 ## Behavioral changes
 
 Some changes leave every method signature untouched yet alter how your module behaves at runtime: a
@@ -293,7 +292,6 @@ The migration period runs in two steps:
 
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
-
 
 ## Binary incompatibilities the removal list cannot cover
 

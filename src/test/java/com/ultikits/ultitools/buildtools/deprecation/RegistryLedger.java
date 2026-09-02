@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * The cumulative deprecation ledger (D-07): entries only ever enter. A member gone from source
@@ -21,6 +22,13 @@ import java.util.Set;
 public final class RegistryLedger {
 
     /** Keyed by {@link RegistryKey#toString()} so lookups don't depend on object identity. */
+    /**
+     * Matches a javadoc {@code @code} inline tag so {@link #toMarkdown()} can render it as a
+     * Markdown code span. Declared here, at the top of the class, deliberately: PMD's
+     * FieldDeclarationsShouldBeAtStartOfClass fires on a constant introduced further down.
+     */
+    private static final Pattern JAVADOC_CODE_TAG = Pattern.compile("\\{@code\\s+([^}]*)\\}");
+
     private final Map<String, DeprecationEntry> entriesByKeyString;
 
     private RegistryLedger(Map<String, DeprecationEntry> entriesByKeyString) {
@@ -46,6 +54,10 @@ public final class RegistryLedger {
      * either source disagreeing alone with the other is fatal (D-22) - see
      * {@link LedgerMergeConflictException}.
      */
+    // PMD.NPathComplexity: 216 against a 200 threshold. The method is one pass over each of
+    // three inputs with a flat guard per entry -- no guard nests inside another, and the count
+    // is the product of independent per-entry checks rather than a measure of reachable state.
+    @SuppressWarnings("PMD.NPathComplexity")
     public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan, Set<RegistryKey> japicmpRemovedKeys) {
         Map<String, DeprecationEntry> merged = new LinkedHashMap<>();
         Set<String> freshKeyStrings = new HashSet<>();
@@ -175,7 +187,8 @@ public final class RegistryLedger {
                 sb.append("| `").append(entry.getKey()).append("` | ")
                         .append(nullToDash(entry.getSince())).append(" | ")
                         .append(nullToDash(entry.getRemovedIn())).append(" | ")
-                        .append(nullToDash(entry.getReplacement())).append(" |\n");
+                        .append(javadocToMarkdown(nullToDash(entry.getReplacement())))
+                        .append(" |\n");
             }
         } else {
             sb.append("| Member | Since | Scheduled removal | Replacement |\n");
@@ -184,7 +197,8 @@ public final class RegistryLedger {
                 sb.append("| `").append(entry.getKey()).append("` | ")
                         .append(nullToDash(entry.getSince())).append(" | ")
                         .append(nullToDash(entry.getRemoveIn())).append(" | ")
-                        .append(nullToDash(entry.getReplacement())).append(" |\n");
+                        .append(javadocToMarkdown(nullToDash(entry.getReplacement())))
+                        .append(" |\n");
             }
         }
         sb.append('\n');
@@ -192,5 +206,19 @@ public final class RegistryLedger {
 
     private static String nullToDash(String value) {
         return value == null || value.isEmpty() ? "-" : value;
+    }
+
+    /**
+     * Renders javadoc inline tags in the Replacement column as Markdown. That column is the one
+     * field carrying prose copied verbatim out of a {@code @deprecated} javadoc block, and
+     * {@code @code} is the only inline tag that occurs in practice.
+     * <p>
+     * Not cosmetic. A javadoc placeholder reaches the table as a literal angle-bracketed token,
+     * which Markdown parses as inline HTML -- markdownlint MD033, and a renderer may swallow the
+     * token outright, so the reader is shown a path with the placeholder missing. Inside a code
+     * span it is both lint-clean and visible.
+     */
+    private static String javadocToMarkdown(String value) {
+        return value == null ? null : JAVADOC_CODE_TAG.matcher(value).replaceAll("`$1`");
     }
 }

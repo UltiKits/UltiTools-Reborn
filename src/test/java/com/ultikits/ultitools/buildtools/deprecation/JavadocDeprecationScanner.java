@@ -45,8 +45,6 @@ public final class JavadocDeprecationScanner {
     private static final Pattern PACKAGE_DECL = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
     private static final Pattern CLASS_OPEN = Pattern.compile(
             "\\b(?:class|interface|enum|@\\s*interface)\\s+(\\w+)");
-    private static final Pattern DEPRECATED_ANNOTATION = Pattern.compile(
-            "@Deprecated\\s*(?:\\(([^)]*)\\))?");
     private static final Pattern SINCE_ARG = Pattern.compile("since\\s*=\\s*\"([^\"]*)\"");
     private static final Pattern FOR_REMOVAL_ARG = Pattern.compile("forRemoval\\s*=\\s*(true|false)");
     private static final Pattern REMOVE_IN_TAG = Pattern.compile(
@@ -298,6 +296,16 @@ public final class JavadocDeprecationScanner {
      * specifically for {@code @Deprecated} and its {@code since}/{@code forRemoval} arguments),
      * then the declaration itself, classifying it as a class, field, method, or constructor.
      */
+    // PMD.NPathComplexity: 28252, and unlike this file's siblings that number is NOT an
+    // artifact of flat sequential guards -- this is a hand-written character scanner with real
+    // nesting (annotation loop, balanced-paren scan, terminator scan). It is suppressed rather
+    // than split because every candidate split threads the scan cursor and paren depth through
+    // a signature, which is where scanners acquire off-by-one defects; and because this is a
+    // build-time tool whose output is checked against japicmp's independent report before any
+    // ledger entry flips to `removed`, so a parse defect is caught by that cross-check rather
+    // than shipped. This is the weakest suppression claim of the four -- if the scanner is
+    // extended again, split it then.
+    @SuppressWarnings("PMD.NPathComplexity")
     private static Declaration parseDeclarationAfter(String source, int fromOffset) {
         int i = fromOffset;
         int n = source.length();
@@ -372,7 +380,8 @@ public final class JavadocDeprecationScanner {
         return decl.kind == null ? null : decl;
     }
 
-    private static int skipWhitespace(String source, int i) {
+    private static int skipWhitespace(String source, int from) {
+        int i = from;
         while (i < source.length() && Character.isWhitespace(source.charAt(i))) {
             i++;
         }
@@ -463,6 +472,11 @@ public final class JavadocDeprecationScanner {
 
         if (decl.kind == Kind.CLASS) {
             String classBinaryName = buildBinaryName(packageName, enclosingStack, decl.name);
+            // Build-time only: classBinaryName is reconstructed from the repository's own
+            // src/main/java tree that this scanner just parsed, and classLoader is the build's
+            // own. No value here originates outside the build. initialize=false additionally
+            // means no static initializer runs.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
             Class<?> clazz = Class.forName(classBinaryName, false, classLoader);
             return DeprecationEntry.builder()
                     .key(RegistryKey.forClass(clazz.getName()))
@@ -472,6 +486,9 @@ public final class JavadocDeprecationScanner {
         }
 
         String enclosingBinaryName = buildBinaryName(packageName, enclosingStack, null);
+        // Build-time only, same provenance as the CLASS branch above: the enclosing name is
+        // built from this scanner's own parse of the repository's source tree.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         Class<?> owner = Class.forName(enclosingBinaryName, false, classLoader);
         String simpleEnclosingName = enclosingStack.isEmpty() ? "" : enclosingStack.get(enclosingStack.size() - 1);
 
