@@ -35,14 +35,6 @@ import com.ultikits.ultitools.interfaces.TransactionManager;
  * disk. Nothing here, and nothing this plan's javadoc, log output, or {@code COMPATIBILITY.md}
  * text produces, should read as a claim that a JSON transaction survives a crash the way a JDBC
  * transaction's commit/rollback does.
- * <p>
- * 面向 JSON 后端的快照式 {@link TransactionManager}（D-03），使 {@code @Transactional} 在
- * {@code datasource.type: json} 下拥有与两个 JDBC 后端一致的行为。按请求方身份分实例
- * （内部路径下为插件名，外部路径下为规范化的数据文件夹路径），同一身份下 {@code JsonStore}
- * 派发的每一个 {@code SimpleJsonDataOperator} 共享同一个管理器实例。事务范围内第一次写入某个
- * 操作器时才惰性捕获该操作器缓存的深拷贝快照——事务期间从未写入的操作器既不会被快照，
- * 也不会被回滚。<b>这不是持久化事务</b>：它只是对内存中缓存状态的进程内回滚，不具备崩溃安全性——
- * 服务器在事务执行中途被杀掉，磁盘上留下的是刷新调度器最后一次写入的内容。
  *
  * @author wisdomme
  * @since 6.3.0

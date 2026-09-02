@@ -27,12 +27,6 @@ import org.jetbrains.annotations.ApiStatus;
  * {@link CircularDependencyException} or {@link MissingDependencyException}, and both carry a
  * structured sortable prefix and a refused set alongside the message, so a caller can load the
  * unaffected modules instead of falling back to filesystem order.
- * <p>
- * 使用 Kahn 算法进行拓扑排序的插件依赖解析器。
- * 确保插件根据其依赖关系以正确的顺序加载。
- * <p>
- * 解析失败不再意味着全部拒绝（D-10）：{@link #resolve(List)} 抛出的两个异常都携带结构化的
- * 可排序前缀和被拒绝集合，调用方可以据此只加载未受影响的模块，而不是整体退化为文件系统顺序。
  *
  * @author wisdomme
  * @since 6.2.0
@@ -170,8 +164,6 @@ public class PluginDependencyResolver {
 
     /**
      * Resolves plugin load order using Kahn's algorithm for topological sorting.
-     * <p>
-     * 使用 Kahn 算法解析插件加载顺序。
      *
      * @param pluginClasses the list of plugin classes to sort
      * @return sorted list of plugin classes

@@ -21,13 +21,8 @@ import org.jetbrains.annotations.ApiStatus;
  * Registers a hidden command /ultitools_callback that executes registered
  * callbacks by their UUID.
  * </p>
- * <p>
- * 聊天回调命令管理器。
- * 支持可点击的聊天消息，点击时执行回调。
- * 注册一个隐藏命令 /ultitools_callback，通过 UUID 执行已注册的回调。
- * </p>
  *
- * <p><strong>Usage Example / 使用示例:</strong></p>
+ * <p><strong>Usage Example:</strong></p>
  * <pre>{@code
  * VoidFunc0 callback = () -> player.sendMessage("Clicked!");
  * UUID callbackId = ChatCallbackManager.registerCallback(callback);
@@ -43,9 +38,9 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class ChatCallbackManager {
-    /** Thread-safe storage for pending callbacks / 待处理回调的线程安全存储 */
+    /** Thread-safe storage for pending callbacks */
     private static final Map<UUID, Runnable> callbacks = new ConcurrentHashMap<>();
-    /** Initialization flag to prevent multiple command registrations / 防止多次命令注册的初始化标志 */
+    /** Initialization flag to prevent multiple command registrations */
     private static boolean initialized = false;
 
     /**
@@ -54,13 +49,9 @@ public class ChatCallbackManager {
      * The callback will be executed once when a player runs the command
      * /ultitools_callback &lt;uuid&gt;. After execution, the callback is removed.
      * </p>
-     * <p>
-     * 注册一个回调并返回其唯一标识符。
-     * 当玩家运行命令 /ultitools_callback &lt;uuid&gt; 时，回调将被执行一次，执行后移除。
-     * </p>
      *
-     * @param callback the callback to register / 要注册的回调
-     * @return the UUID identifier for this callback / 此回调的 UUID 标识符
+     * @param callback the callback to register
+     * @return the UUID identifier for this callback
      */
     public static synchronized UUID registerCallback(Runnable callback) {
         if (!initialized) {

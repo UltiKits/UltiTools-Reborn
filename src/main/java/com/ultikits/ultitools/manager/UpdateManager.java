@@ -19,9 +19,6 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Manages version checking and update notifications for UltiTools-API and modules.
  * Checks once at startup, stores results for later querying by commands and listeners.
- * <br>
- * 管理UltiTools-API和模块的版本检查和更新通知。
- * 在启动时检查一次，存储结果供命令和监听器查询。
  *
  * @since 6.2.0
  */
@@ -59,8 +56,6 @@ public class UpdateManager {
 
     /**
      * Run update checks synchronously. Called from async context (BukkitRunnable).
-     * <br>
-     * 同步运行更新检查。从异步上下文（BukkitRunnable）调用。
      */
     public void checkUpdatesSync() {
         logger.log(Level.INFO, "[UltiTools-API] " + UltiTools.getInstance().i18n("正在检查版本更新..."));
@@ -139,10 +134,8 @@ public class UpdateManager {
 
     /**
      * Check if any updates (framework or modules) are available.
-     * <br>
-     * 检查是否有任何更新（框架或模块）可用。
      *
-     * @return true if any updates are available <br> 如果有任何更新可用则返回true
+     * @return true if any updates are available
      */
     public boolean hasAnyUpdates() {
         return frameworkUpdate != null || !moduleUpdates.isEmpty();
@@ -150,11 +143,9 @@ public class UpdateManager {
 
     /**
      * Check if a player has already been notified about available updates.
-     * <br>
-     * 检查玩家是否已被通知有可用更新。
      *
-     * @param uuid the player's UUID <br> 玩家的UUID
-     * @return true if the player has been notified <br> 如果玩家已被通知则返回true
+     * @param uuid the player's UUID
+     * @return true if the player has been notified
      */
     public boolean isPlayerNotified(UUID uuid) {
         return notifiedPlayers.contains(uuid);
@@ -162,10 +153,8 @@ public class UpdateManager {
 
     /**
      * Mark a player as having been notified about available updates.
-     * <br>
-     * 标记玩家已被通知有可用更新。
      *
-     * @param uuid the player's UUID <br> 玩家的UUID
+     * @param uuid the player's UUID
      */
     public void markPlayerNotified(UUID uuid) {
         ensurePlayerCacheRegistered();
