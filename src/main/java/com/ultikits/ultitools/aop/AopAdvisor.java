@@ -34,10 +34,6 @@ public interface AopAdvisor {
      * <p>
      * Exposed and shared so that the match test and the interceptors that read the annotation's
      * attributes cannot answer differently. See issue #309.
-     * <p>
-     * 先看方法自身的声明，再看它所覆写的声明。Java 不继承方法注解，而扫描对每个可覆写方法只保留
-     * 最派生的那条声明，缺了第二步，覆写就会把父类的注解完全遮住。覆写具有传递性，因此候选要与
-     * 「已收集的整条链」比较，而不是只与叶子比较。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -64,9 +60,6 @@ public interface AopAdvisor {
      * the declaration the method overrides, then that declaration's class. A subclass that writes
      * its own class-level annotation outranks a method-level one it inherited, because the subclass
      * author is the one closer to the bean.
-     * <p>
-     * 拆出来是因为「有没有」与「用哪一个」是两个问题。判断是否拦截只问存在性；决定用哪个注解的
-     * 属性则有次序，Spring 的次序是：方法自身 → 目标类 → 被覆写的声明 → 该声明所在的类。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -145,9 +138,6 @@ public interface AopAdvisor {
      * unrelated failure far from its cause. This is the rule Spring documents for a class-level
      * {@code @Transactional}, and inherited methods must be locally redeclared to pick up a
      * subclass's annotation.
-     * <p>
-     * 类级注解的查找锚点是方法的<b>声明类</b>，并从那里向上走。类级注解是「声明它的那个类及其
-     * 子类」的默认值，不作用于祖先类。这是 Spring 对类级 @Transactional 的既定规则。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -166,9 +156,6 @@ public interface AopAdvisor {
      * caller that has to name the offending class in a message needs the class rather than the
      * annotation. Deriving it a second time in the caller is how two copies of one rule start
      * disagreeing.
-     * <p>
-     * 与 findClassLevelAnnotation 是同一趟遍历，单独暴露是因为要在报错信息里点名那个类的调用方
-     * 需要的是类而不是注解——让调用方自己再推一遍，正是「一条规则两份实现」的开端。
      *
      * @param method         the method being considered
      * @param annotationType the annotation to look for
@@ -210,11 +197,6 @@ public interface AopAdvisor {
      * the proxy, after which this advisor's class-level branch matched it again at invocation time
      * and swallowed the exception into a {@code 0}. Spring reaches the same end differently, by
      * routing {@code equals} and {@code hashCode} to callbacks that structurally cannot run advice.
-     * <p>
-     * 类级注解绝不覆盖的三个签名：拦截它们会把一个可见的异常换成一个静默的错误结果。
-     * toString 有意不在其中——吞掉它只损失一行日志，而「日志语句自身抛异常」正是该注解的用例。
-     * 方法级标注在这三个签名上依然生效。该判定放在切点内而非收集代码里，是为了让「构建代理时」
-     * 与「每次调用时」给出同一个答案。
      *
      * @param method the candidate method
      * @return true if class-level coverage must skip it

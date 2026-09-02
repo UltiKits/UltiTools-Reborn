@@ -26,11 +26,6 @@ import java.util.List;
  * future edit from calling {@link ReflectionUtil#getAllMethods(Class)} directly again instead of
  * building or reusing a scan - the only guard is {@code AopProxyResolverScanCountTest}, which
  * fails if a rescan returns. See issue #309.
- * <p>
- * 一次 getAllMethods 层级扫描的结果，连同扫描所针对的 bean 类一起携带。resolve 以前把裸的
- * Class 交给每个消费者，各自重复同一趟遍历；本类把结果一并带上，供各消费者复用（D-37）。
- * bean 类之所以随扫描结果一起传递而不是各自重新推导，是因为 AopEligibility 五条规则里有两条
- * 相对于它——分开传递正是两者日后走样的开端。
  *
  * @author wisdomme
  * @since 6.3.0

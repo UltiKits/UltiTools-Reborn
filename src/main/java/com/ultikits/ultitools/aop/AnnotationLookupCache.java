@@ -37,12 +37,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * own-and-inherited into a single presence check; {@code ExceptionInterceptor} needs
  * own-method, then class-level, then inherited-method, with class-level ranking <b>between</b> the
  * other two. Both keep asking their own question - only the memoized answers are shared.
- * <p>
- * 把两趟注解查找的结果记住。两趟都沿父类链走，且都在每次被拦截的调用上执行，而结果在类加载后
- * 不再变化。缓存实例有意不是 static：它持有 Class 与 Method 引用，静态缓存将阻止插件
- * ClassLoader 卸载。同一注解类型只有一份共享实例（D-38），而非每个消费者各自一份；
- * 共享缓存不改变两个消费者各自的问题——advisor 仍然只问「有没有」，
- * ExceptionInterceptor 仍然按方法本身、类级、继承方法的顺序依次判断。
  *
  * @param <A> the annotation type this cache answers for
  * @author wisdomme

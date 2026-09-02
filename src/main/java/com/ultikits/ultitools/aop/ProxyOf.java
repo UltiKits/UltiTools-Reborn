@@ -24,12 +24,6 @@ import java.lang.annotation.Target;
  * <p>
  * This annotation is framework-internal bookkeeping attached by {@link ProxyFactory} itself; a
  * module author never writes it directly.
- * <p>
- * 由 {@link ProxyFactory#createProxyClass} 在生成代理时附加，{@link ProxyFactory#isProxyClass(Class)}
- * 与 {@link ProxyFactory#unwrap(Class)} 读取它。这是本代码库中代理身份的唯一真源：代理自己声明
- * 被代理的目标类，而不是由消费者从生成类的名称——第三方库的默认命名约定——推断；这个命名约定
- * 已经在代理引擎从 CGLIB 迁移到 ByteBuddy 时变化过一次。本注解是 {@link ProxyFactory} 自身附加的
- * 框架内部记录，模块作者不会直接编写它。
  *
  * @author wisdomme
  * @since 6.3.0

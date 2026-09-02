@@ -26,9 +26,6 @@ import java.util.logging.Logger;
  * interface's callbacks take an already-constructed instance. The container asks this resolver
  * for a class, instantiates it through the normal constructor paths, and the resulting object is
  * the bean. There is no second instance.
- * <p>
- * 代理创建发生在 bean 存在之前，因此不适合作为 BeanPostProcessor。容器向本类索取一个类，
- * 走原有构造器路径实例化，得到的对象就是 bean，不存在第二个实例。
  *
  * @author wisdomme
  * @since 6.3.0
@@ -62,10 +59,6 @@ public class AopProxyResolver {
      * resolve() that read the old configuration, was overtaken by a mutation and its clear, and
      * then stored its now-stale answer - which nothing would clear again. A resolution is kept
      * only if the configuration it was computed against is still current.
-     * <p>
-     * 变更后清空只堵住两种交错中的一种。另一种是：resolve 读到旧配置，被一次变更与清空超过，
-     * 然后才把已经陈旧的结果写进去——那条记录再也不会被清掉。因此只在「计算所依据的配置仍然
-     * 有效」时才保留结果。
      */
     private final AtomicLong configGeneration = new AtomicLong();
 
@@ -344,8 +337,6 @@ public class AopProxyResolver {
 
     /**
      * Collects methods matched by at least one advisor, across the whole inheritance hierarchy.
-     * <p>
-     * 收集被至少一个 advisor 匹配的方法，范围覆盖整个继承层级。
      */
     private Set<Method> collectInterceptedMethods(MethodScan scan) {
         Set<Method> result = new LinkedHashSet<>();
