@@ -250,4 +250,151 @@ class SimpleContainerLinkageResilienceTest {
             assertThat(diagnosticsCaptured).isEmpty();
         }
     }
+
+    // === 07-23 Task 1: SimpleContainer remembers a failed bean =====================
+
+    @Test
+    @DisplayName("A second, independent getBean() call for an already-failed bean rethrows the "
+            + "original exception type -- never null -- and its ModuleScanDiagnostics record "
+            + "still names the class exactly once, not once per encounter")
+    void secondIndependentGetBeanCallRethrowsOriginalTypeWithoutDuplicateDiagnostics()
+            throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("test-module");
+            container.registerBean(poisonedClass);
+            container.registerBean(SurvivorBean.class);
+
+            assertThatCode(container::refresh).doesNotThrowAnyException();
+
+            // Simulates a second, independent caller resolving the same bean by name after
+            // preInstantiateSingletons already tried and failed it once (the exact shape
+            // PluginManager.validateCommandExecutorContracts's second getBean() call has).
+            assertThatThrownBy(() -> container.getBean("hasMethodReferencingMissingType"))
+                    .as("a repeat direct lookup must fail fast with the ORIGINAL exception type, "
+                            + "never null and never a different type")
+                    .isInstanceOf(NoClassDefFoundError.class);
+
+            List<LogRecord> severe = new ArrayList<>();
+            for (LogRecord record : diagnosticsCaptured) {
+                if (Level.SEVERE.equals(record.getLevel())) {
+                    severe.add(record);
+                }
+            }
+            assertThat(severe)
+                    .as("only refresh()'s own preInstantiateSingletons emits a summary; the "
+                            + "second direct getBean() call must not trigger a second one")
+                    .hasSize(1);
+            String message = severe.get(0).getMessage();
+            int occurrences = message.split(
+                    java.util.regex.Pattern.quote(HasMethodReferencingMissingType.class.getName()),
+                    -1).length - 1;
+            assertThat(occurrences)
+                    .as("the poisoned class must be named exactly once in the summary, not once "
+                            + "per encounter -- closing the duplicate-listing artifact "
+                            + "07-22-SUMMARY.md observed on the real server")
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
+    @DisplayName("getBeanNamesForType excludes an already-failed bean from a second, independent "
+            + "enumeration call made strictly after refresh() returns -- the direct regression "
+            + "test for PluginManager.validateCommandExecutorContracts's uncaught retry")
+    void getBeanNamesForTypeExcludesMemoizedFailureAfterRefresh() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("test-module");
+            container.registerBean(poisonedClass);
+            container.registerBean(SurvivorBean.class);
+
+            container.refresh();
+
+            // Mirrors PluginManager.validateCommandExecutorContracts calling
+            // getBeanNamesForType strictly AFTER refresh() returns, not during it.
+            String[] names = container.getBeanNamesForType(Object.class);
+            assertThat(names)
+                    .as("a bean already skipped once by preInstantiateSingletons must not be "
+                            + "re-offered by a later, independent enumeration call")
+                    .doesNotContain("hasMethodReferencingMissingType")
+                    .contains("survivorBean");
+
+            // Mirrors validateCommandExecutorContracts's own per-name loop: resolve every
+            // enumerated name and assert none of them throw.
+            for (String name : names) {
+                assertThatCode(() -> container.getBean(name))
+                        .as("every name returned by getBeanNamesForType must resolve without "
+                                + "throwing")
+                        .doesNotThrowAnyException();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Memoization is instance-scoped, never static: a fresh SimpleContainer that "
+            + "never touched the poisoned bean resolves a same-named healthy bean normally")
+    void memoizationIsInstanceScopedNotStatic() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            SimpleContainer poisoned = new SimpleContainer();
+            poisoned.setAopProxyResolver(new AopProxyResolver());
+            poisoned.setDisplayName("poisoned-module");
+            poisoned.registerBean(poisonedClass);
+            assertThatCode(poisoned::refresh).doesNotThrowAnyException();
+        }
+
+        // A second, entirely separate container registers a HEALTHY bean under the exact same
+        // bean name the first container's poisoned bean used -- a static/shared memo would make
+        // this resolution fail too; an instance-scoped one must not.
+        SimpleContainer fresh = new SimpleContainer();
+        fresh.setAopProxyResolver(new AopProxyResolver());
+        fresh.setDisplayName("fresh-module");
+        fresh.registerBeanDefinition("hasMethodReferencingMissingType",
+                new BeanDefinition(SurvivorBean.class));
+
+        assertThatCode(fresh::refresh).doesNotThrowAnyException();
+        Object bean = fresh.getBean("hasMethodReferencingMissingType");
+        assertThat(bean).isNotNull().isInstanceOf(SurvivorBean.class);
+    }
+
+    @Test
+    @DisplayName("close() clears the failed-bean memo: since close() is used as a terminal "
+            + "operation in this codebase (never followed by reuse), this test uses a NEW "
+            + "SimpleContainer instance after an earlier poisoned container was closed, and "
+            + "confirms it is not preemptively affected by stale poison state")
+    void closeClearsMemoNewContainerAfterCloseIsUnaffected() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            SimpleContainer poisoned = new SimpleContainer();
+            poisoned.setAopProxyResolver(new AopProxyResolver());
+            poisoned.setDisplayName("poisoned-module");
+            poisoned.registerBean(poisonedClass);
+            assertThatCode(poisoned::refresh).doesNotThrowAnyException();
+            poisoned.close();
+        }
+
+        SimpleContainer fresh = new SimpleContainer();
+        fresh.setAopProxyResolver(new AopProxyResolver());
+        fresh.setDisplayName("fresh-module");
+        fresh.registerBeanDefinition("hasMethodReferencingMissingType",
+                new BeanDefinition(SurvivorBean.class));
+
+        assertThatCode(fresh::refresh).doesNotThrowAnyException();
+        Object bean = fresh.getBean("hasMethodReferencingMissingType");
+        assertThat(bean).isNotNull().isInstanceOf(SurvivorBean.class);
+    }
 }
