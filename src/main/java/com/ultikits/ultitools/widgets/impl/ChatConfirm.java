@@ -37,7 +37,7 @@ import net.kyori.adventure.text.format.TextDecoration;
 public class ChatConfirm implements Confirm {
     /** Custom confirm button text, null uses default i18n "OK" */
     private String confirmText;
-    /** Custom cancel button text, null uses default i18n("取消") */
+    /** Custom cancel button text, null uses the default cancel-button i18n key (see {@link #getCancelText()}) */
     private String cancelText;
 
     /** The target player to show the dialog */
