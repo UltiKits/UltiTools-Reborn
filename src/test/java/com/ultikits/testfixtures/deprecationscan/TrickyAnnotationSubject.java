@@ -12,6 +12,17 @@ package com.ultikits.testfixtures.deprecationscan;
 public class TrickyAnnotationSubject {
 
     /**
+     * A semicolon inside a field initialiser's string, sitting before the declaration's own
+     * terminator. Characterisation input -- the truncation it causes is harmless here because the
+     * kind and name are already parsed by then.
+     *
+     * @deprecated legacy, kept only as scanner input
+     * @removeIn 7.0.0
+     */
+    @Deprecated(since = "6.2.1")
+    public String semicolonInStringBeforeTerminator = "a;b";
+
+    /**
      * An UNBALANCED parenthesis inside the {@code since} value. A balanced pair inside a string is
      * harmless -- the two adjustments cancel -- so it is specifically the unbalanced case that
      * pushes the close-paren search past the real close paren and on into the rest of the file.
@@ -23,17 +34,6 @@ public class TrickyAnnotationSubject {
     public void unbalancedParenInSinceValue() {
         // no body
     }
-
-    /**
-     * A semicolon inside a field initialiser's string, sitting before the declaration's own
-     * terminator. Characterisation input -- the truncation it causes is harmless here because the
-     * kind and name are already parsed by then.
-     *
-     * @deprecated legacy, kept only as scanner input
-     * @removeIn 7.0.0
-     */
-    @Deprecated(since = "6.2.1")
-    public String semicolonInStringBeforeTerminator = "a;b";
 
     /**
      * A bare {@code @Deprecated} with no argument list at all.

@@ -306,13 +306,34 @@ public final class JavadocDeprecationScanner {
      * because masking blanks in place and never changes length.
      */
     private static Declaration parseDeclarationAfter(String source, String masked, int fromOffset) {
-        int i = fromOffset;
-        int n = source.length();
         Declaration decl = new Declaration();
+        int afterAnnotations = consumeAnnotationRun(source, masked, fromOffset, decl);
+        if (afterAnnotations < 0) {
+            return null;
+        }
+        int declStart = skipWhitespace(masked, afterAnnotations);
+        int declEnd = findDeclarationEnd(masked, declStart);
+        if (declEnd < 0) {
+            return null;
+        }
+        classifyDeclaration(source.substring(declStart, declEnd), decl);
+        return decl.kind == null ? null : decl;
+    }
+
+    /**
+     * Consumes the run of annotations starting at {@code fromOffset}, recording {@code @Deprecated}
+     * and its arguments into {@code decl}, and returns the offset just past the run -- or
+     * {@code -1} if an annotation's parentheses never balance.
+     *
+     * @see #scanBalancedParens(String, int)
+     */
+    private static int consumeAnnotationRun(String source, String masked, int fromOffset, Declaration decl) {
+        int i = fromOffset;
+        int n = masked.length();
         while (true) {
             i = skipWhitespace(masked, i);
             if (i >= n || masked.charAt(i) != '@') {
-                break;
+                return i;
             }
             int annotationStart = i;
             i++;
@@ -320,35 +341,27 @@ public final class JavadocDeprecationScanner {
             while (i < n && (Character.isLetterOrDigit(masked.charAt(i)) || masked.charAt(i) == '.')) {
                 i++;
             }
-            String annotationName = source.substring(nameStart, i);
+            boolean isDeprecated = "Deprecated".equals(source.substring(nameStart, i));
             int afterName = skipWhitespace(masked, i);
             if (afterName < n && masked.charAt(afterName) == '(') {
                 int close = scanBalancedParens(masked, afterName);
                 if (close < 0) {
                     // Unbalanced: refuse the declaration rather than report a truncated parse.
-                    return null;
+                    return -1;
                 }
-                if ("Deprecated".equals(annotationName)) {
+                if (isDeprecated) {
                     decl.hasDeprecatedAnnotation = true;
                     readDeprecatedArgs(source.substring(afterName + 1, close - 1), decl);
                 }
                 i = close;
-            } else if ("Deprecated".equals(annotationName)) {
+            } else if (isDeprecated) {
                 decl.hasDeprecatedAnnotation = true;
             }
             if (annotationStart == i) {
                 // Defensive: no progress made, avoid an infinite loop on malformed input.
-                break;
+                return i;
             }
         }
-
-        int declStart = skipWhitespace(masked, i);
-        int declEnd = findDeclarationEnd(masked, declStart);
-        if (declEnd < 0) {
-            return null;
-        }
-        classifyDeclaration(source.substring(declStart, declEnd), decl);
-        return decl.kind == null ? null : decl;
     }
 
     /** Reads {@code since} / {@code forRemoval} out of a {@code @Deprecated} argument list. */
