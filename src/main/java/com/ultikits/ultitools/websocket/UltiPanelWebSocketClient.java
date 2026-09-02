@@ -142,7 +142,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         String messageStr = gson.toJson(message);
 
         // Log the outgoing message
-        String msgType = message.has("type") && !message.get("type").isJsonNull()
+        String msgType = message.has("type") && !message.get("type").isJsonNull() 
             ? message.get("type").getAsString() : "未知";
         UltiTools.getInstance().getLogger().log(Level.FINE, 
             String.format("[WebSocket发送] 类型: %s", msgType));

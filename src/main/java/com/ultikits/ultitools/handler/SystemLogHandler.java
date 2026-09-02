@@ -248,7 +248,7 @@ public class SystemLogHandler extends Handler {
         }
 
         // Server-core log
-        if (loggerName.startsWith("net.minecraft") ||
+        if (loggerName.startsWith("net.minecraft") || 
             loggerName.startsWith("org.bukkit") ||
             loggerName.startsWith("org.spigotmc") ||
             loggerName.startsWith("org.apache.logging") ||
@@ -289,7 +289,7 @@ public class SystemLogHandler extends Handler {
 
         for (String part : parts) {
             // Skip common package-name prefixes
-            if (!part.equals("org") && !part.equals("bukkit") && !part.equals("plugin")
+            if (!part.equals("org") && !part.equals("bukkit") && !part.equals("plugin") 
                 && !part.equals("com") && !part.equals("github") && !part.equals("net")
                 && !part.equals("java") && !part.equals("javax")) {
 
