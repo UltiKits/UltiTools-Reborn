@@ -29,16 +29,18 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Pins {@link CredentialStore}'s contract: one owner of {@code data.json}, an atomic
- * temp-plus-rename replace, and a parse failure reported as an outcome distinct from absence
- * (plan 08-13, D-12/D-14).
+ * Pins {@link CredentialStore}'s contract: one owner of the credential document, an atomic
+ * temp-plus-rename replace, a parse failure reported as an outcome distinct from absence
+ * (plan 08-13, D-12/D-14), and the fail-safe one-time migration from the pre-6.3.0 location to
+ * the current one (plan 08-15, D-15).
  */
-@DisplayName("CredentialStore -- single-owner, atomically-replaced data.json")
+@DisplayName("CredentialStore -- single-owner, atomically-replaced, migrated-in-place credential file")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class CredentialStoreTest {
 
@@ -56,6 +58,130 @@ class CredentialStoreTest {
     @AfterEach
     void tearDown() {
         CredentialStore.clearTargetPathForTesting();
+        // Defence in depth: a MigrationTests failure that skips its own @AfterEach must not leak
+        // these two test-only overrides into every other test class sharing this JVM.
+        CredentialStore.clearOldLocationForTesting();
+        CredentialStore.setSimulateWriteFailureForTesting(false);
+    }
+
+    // ---- migrate(): the fail-safe one-time move from the pre-6.3.0 location to the current one
+    // (plan 08-15). Old and new locations are overridden independently so a case can put either
+    // file, both, or neither in place before calling migrate() directly. ----
+
+    @Nested
+    @DisplayName("migrate() -- old location -> new location, fail-safe on every path (D-15/T-08-55)")
+    class MigrationTests {
+
+        private Path oldFile;
+        private Path newFile;
+
+        @BeforeEach
+        void setUp() {
+            oldFile = tempDir.resolve("old-location").resolve("data.json");
+            newFile = tempDir.resolve("new-location").resolve("credentials.json");
+            CredentialStore.setOldLocationForTesting(oldFile);
+            CredentialStore.setTargetPathForTesting(newFile);
+        }
+
+        @AfterEach
+        void tearDown() {
+            CredentialStore.clearOldLocationForTesting();
+            CredentialStore.setSimulateWriteFailureForTesting(false);
+        }
+
+        private void writeOldFile(String json) throws IOException {
+            Files.createDirectories(oldFile.getParent());
+            Files.write(oldFile, json.getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Test
+        @DisplayName("old file present, new file absent: content moves across and the old file is gone")
+        void migratesWhenOldPresentAndNewAbsent() throws IOException {
+            writeOldFile("{\"uuid\":\"abc123\",\"access_token\":\"tok\"}");
+
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(newFile)).as("the new file must exist after migration").isTrue();
+            assertThat(Files.exists(oldFile)).as("the old file must be gone after a successful migration").isFalse();
+
+            CredentialStore.ReadResult result = CredentialStore.read();
+            assertThat(result.isParsed()).isTrue();
+            assertThat(result.data())
+                    .containsEntry("uuid", "abc123")
+                    .containsEntry("access_token", "tok");
+        }
+
+        @Test
+        @DisplayName("old file present, new file already present: the new file is left untouched, the old file is deleted")
+        void leavesNewFileUntouchedWhenBothExist() throws IOException {
+            writeOldFile("{\"uuid\":\"old-value\"}");
+            Files.createDirectories(newFile.getParent());
+            Files.write(newFile, "{\"uuid\":\"new-value\"}".getBytes(StandardCharsets.UTF_8));
+
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(oldFile))
+                    .as("the old file must be removed once the new one is confirmed present")
+                    .isFalse();
+            String newContent = new String(Files.readAllBytes(newFile), StandardCharsets.UTF_8);
+            assertThat(newContent)
+                    .as("the new file's own content must survive untouched, not be overwritten by the old file's")
+                    .contains("new-value")
+                    .doesNotContain("old-value");
+        }
+
+        @Test
+        @DisplayName("old file absent: migrate() is a no-op -- no file created, no log noise")
+        void noOpWhenOldFileAbsent() {
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(newFile)).as("migrate() must not create a file out of nothing").isFalse();
+            assertThat(Files.exists(oldFile)).isFalse();
+        }
+
+        @Test
+        @DisplayName("running migrate() twice is a no-op the second time; the new file is unchanged")
+        void secondRunIsNoOp() throws IOException {
+            writeOldFile("{\"uuid\":\"abc123\"}");
+
+            CredentialStore.migrate();
+            String contentAfterFirstRun = new String(Files.readAllBytes(newFile), StandardCharsets.UTF_8);
+
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(oldFile)).as("the old file must already be gone before the second run").isFalse();
+            String contentAfterSecondRun = new String(Files.readAllBytes(newFile), StandardCharsets.UTF_8);
+            assertThat(contentAfterSecondRun)
+                    .as("a second migrate() run must not touch the already-migrated file")
+                    .isEqualTo(contentAfterFirstRun);
+        }
+
+        @Test
+        @DisplayName("old file exists but does not parse: it is NOT deleted, and nothing is written to the new location")
+        void doesNotDeleteAnUnparseableOldFile() throws IOException {
+            writeOldFile("{\"access_token\":\"partial-tok");
+
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(oldFile)).as("an unparseable old file must never be discarded").isTrue();
+            assertThat(Files.exists(newFile))
+                    .as("nothing may be written to the new location from an unparseable old file")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("the new file write fails: the old file survives and no partial new file appears")
+        void oldFileSurvivesAWriteFailure() throws IOException {
+            writeOldFile("{\"uuid\":\"abc123\"}");
+            CredentialStore.setSimulateWriteFailureForTesting(true);
+
+            CredentialStore.migrate();
+
+            assertThat(Files.exists(oldFile)).as("the old file must survive a failed migration write").isTrue();
+            assertThat(Files.exists(newFile))
+                    .as("no partial file may appear at the new location after a failed write")
+                    .isFalse();
+        }
     }
 
     @Test
@@ -291,12 +417,18 @@ class CredentialStoreTest {
     }
 
     // ---- The single-owner invariant (promote decision, assumption_delta_decision). Structural,
-    // not runtime: a source scan, because "no other class touches data.json" cannot be observed by
-    // calling an API -- it is a property of the whole src/main tree. ----
+    // not runtime: a source scan, because "no other class touches the credential file" cannot be
+    // observed by calling an API -- it is a property of the whole src/main tree.
+    //
+    // Checks BOTH quoted literals, deliberately: "data.json" (the pre-6.3.0 name -- still the
+    // right thing for CredentialStore.migrate() to read, but wrong for any other class to open
+    // directly) and "credentials.json" (the current, >= 6.3.0 name, plan 08-15). Renaming the
+    // live file must not silently narrow this scan back down to the name nothing writes to
+    // anymore -- see 08-14-SUMMARY.md's note that this expectation has to move with the rename. ----
 
     @Test
-    @DisplayName("no class other than CredentialStore opens a reader or writer on data.json")
-    void onlyCredentialStoreTouchesDataJsonDirectly() throws IOException {
+    @DisplayName("no class other than CredentialStore opens a reader or writer on the credential file (old or new name)")
+    void onlyCredentialStoreTouchesTheCredentialFileDirectly() throws IOException {
         Path srcRoot = Paths.get("src/main/java");
         List<Path> javaFiles = new ArrayList<>();
         Files.walkFileTree(srcRoot, new SimpleFileVisitor<Path>() {
@@ -315,8 +447,9 @@ class CredentialStoreTest {
             String content = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
             // Quoted literal only -- a bare substring match also fires on this file's own package
             // name (com.ultikits.ultitools.interfaces.impl.data.json), a false positive that has
-            // nothing to do with the credential file (measured during this plan's own execution).
-            boolean mentionsCredentialFile = content.contains("\"data.json\"");
+            // nothing to do with the credential file (measured during plan 08-13's own execution).
+            boolean mentionsCredentialFile = content.contains("\"data.json\"")
+                    || content.contains("\"credentials.json\"");
             boolean opensReaderOrWriter = content.contains("Files.newBufferedReader(")
                     || content.contains("Files.newBufferedWriter(")
                     || content.contains("Files.newInputStream(")
@@ -327,7 +460,7 @@ class CredentialStoreTest {
         }
 
         assertThat(offenders)
-                .as("every reader or writer on data.json must go through CredentialStore")
+                .as("every reader or writer on the credential file must go through CredentialStore")
                 .isEmpty();
     }
 }

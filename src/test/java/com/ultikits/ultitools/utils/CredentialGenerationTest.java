@@ -60,10 +60,21 @@ class CredentialGenerationTest {
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
             lenient().when(ultiTools.getDataFolder()).thenReturn(dataFolder);
         });
+        // Plan 08-15 moved CredentialStore's production target outside the plugin data folder
+        // (<server root>/.ultikits/credentials.json). This class's whole method -- watching
+        // dataFolder at the filesystem level for temp-file creations -- needs writes to keep
+        // landing in dataFolder regardless of that move, so both locations are pinned here
+        // explicitly rather than relying on the (now different) production default. The old
+        // location is pinned to a path that never gets a real file written to it in this class,
+        // so migrate() is always a fast, inert no-op for every test below.
+        CredentialStore.setTargetPathForTesting(dataFolder.toPath().resolve("credentials.json"));
+        CredentialStore.setOldLocationForTesting(dataFolder.toPath().resolve("pre-migration-data.json"));
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        CredentialStore.clearTargetPathForTesting();
+        CredentialStore.clearOldLocationForTesting();
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
@@ -79,10 +90,10 @@ class CredentialGenerationTest {
 
     /**
      * The exact temporary-file name {@link CredentialStore} always creates for a write before
-     * atomically renaming it onto {@code data.json} -- see {@code CredentialStore.TEMP_FILE_NAME},
+     * atomically renaming it onto {@code credentials.json} -- see {@code CredentialStore.TEMP_FILE_NAME},
      * which is private and so cannot be referenced symbolically from this package-mate.
      */
-    private static final String TEMP_FILE_NAME = "data.json.tmp";
+    private static final String TEMP_FILE_NAME = "credentials.json.tmp";
 
     /**
      * Registers an OS-level watch on {@code dir} for {@code ENTRY_CREATE} events. Used to count
@@ -166,7 +177,7 @@ class CredentialGenerationTest {
             assertThat(CloudAuthManager.getCurrentToken())
                     .as("内存中的凭证必须仍是空的")
                     .isNull();
-            assertThat(new File(dataFolder, "data.json"))
+            assertThat(new File(dataFolder, "credentials.json"))
                     .as("磁盘上不该留下可用于重启后自动重连的凭证")
                     .satisfiesAnyOf(
                             f -> assertThat(f).doesNotExist(),
@@ -190,7 +201,7 @@ class CredentialGenerationTest {
     /**
      * D-14: one named, deterministic test per timing from issue #298's "already fixed" table
      * (five rows). Each stages its interleaving with explicit, controllable call ordering --
-     * never a sleep -- and asserts both the final {@code data.json} content and the number of
+     * never a sleep -- and asserts both the final {@code credentials.json} content and the number of
      * writes {@link CredentialStore} actually performed, observed at the filesystem level via
      * {@link #newTempFileWatcher(File)}/{@link #countTempFileCreations(WatchService, Duration)}
      * so a failure names which timing broke rather than reporting a generic race. This is

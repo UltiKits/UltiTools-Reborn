@@ -152,10 +152,15 @@ class CommonUtilsTest {
             mockedUltiTools = mockStatic(UltiTools.class);
             mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiToolsInstance);
             when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir);
+            // Plan 08-15 moved CredentialStore's production target outside the plugin data
+            // folder; this class asserts directly against a file under tempDir, so the target is
+            // pinned here rather than relying on the (now different) production default.
+            CredentialStore.setTargetPathForTesting(tempDir.toPath().resolve("credentials.json"));
         }
 
         @AfterEach
         void tearDown() {
+            CredentialStore.clearTargetPathForTesting();
             if (mockedUltiTools != null) {
                 mockedUltiTools.close();
             }
@@ -165,7 +170,7 @@ class CommonUtilsTest {
         @DisplayName("当 data.json 不存在时应该创建新文件并生成 UUID")
         void shouldCreateNewFileAndGenerateUUIDWhenFileNotExists() throws Exception {
             // 确保文件不存在
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             assertThat(dataFile.exists()).isFalse();
             
             // 调用方法
@@ -184,7 +189,7 @@ class CommonUtilsTest {
         @DisplayName("当 data.json 存在时应该读取现有 UUID")
         void shouldReadExistingUUIDWhenFileExists() throws Exception {
             // 预先创建文件
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             String existingUUID = "abcd1234efgh5678ijkl9012mnop3456";
             JsonObject json = new JsonObject();
             json.addProperty("uuid", existingUUID);
@@ -204,7 +209,7 @@ class CommonUtilsTest {
         @DisplayName("多次调用应该返回相同的 UUID（文件存在时）")
         void shouldReturnSameUUIDOnMultipleCalls() throws Exception {
             // 预先创建文件
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             String existingUUID = "test1234test5678test9012test3456";
             JsonObject json = new JsonObject();
             json.addProperty("uuid", existingUUID);
@@ -227,7 +232,7 @@ class CommonUtilsTest {
         @DisplayName("新生成的 UUID 应该被持久化到文件")
         void newlyGeneratedUUIDShouldBePersistedToFile() throws Exception {
             // 确保文件不存在
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             assertThat(dataFile.exists()).isFalse();
             
             // 调用方法生成 UUID
@@ -247,7 +252,7 @@ class CommonUtilsTest {
         @DisplayName("应该能处理包含其他数据的 JSON 文件")
         void shouldHandleJsonFileWithOtherData() throws Exception {
             // 创建包含其他数据的 JSON 文件
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             String existingUUID = "uuid1234uuid5678uuid9012uuid3456";
             JsonObject json = new JsonObject();
             json.addProperty("uuid", existingUUID);
@@ -283,10 +288,15 @@ class CommonUtilsTest {
             mockedUltiTools = mockStatic(UltiTools.class);
             mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiToolsInstance);
             when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir);
+            // Plan 08-15 moved CredentialStore's production target outside the plugin data
+            // folder; this class asserts directly against a file under tempDir, so the target is
+            // pinned here rather than relying on the (now different) production default.
+            CredentialStore.setTargetPathForTesting(tempDir.toPath().resolve("credentials.json"));
         }
 
         @AfterEach
         void tearDown() {
+            CredentialStore.clearTargetPathForTesting();
             if (mockedUltiTools != null) {
                 mockedUltiTools.close();
             }
@@ -296,7 +306,7 @@ class CommonUtilsTest {
         @DisplayName("应该处理空 JSON 对象（没有 uuid 键）")
         void shouldHandleEmptyJsonObject() throws Exception {
             // 创建空 JSON 文件
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             JsonObject json = new JsonObject();
             try (FileWriter writer = new FileWriter(dataFile)) {
                 writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
@@ -318,7 +328,7 @@ class CommonUtilsTest {
         @DisplayName("新创建的文件应该包含有效的 JSON 格式")
         void newlyCreatedFileShouldContainValidJson() throws Exception {
             // 确保文件不存在
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             
             // 调用方法创建文件
             CommonUtils.getUltiToolsUUID();
@@ -339,7 +349,7 @@ class CommonUtilsTest {
             String uuid = CommonUtils.getUltiToolsUUID();
             
             // 读取文件验证类型
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             JsonObject jsonRead;
             try (FileReader reader = new FileReader(dataFile)) {
                 jsonRead = new Gson().fromJson(reader, JsonObject.class);
@@ -367,10 +377,15 @@ class CommonUtilsTest {
             mockedUltiTools = mockStatic(UltiTools.class);
             mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiToolsInstance);
             when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir);
+            // Plan 08-15 moved CredentialStore's production target outside the plugin data
+            // folder; this class asserts directly against a file under tempDir, so the target is
+            // pinned here rather than relying on the (now different) production default.
+            CredentialStore.setTargetPathForTesting(tempDir.toPath().resolve("credentials.json"));
         }
 
         @AfterEach
         void tearDown() {
+            CredentialStore.clearTargetPathForTesting();
             if (mockedUltiTools != null) {
                 mockedUltiTools.close();
             }
@@ -379,7 +394,7 @@ class CommonUtilsTest {
         @Test
         @DisplayName("当文件不存在时应该生成新的 UUID")
         void shouldGenerateNewUUIDWhenFileNotExists() throws Exception {
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             assertThat(dataFile.exists()).isFalse();
             
             String uuid = CommonUtils.getUltiToolsUUID();
@@ -397,7 +412,7 @@ class CommonUtilsTest {
         @DisplayName("当文件存在时应该返回已保存的 UUID")
         void shouldReturnExistingUUIDWhenFileExists() throws Exception {
             // 预先创建文件
-            File dataFile = new File(tempDir, "data.json");
+            File dataFile = new File(tempDir, "credentials.json");
             String existingUUID = "existinguuid123456789012345678ab";
             JsonObject json = new JsonObject();
             json.addProperty("uuid", existingUUID);
