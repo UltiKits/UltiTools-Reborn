@@ -31,17 +31,22 @@ import java.util.regex.Pattern;
 /**
  * Build-time entry point (bound to the {@code verify} phase, after japicmp - see {@code pom.xml})
  * that regenerates {@code compatibility/deprecations.json} and {@code compatibility/DEPRECATIONS.md}
- * from source plus the japicmp report (D-08, D-17, D-22), then runs
- * {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own {@code <exclude>} list,
- * the japicmp report, and the merged registry, and finally {@link ReleaseBoundaryInvariant} (D-03)
- * over the project version, the japicmp baseline version, and the same exclude list.
+ * from source plus the japicmp report (D-08, D-17, D-22), then runs three independent checks over
+ * the merged registry: {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) over the pom's own
+ * {@code <exclude>} list, the japicmp report, and the merged registry; {@link ReleaseBoundaryInvariant}
+ * (D-03) over the project version, the japicmp baseline version, and the same exclude list; and
+ * {@link RemovalDeadlineEvaluator} (D-07) over the project version, the merged registry, and the
+ * fresh source scan's key set.
  *
  * <p>Reads the prior ledger (if any), scans {@code src/main/java} with
  * {@link JavadocDeprecationScanner}, reads {@code target/japicmp/japicmp.xml} for the set of keys
  * japicmp reports {@code changeStatus="REMOVED"}, merges via {@link RegistryLedger#merge}, writes
- * both output files, then evaluates removal-record consistency and the release-boundary invariant.
- * A merge disagreement ({@link LedgerMergeConflictException}), a consistency finding, a
- * release-boundary violation, or any other failure exits non-zero, failing {@code mvn verify}.
+ * both output files, then evaluates all three checks above. A merge disagreement
+ * ({@link LedgerMergeConflictException}) fails immediately; otherwise every violation from all
+ * three checks is collected and reported in a single {@link IllegalStateException} - a build that
+ * fails three times in a row for three related reasons is worse feedback than one failure listing
+ * all of them. The ledger is written before this final check, so a failing build still leaves a
+ * current {@code compatibility/deprecations.json} for the reader to inspect.
  */
 public final class DeprecationRegistryGenerator {
 
@@ -89,47 +94,86 @@ public final class DeprecationRegistryGenerator {
                 + LEDGER_JSON + " and " + LEDGER_MARKDOWN);
 
         Document pomDocument = readPomDocument();
-        evaluateRemovalConsistency(pomDocument, report, merged);
-        evaluateReleaseBoundary(pomDocument);
+        List<String> violations = new ArrayList<>();
+        violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
+        violations.addAll(collectReleaseBoundaryViolations(pomDocument));
+        violations.addAll(collectRemovalDeadlineViolations(pomDocument, merged, freshScan));
+        failOnViolations(violations);
     }
 
     /**
-     * Runs {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) and fails the build - naming
-     * every offending key - on any finding. This is the japicmp {@code <exclude>} staleness check
-     * japicmp itself cannot produce (its {@code ConfigParameters} has no such field).
+     * Runs {@link RemovalConsistencyEvaluator} (D-01/D-21/D-22) and returns one message per
+     * finding - the japicmp {@code <exclude>} staleness check japicmp itself cannot produce (its
+     * {@code ConfigParameters} has no such field). Collected rather than thrown directly, so the
+     * caller can report every violation from every check in a single build failure.
      */
-    private static void evaluateRemovalConsistency(
+    private static List<String> collectRemovalConsistencyViolations(
             Document pomDocument, JapicmpReportReader.Report report, RegistryLedger merged) {
         Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
         String baselineVersion = readJapicmpBaselineVersion(pomDocument);
         List<RemovalConsistencyEvaluator.Finding> findings =
                 RemovalConsistencyEvaluator.evaluate(excludeKeys, report, merged, baselineVersion);
-        if (findings.isEmpty()) {
-            return;
-        }
-        StringBuilder sb = new StringBuilder("RemovalConsistencyEvaluator found ")
-                .append(findings.size()).append(" consistency violation(s):\n");
+        List<String> messages = new ArrayList<>();
         for (RemovalConsistencyEvaluator.Finding finding : findings) {
-            sb.append("  - ").append(finding).append('\n');
+            messages.add("[RemovalConsistencyEvaluator] " + finding);
         }
-        throw new IllegalStateException(sb.toString());
+        return messages;
     }
 
     /**
-     * Runs {@link ReleaseBoundaryInvariant} (D-03) and fails the build - naming every violation -
+     * Runs {@link ReleaseBoundaryInvariant} (D-03) and returns one message per violation - fires
      * when {@code ${project.version}} carries no {@code -SNAPSHOT} and either the japicmp
      * {@code <excludes>} list is still populated or {@code japicmp.baseline.version} has not been
      * advanced past the project version. Dormant on every {@code -SNAPSHOT} build.
      */
-    private static void evaluateReleaseBoundary(Document pomDocument) {
+    private static List<String> collectReleaseBoundaryViolations(Document pomDocument) {
         String projectVersion = readProjectVersion(pomDocument);
         String baselineVersion = readJapicmpBaselineVersion(pomDocument);
         Set<RegistryKey> excludeKeys = readPomExcludeKeys(pomDocument);
         List<String> violations = ReleaseBoundaryInvariant.evaluate(projectVersion, baselineVersion, excludeKeys);
+        List<String> messages = new ArrayList<>();
+        for (String violation : violations) {
+            messages.add("[ReleaseBoundaryInvariant] " + violation);
+        }
+        return messages;
+    }
+
+    /**
+     * Runs {@link RemovalDeadlineEvaluator} (D-07) and returns one message per violation - an
+     * {@code ANNOUNCED} registry entry whose {@code removeIn} the project version has reached,
+     * while the member is still present in the fresh {@link JavadocDeprecationScanner} scan. Green
+     * today: no {@code ANNOUNCED} entry carries {@code removeIn 6.3.0}.
+     */
+    private static List<String> collectRemovalDeadlineViolations(
+            Document pomDocument, RegistryLedger merged, List<DeprecationEntry> freshScan) {
+        String projectVersion = readProjectVersion(pomDocument);
+        Set<RegistryKey> presentInSource = freshScanKeys(freshScan);
+        List<String> violations = RemovalDeadlineEvaluator.evaluate(projectVersion, merged, presentInSource);
+        List<String> messages = new ArrayList<>();
+        for (String violation : violations) {
+            messages.add("[RemovalDeadlineEvaluator] " + violation);
+        }
+        return messages;
+    }
+
+    private static Set<RegistryKey> freshScanKeys(List<DeprecationEntry> freshScan) {
+        Set<RegistryKey> keys = new LinkedHashSet<>();
+        for (DeprecationEntry entry : freshScan) {
+            keys.add(entry.getKey());
+        }
+        return keys;
+    }
+
+    /**
+     * Fails the build once, naming every violation from every check - a build that fails three
+     * times in a row for three related reasons is worse feedback than one failure listing all of
+     * them.
+     */
+    private static void failOnViolations(List<String> violations) {
         if (violations.isEmpty()) {
             return;
         }
-        StringBuilder sb = new StringBuilder("ReleaseBoundaryInvariant found ")
+        StringBuilder sb = new StringBuilder("DeprecationRegistryGenerator found ")
                 .append(violations.size()).append(" violation(s):\n");
         for (String violation : violations) {
             sb.append("  - ").append(violation).append('\n');
