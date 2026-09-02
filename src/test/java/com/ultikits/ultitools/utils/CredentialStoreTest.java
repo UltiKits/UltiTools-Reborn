@@ -28,7 +28,6 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -296,10 +295,6 @@ class CredentialStoreTest {
     // calling an API -- it is a property of the whole src/main tree. ----
 
     @Test
-    @Disabled("Enabled by plan 08-14, which routes CloudAuthManager and CommonUtils through "
-            + "CredentialStore so this invariant holds. Until then both classes still open a "
-            + "reader/writer on data.json directly and this test would correctly fail -- do not "
-            + "delete it as broken, and do not weaken the scan to make it pass early.")
     @DisplayName("no class other than CredentialStore opens a reader or writer on data.json")
     void onlyCredentialStoreTouchesDataJsonDirectly() throws IOException {
         Path srcRoot = Paths.get("src/main/java");

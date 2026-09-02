@@ -1,11 +1,6 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -43,7 +38,12 @@ public class CloudAuthManager {
     /** Basic auth header for OAuth2 client credentials (client:112233) */
     private static final String OAUTH2_BASIC_AUTH = "Basic Y2xpZW50OjExMjIzMw==";
 
-    private static TokenEntity currentToken;
+    /**
+     * Written by the refresh executor thread, read by any caller of {@link #getCurrentToken()} or
+     * {@link #hasValidToken()} without holding a lock -- {@code volatile} is required so a value
+     * published there is visible to a subsequent read on another thread (D-12's visibility hole).
+     */
+    private static volatile TokenEntity currentToken;
     private static ScheduledExecutorService pollExecutor;
     private static ScheduledFuture<?> pollTask;
     private static ScheduledExecutorService refreshExecutor;
@@ -79,7 +79,21 @@ public class CloudAuthManager {
      */
     public static TokenEntity loadSavedToken() {
         try {
-            Map<String, Object> data = readDataFile();
+            CredentialStore.ReadResult result = CredentialStore.read();
+            if (result.isAbsent()) {
+                return null;
+            }
+            if (result.isParseFailure()) {
+                // Distinguishable from absence: a torn/corrupt credential file must not be
+                // silently treated as "no saved token" -- that would swallow the failure instead
+                // of reporting it (D-12, T-08-53).
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "Saved credential file exists but could not be parsed as valid JSON; "
+                        + "treating it as no saved token rather than deleting it. "
+                        + "Use /ulticloud login to re-authenticate.");
+                return null;
+            }
+            Map<String, Object> data = result.data();
             Object savedToken = data.get("cloud_token");
             if (savedToken == null) {
                 return null;
@@ -181,7 +195,6 @@ public class CloudAuthManager {
      */
     public static void saveToken(TokenEntity token) throws IOException {
         currentToken = token;
-        Map<String, Object> data = readDataFile();
 
         // Store token fields as a map (Gson will serialize properly)
         Map<String, Object> tokenMap = new LinkedHashMap<>();
@@ -192,8 +205,10 @@ public class CloudAuthManager {
         tokenMap.put("scope", token.getScope());
         tokenMap.put("jti", token.getJti());
 
-        data.put("cloud_token", tokenMap);
-        writeDataFile(data);
+        CredentialStore.update(existing -> {
+            existing.put("cloud_token", tokenMap);
+            return existing;
+        });
     }
 
     /**
@@ -205,9 +220,10 @@ public class CloudAuthManager {
         // 生产者全部停掉之后，任何仍在途的结果到这里都已过期。
         credentialGeneration.incrementAndGet();
         currentToken = null;
-        Map<String, Object> data = readDataFile();
-        data.remove("cloud_token");
-        writeDataFile(data);
+        CredentialStore.update(existing -> {
+            existing.remove("cloud_token");
+            return existing;
+        });
     }
 
     /**
@@ -521,25 +537,4 @@ public class CloudAuthManager {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> readDataFile() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (dataFile.exists()) {
-            try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                Map<String, Object> json = GSON.fromJson(reader, Map.class);
-                return json != null ? json : new LinkedHashMap<>();
-            }
-        }
-        return new LinkedHashMap<>();
-    }
-
-    private static void writeDataFile(Map<String, Object> data) throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (!dataFile.getParentFile().exists()) {
-            dataFile.getParentFile().mkdirs();
-        }
-        try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
-            GSON.toJson(data, writer);
-        }
-    }
 }

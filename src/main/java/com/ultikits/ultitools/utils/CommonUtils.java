@@ -1,18 +1,7 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.ultikits.ultitools.UltiTools;
 
 /**
  * Common utility class providing general-purpose helper methods.
@@ -25,7 +14,6 @@ import com.ultikits.ultitools.UltiTools;
  * @since 6.0.0
  */
 public class CommonUtils {
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     /**
      * get UltiTools UUID
@@ -35,32 +23,19 @@ public class CommonUtils {
      * @return UUID
      * @throws IOException if an I/O error occurs
      */
-    @SuppressWarnings("unchecked")
-    public static synchronized String getUltiToolsUUID() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        Map<String, Object> json;
-        
-        if (dataFile.exists()) {
-            try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                json = GSON.fromJson(reader, Map.class);
-                if (json == null) {
-                    json = new LinkedHashMap<>();
-                }
+    public static String getUltiToolsUUID() throws IOException {
+        String[] uuidHolder = new String[1];
+        CredentialStore.update(existing -> {
+            Object existingUuid = existing.get("uuid");
+            if (existingUuid != null) {
+                uuidHolder[0] = existingUuid.toString();
+            } else {
+                String generated = UUID.randomUUID().toString().replace("-", "");
+                existing.put("uuid", generated);
+                uuidHolder[0] = generated;
             }
-        } else {
-            json = new LinkedHashMap<>();
-        }
-        
-        if (!json.containsKey("uuid")) {
-            json.put("uuid", UUID.randomUUID().toString().replace("-", ""));
-            if (!dataFile.getParentFile().exists()) {
-                dataFile.getParentFile().mkdirs();
-            }
-            try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                GSON.toJson(json, writer);
-            }
-        }
-        
-        return json.get("uuid").toString();
+            return existing;
+        });
+        return uuidHolder[0];
     }
 }
