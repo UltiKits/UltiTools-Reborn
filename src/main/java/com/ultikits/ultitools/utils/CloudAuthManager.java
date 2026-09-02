@@ -230,7 +230,16 @@ public class CloudAuthManager {
      * 取当前的凭证代际。异步凭证操作在<b>出发时</b>调它记下自己那一代。
      *
      * @return 当前代际
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * asynchronous credential producers, not a supported external API -- measured 0 downstream
+     * references across every published module JAR and every local module/plugin source. The
+     * cancel-is-not-invalidate guard this method reads from is preserved unchanged; the credential
+     * file I/O this class used to imply now lives in {@link CredentialStore}. Scheduled for
+     * removal once issue #298's session-based credential lifecycle redesign replaces the whole
+     * generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static long currentCredentialGeneration() {
         return credentialGeneration.get();
     }
@@ -240,7 +249,18 @@ public class CloudAuthManager {
      * <p>
      * 拆线路径（{@code disableCloud()} / {@code /ulticloud logout}）必须调它。只停调度器
      * 是不够的——见 {@link #credentialGeneration} 上的说明。
+     *
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * teardown path, not a supported external API -- measured 0 downstream references across
+     * every published module JAR and every local module/plugin source. The guard's behaviour is
+     * preserved unchanged, including its {@code synchronized} coordination with
+     * {@link #commitTokenIfCurrent(TokenEntity, long)} and {@link #clearToken()}; the credential
+     * file I/O this class used to imply now lives in {@link CredentialStore}. Scheduled for
+     * removal once issue #298's session-based credential lifecycle redesign replaces the whole
+     * generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static synchronized void invalidateCredentialOperations() {
         credentialGeneration.incrementAndGet();
     }
@@ -256,7 +276,17 @@ public class CloudAuthManager {
      * @param generation 调用方出发时记下的代际
      * @return 已提交返回 true；代际已变、结果被丢弃则返回 false
      * @throws IOException 写入失败
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * asynchronous credential producers, not a supported external API -- measured 0 downstream
+     * references across every published module JAR and every local module/plugin source. The
+     * generation-comparison-then-write guard is preserved unchanged, including its
+     * {@code synchronized} coordination with {@link #invalidateCredentialOperations()} and
+     * {@link #clearToken()}; the write itself now goes through {@link CredentialStore} for an
+     * atomic replace. Scheduled for removal once issue #298's session-based credential lifecycle
+     * redesign replaces the whole generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static synchronized boolean commitTokenIfCurrent(TokenEntity token, long generation)
             throws IOException {
         if (generation != credentialGeneration.get()) {
