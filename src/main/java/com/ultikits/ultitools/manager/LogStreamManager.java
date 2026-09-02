@@ -20,9 +20,9 @@ import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 日志流管理器
- * 负责实时监控服务器日志并通过WebSocket传输到UltiPanel
- * 
+ * Log stream manager.
+ * Responsible for monitoring server logs in real time and transmitting them to UltiPanel via WebSocket.
+ *
  * @author UltiKits
  * @version 2.0.0
  */
@@ -40,7 +40,7 @@ public class LogStreamManager implements Listener {
     private SystemLogHandler systemLogHandler;
     
     private LogStreamManager() {
-        // 注册事件监听器
+        // Register the event listener
         try {
             Bukkit.getPluginManager().registerEvents(this, UltiTools.getInstance());
         } catch (Exception e) {
@@ -56,17 +56,18 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 初始化日志流管理器
+     * Initializes the log stream manager.
      */
     public void initialize(UltiPanelWebSocketClient client) {
-        // 幂等：重复调用必须先拆掉上一轮留下的东西。
+        // Idempotent: a repeat call must first tear down whatever the previous round left behind.
         //
-        // 这个方法由 onConnectHandler 调用，而 onConnectHandler 在**每一次** onOpen 都会跑
-        // ——包括重连窗口内的 reconnect()，以及 reinitWebSocket 造出新客户端之后的那次。
-        // 原先它无条件 new 一个 UltiPanelLogTransmitter（起一条传输线程）并往 JVM root logger
-        // 挂一个新的 SystemLogHandler，而 removeHandler 只写在 shutdown() 里，shutdown() 的
-        // 唯一调用者是 onDisable。于是连接每抖动一次就泄漏一个 handler 加一条线程，
-        // 每行日志被重复发送 N 次。见 issue #181。
+        // This method is called by onConnectHandler, and onConnectHandler runs on **every**
+        // onOpen -- including reconnect() within the reconnect window, and the call after
+        // reinitWebSocket builds a fresh client. It used to unconditionally `new` a
+        // UltiPanelLogTransmitter (spinning up a transmission thread) and attach a new
+        // SystemLogHandler to the JVM root logger, while removeHandler only ever ran inside
+        // shutdown(), and shutdown()'s only caller is onDisable. So every connection blip leaked
+        // one handler plus one thread, and every log line got sent N times over. See issue #181.
         detachAllSystemLogHandlers();
         if (logTransmitter != null) {
             try {
@@ -79,40 +80,40 @@ public class LogStreamManager implements Listener {
 
         this.webSocketClient = client;
 
-        // 初始化日志传输器
+        // Initialize the log transmitter
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
 
-        // 从配置文件加载批量发送设置
+        // Load the batch-send settings from the config file
         loadBatchConfiguration();
 
-        // 创建并配置系统日志处理器
+        // Create and configure the system log handler
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
         this.systemLogHandler.loadConfiguration();
 
-        // 添加系统日志处理器到根Logger
+        // Add the system log handler to the root Logger
         Logger rootLogger = Logger.getLogger("");
         rootLogger.addHandler(systemLogHandler);
 
-        // 自动启动日志流（立即开始监控和发送日志）
+        // Auto-start the log stream (begin monitoring and sending logs immediately)
         startLogStream("auto", "info");
-        
+
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager initialized and log streaming started");
-        
-        // 发送初始化完成日志
+
+        // Send the initialization-complete logs
         sendInitializationLogs();
     }
-    
+
     /**
-     * 从配置文件加载批量发送配置
+     * Loads the batch-send configuration from the config file.
      */
     private void loadBatchConfiguration() {
         if (logTransmitter == null) {
             return;
         }
-        
+
         try {
-            // 加载批量发送配置
+            // Load the batch-send configuration
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.enabled")) {
                 boolean batchEnabled = UltiTools.getInstance().getConfig().getBoolean("ultipanel.logging.batch.enabled", true);
                 logTransmitter.setBatchEnabled(batchEnabled);
@@ -138,25 +139,25 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 发送初始化完成相关日志
+     * Sends the initialization-complete logs.
      */
     private void sendInitializationLogs() {
-        // 发送服务器启动信息
+        // Send the server-startup information
         logTransmitter.info("UltiTools 日志传输系统已启动", "plugin:UltiTools");
-        
-        // 发送当前在线玩家信息
+
+        // Send the current online-player-count information
         int onlineCount = Bukkit.getOnlinePlayers().size();
         logTransmitter.info(String.format("当前在线玩家数量: %d", onlineCount), "server");
-        
-        // 发送系统配置信息
+
+        // Send the system configuration information
         if (systemLogHandler != null) {
             String configInfo = systemLogHandler.getConfigurationInfo();
             UltiTools.getInstance().getLogger().info(configInfo);
         }
     }
-    
+
     /**
-     * 处理日志流消息
+     * Handles a log stream message.
      */
     public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
@@ -207,17 +208,17 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 处理配置更新
+     * Handles a configuration update.
      */
     private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
-            // 更新日志级别配置
+            // Update the log-level configuration
             if (data.has("levels") && systemLogHandler != null) {
-                // 这里可以动态更新日志级别配置
+                // The log-level configuration could be updated dynamically here
                 UltiTools.getInstance().getLogger().info("[UltiPanel] 收到日志级别配置更新请求");
             }
-            
-            // 更新批量发送配置
+
+            // Update the batch-send configuration
             if (data.has("batchConfig") && logTransmitter != null) {
                 JsonObject batchConfig = data.getAsJsonObject("batchConfig");
                 if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
@@ -241,56 +242,56 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 开始日志流
+     * Starts the log stream.
      */
     public void startLogStream(String clientId, String level) {
         subscribedClients.put(clientId, true);
         streaming.set(true);
-        
+
         UltiTools.getInstance().getLogger().info(
             String.format("LogStreamManager: 为客户端 %s 启动日志流，级别: %s", clientId, level));
-        
-        // 发送确认消息
+
+        // Send the acknowledgment message
         sendStreamResponse(clientId, "started", "Log stream started successfully");
     }
-    
+
     /**
-     * 开始日志流（兼容旧版本）
+     * Starts the log stream (legacy-version compatibility overload).
      */
     public void startLogStream(String clientId) {
         startLogStream(clientId, "info");
     }
-    
+
     /**
-     * 停止日志流
+     * Stops the log stream.
      */
     public void stopLogStream(String clientId) {
         subscribedClients.remove(clientId);
         if (subscribedClients.isEmpty()) {
             streaming.set(false);
         }
-        
+
         UltiTools.getInstance().getLogger().info(
             String.format("LogStreamManager: 为客户端 %s 停止日志流", clientId));
-        
-        // 发送确认消息
+
+        // Send the acknowledgment message
         sendStreamResponse(clientId, "stopped", "Log stream stopped successfully");
     }
-    
+
     /**
-     * 暂停日志流
+     * Pauses the log stream.
      */
     public void pauseLogStream(String clientId) {
         subscribedClients.put(clientId, false); // 标记为暂停状态
-        
+
         UltiTools.getInstance().getLogger().info(
             String.format("LogStreamManager: 为客户端 %s 暂停日志流", clientId));
-        
+
         sendStreamResponse(clientId, "paused", "Log stream paused");
     }
-    
+
     /**
-     * 恢复日志流
+     * Resumes the log stream.
      */
     public void resumeLogStream(String clientId) {
         subscribedClients.put(clientId, true);
@@ -303,7 +304,7 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 发送流响应消息
+     * Sends a stream response message.
      */
     private void sendStreamResponse(String clientId, String status, String message) {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -333,7 +334,7 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 发送错误响应
+     * Sends an error response.
      */
     private void sendErrorResponse(String clientId, String error) {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -361,7 +362,7 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 发送流状态
+     * Sends the stream status.
      */
     private void sendStreamStatus(String clientId) {
         JsonObject message = new JsonObject();
@@ -384,48 +385,48 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 获取当前流状态
+     * Gets the current stream status.
      */
     public boolean isStreaming() {
         return streaming.get();
     }
-    
+
     /**
-     * 获取订阅客户端数量
+     * Gets the number of subscribed clients.
      */
     public int getSubscriberCount() {
         return subscribedClients.size();
     }
-    
+
     /**
-     * 直接发送自定义日志消息
-     * 用于插件特定事件的日志记录
+     * Sends a custom log message directly.
+     * Used for logging plugin-specific events.
      */
     public void sendCustomLog(String level, String message, String source) {
         if (logTransmitter != null) {
             logTransmitter.sendLog(level, message, source, null);
         }
     }
-    
+
     /**
-     * 发送玩家事件日志
+     * Sends a player-event log.
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
-        sendCustomLog("info", 
+        sendCustomLog("info",
             String.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
             "plugin:UltiTools");
     }
-    
+
     /**
-     * 发送插件操作日志
+     * Sends a plugin-action log.
      */
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
             String.format("[插件操作] %s: %s", action, details),
             "plugin:UltiTools");
     }
-    
-    // ========== Bukkit事件处理器 ==========
+
+    // ========== Bukkit event handlers ==========
     
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
@@ -445,7 +446,7 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * 获取服务器ID
+     * Gets the server ID.
      */
     private String getServerId() {
         try {
@@ -454,32 +455,36 @@ public class LogStreamManager implements Listener {
             return "unknown";
         }
     }
-    
+
     /**
-     * 关闭日志流管理器
+     * Shuts down the log stream manager.
      */
     public void shutdown() {
         subscribedClients.clear();
         streaming.set(false);
-        
-        // 关闭日志传输器
+
+        // Shut down the log transmitter
         if (logTransmitter != null) {
             logTransmitter.shutdown();
         }
-        
-        // 从Bukkit的Logger中移除处理器
+
+        // Remove the handler from Bukkit's Logger
         detachAllSystemLogHandlers();
-        
+
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");
     }
 
     /**
-     * 摘掉 JVM root logger 上所有本框架的 {@link SystemLogHandler}。
+     * Detaches every one of this framework's {@link SystemLogHandler} instances from the JVM
+     * root logger.
      * <p>
-     * 刻意按类型扫描并全部移除，而不是只移除 {@code this.systemLogHandler}：在本方法存在之前，
-     * 每次重连成功都会往 root logger 上多挂一个，字段里只留得住最后那一个，先前泄漏的那些
-     * 没有任何引用能指到、也就永远摘不掉。按类型扫一遍才能把历史欠账一并清干净，这也是
-     * 「handler 数量恒为 1」这条验收唯一能成立的写法。见 issue #181。
+     * Deliberately scans by type and removes every instance, rather than only removing {@code
+     * this.systemLogHandler}: before this method existed, every successful reconnect attached
+     * one more to the root logger, the field could only ever hold onto the last one, and the
+     * previously-leaked ones had no reference pointing at them any more and so could never be
+     * detached. Only a type-based scan can clean up the whole historical backlog at once, and
+     * that is also the only formulation under which the acceptance criterion "handler count is
+     * always 1" can hold. See issue #181.
      */
     private void detachAllSystemLogHandlers() {
         try {

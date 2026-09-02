@@ -20,9 +20,9 @@ import lombok.Setter;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * UltiPanel日志传输器
- * 按照API文档规范实现日志传输功能
- * 
+ * UltiPanel log transmitter.
+ * Implements the log-transmission functionality per the API documentation specification.
+ *
  * @author UltiKits
  * @version 1.0.0
  */
@@ -35,26 +35,27 @@ public class UltiPanelLogTransmitter {
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
 
-    // 外部排空模式：当为true时，sendBatch()不再自动发送，由外部调用drainQueue()获取日志
+    // External drain mode: when true, sendBatch() no longer sends automatically, and logs are
+    // obtained externally by calling drainQueue()
     private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
 
-    // 批量发送配置
+    // Batch-send configuration
     @Getter @Setter
     private boolean batchEnabled = true;
     @Getter @Setter
     private int batchSize = 10;
     @Getter @Setter
     private int intervalMs = 5000; // 5秒间隔
-    
-    // 批量发送队列和调度器
+
+    // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
     private final ScheduledExecutorService batchScheduler;
-    
+
     /**
-     * 构造函数
-     * 
-     * @param webSocketClient WebSocket客户端
-     * @param serverId 服务器ID
+     * Constructor.
+     *
+     * @param webSocketClient the WebSocket client
+     * @param serverId the server ID
      */
     public UltiPanelLogTransmitter(UltiPanelWebSocketClient webSocketClient, String serverId) {
         this.webSocketClient = webSocketClient;
@@ -65,18 +66,18 @@ public class UltiPanelLogTransmitter {
             thread.setDaemon(true);
             return thread;
         });
-        
-        // 启动批量发送任务
+
+        // Start the batch-send task
         startBatchSender();
     }
-    
+
     /**
-     * 发送日志消息到后端
-     * 
-     * @param level 日志级别 (info, warning, error, debug)
-     * @param message 日志消息
-     * @param source 日志来源 (如: "server", "plugin:名称")
-     * @param throwable 异常对象（可选）
+     * Sends a log message to the backend.
+     *
+     * @param level the log level (info, warning, error, debug)
+     * @param message the log message
+     * @param source the log source (e.g.: "server", "plugin:name")
+     * @param throwable the exception object (optional)
      */
     public void sendLog(String level, String message, String source, Throwable throwable) {
         if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
@@ -100,32 +101,32 @@ public class UltiPanelLogTransmitter {
             logData.addProperty("source", logSource);
             logData.addProperty("thread", Thread.currentThread().getName());
 
-            // 添加记录器名称（可选）
+            // Add the logger name (optional)
             logData.addProperty("logger", determineLoggerName(logSource));
-            
-            // 如果有异常，添加堆栈跟踪
+
+            // If there is an exception, add the stack trace
             if (throwable != null) {
                 logData.addProperty("stackTrace", getStackTrace(throwable));
             } else {
                 logData.add("stackTrace", null);
             }
-            
+
             if (batchEnabled) {
-                // 批量发送模式
+                // Batch-send mode
                 addToBatch(logData);
             } else {
-                // 立即发送模式
+                // Immediate-send mode
                 sendLogImmediately(logData);
             }
-            
+
         } catch (Exception e) {
-            // 避免日志循环，只输出到控制台（不使用日志记录器以避免循环）
+            // Avoid a logging loop -- print to the console only (do not use the logger, to avoid the loop)
             System.err.println("[UltiPanel] 发送日志失败: " + e.getMessage() + " - " + e.getClass().getSimpleName());
         }
     }
-    
+
     /**
-     * 便捷方法：发送不同级别的日志
+     * Convenience methods: send a log at a specific level.
      */
     public void info(String message, String source) {
         sendLog("info", message, source, null);
@@ -144,7 +145,7 @@ public class UltiPanelLogTransmitter {
     }
     
     /**
-     * 立即发送单条日志
+     * Sends a single log entry immediately.
      */
     private void sendLogImmediately(JsonObject logData) {
         JsonObject wsMessage = new JsonObject();
@@ -157,7 +158,7 @@ public class UltiPanelLogTransmitter {
     }
     
     /**
-     * 添加日志到批量队列
+     * Adds a log entry to the batch queue.
      */
     private void addToBatch(JsonObject logData) {
         // Drop oldest entries if queue is full
@@ -167,30 +168,31 @@ public class UltiPanelLogTransmitter {
 
         logQueue.offer(logData);
 
-        // 如果队列满了，立即发送
+        // If the queue is full, send immediately
         if (logQueue.size() >= batchSize) {
             sendBatch();
         }
     }
-    
+
     /**
-     * 启动批量发送任务
+     * Starts the batch-send task.
      */
     private void startBatchSender() {
-        batchScheduler.scheduleWithFixedDelay(this::sendBatch, 
+        batchScheduler.scheduleWithFixedDelay(this::sendBatch,
             intervalMs, intervalMs, TimeUnit.MILLISECONDS);
     }
-    
+
     /**
-     * 发送批量日志
-     * 当externalDrainMode为true时，仅丢弃超出队列上限的旧条目，不发送
+     * Sends the batched logs.
+     * When externalDrainMode is true, only drops entries that exceed the queue cap and does not send.
      */
     private void sendBatch() {
         if (logQueue.isEmpty()) {
             return;
         }
 
-        // 外部排空模式下，仅做队列溢出保护（addToBatch已处理），不发送
+        // Under external drain mode, only enforce queue-overflow protection (already handled by
+        // addToBatch), do not send
         if (externalDrainMode.get()) {
             return;
         }
@@ -202,7 +204,7 @@ public class UltiPanelLogTransmitter {
         try {
             JsonArray logs = new JsonArray();
 
-            // 从队列中取出日志
+            // Pull logs out of the queue
             for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
                 JsonObject log = logQueue.poll();
                 if (log != null) {
@@ -211,7 +213,7 @@ public class UltiPanelLogTransmitter {
             }
 
             if (logs.size() > 0) {
-                // 发送批量日志消息
+                // Send the batched-log message
                 JsonObject batchMessage = new JsonObject();
                 batchMessage.addProperty("type", "log_batch");
                 batchMessage.addProperty("serverId", serverId);
@@ -220,7 +222,7 @@ public class UltiPanelLogTransmitter {
 
                 webSocketClient.sendMessage(batchMessage);
 
-                // 记录批量发送信息
+                // Log the batch-send information
                 UltiTools.getInstance().getLogger().log(Level.FINE,
                     String.format("[UltiPanel] 批量发送 %d 条日志", logs.size()));
             }
@@ -231,11 +233,11 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * 从队列中排空日志条目，返回JsonArray
-     * 供外部调用者（如ServerMonitorManager的batch_update）使用
+     * Drains log entries from the queue, returning them as a JsonArray.
+     * For external callers to use (e.g. ServerMonitorManager's batch_update).
      *
-     * @param maxItems 最多取出的条目数
-     * @return 日志条目的JsonArray
+     * @param maxItems the maximum number of entries to take
+     * @return a JsonArray of log entries
      */
     public JsonArray drainQueue(int maxItems) {
         JsonArray logs = new JsonArray();
@@ -249,24 +251,25 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * 设置外部排空模式
-     * 当启用时，sendBatch()不再自动发送日志，改由外部通过drainQueue()获取
+     * Sets external drain mode.
+     * When enabled, sendBatch() no longer sends logs automatically; they are obtained externally
+     * via drainQueue() instead.
      *
-     * @param enabled 是否启用外部排空模式
+     * @param enabled whether to enable external drain mode
      */
     public void setExternalDrainMode(boolean enabled) {
         this.externalDrainMode.set(enabled);
     }
 
     /**
-     * 检查是否处于外部排空模式
+     * Checks whether external drain mode is active.
      */
     public boolean isExternalDrainMode() {
         return externalDrainMode.get();
     }
-    
+
     /**
-     * 获取异常堆栈跟踪字符串
+     * Gets the exception stack trace as a string.
      */
     private String getStackTrace(Throwable throwable) {
         if (throwable == null) {
@@ -284,13 +287,13 @@ public class UltiPanelLogTransmitter {
     }
     
     /**
-     * 确定记录器名称
+     * Determines the logger name.
      */
     private String determineLoggerName(String source) {
         if (source == null) {
             return "unknown";
         }
-        
+
         if (source.startsWith("plugin:")) {
             return source.substring(7); // 移除 "plugin:" 前缀
         } else if (source.equals("server")) {
@@ -299,9 +302,9 @@ public class UltiPanelLogTransmitter {
             return source;
         }
     }
-    
+
     /**
-     * 获取默认服务器ID
+     * Gets the default server ID.
      */
     private String getDefaultServerId() {
         try {
@@ -312,54 +315,58 @@ public class UltiPanelLogTransmitter {
     }
     
     /**
-     * 启用/禁用日志传输
+     * Enables/disables log transmission.
      */
     public void setLogTransmissionEnabled(boolean enabled) {
         this.logTransmissionEnabled.set(enabled);
-        
+
         if (enabled) {
             UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输已启用");
         } else {
             UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输已禁用");
         }
     }
-    
+
     /**
-     * 检查日志传输是否启用
+     * Checks whether log transmission is enabled.
      */
     public boolean isLogTransmissionEnabled() {
         return logTransmissionEnabled.get();
     }
-    
+
     /**
-     * 获取当前队列大小
+     * Gets the current queue size.
      */
     public int getQueueSize() {
         return logQueue.size();
     }
-    
+
     /**
-     * 立即发送队列中的所有日志
-     * 临时禁用外部排空模式以确保日志被发送
+     * Immediately sends every log currently in the queue.
+     * Temporarily disables external drain mode to make sure the logs actually get sent.
      */
     public void flushLogs() {
         boolean wasExternalDrain = externalDrainMode.getAndSet(false);
         try {
-            // 必须以「队列真的变短了」作为继续的条件，不能只看队列非空。
+            // The continuation condition must be "the queue actually got shorter", not just
+            // "the queue is non-empty".
             //
-            // sendBatch() 在 WebSocket 未连接时会直接 return 且**不消费任何队列元素**
-            // （见 sendBatch 里的 isConnected 判断）。原先写成 while (!logQueue.isEmpty())
-            // 就是死循环——而「面板连不上、队列积压、socket 已断」恰恰是最容易命中的场景：
-            // 管理员之所以要 logout 或关服，通常正是因为面板连不上。
+            // sendBatch() returns directly, **consuming no queue elements at all**, when the
+            // WebSocket is not connected (see the isConnected check inside sendBatch). Written as
+            // while (!logQueue.isEmpty()), that used to be an infinite loop -- and "the panel is
+            // unreachable, the queue has backed up, and the socket is already disconnected" is
+            // exactly the scenario most likely to be hit: an admin usually logs out or shuts the
+            // server down precisely because the panel is unreachable.
             //
-            // 这个死循环在 disableCloud() 出现之前就存在（onDisable 也会走到这条路径），
-            // 但那时只在关服时触发；现在 logout 在命令线程上也会走到，会直接卡住服务器。
-            // 见 issue #181 / #223 的 PR 评审。
+            // This infinite loop predates disableCloud() (onDisable also reaches this path), but
+            // back then it only triggered on server shutdown; now logout reaches it from the
+            // command thread too, which would hang the server outright. See the PR review for
+            // issue #181 / #223.
             int previousSize = -1;
             while (!logQueue.isEmpty()) {
                 int currentSize = logQueue.size();
                 if (currentSize == previousSize) {
-                    // 上一轮一个都没送出去，再转多少次也不会有进展
+                    // Nothing was sent out in the previous round -- looping any further will not make progress
                     break;
                 }
                 previousSize = currentSize;
@@ -371,26 +378,26 @@ public class UltiPanelLogTransmitter {
             }
         }
     }
-    
+
     /**
-     * 关闭日志传输器
+     * Shuts down the log transmitter.
      */
     public void shutdown() {
         try {
-            // 发送剩余的日志
+            // Send the remaining logs
             flushLogs();
-            
-            // 关闭调度器
+
+            // Shut down the scheduler
             batchScheduler.shutdown();
-            
-            // 等待调度器关闭
+
+            // Wait for the scheduler to shut down
             if (!batchScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                 batchScheduler.shutdownNow();
             }
-            
+
             logTransmissionEnabled.set(false);
             UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输器已关闭");
-            
+
         } catch (InterruptedException e) {
             batchScheduler.shutdownNow();
             Thread.currentThread().interrupt();

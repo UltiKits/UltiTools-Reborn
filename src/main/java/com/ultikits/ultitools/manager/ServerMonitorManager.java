@@ -21,54 +21,60 @@ import java.util.logging.Level;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 服务器监控管理器
- * 负责收集服务器状态信息并通过WebSocket发送
+ * Server monitor manager.
+ * Responsible for collecting server status information and sending it via WebSocket.
  */
 @ApiStatus.Internal
 public class ServerMonitorManager {
     private UltiPanelWebSocketClient webSocketClient;
     /**
-     * 发送线程池。<b>不能是 final</b>：{@link #stopMonitoring()} 会 shutdown 它，而
-     * {@code ScheduledExecutorService} 一经 shutdown 就永久失效。logout 之后再 login
-     * 是一条完全正常的路径，那时 {@link #startMonitoring()} 必须拿到一个可用的池，
-     * 否则 {@code scheduleAtFixedRate} 直接抛 {@code RejectedExecutionException}。
+     * Send thread pool. <b>Must not be final</b>: {@link #stopMonitoring()} shuts it down, and
+     * once a {@code ScheduledExecutorService} is shut down it is permanently dead. Logging out
+     * and back in is a perfectly normal path, and at that point {@link #startMonitoring()} must
+     * obtain a usable pool -- otherwise {@code scheduleAtFixedRate} throws {@code
+     * RejectedExecutionException} directly.
      */
     private ScheduledExecutorService scheduler;
     private boolean isMonitoring = false;
     private int tickCount = 0;
 
-    // TPS计算相关
+    // TPS calculation related
     private long lastTick = System.currentTimeMillis();
     private final long[] tpsHistory1m = new long[60];   // 1分钟TPS历史
     private final long[] tpsHistory5m = new long[300];  // 5分钟TPS历史
     private final long[] tpsHistory15m = new long[900]; // 15分钟TPS历史
     private int historyIndex = 0;
 
-    // CPU采样（在Bukkit主线程定期采样，batch_update线程读取）
+    // CPU sampling (sampled periodically on the Bukkit main thread, read by the batch_update thread)
     private volatile double lastCpuUsage = 0.0;
 
-    /** 世界/玩家/插件状态的采样周期，单位 tick。100 tick = 5 秒，与 batch_update 的发送节拍一致。 */
+    /** Sampling period for world/player/plugin status, in ticks. 100 ticks = 5 seconds, matching batch_update's send cadence. */
     private static final long SNAPSHOT_INTERVAL_TICKS = 100L;
 
     /**
-     * 主线程采出来的服务器状态快照，异步发送线程只读它。
+     * A server-state snapshot sampled on the main thread; the async send thread only ever reads
+     * it.
      * <p>
-     * <b>这是 issue #179 的全部要点。</b>在它存在之前，{@code sendBatchUpdate} 跑在普通
-     * {@code ScheduledThreadPool} 上，却在那里直接调 {@code Bukkit.getWorlds()}、
-     * {@code world.getLoadedChunks()}、{@code Bukkit.getOnlinePlayers()}、
-     * {@code player.getLocation()} —— 全是 Paper 明确不支持在异步线程上碰的可变世界状态，
-     * 表现为偶发的并发修改异常或读到撕裂的数据。
+     * <b>This is the entire point of issue #179.</b> Before this field existed, {@code
+     * sendBatchUpdate} ran on a plain {@code ScheduledThreadPool} but called {@code
+     * Bukkit.getWorlds()}, {@code world.getLoadedChunks()}, {@code Bukkit.getOnlinePlayers()},
+     * {@code player.getLocation()} directly from there -- all mutable world state Paper
+     * explicitly does not support touching from an async thread, surfacing as intermittent
+     * concurrent-modification exceptions or torn reads.
      * <p>
-     * 同一个类里的 TPS/CPU 采样<b>已经</b>正确地 hop 到了 {@code runTaskTimer}，说明契约当时
-     * 就被识别到了，只是只应用了一半。本字段把剩下那一半补齐，沿用完全相同的模式。
+     * TPS/CPU sampling in this same class <b>already</b> correctly hopped over to {@code
+     * runTaskTimer}, showing the contract was recognized at the time -- just only half applied.
+     * This field fills in the other half, following the exact same pattern.
      * <p>
-     * 代价是数据最多陈旧一个采样周期（5 秒）。这是刻意选的：另一条路是让异步线程用
-     * {@code callSyncMethod().get()} 同步等主线程，那会让监控的存活依赖主线程的健康度，
-     * 而服务器卡顿时恰恰是最需要监控还能说话的时候。
+     * The cost is that data can be stale by up to one sampling period (5 seconds). This is a
+     * deliberate choice: the alternative would have the async thread synchronously wait on the
+     * main thread via {@code callSyncMethod().get()}, which would make monitoring's liveness
+     * depend on the main thread's health -- precisely when the server is lagging is exactly when
+     * monitoring most needs to still be able to speak.
      */
     private volatile ServerStateSnapshot stateSnapshot = ServerStateSnapshot.EMPTY;
 
-    /** 主线程上的两个定时任务，{@link #stopMonitoring()} 需要能取消它们。 */
+    /** The two main-thread scheduled tasks; {@link #stopMonitoring()} needs to be able to cancel them. */
     private BukkitTask tpsTask;
     private BukkitTask snapshotTask;
 
@@ -77,11 +83,14 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 一次主线程采样的结果。字段全部 final，构造完成后不再改动，通过 volatile 字段发布，
-     * 因此读线程看到的要么是上一份完整快照、要么是这一份完整快照，不会看到半份。
+     * The result of one main-thread sample. Every field is final and never changed after
+     * construction, published via a volatile field, so a reading thread sees either the
+     * previous complete snapshot or this complete snapshot, never a half-built one.
      * <p>
-     * 其中三个 {@link JsonArray} 在发布之后<b>绝不可再被修改</b>——它们会被直接塞进待发送的
-     * 消息里，序列化只读不写，所以共享实例是安全的；一旦有人在发布后 add 一笔，这个前提就没了。
+     * The three {@link JsonArray} fields <b>must never be mutated again after being
+     * published</b> -- they are pushed directly into the outgoing message and serialization is
+     * read-only, so sharing the instance is safe; the moment anyone calls {@code add} on one
+     * after publication, that precondition no longer holds.
      */
     private static final class ServerStateSnapshot {
         static final ServerStateSnapshot EMPTY = new ServerStateSnapshot(
@@ -113,63 +122,69 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 设置WebSocket客户端
-     * @param client WebSocket客户端
+     * Set the WebSocket client.
+     * @param client the WebSocket client
      */
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
     }
-    
+
     /**
-     * 开始监控服务器状态
+     * Start monitoring server status.
      */
     public void startMonitoring() {
         if (isMonitoring) {
             return;
         }
-        
+
         isMonitoring = true;
-        // 上一轮 stopMonitoring 把池关掉了就换一个新的——见字段上的说明。
+        // If the previous stopMonitoring() shut the pool down, swap in a fresh one -- see the
+        // note on the field.
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(2);
         }
         UltiTools.getInstance().getLogger().log(Level.INFO, "启动服务器状态监控");
-        
-        // 等待WebSocket连接建立后，立即发送初始状态
+
+        // Send the initial status as soon as the WebSocket connection is established
         Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
             if (webSocketClient != null && webSocketClient.isConnected()) {
                 sendBatchUpdate();
             }
         }, 20L); // 等待1秒
 
-        // 启用日志传输器的外部排空模式（日志将由batch_update统一发送）
+        // Enable the log transmitter's external drain mode (logs will be sent uniformly via batch_update)
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
         if (lsm != null && lsm.getLogTransmitter() != null) {
             lsm.getLogTransmitter().setExternalDrainMode(true);
         }
 
-        // 每5秒发送一次batch_update（包含status、metrics，每12个tick包含plugins，每次包含logs）
-        // 注意：这条线程**只负责发送**，一切 Bukkit 状态都来自主线程采好的快照。见 issue #179。
+        // Send a batch_update every 5 seconds (includes status and metrics; includes plugins
+        // every 12th tick; includes logs every time).
+        // Note: this thread **only sends** -- every piece of Bukkit state comes from the
+        // main-thread-sampled snapshot. See issue #179.
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
 
-        // 启动TPS计算 + CPU采样任务（每秒）
+        // Start the TPS calculation + CPU sampling task (every second)
         tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
 
-        // 世界/玩家/插件状态的采样任务（每5秒，主线程）。
-        // 刻意不并进上面那个 1Hz 的任务：world.getLoadedChunks() 会分配一个装下所有已加载区块
-        // 的数组，大服上并不便宜，按 1Hz 采就是凭空把这份开销放大 5 倍。100 tick 与今天实际的
-        // 采样频率一致，只是换到了正确的线程上。
+        // World/player/plugin status sampling task (every 5 seconds, main thread).
+        // Deliberately not folded into the 1Hz task above: world.getLoadedChunks() allocates an
+        // array holding every loaded chunk, which is not cheap on a large server -- sampling it
+        // at 1Hz would inflate that cost by a factor of 5 for no reason. 100 ticks matches
+        // today's actual sampling frequency, just moved to the correct thread.
         snapshotTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
                 0L, SNAPSHOT_INTERVAL_TICKS);
     }
 
     /**
-     * 停止监控
+     * Stop monitoring.
      * <p>
-     * 除了关掉发送线程，还要取消两个主线程定时任务。原先这里只 {@code scheduler.shutdown()}，
-     * 那在采样搬到主线程<b>之前</b>是够的——遍历世界那份开销本来就长在发送线程上，关掉发送
-     * 就一起没了。搬家之后不取消的话，「停止监控」会变成「不再发送、但照样每 5 秒遍历一遍
-     * 所有世界和区块」，而且是在主线程上。见 PR #265 的评审。
+     * Besides shutting down the send thread, the two main-thread scheduled tasks must also be
+     * cancelled. This used to be just {@code scheduler.shutdown()}, which was enough
+     * <b>before</b> sampling moved to the main thread -- the cost of iterating every world lived
+     * on the send thread, so shutting down sending removed it too. After the move, not
+     * cancelling turns "stop monitoring" into "stop sending, but still iterate every world and
+     * chunk every 5 seconds" -- and now on the main thread. See the PR #265 review.
      */
     public void stopMonitoring() {
         if (!isMonitoring) {
@@ -190,15 +205,16 @@ public class ServerMonitorManager {
             try {
                 task.cancel();
             } catch (Exception e) {
-                // 把异常本身交给 logger 而不是拼 getMessage()：既保住栈，也避免在日志调用点
-                // 无条件做字符串拼接（PMD 的 PreserveStackTrace / GuardLogStatement 都盯这一点）。
+                // Hand the exception itself to the logger instead of concatenating getMessage():
+                // this preserves the stack trace and avoids unconditional string concatenation at
+                // the log call site (both PMD's PreserveStackTrace and GuardLogStatement watch for this).
                 UltiTools.getInstance().getLogger().log(Level.FINE, "取消监控任务时出错", e);
             }
         }
     }
-    
+
     /**
-     * 发送服务器状态信息
+     * Send server status information.
      */
     public void sendServerStatus() {
         try {
@@ -206,19 +222,20 @@ public class ServerMonitorManager {
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
                 return;
             }
-            
+
             JsonObject message = new JsonObject();
             message.addProperty("type", "server_status");
             message.addProperty("serverId", webSocketClient.getServerId());
             message.addProperty("timestamp", System.currentTimeMillis());
-            
+
             JsonObject data = getCurrentServerStatusData();
             message.add("data", data);
-            
-            // 发送消息
+
+            // Send the message
             webSocketClient.sendMessage(message);
-            
-            // 日志里的玩家数同样取自快照——这句也跑在异步线程上，直接读 Bukkit 是同一个毛病。
+
+            // The player count in the log line also comes from the snapshot -- this line also
+            // runs on the async thread, so reading Bukkit directly here would be the same defect.
             ServerStateSnapshot snapshot = currentSnapshot();
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
@@ -226,19 +243,19 @@ public class ServerMonitorManager {
                     calculateTPS()[0],
                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024,
                     Runtime.getRuntime().maxMemory() / 1024 / 1024));
-            
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "发送服务器状态失败: " + e.getMessage(), e);
         }
     }
     
     /**
-     * 提取版本号
+     * Extract the version number.
      */
     private String extractVersionNumber(String fullVersion) {
         try {
-            // 尝试从版本字符串中提取数字版本号
-            // 例如: "git-Bukkit-abc123 (MC: 1.20.1)" -> "1.20.1"
+            // Try to extract the numeric version from the version string
+            // e.g.: "git-Bukkit-abc123 (MC: 1.20.1)" -> "1.20.1"
             if (fullVersion.contains("MC: ")) {
                 int start = fullVersion.indexOf("MC: ") + 4;
                 int end = fullVersion.indexOf(")", start);
@@ -246,28 +263,28 @@ public class ServerMonitorManager {
                     return fullVersion.substring(start, end);
                 }
             }
-            
-            // 如果无法提取，返回Bukkit版本
+
+            // If it cannot be extracted, return the Bukkit version
             String bukkitVersion = Bukkit.getBukkitVersion();
             if (bukkitVersion.contains("-")) {
                 return bukkitVersion.split("-")[0];
             }
-            
+
             return bukkitVersion;
         } catch (Exception e) {
             return "Unknown";
         }
     }
-    
+
     /**
-     * 获取CPU使用率（返回缓存值，由定期采样更新）
+     * Get the CPU usage (returns the cached value, updated by periodic sampling).
      */
     private double getCPUUsage() {
         return lastCpuUsage;
     }
 
     /**
-     * 采样CPU使用率并更新缓存值
+     * Sample CPU usage and update the cached value.
      */
     private void sampleCpuUsage() {
         try {
@@ -281,7 +298,7 @@ public class ServerMonitorManager {
                 }
             }
 
-            // 备选方案：使用系统负载
+            // Fallback: use the system load average
             double systemLoad = osBean.getSystemLoadAverage();
             if (systemLoad >= 0) {
                 int processors = osBean.getAvailableProcessors();
@@ -291,9 +308,9 @@ public class ServerMonitorManager {
             UltiTools.getInstance().getLogger().log(Level.FINE, "无法获取CPU使用率: " + e.getMessage());
         }
     }
-    
+
     /**
-     * 发送带请求ID的服务器状态信息（响应后端请求）
+     * Send server status information with a request ID (in response to a backend request).
      */
     public void sendServerStatusWithRequestId(String requestId) {
         try {
@@ -301,35 +318,37 @@ public class ServerMonitorManager {
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
                 return;
             }
-            
+
             JsonObject message = new JsonObject();
             message.addProperty("type", "server_status");
             message.addProperty("serverId", webSocketClient.getServerId());
             message.addProperty("timestamp", System.currentTimeMillis());
             message.addProperty("requestId", requestId); // 包含请求ID
-            
+
             JsonObject data = getCurrentServerStatusData();
             message.add("data", data);
-            
-            // 发送消息
+
+            // Send the message
             webSocketClient.sendMessage(message);
-            
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
+
+            UltiTools.getInstance().getLogger().log(Level.INFO,
                 String.format("已响应服务器状态请求，请求ID: %s", requestId));
-            
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "响应服务器状态请求失败: " + e.getMessage(), e);
         }
     }
     
     /**
-     * 在主线程上采一份服务器状态快照。
+     * Samples a server-state snapshot on the main thread.
      * <p>
-     * <b>只能在 Bukkit 主线程调用。</b>非主线程调用会被拒绝并记 SEVERE —— 这是防御性的第二道
-     * 闸：调度已经保证了线程，但这个类的历史正是「契约被识别了，只应用了一半」，把契约写进
-     * 代码里比写进注释里可靠。
+     * <b>May only be called on the Bukkit main thread.</b> A call from a non-main thread is
+     * refused and logged as SEVERE -- this is a second, defensive gate: scheduling already
+     * guarantees the thread, but this class's own history is exactly "the contract was
+     * recognized, only half applied", and writing the contract into the code is more reliable
+     * than writing it into a comment.
      *
-     * @return 新的快照；若不在主线程则返回 {@code null}
+     * @return the new snapshot; {@code null} if not on the main thread
      */
     private ServerStateSnapshot sampleServerState() {
         if (!isOnPrimaryThreadOrComplain()) {
@@ -390,8 +409,10 @@ public class ServerMonitorManager {
             plugins.add(pluginInfo);
         }
 
-        // 计数一律取自上面刚构造好的数组，而不是再问一次 Bukkit：既少两次遍历，
-        // 也让「playerCount 与 onlinePlayers 长度一致」由构造保证，而不是靠「同一 tick 内不会变」这条推理。
+        // Counts are always taken from the arrays just constructed above, rather than asking
+        // Bukkit again: this avoids two extra iterations, and it lets "playerCount matches
+        // onlinePlayers' length" be guaranteed by construction, instead of relying on the
+        // reasoning "it won't change within the same tick".
         return new ServerStateSnapshot(
                 onlinePlayers.size(),
                 Bukkit.getMaxPlayers(),
@@ -405,10 +426,12 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 线程契约的唯一检查点：不在主线程就记 SEVERE 并返回 false。
+     * The single check point for the thread contract: logs SEVERE and returns false when not on
+     * the main thread.
      * <p>
-     * 这个类的历史正是「契约被识别了，只应用了一半」，所以把契约写成运行时可观测的信号，
-     * 比写进注释可靠——真机上只要日志里出现这句，就说明调度被改错了。
+     * This class's own history is exactly "the contract was recognized, only half applied", so
+     * the contract is written as a runtime-observable signal rather than trusted to a comment --
+     * on a real server, this line appearing in the log is proof that scheduling was broken.
      */
     private boolean isOnPrimaryThreadOrComplain() {
         if (Bukkit.isPrimaryThread()) {
@@ -420,21 +443,25 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 主线程定时任务的入口：采样并发布快照。
+     * Entry point for the main-thread scheduled task: samples and publishes the snapshot.
      * <p>
-     * 包级可见，供测试直接驱动。
+     * Package-visible so tests can drive it directly.
      */
     void refreshStateSnapshot() {
-        // 线程契约的检查放在连接判断**之前**：断连时也要抓得住「跑错线程」这件事，
-        // 否则这道防御闸在最需要它的场景（连不上、于是走到各种异常路径）反而是哑的。
+        // The thread-contract check runs **before** the connection check: even when
+        // disconnected, "running on the wrong thread" must still be caught -- otherwise this
+        // defensive gate would be mute exactly in the scenario that needs it most (unable to
+        // connect, falling through various exception paths).
         if (!isOnPrimaryThreadOrComplain()) {
             return;
         }
 
-        // 没有连接就不采样。这一条不是省电，是保持修复前的行为：原先 sendBatchUpdate 在
-        // !isConnected 时是**先返回、再遍历**的，所以永久断连的服务器一次遍历都不做。
-        // 采样搬到主线程之后若不带上这个判断，断连反而变成了每 5 秒白遍历一遍所有世界和区块。
-        // 见 PR #265 的评审。
+        // Skip sampling when there is no connection. This isn't about saving power -- it
+        // preserves pre-fix behavior: sendBatchUpdate used to **return first, iterate second**
+        // when !isConnected, so a permanently disconnected server never iterated at all. If this
+        // check weren't carried over after moving sampling to the main thread, a disconnected
+        // server would instead iterate every world and chunk for nothing, every 5 seconds. See
+        // the PR #265 review.
         if (webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
@@ -444,22 +471,25 @@ public class ServerMonitorManager {
                 stateSnapshot = snapshot;
             }
         } catch (Exception e) {
-            // 与 cancelTask 保持一致：异常交给 logger，不在调用点拼 getMessage()。
+            // Same convention as cancelTask: hand the exception itself to the logger instead of
+            // concatenating getMessage() at the call site.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "[ServerMonitor] 采样服务器状态失败", e);
         }
     }
 
-    /** 供测试断言「到底采过样没有」——比从外部观察发出去的 JSON 更直接。 */
+    /** Lets tests assert whether sampling has actually happened yet -- more direct than observing the emitted JSON externally. */
     boolean hasSampledState() {
         return stateSnapshot != ServerStateSnapshot.EMPTY;
     }
 
     /**
-     * 取当前快照供发送线程使用。
+     * Gets the current snapshot for the send thread to use.
      * <p>
-     * 若还一次都没采过、而调用方恰好就在主线程上，就地补采一次——否则连接建立后的第一帧
-     * 会是一片零，以及 {@code sendServerStatusWithRequestId} 这类按需请求在监控启动前会返回空数据。
+     * If sampling has never happened even once and the caller happens to be on the main thread,
+     * sample once right here -- otherwise the first frame after the connection is established
+     * would be all zeroes, and on-demand requests like {@code sendServerStatusWithRequestId}
+     * would return empty data before monitoring has started.
      */
     private ServerStateSnapshot currentSnapshot() {
         ServerStateSnapshot snapshot = stateSnapshot;
@@ -474,64 +504,65 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 获取当前服务器状态数据
+     * Gets the current server status data.
      * <p>
-     * 所有 Bukkit 派生的字段都取自主线程采好的快照（见 {@link #stateSnapshot}）；
-     * 本方法本身可以在任意线程调用。Runtime 内存、JVM 运行时长、TPS、CPU 不属于 Bukkit 状态，
-     * 就地读取即可——TPS 与 CPU 早已由主线程的 1Hz 任务维护。
+     * Every Bukkit-derived field comes from the main-thread-sampled snapshot (see {@link
+     * #stateSnapshot}); this method itself may be called from any thread. Runtime memory, JVM
+     * uptime, TPS and CPU are not Bukkit state and are read in place -- TPS and CPU are already
+     * maintained by the main thread's 1Hz task.
      */
     private JsonObject getCurrentServerStatusData() {
         ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
 
-        // 玩家信息
+        // Player information
         data.addProperty("playerCount", snapshot.playerCount);
         data.addProperty("maxPlayers", snapshot.maxPlayers);
         data.addProperty("onlineMode", snapshot.onlineMode);
 
-        // 服务器版本信息
+        // Server version information
         data.addProperty("serverVersion", snapshot.serverVersion);
 
-        // TPS信息
+        // TPS information
         JsonArray tpsArray = new JsonArray();
         double[] tps = calculateTPS();
         for (double tpsValue : tps) {
             tpsArray.add(Math.round(tpsValue * 10.0) / 10.0);
         }
         data.add("tps", tpsArray);
-        
-        // 内存信息
+
+        // Memory information
         Runtime runtime = Runtime.getRuntime();
         long maxMemory = runtime.maxMemory() / 1024 / 1024; // MB
         long totalMemory = runtime.totalMemory() / 1024 / 1024; // MB
         long freeMemory = runtime.freeMemory() / 1024 / 1024; // MB
         long usedMemory = totalMemory - freeMemory;
-        
+
         JsonObject memory = new JsonObject();
         memory.addProperty("used", usedMemory);
         memory.addProperty("max", maxMemory);
         memory.addProperty("free", maxMemory - usedMemory);
         data.add("memory", memory);
-        
-        // CPU使用率
+
+        // CPU usage
         double cpuUsage = getCPUUsage();
         data.addProperty("cpu", Math.round(cpuUsage * 10.0) / 10.0);
-        
-        // 运行时间
+
+        // Uptime
         data.addProperty("uptime", ManagementFactory.getRuntimeMXBean().getUptime());
-        
-        // 世界列表 (enriched objects) —— 主线程采样，此处只引用
+
+        // World list (enriched objects) -- sampled on the main thread, only referenced here
         data.add("worlds", snapshot.worlds);
 
-        // Online player details —— 同上
+        // Online player details -- same as above
         data.add("onlinePlayers", snapshot.onlinePlayers);
 
         return data;
     }
     
     /**
-     * 发送batch_update消息，合并status、metrics、plugins、logs到单条WebSocket帧
-     * 每5秒调用一次，plugins每12个tick（60秒）包含一次
+     * Sends the batch_update message, merging status, metrics, plugins and logs into a single
+     * WebSocket frame. Called every 5 seconds; plugins is included once every 12th tick (60 seconds).
      */
     private void sendBatchUpdate() {
         try {
@@ -546,20 +577,22 @@ public class ServerMonitorManager {
 
             JsonObject data = new JsonObject();
 
-            // 始终包含status
+            // status is always included
             data.add("status", getCurrentServerStatusData());
 
-            // 始终包含metrics
+            // metrics is always included
             data.add("metrics", getCurrentMetricsData());
 
-            // 每12个tick（60秒）包含plugins（Worker expects raw array, not wrapper object）
+            // plugins is included every 12th tick (60 seconds) (Worker expects raw array, not wrapper object)
             if (tickCount % 12 == 0) {
                 data.add("plugins", getCurrentPluginArray());
             }
 
-            // 从日志传输器排空日志 —— 由 LOGS 能力开关决定是否排空（D-12）。
-            // 门必须挡在 drainQueue(...) 之前，而不是挡在拿到结果之后再丢：先排空再丢弃仍然是
-            // 「已经采集进内存，只是没发出去」的形状，D-12 明确否决这种半吊子的关闭方式。
+            // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
+            // capability switch (D-12). The gate must sit before drainQueue(...), not after the
+            // result is obtained only to be thrown away: drain-then-discard is still the shape of
+            // "already collected into memory, just not sent out", which D-12 explicitly rejects
+            // as a half-measure disable.
             if (Capability.LOGS.isEnabled()) {
                 LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
                 if (lsm != null && lsm.getLogTransmitter() != null) {
@@ -570,10 +603,12 @@ public class ServerMonitorManager {
                 }
             }
 
-            // 从错误报告收集器排空错误 —— 刻意不受任何 Capability 影响（D-07）：error-reporting
-            // 保留自己原有的 ultipanel.logging.error-reporting.enabled 键与原有默认值，挪到能力
-            // 开关下会悄悄改变一个运维可能已经手动设置过的键；ErrorReportCollector 自己已经在
-            // 采集层面用这把键把关，队列为空时排空到的也就是空数组。
+            // Drain errors from the error report collector -- deliberately unaffected by any
+            // Capability (D-07): error-reporting keeps its own pre-existing
+            // ultipanel.logging.error-reporting.enabled key and its pre-existing default; moving
+            // it under the capability switch would silently change a key an operator may already
+            // have set by hand. ErrorReportCollector already gates on that key itself at the
+            // collection layer, so draining an empty queue just yields an empty array.
             ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
             if (erc != null) {
                 JsonArray errors = erc.drainErrors(10);
@@ -593,30 +628,31 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 获取当前插件列表数组
+     * Gets the current plugin list array.
      * <p>
-     * 取自主线程采好的快照。{@code Bukkit.getPluginManager().getPlugins()} 同样不该在异步线程上遍历。
+     * Taken from the main-thread-sampled snapshot. {@code Bukkit.getPluginManager().getPlugins()}
+     * likewise should not be iterated from an async thread.
      */
     private JsonArray getCurrentPluginArray() {
         return currentSnapshot().plugins;
     }
 
     /**
-     * 获取当前性能统计数据
+     * Gets the current performance metrics data.
      * <p>
-     * Bukkit 派生的字段取自快照；Runtime 内存与 TPS 就地计算。
+     * Bukkit-derived fields come from the snapshot; Runtime memory and TPS are computed in place.
      */
     private JsonObject getCurrentMetricsData() {
         ServerStateSnapshot snapshot = currentSnapshot();
         JsonObject data = new JsonObject();
 
-        // 玩家活动统计
+        // Player activity statistics
         JsonObject playerActivity = new JsonObject();
         playerActivity.addProperty("currentOnline", snapshot.playerCount);
         playerActivity.addProperty("maxPlayers", snapshot.maxPlayers);
         data.add("playerActivity", playerActivity);
 
-        // 服务器性能
+        // Server performance
         JsonObject serverPerformance = new JsonObject();
         double[] tps = calculateTPS();
         double avgTPS = 0;
@@ -636,7 +672,7 @@ public class ServerMonitorManager {
 
         data.add("serverPerformance", serverPerformance);
 
-        // 插件使用情况
+        // Plugin usage
         JsonObject pluginUsage = new JsonObject();
         pluginUsage.addProperty("enabledPlugins", snapshot.pluginCount);
         pluginUsage.addProperty("loadedWorlds", snapshot.worldCount);
@@ -646,7 +682,7 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 发送性能统计数据（独立消息，用于on-demand请求）
+     * Sends performance metrics data (standalone message, for on-demand requests).
      */
     public void sendMetricsData() {
         try {
@@ -664,9 +700,9 @@ public class ServerMonitorManager {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
         }
     }
-    
+
     /**
-     * 发送性能统计数据（带请求ID，用于响应后端请求）
+     * Sends performance metrics data with a request ID (in response to a backend request).
      */
     public void sendMetricsDataWithRequestId(String requestId) {
         try {
@@ -685,32 +721,32 @@ public class ServerMonitorManager {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
         }
     }
-    
+
     /**
-     * 更新TPS计算 + CPU采样 - 每秒执行一次（20 ticks）
+     * Updates the TPS calculation + CPU sampling -- runs once per second (20 ticks).
      */
     private void updateTpsAndCpu() {
         long currentTime = System.currentTimeMillis();
         long timeDiff = currentTime - lastTick;
 
-        // CPU采样（每次调用都采样，让JVM有足够数据返回非-1值）
+        // CPU sampling (sampled on every call, so the JVM has enough data to return a non-(-1) value)
         sampleCpuUsage();
-        
+
         // Task runs every 20 ticks. At 20 TPS, timeDiff ≈ 1000ms.
         // TPS = 20 ticks * (1000ms / actual_elapsed_ms)
         double currentTPS = 20000.0 / Math.max(timeDiff, 50.0);
         currentTPS = Math.min(currentTPS, 20.0); // 限制最大TPS为20
-        
-        // 存储到历史数组
+
+        // Store into the history arrays
         long tpsAsLong = Math.round(currentTPS * 100); // 存储为百分制整数
         tpsHistory1m[historyIndex % tpsHistory1m.length] = tpsAsLong;
         tpsHistory5m[historyIndex % tpsHistory5m.length] = tpsAsLong;
         tpsHistory15m[historyIndex % tpsHistory15m.length] = tpsAsLong;
-        
+
         historyIndex++;
         lastTick = currentTime;
-        
-        UltiTools.getInstance().getLogger().log(Level.FINEST, 
+
+        UltiTools.getInstance().getLogger().log(Level.FINEST,
             String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     
@@ -726,21 +762,21 @@ public class ServerMonitorManager {
     }
 
     /**
-     * 计算TPS - 返回 [1分钟, 5分钟, 15分钟] 平均值
+     * Calculates TPS -- returns the [1-minute, 5-minute, 15-minute] averages.
      */
     private double[] calculateTPS() {
         double[] tps = new double[3];
-        
-        // 1分钟TPS平均值
+
+        // 1-minute TPS average
         tps[0] = calculateAverageTPS(tpsHistory1m, Math.min(historyIndex, tpsHistory1m.length));
-        
-        // 5分钟TPS平均值
+
+        // 5-minute TPS average
         tps[1] = calculateAverageTPS(tpsHistory5m, Math.min(historyIndex, tpsHistory5m.length));
-        
-        // 15分钟TPS平均值
+
+        // 15-minute TPS average
         tps[2] = calculateAverageTPS(tpsHistory15m, Math.min(historyIndex, tpsHistory15m.length));
-        
-        // 如果没有足够的历史数据，使用实时计算的TPS
+
+        // If there isn't enough history yet, fall back to the realtime-computed TPS
         if (historyIndex < 60) {
             double realtimeTPS = calculateRealtimeTPS();
             if (historyIndex < 1) tps[0] = realtimeTPS;  // 至少需要1秒数据
@@ -752,52 +788,52 @@ public class ServerMonitorManager {
     }
     
     /**
-     * 计算历史TPS的平均值
+     * Calculates the average of a history-of-TPS array.
      */
     private double calculateAverageTPS(long[] history, int count) {
         if (count == 0) return 20.0;
-        
+
         long sum = 0;
         for (int i = 0; i < count; i++) {
             sum += history[i];
         }
-        
+
         return (sum / (double) count) / 100.0; // 转回小数形式
     }
-    
+
     /**
-     * 计算实时TPS（基于最近的历史记录）
+     * Calculates the realtime TPS (based on the most recent history entry).
      */
     private double calculateRealtimeTPS() {
-        // 如果有历史数据，使用最近的TPS记录
+        // If history data exists, use the most recent TPS record
         if (historyIndex > 0) {
             int recentIndex = (historyIndex - 1) % tpsHistory1m.length;
             return tpsHistory1m[recentIndex] / 100.0; // 转回小数形式
         }
-        
-        // 如果没有历史数据，返回默认值
+
+        // If there is no history data, return the default value
         return 20.0;
     }
-    
+
     /**
-     * 发送玩家事件
+     * Sends a player event.
      */
     public void sendPlayerEvent(String eventType, Player player, JsonObject additionalData) {
         try {
             JsonObject message = new JsonObject();
             message.addProperty("type", "player_event");
-            
+
             JsonObject data = new JsonObject();
             data.addProperty("eventType", eventType);
-            
-            // 玩家信息
+
+            // Player information
             JsonObject playerInfo = new JsonObject();
             playerInfo.addProperty("uuid", player.getUniqueId().toString());
             playerInfo.addProperty("name", player.getName());
             playerInfo.addProperty("ip", player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
             data.add("player", playerInfo);
-            
-            // 位置信息
+
+            // Location information
             if (player.getLocation() != null) {
                 JsonObject location = new JsonObject();
                 location.addProperty("world", player.getWorld().getName());
@@ -806,8 +842,8 @@ public class ServerMonitorManager {
                 location.addProperty("z", Math.round(player.getLocation().getZ() * 100.0) / 100.0);
                 data.add("location", location);
             }
-            
-            // 添加额外数据
+
+            // Add additional data
             if (additionalData != null) {
                 for (String key : additionalData.keySet()) {
                     data.add(key, additionalData.get(key));
