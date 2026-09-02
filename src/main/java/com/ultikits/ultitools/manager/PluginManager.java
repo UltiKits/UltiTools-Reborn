@@ -2177,6 +2177,17 @@ public class PluginManager {
         context.registerShutdownHook();
         context.setClassLoader(adapter.getPluginClassLoader());
 
+        // 07-fix: the per-container diagnostic identifier for
+        // SimpleContainer.preInstantiateSingletons' own SEVERE summary (07-21 D-19).
+        // assemblePluginContainer sets it at :1577 for both UltiToolsPlugin load paths, but
+        // registerExternal is a third container-assembly path that never goes through that
+        // method -- leaving displayName null, which ModuleScanDiagnostics' isBlank guard turns
+        // into a silently dropped record AND a suppressed summary. Set before
+        // scanComponents/refresh() so a bean-creation-time linkage failure here produces the
+        // same operator-matchable signature compatibility/records/6.3.0.md documents for
+        // module JARs, instead of only the per-bean WARNING createBean logs.
+        context.setDisplayName(adapter.getPluginName());
+
         // Register the connector's own JavaPlugin so services can inject it via constructor.
         // Must run BEFORE scanComponents, mirroring initializePlugin's own T-03-27 fix
         // (:1524): registerType writes the type registry directly and never goes through
