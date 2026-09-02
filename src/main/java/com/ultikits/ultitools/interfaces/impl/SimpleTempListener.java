@@ -57,13 +57,12 @@ public class SimpleTempListener<E extends Event> implements TempListener {
      * @deprecated Use the four-argument
      * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
      * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
-     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
-     * milestone.
+     * {@link TempListener#common(Class)}. Scheduled for removal in 6.4.0.
      * <br>
      * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
      * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
-     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
-     * @removeIn 6.3.0
+     * 或 {@link TempListener#common(Class)}。计划在 6.4.0 中移除。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener() {
@@ -79,13 +78,12 @@ public class SimpleTempListener<E extends Event> implements TempListener {
      * @deprecated Use the four-argument
      * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
      * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
-     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
-     * milestone.
+     * {@link TempListener#common(Class)}. Scheduled for removal in 6.4.0.
      * <br>
      * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
      * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
-     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
-     * @removeIn 6.3.0
+     * 或 {@link TempListener#common(Class)}。计划在 6.4.0 中移除。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler) {
@@ -101,13 +99,12 @@ public class SimpleTempListener<E extends Event> implements TempListener {
      * @deprecated Use the four-argument
      * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
      * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
-     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
-     * milestone.
+     * {@link TempListener#common(Class)}. Scheduled for removal in 6.4.0.
      * <br>
      * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
      * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
-     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
-     * @removeIn 6.3.0
+     * 或 {@link TempListener#common(Class)}。计划在 6.4.0 中移除。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler, Function<E, Boolean> filter) {
@@ -127,13 +124,12 @@ public class SimpleTempListener<E extends Event> implements TempListener {
      * @deprecated Use the four-argument
      * {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated
      * via {@code @AllArgsConstructor}, so it has no source declaration to link to) or
-     * {@link TempListener#common(Class)}. Scheduled for removal in Phase 7 of the 6.3.0
-     * milestone.
+     * {@link TempListener#common(Class)}. Scheduled for removal in 6.4.0.
      * <br>
      * 请使用四参构造器 {@code (Class, EventPriority, TempEventHandler, Function)}
      * （由 Lombok 的 {@code @AllArgsConstructor} 生成，没有源码声明可供链接）
-     * 或 {@link TempListener#common(Class)}。计划在 6.3.0 里程碑的 Phase 7 中移除。
-     * @removeIn 6.3.0
+     * 或 {@link TempListener#common(Class)}。计划在 6.4.0 中移除。
+     * @removeIn 6.4.0
      */
     @Deprecated(since = "6.3.0", forRemoval = true)
     public SimpleTempListener(Class<E> eventClass, TempEventHandler<E> eventHandler, EventPriority priority) {

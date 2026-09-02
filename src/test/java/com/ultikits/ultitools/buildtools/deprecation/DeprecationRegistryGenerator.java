@@ -231,6 +231,21 @@ public final class DeprecationRegistryGenerator {
             freshKeyStrings.add(entry.getKey().toString());
         }
         Set<RegistryKey> implied = new LinkedHashSet<>();
+        // 07-fix: an EMPTY report means japicmp had nothing to compare against, not that every
+        // absent key was private. pom.xml sets <ignoreMissingOldVersion>true</ignoreMissingOldVersion>,
+        // so a baseline that fails to resolve produces an empty report and the build continues --
+        // at which point "absent from the report" is true of every key, and this method would imply
+        // a REMOVED transition for the entire prior ledger on source evidence alone. D-22's rule is
+        // dual-source; with no old side there is no second source, so imply nothing and let the
+        // normal conflict path in RegistryLedger.merge speak.
+        //
+        // Note this guard is NOT about japicmp's <excludes>: an excluded symbol still appears in
+        // target/japicmp/japicmp.xml (measured -- CglibProxyFactory, AopProxyBeanPostProcessor,
+        // Propagation#NESTED and CommandExecutionManager#isCommandAllowed are all present in the
+        // report, same as unexcluded removals). <excludes> gates breakBuildOn*, not report content.
+        if (report.entries().isEmpty()) {
+            return implied;
+        }
         for (DeprecationEntry priorEntry : prior.entries()) {
             if (priorEntry.getStatus() == DeprecationEntry.Status.REMOVED) {
                 continue; // already history; RegistryLedger.merge carries it forward unconditionally

@@ -300,4 +300,24 @@ class ClassloadFilterAuditTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("07-fix: the class's own ConsoleHandler is configured at INFO, so the per-class "
+            + "FINE records never reach the production console")
+    void consoleHandlerIsConfiguredAboveFine() {
+        // classify() returns WHITELIST for every class outside the seven trusted prefixes, and
+        // record() is called once per class from PluginManager's scan loops (:474, :622), capped at
+        // 1000 classes per JAR by PluginManager:357. A ConsoleHandler at ALL therefore prints up to
+        // a thousand startup lines per third-party module, on top of the one INFO summary that is
+        // the actual operator-facing output.
+        //
+        // Asserted against the named constant rather than auditLogger.getHandlers(): that list is
+        // global mutable state which other tests in this JVM add to and remove from, so reading it
+        // back is order-dependent -- measured, it is empty by the time the full suite reaches here.
+        assertThat(ClassloadFilterAudit.CONSOLE_HANDLER_LEVEL.intValue())
+                .isGreaterThanOrEqualTo(Level.INFO.intValue());
+        // The logger itself must stay permissive, or a debug/test handler could never see FINE.
+        assertThat(Logger.getLogger(ClassloadFilterAudit.class.getName()).getLevel())
+                .isEqualTo(Level.ALL);
+    }
 }

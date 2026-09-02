@@ -63,6 +63,14 @@ final class ClassloadFilterAudit {
 
     private static final Logger AUDIT_LOGGER = Logger.getLogger(ClassloadFilterAudit.class.getName());
 
+    /**
+     * The level of this class's own {@link ConsoleHandler}. Named, package-private and asserted on
+     * by {@code ClassloadFilterAuditTest} rather than left inline: the live handler list on a JUL
+     * logger is global mutable state that other tests in the same JVM add to and remove from, so a
+     * test that reads it back is order-dependent. This constant is the decision itself.
+     */
+    static final Level CONSOLE_HANDLER_LEVEL = Level.INFO;
+
     static {
         // Load-bearing (see class javadoc): the only way this logger's records could reach
         // SystemLogHandler is by propagating to the root logger, and this call removes that path
@@ -76,8 +84,19 @@ final class ClassloadFilterAudit {
         // "D-19 diagnostic observation" section -- found here by the same real-server verification
         // step this class's own D-14 mandates (Rule 1: a logger with no handler and parent
         // handlers disabled produces no output anywhere, silently).
+        //
+        // 07-fix: this handler sits at INFO, NOT ALL -- deliberately differing from
+        // ModuleScanDiagnostics's otherwise identical block, because the two emit at completely
+        // different volumes. ModuleScanDiagnostics logs FINE only for a class that actually failed
+        // to load, which is rare. This class logs FINE for every class classify() returns a layer
+        // for, and classify() returns WHITELIST for anything outside the seven trusted prefixes --
+        // that is EVERY class of a third-party module, once per class, from the per-class scan
+        // loops at PluginManager:474 and :622 (capped at 1000 classes per JAR by PluginManager:357).
+        // At ALL that is up to a thousand console lines per module at startup, on top of the one
+        // INFO summary that is the actual operator-facing output. The logger itself stays at ALL so
+        // a test- or debug-attached handler still receives FINE.
         ConsoleHandler consoleHandler = new ConsoleHandler();
-        consoleHandler.setLevel(Level.ALL);
+        consoleHandler.setLevel(CONSOLE_HANDLER_LEVEL);
         AUDIT_LOGGER.addHandler(consoleHandler);
     }
 

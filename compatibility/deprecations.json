@@ -411,8 +411,8 @@
     "kind": "CONSTRUCTOR",
     "since": "6.3.0",
     "forRemoval": true,
-    "removeIn": "6.3.0",
-    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in Phase 7 of the 6.3.0 milestone.",
+    "removeIn": "6.4.0",
+    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -422,8 +422,8 @@
     "kind": "CONSTRUCTOR",
     "since": "6.3.0",
     "forRemoval": true,
-    "removeIn": "6.3.0",
-    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in Phase 7 of the 6.3.0 milestone.",
+    "removeIn": "6.4.0",
+    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -433,8 +433,8 @@
     "kind": "CONSTRUCTOR",
     "since": "6.3.0",
     "forRemoval": true,
-    "removeIn": "6.3.0",
-    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in Phase 7 of the 6.3.0 milestone.",
+    "removeIn": "6.4.0",
+    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {
@@ -444,8 +444,8 @@
     "kind": "CONSTRUCTOR",
     "since": "6.3.0",
     "forRemoval": true,
-    "removeIn": "6.3.0",
-    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in Phase 7 of the 6.3.0 milestone.",
+    "removeIn": "6.4.0",
+    "replacement": "Use the four-argument {@code (Class, EventPriority, TempEventHandler, Function)} constructor (Lombok-generated via {@code @AllArgsConstructor}, so it has no source declaration to link to) or TempListener#common(Class). Scheduled for removal in 6.4.0.",
     "status": "ANNOUNCED"
   },
   {

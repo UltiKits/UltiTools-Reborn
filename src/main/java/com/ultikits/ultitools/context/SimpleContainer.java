@@ -246,6 +246,13 @@ public class SimpleContainer {
     public void registerSingleton(String name, Object instance) {
         refuseIfAopAnnotated(instance);
 
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
+
         Object bean = instance;
         for (BeanPostProcessor processor : beanPostProcessors) {
             bean = processor.postProcessBeforeInitialization(bean, name);
@@ -305,6 +312,12 @@ public class SimpleContainer {
      * @param supplier supplier function <br> 供应商函数
      */
     public void registerSupplier(String name, Supplier<Object> supplier) {
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
         suppliers.put(name, supplier);
     }
 
@@ -834,6 +847,12 @@ public class SimpleContainer {
      * @param definition bean definition <br> Bean定义
      */
     public void registerBeanDefinition(String name, BeanDefinition definition) {
+        // 07-fix: the memo describes ONE binding for this name. Re-binding the name makes it
+        // stale, and getBean's fast-path answers from it before consulting any map, so a
+        // valid replacement would stay permanently unreachable (and filtered out of
+        // getBeanNamesForType). Same invariant registerBeanDefinition already honours for
+        // resolvedTypeCache via invalidateResolvedTypeCache (D-12).
+        unresolvableBeans.remove(name);
         beanDefinitions.put(name, definition);
         beanTypes.put(name, definition.getBeanClass());
         // A newly registered bean definition may be a new candidate for some already-resolved

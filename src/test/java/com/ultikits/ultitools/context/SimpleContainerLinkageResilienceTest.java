@@ -268,6 +268,68 @@ class SimpleContainerLinkageResilienceTest {
         }
     }
 
+    // === 07-fix: the memo must not outlive the binding it describes ===================
+
+    @Test
+    @DisplayName("re-registering a poisoned name as a singleton makes it resolvable again")
+    void registerSingletonClearsTheFailureMemo() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            // A key of its own: ModuleScanDiagnostics' accumulator is static and drained only by
+            // emitSummary, which these tests never reach -- sharing a key leaks records into
+            // whichever test runs next.
+            container.setDisplayName("memo-clear-singleton");
+            container.registerBean(poisonedClass);
+            String poisonedName = "hasMethodReferencingMissingType";
+
+            assertThatThrownBy(() -> container.getBean(poisonedName))
+                    .isInstanceOfAny(LinkageError.class, TypeNotPresentException.class);
+
+            // The name is now bound to something that resolves perfectly well. The memo describes
+            // a binding that no longer exists, so it must not keep answering for this name.
+            container.registerSingleton(poisonedName, new SurvivorBean());
+
+            assertThat(container.getBean(poisonedName)).isInstanceOf(SurvivorBean.class);
+            assertThat(container.getBeanNamesForType(SurvivorBean.class)).contains(poisonedName);
+        }
+    }
+
+    @Test
+    @DisplayName("re-registering a poisoned name as a bean definition makes it resolvable again")
+    void registerBeanDefinitionClearsTheFailureMemo() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class)) {
+            Class<?> poisonedClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("memo-clear-definition");
+            container.registerBean(poisonedClass);
+            String poisonedName = "hasMethodReferencingMissingType";
+
+            assertThatThrownBy(() -> container.getBean(poisonedName))
+                    .isInstanceOfAny(LinkageError.class, TypeNotPresentException.class);
+
+            container.registerBeanDefinition(poisonedName, new BeanDefinition(SurvivorBean.class));
+
+            assertThat(container.getBean(poisonedName)).isInstanceOf(SurvivorBean.class);
+        }
+    }
+
+    // registerSupplier also clears the memo, but that clearing is not independently observable
+    // through getBean: its resolution order is memo -> singleton cache -> bean definition ->
+    // supplier, so the poisoned BeanDefinition that produced the memo in the first place is
+    // consulted before any supplier and fails again on its own. A test asserting otherwise would
+    // be asserting a precedence this container does not have. The clearing is kept there for the
+    // same reason it is kept in the other two: the memo describes a binding, and registerSupplier
+    // rebinds the name.
+
     // === 07-23 Task 1: SimpleContainer remembers a failed bean =====================
 
     @Test
