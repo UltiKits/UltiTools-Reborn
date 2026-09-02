@@ -34,33 +34,54 @@
 #
 # Usage:
 #   check-comment-only-diff.sh --base <ref> [--head <ref>] [--scope <path> ...]
+#   check-comment-only-diff.sh --self-test
 #
-#   --base <ref>    Required. The ref the diff is measured from (the pre-batch state).
+#   --base <ref>    Required (unless --self-test). The ref the diff is measured from (the
+#                    pre-batch state).
 #   --head <ref>    Optional, default HEAD. The ref the diff is measured to.
 #   --scope <path>  Repeatable. Restricts every assertion to these pathspecs.
 #                    Default: src/main/java
+#   --self-test     Run the fixture self-test for assertion C's is_crlf() (see below) and exit.
+#                    Ignores --base/--head/--scope. Follows the same --self-test convention as
+#                    check-cjk-scope.sh.
 #
-# Exit codes: 0 = all three invariants hold (including the empty-range case);
-#             1 = at least one invariant violated, or a line could not be classified;
-#             64 = usage error (unknown flag, or --base missing).
+# Exit codes: 0 = all three invariants hold (including the empty-range case), or --self-test
+#             passed; 1 = at least one invariant violated, a line could not be classified, or
+#             --self-test failed; 64 = usage error (unknown flag, or --base missing without
+#             --self-test).
+#
+# assertion C / is_crlf() pipefail note (WINDOWS.md #28, 08-CONTROL-DOC-CORRECTIONS.md C-06):
+# `is_crlf` used to be `git show REF:PATH | grep -qa $'\r'`. Under `set -o pipefail`, `grep -q`
+# exits at its FIRST match — line 1 of a CRLF file — while `git show` may still be writing a
+# large blob. If `git show` then takes SIGPIPE it exits 141, pipefail propagates that as the
+# pipeline's status, and the old `is_crlf` returned false: a genuinely-CRLF file was reported as
+# LF. The dangerous direction is a false NEGATIVE — if the same misread hits both the base and
+# head blobs they compare equal and no violation is reported, so a real CRLF->LF regression can
+# pass silently. Fixed by using `grep -c`, which drains the whole stream and therefore never lets
+# grep exit before `git show` finishes writing. `--self-test` proves both directions on a
+# synthetic blob larger than a 64 KiB pipe buffer: a genuinely-CRLF blob is still reported as
+# CRLF, and a genuine CRLF->LF change is still caught as a violation.
 #
 set -euo pipefail
 
 BASE_REF=""
 HEAD_REF="HEAD"
 SCOPES=()
+SELF_TEST=0
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: check-comment-only-diff.sh --base <ref> [--head <ref>] [--scope <path> ...]
+       check-comment-only-diff.sh --self-test
 USAGE
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base)  BASE_REF="$2"; shift 2 ;;
-        --head)  HEAD_REF="$2"; shift 2 ;;
-        --scope) SCOPES+=("$2"); shift 2 ;;
+        --base)      BASE_REF="$2"; shift 2 ;;
+        --head)      HEAD_REF="$2"; shift 2 ;;
+        --scope)     SCOPES+=("$2"); shift 2 ;;
+        --self-test) SELF_TEST=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)
             echo "Unknown flag: $1" >&2
@@ -70,19 +91,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$BASE_REF" ]; then
-    echo "Missing required flag: --base" >&2
-    usage
-    exit 64
-fi
-
-if [ ${#SCOPES[@]} -eq 0 ]; then
-    SCOPES=("src/main/java")
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
+
+if [ "$SELF_TEST" -eq 0 ]; then
+    if [ -z "$BASE_REF" ]; then
+        echo "Missing required flag: --base" >&2
+        usage
+        exit 64
+    fi
+
+    if [ ${#SCOPES[@]} -eq 0 ]; then
+        SCOPES=("src/main/java")
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -291,7 +314,15 @@ ASSERTION_C_NOTES=()
 
 is_crlf() {
     # true (0) when REF:PATH contains at least one carriage return.
-    git show "${1}:${2}" 2>/dev/null | grep -qa $'\r'
+    #
+    # Deliberately `grep -c`, not `grep -q`: `-q` exits at the first match, which on a large CRLF
+    # blob can SIGPIPE `git show` before it finishes writing under `set -o pipefail`, silently
+    # misreporting a genuinely-CRLF file as LF (see the header note above, WINDOWS.md #28,
+    # 08-CONTROL-DOC-CORRECTIONS.md C-06). `-c` drains the whole stream, so there is no early
+    # exit and therefore no SIGPIPE race — correctness does not depend on scheduling.
+    local count
+    count="$(git show "${1}:${2}" 2>/dev/null | grep -ca $'\r' || true)"
+    [ "${count:-0}" != "0" ]
 }
 
 run_assertion_c() {
@@ -320,6 +351,104 @@ run_assertion_c() {
         fi
     done <<< "$changed_files"
 }
+
+# ---------------------------------------------------------------------------
+# Self-test for assertion C / is_crlf() (C-06 / WINDOWS.md #28).
+#
+# Builds two synthetic blobs — one genuinely CRLF, one its LF sibling with every carriage return
+# stripped and nothing else changed — each larger than a 64 KiB pipe buffer, so the SIGPIPE race
+# the old `grep -qa` implementation was vulnerable to is actually reachable. The blobs are wired
+# into throwaway commit objects via `git hash-object -w` / `git mktree` / `git commit-tree`
+# (plumbing only — no branch, ref, or working-tree change; the resulting objects are unreachable
+# from any ref and are ordinary GC-eligible loose objects), then run through the real is_crlf()
+# and run_assertion_c() exactly as the normal code path would.
+# ---------------------------------------------------------------------------
+
+# self_test_fixture_content FD — writes >64 KiB of comment-shaped CRLF text to the given fd.
+self_test_fixture_content() {
+    local i
+    for i in $(seq 1 3000); do
+        printf '// self-test fixture line %04d padding padding padding padding\r\n' "$i"
+    done
+}
+
+run_self_test() {
+    local failures=0
+    local fixture_path="crlf-fixture-self-test.txt"
+    local crlf_file lf_file size
+    local blob_crlf blob_lf tree_crlf tree_lf
+    local commit_base commit_head_unchanged commit_head_converted
+
+    crlf_file="$(mktemp)"
+    lf_file="$(mktemp)"
+    self_test_fixture_content > "$crlf_file"
+    tr -d '\r' < "$crlf_file" > "$lf_file"
+
+    size=$(wc -c < "$crlf_file")
+    if [ "$size" -le 65536 ]; then
+        echo "FAIL: self-test setup — fixture is only ${size} bytes, must exceed the 64 KiB pipe buffer."
+        rm -f "$crlf_file" "$lf_file"
+        return 1
+    fi
+
+    blob_crlf="$(git hash-object -w "$crlf_file")"
+    blob_lf="$(git hash-object -w "$lf_file")"
+    rm -f "$crlf_file" "$lf_file"
+
+    tree_crlf="$(printf '100644 blob %s\t%s\n' "$blob_crlf" "$fixture_path" | git mktree)"
+    tree_lf="$(printf '100644 blob %s\t%s\n' "$blob_lf" "$fixture_path" | git mktree)"
+
+    commit_base="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: base (CRLF)')"
+    commit_head_unchanged="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: head, unchanged (CRLF)')"
+    commit_head_converted="$(git commit-tree "$tree_lf" -m 'check-comment-only-diff.sh self-test: head, converted (LF)')"
+
+    # Assertion 1: a large genuinely-CRLF blob is reported as CRLF, not LF — the direction the
+    # SIGPIPE race used to get wrong.
+    if is_crlf "$commit_base" "$fixture_path"; then
+        echo "PASS: assertion 1 — large genuinely-CRLF blob (${size} bytes) reported as CRLF."
+    else
+        echo "FAIL: assertion 1 — large genuinely-CRLF blob (${size} bytes) reported as CRLF (is_crlf returned false)."
+        failures=1
+    fi
+
+    # Assertion 2: a genuine CRLF -> LF change on a large file is still caught as a violation.
+    # This is the direction that matters — a fix that made assertion C always pass would be worse
+    # than the bug it replaces.
+    ASSERTION_C_VIOLATIONS=()
+    ASSERTION_C_NOTES=()
+    BASE_REF="$commit_base"
+    HEAD_REF="$commit_head_converted"
+    SCOPES=("$fixture_path")
+    run_assertion_c
+    if [ ${#ASSERTION_C_VIOLATIONS[@]} -eq 1 ]; then
+        echo "PASS: assertion 2 — genuine CRLF -> LF change on a large file is still caught."
+    else
+        echo "FAIL: assertion 2 — genuine CRLF -> LF change on a large file is still caught (got ${#ASSERTION_C_VIOLATIONS[@]} violation(s))."
+        failures=1
+    fi
+
+    # Assertion 3 (control): an unchanged large CRLF file across base/head reports no violation —
+    # rules out a fix that over-corrects into always flagging large files.
+    ASSERTION_C_VIOLATIONS=()
+    ASSERTION_C_NOTES=()
+    BASE_REF="$commit_base"
+    HEAD_REF="$commit_head_unchanged"
+    SCOPES=("$fixture_path")
+    run_assertion_c
+    if [ ${#ASSERTION_C_VIOLATIONS[@]} -eq 0 ]; then
+        echo "PASS: assertion 3 — unchanged large CRLF file reports no violation (control)."
+    else
+        echo "FAIL: assertion 3 — unchanged large CRLF file reports no violation (control, got ${#ASSERTION_C_VIOLATIONS[@]} violation(s))."
+        failures=1
+    fi
+
+    return "$failures"
+}
+
+if [ "$SELF_TEST" -eq 1 ]; then
+    run_self_test
+    exit $?
+fi
 
 # ---------------------------------------------------------------------------
 # Main
