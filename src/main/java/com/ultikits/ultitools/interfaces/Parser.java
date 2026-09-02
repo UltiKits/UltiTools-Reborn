@@ -7,7 +7,6 @@ package com.ultikits.ultitools.interfaces;
  * Implementations should handle type conversion for configuration files,
  * database storage, or other persistence mechanisms.
  * </p>
- * </p>
  *
  * <p><strong>Example Implementation:</strong></p>
  * <pre>{@code

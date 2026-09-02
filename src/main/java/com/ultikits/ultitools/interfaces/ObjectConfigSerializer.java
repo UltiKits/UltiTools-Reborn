@@ -9,7 +9,6 @@ import org.bukkit.configuration.MemorySection;
  * Implementors should convert their objects to a MemorySection structure
  * that can be saved to and loaded from configuration files.
  * </p>
- * </p>
  *
  * <p><strong>Example Usage:</strong></p>
  * <pre>{@code
