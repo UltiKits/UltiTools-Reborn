@@ -331,7 +331,7 @@ public class ServerMonitorManager {
             // Send the message
             webSocketClient.sendMessage(message);
 
-            UltiTools.getInstance().getLogger().log(Level.INFO,
+            UltiTools.getInstance().getLogger().log(Level.INFO, 
                 String.format("已响应服务器状态请求，请求ID: %s", requestId));
 
         } catch (Exception e) {
@@ -746,7 +746,7 @@ public class ServerMonitorManager {
         historyIndex++;
         lastTick = currentTime;
 
-        UltiTools.getInstance().getLogger().log(Level.FINEST,
+        UltiTools.getInstance().getLogger().log(Level.FINEST, 
             String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     

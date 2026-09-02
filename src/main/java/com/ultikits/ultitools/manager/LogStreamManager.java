@@ -412,7 +412,7 @@ public class LogStreamManager implements Listener {
      * Sends a player-event log.
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
-        sendCustomLog("info",
+        sendCustomLog("info", 
             String.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
             "plugin:UltiTools");
     }

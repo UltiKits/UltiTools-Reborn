@@ -178,7 +178,7 @@ public class UltiPanelLogTransmitter {
      * Starts the batch-send task.
      */
     private void startBatchSender() {
-        batchScheduler.scheduleWithFixedDelay(this::sendBatch,
+        batchScheduler.scheduleWithFixedDelay(this::sendBatch, 
             intervalMs, intervalMs, TimeUnit.MILLISECONDS);
     }
 
