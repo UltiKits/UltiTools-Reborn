@@ -14,27 +14,27 @@ import java.util.Map;
 import javax.annotation.Nullable;
 
 /**
- * 反射工具类
+ * Reflection utility class.
  * <p>
- * 替代 hutool ReflectUtil / AnnotationUtil
+ * Replaces hutool's ReflectUtil / AnnotationUtil.
  *
  * @author wisdomme
  * @since 6.2.0
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Reflection utility requires setAccessible
 public final class ReflectionUtil {
-    
+
     private ReflectionUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
-    
-    // ==================== 字段操作 ====================
-    
+
+    // ==================== Field operations ====================
+
     /**
-     * 获取类的所有字段（包括父类）
+     * Gets all fields of a class (including superclasses).
      *
-     * @param clazz 类
-     * @return 字段列表
+     * @param clazz the class
+     * @return the field list
      */
     public static List<Field> getAllFields(Class<?> clazz) {
         List<Field> fields = new ArrayList<>();
@@ -45,23 +45,23 @@ public final class ReflectionUtil {
         }
         return fields;
     }
-    
+
     /**
-     * 获取类的所有字段（包括父类）
+     * Gets all fields of a class (including superclasses).
      *
-     * @param clazz 类
-     * @return 字段数组
+     * @param clazz the class
+     * @return the field array
      */
     public static Field[] getFields(Class<?> clazz) {
         return getAllFields(clazz).toArray(new Field[0]);
     }
-    
+
     /**
-     * 获取字段值
+     * Gets a field's value.
      *
-     * @param obj   对象
-     * @param field 字段
-     * @return 字段值
+     * @param obj   the object
+     * @param field the field
+     * @return the field value
      */
     public static Object getFieldValue(Object obj, Field field) {
         try {
@@ -71,13 +71,13 @@ public final class ReflectionUtil {
             throw new IllegalStateException("Failed to get field value: " + field.getName(), e);
         }
     }
-    
+
     /**
-     * 获取字段值
+     * Gets a field's value.
      *
-     * @param obj       对象
-     * @param fieldName 字段名
-     * @return 字段值
+     * @param obj       the object
+     * @param fieldName the field name
+     * @return the field value
      */
     public static Object getFieldValue(Object obj, String fieldName) {
         Field field = getField(obj.getClass(), fieldName);
@@ -86,13 +86,13 @@ public final class ReflectionUtil {
         }
         return getFieldValue(obj, field);
     }
-    
+
     /**
-     * 设置字段值
+     * Sets a field's value.
      *
-     * @param obj   对象
-     * @param field 字段
-     * @param value 值
+     * @param obj   the object
+     * @param field the field
+     * @param value the value
      */
     public static void setFieldValue(Object obj, Field field, Object value) {
         try {
@@ -102,13 +102,13 @@ public final class ReflectionUtil {
             throw new IllegalStateException("Failed to set field value: " + field.getName(), e);
         }
     }
-    
+
     /**
-     * 设置字段值
+     * Sets a field's value.
      *
-     * @param obj       对象
-     * @param fieldName 字段名
-     * @param value     值
+     * @param obj       the object
+     * @param fieldName the field name
+     * @param value     the value
      */
     public static void setFieldValue(Object obj, String fieldName, Object value) {
         Field field = getField(obj.getClass(), fieldName);
@@ -117,13 +117,13 @@ public final class ReflectionUtil {
         }
         setFieldValue(obj, field, value);
     }
-    
+
     /**
-     * 获取指定字段
+     * Gets the specified field.
      *
-     * @param clazz     类
-     * @param fieldName 字段名
-     * @return 字段，找不到返回 null
+     * @param clazz     the class
+     * @param fieldName the field name
+     * @return the field, or {@code null} if not found
      */
     public static Field getField(Class<?> clazz, String fieldName) {
         while (clazz != null && clazz != Object.class) {
@@ -135,15 +135,15 @@ public final class ReflectionUtil {
         }
         return null;
     }
-    
-    // ==================== 实例创建 ====================
-    
+
+    // ==================== Instance creation ====================
+
     /**
-     * 创建实例（使用无参构造器）
+     * Creates an instance (using the no-arg constructor).
      *
-     * @param clazz 类
-     * @param <T>   类型
-     * @return 实例
+     * @param clazz the class
+     * @param <T>   the type
+     * @return the instance
      */
     public static <T> T newInstance(Class<T> clazz) {
         try {
@@ -155,36 +155,36 @@ public final class ReflectionUtil {
     }
     
     /**
-     * 创建实例（使用带参数的构造器）
+     * Creates an instance (using a parameterized constructor).
      *
-     * @param clazz  类
-     * @param params 构造器参数
-     * @param <T>    类型
-     * @return 实例
+     * @param clazz  the class
+     * @param params the constructor parameters
+     * @param <T>    the type
+     * @return the instance
      */
     @SuppressWarnings("unchecked")
     public static <T> T newInstance(Class<T> clazz, Object... params) {
         if (params == null || params.length == 0) {
             return newInstance(clazz);
         }
-        
+
         Class<?>[] paramTypes = new Class[params.length];
         for (int i = 0; i < params.length; i++) {
             paramTypes[i] = params[i] == null ? Object.class : params[i].getClass();
         }
-        
-        // 尝试精确匹配
+
+        // Try an exact match
         try {
             java.lang.reflect.Constructor<T> constructor = clazz.getDeclaredConstructor(paramTypes);
             constructor.setAccessible(true);
             return constructor.newInstance(params);
         } catch (NoSuchMethodException e) {
-            // 尝试模糊匹配
+            // Fall through to a fuzzy match
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
             throw new IllegalStateException("Failed to create instance: " + clazz.getName(), e);
         }
-        
-        // 模糊匹配 - 查找参数数量相同且类型兼容的构造器
+
+        // Fuzzy match - find a constructor with the same parameter count and compatible types
         for (java.lang.reflect.Constructor<?> constructor : clazz.getDeclaredConstructors()) {
             Class<?>[] ctorParamTypes = constructor.getParameterTypes();
             if (ctorParamTypes.length == params.length) {
@@ -208,15 +208,15 @@ public final class ReflectionUtil {
         
         throw new IllegalArgumentException("No suitable constructor found for: " + clazz.getName());
     }
-    
+
     /**
-     * 判断类型是否可赋值
+     * Whether the type is assignable.
      */
     private static boolean isAssignable(Class<?> target, Class<?> source) {
         if (target.isAssignableFrom(source)) {
             return true;
         }
-        // 处理基本类型
+        // Handle primitive types
         if (target.isPrimitive()) {
             return getPrimitiveWrapper(target).isAssignableFrom(source);
         }
@@ -225,9 +225,9 @@ public final class ReflectionUtil {
         }
         return false;
     }
-    
+
     /**
-     * 获取基本类型对应的包装类
+     * Gets the wrapper class corresponding to a primitive type.
      */
     private static Class<?> getPrimitiveWrapper(Class<?> primitive) {
         if (primitive == int.class) return Integer.class;
@@ -242,11 +242,11 @@ public final class ReflectionUtil {
     }
     
     /**
-     * 创建实例（使用无参构造器，支持私有构造器）
+     * Creates an instance (using the no-arg constructor, private constructors included).
      *
-     * @param clazz 类
-     * @param <T>   类型
-     * @return 实例
+     * @param clazz the class
+     * @param <T>   the type
+     * @return the instance
      */
     public static <T> T newInstanceIfPossible(Class<T> clazz) {
         try {
@@ -257,50 +257,50 @@ public final class ReflectionUtil {
             return null;
         }
     }
-    
-    // ==================== 注解操作 ====================
-    
+
+    // ==================== Annotation operations ====================
+
     /**
-     * 获取类上的注解
+     * Gets an annotation on a class.
      *
-     * @param clazz           类
-     * @param annotationClass 注解类型
-     * @param <A>             注解类型
-     * @return 注解实例，不存在返回 null
+     * @param clazz           the class
+     * @param annotationClass the annotation type
+     * @param <A>             the annotation type
+     * @return the annotation instance, or {@code null} if absent
      */
     public static <A extends Annotation> A getAnnotation(Class<?> clazz, Class<A> annotationClass) {
         return clazz.getAnnotation(annotationClass);
     }
-    
+
     /**
-     * 获取字段上的注解
+     * Gets an annotation on a field.
      *
-     * @param field           字段
-     * @param annotationClass 注解类型
-     * @param <A>             注解类型
-     * @return 注解实例，不存在返回 null
+     * @param field           the field
+     * @param annotationClass the annotation type
+     * @param <A>             the annotation type
+     * @return the annotation instance, or {@code null} if absent
      */
     public static <A extends Annotation> A getAnnotation(Field field, Class<A> annotationClass) {
         return field.getAnnotation(annotationClass);
     }
-    
+
     /**
-     * 判断类是否有指定注解
+     * Whether a class carries the specified annotation.
      *
-     * @param clazz           类
-     * @param annotationClass 注解类型
-     * @return 是否有注解
+     * @param clazz           the class
+     * @param annotationClass the annotation type
+     * @return whether the annotation is present
      */
     public static boolean hasAnnotation(Class<?> clazz, Class<? extends Annotation> annotationClass) {
         return clazz.isAnnotationPresent(annotationClass);
     }
-    
+
     /**
-     * 判断字段是否有指定注解
+     * Whether a field carries the specified annotation.
      *
-     * @param field           字段
-     * @param annotationClass 注解类型
-     * @return 是否有注解
+     * @param field           the field
+     * @param annotationClass the annotation type
+     * @return whether the annotation is present
      */
     public static boolean hasAnnotation(Field field, Class<? extends Annotation> annotationClass) {
         return field.isAnnotationPresent(annotationClass);
@@ -322,17 +322,6 @@ public final class ReflectionUtil {
      * {@code getDeclaringClass()}, so a class-level annotation on that superclass is still found
      * without any extra ancestor walk here.
      * <p>
-     * 解析 {@code method} 上的 {@code annotationType}：优先取方法自身的声明，若方法未声明则回退到
-     * 方法所属声明类上的声明——方法级优先，与本验证器链中 {@code SenderTypeValidator} 对
-     * {@code @CmdTarget} 已经采用的优先级完全一致，也是 Spring 的 {@code @Transactional} 与 Spring
-     * Security 的 {@code @PreAuthorize} 在类级/方法级注解冲突时共同采用的先例。
-     * <p>
-     * 只查询方法自身声明类（通过 {@code method.getDeclaringClass().getAnnotation(...)}）——不会
-     * 再向上查询该类的祖先类，因为 {@code @CmdCD} 与 {@code @UsageLimit} 均未标注
-     * {@code @Inherited}。这与 {@link #getAllMethods(Class)} 自身的层级遍历一致：一个从父类继承、
-     * 未被重写的方法，其 {@code getDeclaringClass()} 本就是该父类，因此父类上的类级注解无需额外的
-     * 祖先遍历即可在此被发现。
-     * <p>
      * Convenience delegate to {@link #resolveMethodOrClassAnnotation(Method, Class, Class)} with
      * {@code executorClass} as {@code null} -- kept for callers (and existing tests) that only
      * ever had a {@code Method} to resolve against, not the dispatching executor's concrete
@@ -341,19 +330,12 @@ public final class ReflectionUtil {
      * annotation declared on a concrete executor SUBCLASS, inherited by an unoverridden {@code
      * @CmdMapping} method whose {@code getDeclaringClass()} is an ancestor, is invisible to this
      * 2-argument form.
-     * <p>
-     * 委托给 {@link #resolveMethodOrClassAnnotation(Method, Class, Class)}，{@code executorClass}
-     * 传 {@code null}——为只有 {@code Method}、拿不到分发执行器具体类的调用方（及既有测试）保留。
-     * 已知具体执行器类时优先用三参数重载：它还会检查该类自身的声明，从而关闭 WR-02
-     * （05-REVIEW.md）——一个只声明在具体执行器子类上的类级注解，被一个未重写、其
-     * {@code getDeclaringClass()} 是祖先类的 {@code @CmdMapping} 方法继承时，这个双参数形式看不见它。
      *
-     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
-     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
-     * @param <A>            the annotation type <br> 注解类型
+     * @param method         the matched command mapping method
+     * @param annotationType the annotation type to resolve
+     * @param <A>            the annotation type
      * @return the method-level annotation if present, otherwise the declaring class's
-     *         annotation, or {@code null} if neither declares it <br> 方法级注解（若存在）；
-     *         否则为声明类上的注解；两者均不存在时为 {@code null}
+     *         annotation, or {@code null} if neither declares it
      * @since 6.3.0
      */
     public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, Class<A> annotationType) {
@@ -384,19 +366,15 @@ public final class ReflectionUtil {
      * the "declared on an ancestor of the mapping method" case, and there is no third distinct
      * class to consult for the same annotation type.
      *
-     * @param method         the matched command mapping method <br> 已匹配的命令映射方法
+     * @param method         the matched command mapping method
      * @param executorClass  the concrete {@code BaseCommandExecutor} class dispatching this
      *                       command -- the SAME class {@code PluginManager}'s load-time gate
      *                       inspects -- or {@code null} to fall back to the pre-WR-02,
-     *                       declaring-class-only resolution <br> 分发本次命令的具体
-     *                       {@code BaseCommandExecutor} 类——与 {@code PluginManager} 加载时
-     *                       门禁检查的是同一个类——为 {@code null} 时回退到 WR-02 之前的、
-     *                       仅声明类的解析
-     * @param annotationType the annotation type to resolve <br> 要解析的注解类型
-     * @param <A>            the annotation type <br> 注解类型
+     *                       declaring-class-only resolution
+     * @param annotationType the annotation type to resolve
+     * @param <A>            the annotation type
      * @return the resolved annotation, or {@code null} if none of method, {@code executorClass},
-     *         or the method's declaring class carries one <br> 解析出的注解；方法、
-     *         {@code executorClass} 与方法声明类均未携带该注解时为 {@code null}
+     *         or the method's declaring class carries one
      * @since 6.3.0
      */
     public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, @Nullable Class<?> executorClass,
@@ -414,16 +392,16 @@ public final class ReflectionUtil {
         return method.getDeclaringClass().getAnnotation(annotationType);
     }
 
-    // ==================== 方法操作 ====================
-    
+    // ==================== Method operations ====================
+
     /**
-     * 调用方法
+     * Invokes a method.
      *
-     * @param obj    对象
-     * @param method 方法
-     * @param args   参数
-     * @param <T>    返回类型
-     * @return 方法返回值
+     * @param obj    the object
+     * @param method the method
+     * @param args   the arguments
+     * @param <T>    the return type
+     * @return the method's return value
      */
     @SuppressWarnings("unchecked")
     public static <T> T invoke(Object obj, java.lang.reflect.Method method, Object... args) {
@@ -434,9 +412,9 @@ public final class ReflectionUtil {
             throw new IllegalStateException("Failed to invoke method: " + method.getName(), e);
         }
     }
-    
+
     /**
-     * 获取满足条件的方法
+     * Gets the methods that satisfy a condition.
      * <p>
      * Delegates to {@link #getAllMethods(Class)} so callers get the same de-duplicated,
      * bridge/synthetic-free view of the hierarchy - a raw {@code getDeclaredMethods()} walk here
@@ -444,9 +422,9 @@ public final class ReflectionUtil {
      * the proxy's intercepted override and the original method as separate hits for the same
      * logical method).
      *
-     * @param clazz  类
-     * @param filter 过滤条件
-     * @return 方法数组
+     * @param clazz  the class
+     * @param filter the filter condition
+     * @return the method array
      */
     public static java.lang.reflect.Method[] getMethods(Class<?> clazz, java.util.function.Predicate<java.lang.reflect.Method> filter) {
         java.util.List<java.lang.reflect.Method> result = new ArrayList<>();
@@ -457,12 +435,12 @@ public final class ReflectionUtil {
         }
         return result.toArray(new java.lang.reflect.Method[0]);
     }
-    
+
     /**
-     * 获取类的所有方法（包括父类）
+     * Gets all methods of a class (including superclasses).
      *
-     * @param clazz 类
-     * @return 方法数组
+     * @param clazz the class
+     * @return the method array
      */
     public static java.lang.reflect.Method[] getMethods(Class<?> clazz) {
         return getMethods(clazz, null);
@@ -475,9 +453,9 @@ public final class ReflectionUtil {
      * {@code Class.getDeclaredMethods()} returns only the methods a class declares itself, and
      * {@code Class.getMethods()} returns only public ones. Neither is right for annotation scanning
      * on a bean that may be an AOP proxy: the proxy declares overrides only for intercepted
-     * methods, so scanning it directly loses every annotation on the rest. Walking the hierarchy
-     * recovers them, and collapsing overrides keeps a callback from firing once per level when an
-     * override repeats its parent's annotation.
+     * methods, so scanning it directly loses every annotation on the rest (issue #190). Walking the
+     * hierarchy recovers them, and collapsing overrides keeps a callback from firing once per level
+     * when an override repeats its parent's annotation.
      * <p>
      * Declarations are grouped into <em>slots</em> using {@link #overrides(Method, Method)}, and
      * each slot contributes exactly one entry: the most derived declaration, which is the one whose
@@ -495,12 +473,6 @@ public final class ReflectionUtil {
      * compiler artifacts, are never the method a scanner means to find.
      * <p>
      * {@code Object}'s own methods are excluded.
-     * <p>
-     * {@code getDeclaredMethods()} 只返回类自己声明的方法，{@code getMethods()} 只返回 public
-     * 方法，两者都不适合在可能是 AOP 代理的 bean 上做注解扫描：代理只为被拦截的方法声明覆盖，
-     * 直接扫它会丢掉其余方法上的全部注解。见 issue #190。合并覆盖时以
-     * {@link #overrides(Method, Method)} 判定，并保留每个槽内的<b>全部</b>声明而不只是代表——
-     * 因为覆盖具有传递性，只与代表比较会漏掉链条最上游的那条声明。
      *
      * @param clazz the class to scan, may be null
      * @return the methods, subclass overrides first; empty if clazz is null
@@ -600,15 +572,6 @@ public final class ReflectionUtil {
      * Packages are compared by name, matching how the rest of this class treats them; two
      * same-named packages defined by different class loaders are distinct runtime packages to the
      * JVM, a distinction this check does not make.
-     * <p>
-     * 覆盖关系是<b>有方向</b>的，也不是等价关系，因此无法用任何对称的 key 相等来表达——这正是
-     * 这里提供谓词而不是比较对称签名 key 的原因。判定条件见上方英文列表。
-     * 注意对 {@code sub} 自身的访问级别<b>不设</b>任何条件：Java 允许覆盖时放宽访问权限，同包子类
-     * 把包私有方法放宽为 {@code public} 仍是真正的覆盖。包按名称比较，不区分不同类加载器下的同名包。
-     * <p>
-     * 需要说明的是，上面第一条判定的其实是 JLS 8.4.2 的签名相等，而不是 JLS 8.4.8.1 真正要求的
-     * 子签名（subsignature）关系：参数类型按擦除后的 {@code Class} 对象比较，因此泛型声明与仅靠
-     * 擦除匹配的重写会被当成两个不同方法，即便子签名判定和 javac 都认可它们其实是同一个方法。
      *
      * @param sub the potentially overriding declaration, may be null
      * @param sup the potentially overridden declaration, may be null
