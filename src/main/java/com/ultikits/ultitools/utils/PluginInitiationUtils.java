@@ -1483,8 +1483,8 @@ public class PluginInitiationUtils {
         String format = data.get("format").getAsString();
         boolean backup = data.get("backup").getAsBoolean();
 
-        UltiTools.getInstance().getLogger().log(Level.FINE,
-            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
+        UltiTools.getInstance().getLogger().log(Level.FINE, 
+            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s", 
                 configType, configName, format, backup));
 
         // Handle different config files based on config type
@@ -1563,10 +1563,10 @@ public class PluginInitiationUtils {
                 // Recognize and ignore server acknowledgement messages
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE,
+                    UltiTools.getInstance().getLogger().log(Level.FINE, 
                         String.format("收到服务器插件列表确认: %s", message));
                 } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE,
+                    UltiTools.getInstance().getLogger().log(Level.FINE, 
                         "收到服务器插件列表消息，但不包含requestId，忽略处理");
                 }
             }
@@ -1583,7 +1583,7 @@ public class PluginInitiationUtils {
             // Only handle explicit status requests (carrying a requestId); ignore server acknowledgement messages
             if (data != null && data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
-                UltiTools.getInstance().getLogger().log(Level.FINE,
+                UltiTools.getInstance().getLogger().log(Level.FINE, 
                     String.format("收到服务器状态请求，请求ID: %s", requestId));
 
                 // Immediately send the current server status, including the request id
