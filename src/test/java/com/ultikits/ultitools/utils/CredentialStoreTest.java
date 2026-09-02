@@ -5,8 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,6 +28,7 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -284,5 +289,50 @@ class CredentialStoreTest {
         assertThat(parseFailures.get())
                 .as("every read must either parse or report absence -- never a parse failure from a torn write")
                 .isZero();
+    }
+
+    // ---- The single-owner invariant (promote decision, assumption_delta_decision). Structural,
+    // not runtime: a source scan, because "no other class touches data.json" cannot be observed by
+    // calling an API -- it is a property of the whole src/main tree. ----
+
+    @Test
+    @Disabled("Enabled by plan 08-14, which routes CloudAuthManager and CommonUtils through "
+            + "CredentialStore so this invariant holds. Until then both classes still open a "
+            + "reader/writer on data.json directly and this test would correctly fail -- do not "
+            + "delete it as broken, and do not weaken the scan to make it pass early.")
+    @DisplayName("no class other than CredentialStore opens a reader or writer on data.json")
+    void onlyCredentialStoreTouchesDataJsonDirectly() throws IOException {
+        Path srcRoot = Paths.get("src/main/java");
+        List<Path> javaFiles = new ArrayList<>();
+        Files.walkFileTree(srcRoot, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                if (file.toString().endsWith(".java")
+                        && !file.getFileName().toString().equals("CredentialStore.java")) {
+                    javaFiles.add(file);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        List<String> offenders = new ArrayList<>();
+        for (Path file : javaFiles) {
+            String content = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            // Quoted literal only -- a bare substring match also fires on this file's own package
+            // name (com.ultikits.ultitools.interfaces.impl.data.json), a false positive that has
+            // nothing to do with the credential file (measured during this plan's own execution).
+            boolean mentionsCredentialFile = content.contains("\"data.json\"");
+            boolean opensReaderOrWriter = content.contains("Files.newBufferedReader(")
+                    || content.contains("Files.newBufferedWriter(")
+                    || content.contains("Files.newInputStream(")
+                    || content.contains("Files.newOutputStream(");
+            if (mentionsCredentialFile && opensReaderOrWriter) {
+                offenders.add(file.toString() + " -- route through CredentialStore instead");
+            }
+        }
+
+        assertThat(offenders)
+                .as("every reader or writer on data.json must go through CredentialStore")
+                .isEmpty();
     }
 }
