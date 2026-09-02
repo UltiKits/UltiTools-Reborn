@@ -4,9 +4,9 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Widget 构建器的通用接口。
+ * Common interface for Widget builders.
  *
- * @param <T> 构建的 Widget 类型
+ * @param <T> the type of Widget being built
  * @author UltiTools Team
  * @version 1.0.0
  * @since 6.2.0
@@ -15,9 +15,9 @@ import org.jetbrains.annotations.NotNull;
 public interface WidgetBuilder<T extends Widget> {
 
     /**
-     * 构建 Widget 实例。
+     * Builds the Widget instance.
      *
-     * @return Widget 实例
+     * @return the Widget instance
      */
     @NotNull
     T build();

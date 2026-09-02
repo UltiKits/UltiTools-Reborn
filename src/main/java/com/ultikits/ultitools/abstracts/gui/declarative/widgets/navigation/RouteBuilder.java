@@ -5,9 +5,9 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * 路由构建器接口。
+ * Route builder interface.
  * <p>
- * 用于根据上下文构建 Widget。
+ * Used to build a Widget from a context.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -17,10 +17,10 @@ import org.jetbrains.annotations.NotNull;
 public interface RouteBuilder {
 
     /**
-     * 构建 Widget。
+     * Builds the Widget.
      *
-     * @param context BuildContext
-     * @return 构建的 Widget
+     * @param context the BuildContext
+     * @return the built Widget
      */
     @NotNull
     Widget build(@NotNull BuildContext context);

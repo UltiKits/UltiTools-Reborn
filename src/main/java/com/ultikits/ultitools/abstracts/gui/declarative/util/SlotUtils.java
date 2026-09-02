@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.util;
 
 /**
- * 槽位计算工具类。
+ * Slot-index calculation utilities.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -10,27 +10,27 @@ package com.ultikits.ultitools.abstracts.gui.declarative.util;
 public final class SlotUtils {
 
     private SlotUtils() {
-        // 工具类，禁止实例化
+        // Utility class — instantiation forbidden
     }
 
     /**
-     * 将行列转换为槽位索引。
+     * Converts a row/column pair into a slot index.
      *
-     * @param row 行（0-based）
-     * @param col 列（0-based）
-     * @return 槽位索引
+     * @param row row (0-based)
+     * @param col column (0-based)
+     * @return slot index
      */
     public static int toSlotIndex(int row, int col) {
         return row * 9 + col;
     }
 
     /**
-     * 从起始槽位计算相对位置的槽位索引。
+     * Computes the slot index of a position relative to a starting slot.
      *
-     * @param startSlot 起始槽位
-     * @param rowOffset 行偏移
-     * @param colOffset 列偏移
-     * @return 槽位索引
+     * @param startSlot starting slot
+     * @param rowOffset row offset
+     * @param colOffset column offset
+     * @return slot index
      */
     public static int toSlotIndex(int startSlot, int rowOffset, int colOffset) {
         int startRow = startSlot / 9;
@@ -39,42 +39,42 @@ public final class SlotUtils {
     }
 
     /**
-     * 从槽位索引获取行。
+     * Gets the row of a slot index.
      *
-     * @param slot 槽位索引
-     * @return 行（0-based）
+     * @param slot slot index
+     * @return row (0-based)
      */
     public static int getRow(int slot) {
         return slot / 9;
     }
 
     /**
-     * 从槽位索引获取列。
+     * Gets the column of a slot index.
      *
-     * @param slot 槽位索引
-     * @return 列（0-based）
+     * @param slot slot index
+     * @return column (0-based)
      */
     public static int getCol(int slot) {
         return slot % 9;
     }
 
     /**
-     * 检查槽位是否在有效的 GUI 范围内。
+     * Checks whether a slot is within the valid GUI range.
      *
-     * @param slot 槽位索引
-     * @param rows GUI 行数
-     * @return 如果有效返回 true
+     * @param slot slot index
+     * @param rows number of GUI rows
+     * @return true if valid
      */
     public static boolean isValidSlot(int slot, int rows) {
         return slot >= 0 && slot < rows * 9;
     }
 
     /**
-     * 检查槽位是否在边框上（最外圈）。
+     * Checks whether a slot sits on the border (the outermost ring).
      *
-     * @param slot 槽位索引
-     * @param rows GUI 行数
-     * @return 如果在边框上返回 true
+     * @param slot slot index
+     * @param rows number of GUI rows
+     * @return true if on the border
      */
     public static boolean isBorderSlot(int slot, int rows) {
         int row = getRow(slot);
@@ -83,20 +83,20 @@ public final class SlotUtils {
     }
 
     /**
-     * 获取指定行的起始槽位。
+     * Gets the starting slot of the given row.
      *
-     * @param row 行（0-based）
-     * @return 起始槽位
+     * @param row row (0-based)
+     * @return starting slot
      */
     public static int getRowStart(int row) {
         return row * 9;
     }
 
     /**
-     * 获取指定行的槽位范围。
+     * Gets the slot range of the given row.
      *
-     * @param row 行（0-based）
-     * @return 起始槽位（包含）和结束槽位（不包含）
+     * @param row row (0-based)
+     * @return starting slot (inclusive) and ending slot (exclusive)
      */
     public static int[] getRowRange(int row) {
         int start = row * 9;
@@ -104,21 +104,21 @@ public final class SlotUtils {
     }
 
     /**
-     * 获取中心槽位。
+     * Gets the center slot.
      *
-     * @param rows GUI 行数
-     * @return 中心槽位索引
+     * @param rows number of GUI rows
+     * @return center slot index
      */
     public static int getCenterSlot(int rows) {
         return (rows / 2) * 9 + 4;
     }
 
     /**
-     * 创建槽位范围。
+     * Creates a slot range.
      *
-     * @param startSlot 起始槽位
-     * @param endSlot   结束槽位（包含）
-     * @return 槽位数组
+     * @param startSlot starting slot
+     * @param endSlot   ending slot (inclusive)
+     * @return array of slots
      */
     public static int[] createRange(int startSlot, int endSlot) {
         int[] slots = new int[endSlot - startSlot + 1];

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.logging.Logger;
 
 /**
- * GridView 对应的 Element。
+ * The Element counterpart of GridView.
  * <p>
  * Task 2 (05-13, WIRE-03 / D-11): positions ANY widget type by writing parent data at render
  * time -- {@link #applyGridPositions()} computes each child's slot from the {@link GridView}'s
