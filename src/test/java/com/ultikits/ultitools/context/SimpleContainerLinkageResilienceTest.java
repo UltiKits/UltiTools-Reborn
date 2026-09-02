@@ -18,10 +18,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.testfixtures.missingdependency.CommandExecutorWithMissingDependency;
 import com.ultikits.testfixtures.missingdependency.HasMethodReferencingMissingType;
 import com.ultikits.testfixtures.missingdependency.MissingDependencyType;
+import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
+
+import org.bukkit.command.CommandExecutor;
 
 /**
  * 07-21 Task 2: proves {@code SimpleContainer.createBean}/{@code preInstantiateSingletons} skip a
@@ -90,16 +94,24 @@ class SimpleContainerLinkageResilienceTest {
     // BlockingClassLoader exactly (see that test's class-level comment for the full rationale --
     // a bootstrap-parented loader would also cut off com.ultikits.ultitools.annotations.* and
     // friends). The parent here is this test's own (normal) class loader, so every ordinary type
-    // resolves exactly as it does anywhere else in the JVM; only two names are treated specially.
+    // resolves exactly as it does anywhere else in the JVM; only the blocked name plus the
+    // self-defined name(s) are treated specially.
+    // 07-23 Task 2: widened from a single selfDefinedClassName to a varargs set of names --
+    // required so a SECOND fixture class (CommandExecutorWithMissingDependency) can be defined
+    // by the SAME loader instance as HasMethodReferencingMissingType, which is what makes
+    // Field.getType() on the new fixture's @Autowired field return the EXACT SAME Class object
+    // this test registers in the container as the poisoned bean's own definition. Two Class
+    // objects for textually-identical bytecode loaded by two DIFFERENT class loaders are never
+    // .equals()/mutually assignable in the JVM's eyes.
     private static final class BlockingClassLoader extends URLClassLoader {
         private final String blockedClassName;
-        private final String selfDefinedClassName;
+        private final java.util.List<String> selfDefinedClassNames;
 
         BlockingClassLoader(URL[] urls, ClassLoader parent, String blockedClassName,
-                String selfDefinedClassName) {
+                String... selfDefinedClassNames) {
             super(urls, parent);
             this.blockedClassName = blockedClassName;
-            this.selfDefinedClassName = selfDefinedClassName;
+            this.selfDefinedClassNames = java.util.Arrays.asList(selfDefinedClassNames);
         }
 
         @Override
@@ -107,7 +119,7 @@ class SimpleContainerLinkageResilienceTest {
             if (blockedClassName.equals(name)) {
                 throw new ClassNotFoundException(name);
             }
-            if (!selfDefinedClassName.equals(name)) {
+            if (!selfDefinedClassNames.contains(name)) {
                 return super.loadClass(name, resolve);
             }
             synchronized (getClassLoadingLock(name)) {
@@ -123,11 +135,15 @@ class SimpleContainerLinkageResilienceTest {
         }
     }
 
-    private BlockingClassLoader newLoaderHiding(Class<?> hiddenType, Class<?> targetType) {
-        URL classesRoot = targetType.getProtectionDomain().getCodeSource().getLocation();
+    private BlockingClassLoader newLoaderHiding(Class<?> hiddenType, Class<?>... targetTypes) {
+        URL classesRoot = targetTypes[0].getProtectionDomain().getCodeSource().getLocation();
+        String[] targetNames = new String[targetTypes.length];
+        for (int i = 0; i < targetTypes.length; i++) {
+            targetNames[i] = targetTypes[i].getName();
+        }
         return new BlockingClassLoader(new URL[]{classesRoot},
                 SimpleContainerLinkageResilienceTest.class.getClassLoader(),
-                hiddenType.getName(), targetType.getName());
+                hiddenType.getName(), targetNames);
     }
 
     @Test
@@ -396,5 +412,157 @@ class SimpleContainerLinkageResilienceTest {
         assertThatCode(fresh::refresh).doesNotThrowAnyException();
         Object bean = fresh.getBean("hasMethodReferencingMissingType");
         assertThat(bean).isNotNull().isInstanceOf(SurvivorBean.class);
+    }
+
+    // === 07-23 Task 2: faithful CommandExecutor-shaped regression ===================
+
+    /**
+     * Test H's negative-control fixture: an {@code @Autowired} field of a type that is simply
+     * never registered as any bean at all. No special class loader is involved -- this scenario
+     * has nothing to do with classpath linkage.
+     */
+    static class NeverRegisteredDependency {
+    }
+
+    static class HasUnregisteredRequiredDependency {
+        @Autowired
+        private NeverRegisteredDependency dependency;
+    }
+
+    @Test
+    @DisplayName("A CommandExecutor-shaped bean whose own class is clean but whose sole "
+            + "@Autowired dependency is poisoned survives refresh() -- the module still loads, "
+            + "matching 07-21's existing per-bean skip-and-continue and 07-22-SUMMARY.md's "
+            + "measured BackupCommand/BackupService shape")
+    void commandExecutorWithPoisonedTransitiveDependencySurvivesRefresh() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class,
+                CommandExecutorWithMissingDependency.class)) {
+            Class<?> poisonedServiceClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            Class<?> poisonedCommandClass =
+                    loader.loadClass(CommandExecutorWithMissingDependency.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("backup-shaped-module");
+            container.registerBean(poisonedServiceClass);
+            container.registerBean(poisonedCommandClass);
+            container.registerBean(SurvivorBean.class);
+
+            assertThatCode(container::refresh)
+                    .as("a CommandExecutor whose own class is clean but whose autowired "
+                            + "dependency is poisoned must not abort the whole module")
+                    .doesNotThrowAnyException();
+
+            Object survivor = container.getBean("survivorBean");
+            assertThat(survivor).isNotNull();
+            assertThat(((SurvivorBean) survivor).ping()).isEqualTo("pong");
+        }
+    }
+
+    @Test
+    @DisplayName("getBeanNamesForType(CommandExecutor.class) excludes a bean whose sole "
+            + "autowired dependency is poisoned from a second, independent enumeration call -- "
+            + "matching PluginManager.validateCommandExecutorContracts's exact call shape, "
+            + "including the two-argument getBean(name, type) overload it actually calls")
+    void getBeanNamesForTypeExcludesTransitivelyPoisonedCommandExecutor() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class,
+                CommandExecutorWithMissingDependency.class)) {
+            Class<?> poisonedServiceClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            Class<?> poisonedCommandClass =
+                    loader.loadClass(CommandExecutorWithMissingDependency.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("backup-shaped-module");
+            container.registerBean(poisonedServiceClass);
+            container.registerBean(poisonedCommandClass);
+            container.registerBean(SurvivorBean.class);
+
+            container.refresh();
+
+            String[] names = container.getBeanNamesForType(CommandExecutor.class);
+            assertThat(names)
+                    .as("the transitively-poisoned CommandExecutor bean must not be re-offered "
+                            + "by a second, independent enumeration call")
+                    .doesNotContain("commandExecutorWithMissingDependency");
+
+            for (String name : names) {
+                assertThatCode(() -> container.getBean(name, CommandExecutor.class))
+                        .as("mirrors validateCommandExecutorContracts's own per-name loop, "
+                                + "including the two-arg getBean(name, type) overload it calls")
+                        .doesNotThrowAnyException();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Diagnostics dedup: the whole register/refresh/enumerate/resolve sequence emits "
+            + "exactly ONE SEVERE summary naming each distinct poisoned class exactly once, not "
+            + "the two-or-three-times duplicate-listing artifact 07-22-SUMMARY.md observed on "
+            + "the real server")
+    void diagnosticsNameEachDistinctPoisonedClassExactlyOnce() throws Exception {
+        try (BlockingClassLoader loader = newLoaderHiding(MissingDependencyType.class,
+                HasMethodReferencingMissingType.class,
+                CommandExecutorWithMissingDependency.class)) {
+            Class<?> poisonedServiceClass =
+                    loader.loadClass(HasMethodReferencingMissingType.class.getName());
+            Class<?> poisonedCommandClass =
+                    loader.loadClass(CommandExecutorWithMissingDependency.class.getName());
+
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new AopProxyResolver());
+            container.setDisplayName("backup-shaped-module");
+            container.registerBean(poisonedServiceClass);
+            container.registerBean(poisonedCommandClass);
+            container.registerBean(SurvivorBean.class);
+
+            container.refresh();
+            String[] names = container.getBeanNamesForType(CommandExecutor.class);
+            for (String name : names) {
+                container.getBean(name, CommandExecutor.class);
+            }
+        }
+
+        List<LogRecord> severe = new ArrayList<>();
+        for (LogRecord record : diagnosticsCaptured) {
+            if (Level.SEVERE.equals(record.getLevel())) {
+                severe.add(record);
+            }
+        }
+        assertThat(severe).hasSize(1);
+        String message = severe.get(0).getMessage();
+        int serviceOccurrences = message.split(java.util.regex.Pattern.quote(
+                HasMethodReferencingMissingType.class.getName()), -1).length - 1;
+        int commandOccurrences = message.split(java.util.regex.Pattern.quote(
+                CommandExecutorWithMissingDependency.class.getName()), -1).length - 1;
+        assertThat(serviceOccurrences)
+                .as("HasMethodReferencingMissingType must be named exactly once")
+                .isEqualTo(1);
+        assertThat(commandOccurrences)
+                .as("CommandExecutorWithMissingDependency must be named exactly once")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Hazard guard (negative control): a genuinely unrelated required-dependency "
+            + "failure -- an @Autowired(required=true) field whose type was never registered as "
+            + "any bean at all -- still aborts refresh() exactly as before; this plan's "
+            + "memoization is scoped exclusively to LinkageError/TypeNotPresentException "
+            + "classpath failures")
+    void unrelatedRequiredDependencyFailureStillAbortsRefresh() {
+        SimpleContainer container = new SimpleContainer();
+        container.setAopProxyResolver(new AopProxyResolver());
+        container.setDisplayName("negative-control-module");
+        container.registerBean(HasUnregisteredRequiredDependency.class);
+
+        assertThatThrownBy(container::refresh)
+                .as("a genuinely unrelated, never-registered required dependency must still "
+                        + "abort the module -- this plan's memoization must not convert it into "
+                        + "a silent skip")
+                .isInstanceOf(RuntimeException.class);
     }
 }
