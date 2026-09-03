@@ -96,8 +96,12 @@
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
 #             64 = usage error (unknown flag).
 #
-# NOT wired into maven-ci.yml yet — see D-20. The gate turns on only after GATE-02 batch 4 lands,
-# because a gate that is red for the whole conversion trains everyone to ignore it.
+# Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
+# there with no threshold flag, so the zero-violation default applies. The migration aid
+# (--max-violations) existed only to let the gate be introduced before GATE-02's conversion
+# batches finished (08-04..08-17); the conversion is now finished and the gate is live and
+# required on both alpha and main. IN-01 (08-REVIEW.md): this header previously said "NOT wired
+# into maven-ci.yml yet" after the wiring had already landed -- corrected here to match.
 #
 set -euo pipefail
 
