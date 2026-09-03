@@ -37,6 +37,9 @@ import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
@@ -225,11 +228,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             Reader envReader = getInstance().getTextResource("env.yml");
             if (envReader == null) {
-                throw new RuntimeException("env.yml not found in resources!");
+                // GATE-05 group two (08-21): routed to the typed configuration hierarchy.
+                throw new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED, "env.yml not found in resources!");
             }
             config.load(envReader);
         } catch (IOException | InvalidConfigurationException e) {
-            throw new RuntimeException("Failed to load env.yml configuration", e);
+            // GATE-05 group two (08-21): routed to the typed configuration hierarchy.
+            throw ConfigurationException.loadFailed("env.yml", e);
         }
         return config;
     }
@@ -247,7 +252,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 getLogger().info("Server Jar detected: " + name);
             }
         } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
+            // the core plugin itself failing during its own onLoad, the same category as a
+            // module's own load failure.
+            throw PluginModuleException.loadFailed("UltiTools", e);
         }
     }
 
@@ -342,7 +350,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             pluginManager.init(ultiToolsClassLoader);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
+            // the module-loading subsystem itself failing to initialize, before any individual
+            // module is even identified.
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Failed to initialize plugin module loading", e);
         }
     }
 
@@ -640,11 +652,15 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     public Economy getEconomy() {
         if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            throw new RuntimeException("Vault not found!");
+            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
+            // a missing plugin dependency, exactly what dependencyMissing exists for.
+            throw PluginModuleException.dependencyMissing("UltiTools", "Vault");
         }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         if (registration == null) {
-            throw new RuntimeException("Economy service not found!");
+            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
+            // present but no economy provider (e.g. EssentialsX) has registered one.
+            throw PluginModuleException.dependencyMissing("UltiTools", "an Economy provider registered with Vault");
         }
         return registration.getProvider();
     }

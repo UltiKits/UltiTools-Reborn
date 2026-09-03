@@ -107,6 +107,15 @@ public class SimpleTempListener<E extends Event> implements TempListener {
         this.eventHandler = eventHandler;
     }
 
+    // GATE-05 group two (08-21): the ClassCastException wrap below is deliberately left raw, not
+    // routed to the typed exception hierarchy. It runs inside Bukkit's own event-dispatch
+    // callback, invoked by Bukkit's plugin manager rather than by any UltiTools API caller --
+    // there is no framework-internal catch site that could ever distinguish a typed exception
+    // from an untyped one here, since Bukkit's own dispatcher is what observes it. It also
+    // asserts an effectively-impossible internal state: registerEvent only fires this callback
+    // for the exact eventClass this listener registered (or a subclass), so the cast can only
+    // fail if Bukkit's own dispatch contract is violated. See 08-GATE05-TRIAGE.md.
+    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
     public void register() {
         if (eventClass == null) {
             throw new IllegalStateException(

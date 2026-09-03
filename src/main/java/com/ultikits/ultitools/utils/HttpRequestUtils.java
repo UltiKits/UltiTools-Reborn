@@ -94,6 +94,14 @@ public class HttpRequestUtils {
      * @param token  the authentication token
      * @return HttpResponse containing the registration result
      */
+    // GATE-05 group two (08-21): deliberately left raw, not routed to the typed exception
+    // hierarchy. Both this method's caller (PluginInitiationUtils.loginWithToken) and its
+    // caller in turn (UltiTools.attemptCloudLogin / CloudAuthManager's login callback) catch
+    // generic Exception and log e.getMessage() -- neither distinguishes rate limiting from any
+    // other registration failure by type, and the failure is internal to this HTTP helper
+    // rather than part of the framework's public exception contract surface. See
+    // 08-GATE05-TRIAGE.md's rate-limit decision.
+    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
     protected static Response registerServer(String uuid, String name, int port, String domain, boolean ssl, TokenEntity token) {
         if (!ApiRateLimiter.isAllowed("registerServer", 60_000)) {
             throw new RuntimeException("Rate limited: please wait before retrying server registration");
@@ -129,6 +137,9 @@ public class HttpRequestUtils {
      * @param token  the authentication token
      * @return HttpResponse containing the update result
      */
+    // GATE-05 group two (08-21): deliberately left raw -- same reasoning as registerServer's
+    // identical suppression above. See 08-GATE05-TRIAGE.md's rate-limit decision.
+    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
     protected static Response updateServer(String uuid, int port, String domain, boolean ssl, TokenEntity token) {
         if (!ApiRateLimiter.isAllowed("updateServer", 60_000)) {
             throw new RuntimeException("Rate limited: please wait before retrying server update");

@@ -22,6 +22,9 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+
 /**
  * Factory for creating inheritance-based subclass proxies.
  * <p>
@@ -200,7 +203,11 @@ public class ProxyFactory {
                     .load(targetClass.getClassLoader(), ClassLoadingStrategy.Default.INJECTION)
                     .getLoaded();
         } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to create a proxy for " + targetClass.getName() +
+            // GATE-05 group two (08-21): routed to the typed container hierarchy -- the
+            // generated proxy class IS the bean in this framework's design, so a failure to
+            // build it is a bean-creation failure.
+            throw new ContainerException(ErrorCode.BEAN_CREATION_FAILED,
+                    "Failed to create a proxy for " + targetClass.getName() +
                     ". Common causes: the class is final, has no constructor reachable by the " +
                     "container, or one of the intercepted methods cannot be overridden.", e);
         }

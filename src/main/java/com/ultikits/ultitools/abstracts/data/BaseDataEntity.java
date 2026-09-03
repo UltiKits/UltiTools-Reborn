@@ -3,6 +3,8 @@ package com.ultikits.ultitools.abstracts.data;
 import java.io.Serializable;
 
 import com.ultikits.ultitools.annotations.Column;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -134,7 +136,10 @@ public abstract class BaseDataEntity<ID extends Serializable> implements Seriali
             copy.setId(null);
             return copy;
         } catch (CloneNotSupportedException e) {
-            throw new RuntimeException("Failed to copy entity", e);
+            // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- copying an
+            // entity is a data operation, same category as SimpleJsonDataOperator's batch/
+            // transaction failures.
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED, "Failed to copy entity", e);
         }
     }
     

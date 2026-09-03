@@ -220,7 +220,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             initConfig();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this
+            // constructor failing to complete means the whole connector plugin failed to load.
+            throw PluginModuleException.loadFailed(pluginName, e);
         }
     }
 
