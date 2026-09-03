@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.CommandManager;
@@ -26,6 +28,7 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * Tests for the {@link UltiTools} main plugin class.
@@ -114,9 +117,12 @@ class UltiToolsTest {
         // dispatches through the mock's interceptor, so Mockito's `when(...)` still picks up the
         // recorded invocation; only the *call syntax*, not the mocking itself, needs to route
         // around the access check.
-        private java.lang.reflect.Method getTextResourceMethod;
+        private Method getTextResourceMethod;
 
+        // Deliberate access alteration: reaching a protected JavaPlugin method and the
+        // private UltiTools singleton field is the point of this fixture, not a leak.
         @org.junit.jupiter.api.BeforeEach
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void resolveProtectedMethod() throws NoSuchMethodException {
             getTextResourceMethod = org.bukkit.plugin.java.JavaPlugin.class
                     .getDeclaredMethod("getTextResource", String.class);
@@ -124,8 +130,9 @@ class UltiToolsTest {
         }
 
         @org.junit.jupiter.api.AfterEach
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void resetInstance() throws Exception {
-            java.lang.reflect.Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
             instanceField.set(null, null);
         }
@@ -137,7 +144,7 @@ class UltiToolsTest {
         @Test
         @DisplayName("Should throw ConfigurationException when env.yml is absent from resources")
         void shouldThrowConfigurationExceptionWhenEnvYmlMissing() {
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
                 try {
                     when(invokeGetTextResource(ultiTools, "env.yml")).thenReturn(null);
                 } catch (Exception e) {
@@ -146,16 +153,16 @@ class UltiToolsTest {
             });
 
             assertThatThrownBy(UltiTools::getEnv)
-                    .isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class)
+                    .isInstanceOf(ConfigurationException.class)
                     .hasMessageContaining("env.yml not found")
-                    .extracting(t -> ((com.ultikits.ultitools.exceptions.ConfigurationException) t).getErrorCode())
-                    .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_LOAD_FAILED);
+                    .extracting(t -> ((ConfigurationException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.CONFIG_LOAD_FAILED);
         }
 
         @Test
         @DisplayName("Should throw ConfigurationException when env.yml content is not valid YAML")
         void shouldThrowConfigurationExceptionWhenEnvYmlMalformed() {
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
                 try {
                     when(invokeGetTextResource(ultiTools, "env.yml"))
                             .thenReturn(new java.io.StringReader("api-url: [unterminated"));
@@ -165,10 +172,10 @@ class UltiToolsTest {
             });
 
             assertThatThrownBy(UltiTools::getEnv)
-                    .isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class)
+                    .isInstanceOf(ConfigurationException.class)
                     .hasMessageContaining("env.yml")
-                    .extracting(t -> ((com.ultikits.ultitools.exceptions.ConfigurationException) t).getErrorCode())
-                    .isEqualTo(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_LOAD_FAILED);
+                    .extracting(t -> ((ConfigurationException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.CONFIG_LOAD_FAILED);
         }
     }
 

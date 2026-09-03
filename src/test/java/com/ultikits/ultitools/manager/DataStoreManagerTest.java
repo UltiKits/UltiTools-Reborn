@@ -13,9 +13,14 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -482,10 +487,10 @@ class DataStoreManagerTest {
         void concurrentReadWriteShouldBeSafe() throws Exception {
             int initialCount = 3;
             int writerCount = 20;
-            java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(writerCount * 2);
-            java.util.List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
-            java.util.List<DataStore> readResults = new java.util.concurrent.CopyOnWriteArrayList<>();
-            java.util.Set<String> expectedTypes = new java.util.HashSet<>();
+            CyclicBarrier barrier = new CyclicBarrier(writerCount * 2);
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
+            List<DataStore> readResults = new CopyOnWriteArrayList<>();
+            Set<String> expectedTypes = new HashSet<>();
 
             for (int i = 0; i < initialCount; i++) {
                 DataStore store = mock(DataStore.class);
@@ -495,7 +500,7 @@ class DataStoreManagerTest {
                 expectedTypes.add(type);
             }
 
-            java.util.List<Thread> threads = new java.util.ArrayList<>();
+            List<Thread> threads = new ArrayList<>();
             for (int i = 0; i < writerCount; i++) {
                 String newType = "new-type-" + i;
                 expectedTypes.add(newType);
@@ -904,7 +909,7 @@ class DataStoreManagerTest {
         class UnownedEntity extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String> {
         }
 
-        private DataScope scopeFor(String pluginName, java.util.Set<Class<?>> owned) {
+        private DataScope scopeFor(String pluginName, Set<Class<?>> owned) {
             return DataScope.forExternal(pluginName, new File(System.getProperty("java.io.tmpdir"),
                     "ultitools-test-scope-" + pluginName), owned);
         }
@@ -1020,7 +1025,7 @@ class DataStoreManagerTest {
         class OwnedEntity extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String> {
         }
 
-        private DataScope scopeFor(String pluginName, java.util.Set<Class<?>> owned, File folder) {
+        private DataScope scopeFor(String pluginName, Set<Class<?>> owned, File folder) {
             return DataScope.forExternal(pluginName, folder, owned);
         }
 

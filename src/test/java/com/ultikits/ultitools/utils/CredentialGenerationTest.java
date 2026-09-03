@@ -53,6 +53,13 @@ class CredentialGenerationTest {
     @TempDir
     File dataFolder;
 
+    /**
+     * The exact temporary-file name {@link CredentialStore} always creates for a write before
+     * atomically renaming it onto {@code credentials.json} -- see {@code CredentialStore.TEMP_FILE_NAME},
+     * which is private and so cannot be referenced symbolically from this package-mate.
+     */
+    private static final String TEMP_FILE_NAME = "credentials.json.tmp";
+
     @BeforeEach
     void setUp() {
         Logger mockLogger = mock(Logger.class);
@@ -89,13 +96,6 @@ class CredentialGenerationTest {
     }
 
     /**
-     * The exact temporary-file name {@link CredentialStore} always creates for a write before
-     * atomically renaming it onto {@code credentials.json} -- see {@code CredentialStore.TEMP_FILE_NAME},
-     * which is private and so cannot be referenced symbolically from this package-mate.
-     */
-    private static final String TEMP_FILE_NAME = "credentials.json.tmp";
-
-    /**
      * Registers an OS-level watch on {@code dir} for {@code ENTRY_CREATE} events. Used to count
      * {@link CredentialStore} writes independently of the call sites that trigger them: every
      * {@code CredentialStore} write creates {@value #TEMP_FILE_NAME} fresh (it is renamed away by
@@ -116,6 +116,11 @@ class CredentialGenerationTest {
      * kernel -- {@code timeout} only bounds how long this waits for them to be delivered and
      * drained, it is not a sleep-and-hope for an async operation to finish.
      */
+    // StandardWatchEventKinds constants are singletons whose implementing class
+    // (java.nio.file.StandardWatchEventKinds$StdWatchEventKind) never overrides equals()/
+    // hashCode() -- `==` is reference identity here, which is exactly what the JDK's own
+    // WatchService documentation uses to compare a WatchEvent's kind.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static int countTempFileCreations(WatchService watchService, Duration timeout) throws InterruptedException {
         int count = 0;
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
