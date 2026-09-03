@@ -156,19 +156,38 @@
                 <configuration>
                     <publishingServerId>ultikits-sonatype</publishingServerId>
                     <!--
-                        WR-02 (08-REVIEW.md): this module is prepared for Central publishing but
-                        not yet publishable, because the org.spigotmc:spigot-api dependency above
-                        is still a SNAPSHOT coordinate, and Central rejects any POM referencing a
-                        SNAPSHOT dependency (see 08-RELEASE-PACKAGE.md #2.2 for the two
-                        architectural options; resolving that is a separate maintainer decision,
-                        not addressed here). autoPublish left at true would let a `mvn deploy -P
-                        release` attempt publish straight to Central with no staging-review step,
-                        so a premature deploy would fail at Central's own validation gate instead
-                        of failing fast locally. Do not flip this back to true until the
-                        spigot-api SNAPSHOT question above is resolved.
+                        Staging-only by design. autoPublish=false uploads the bundle, lets Central
+                        run its validation, and stops for a human to release. waitUntil must be
+                        `validated`, NOT `published`: with autoPublish=false the deployment never
+                        reaches PUBLISHED on its own, so `published` would block waiting for a
+                        state only a manual release can produce.
+
+                        This module is prepared but NOT publishable, and the reason is now measured
+                        rather than argued. A real staging attempt on 2026-09-03 was REJECTED by
+                        Central's own validator:
+
+                          Deployment 6db570a1-29fa-4c56-bce8-f2f98ed4d498 failed
+                          pkg:maven/com.ultikits/ultikits-test-utils@1.0.0:
+                           - Dependencies to SNAPSHOT versions not allowed for dependency:
+                             org.spigotmc:spigot-api
+
+                        Note a genuine counter-observation that does NOT overturn this, so nobody
+                        re-litigates it: com.github.cryptomorin:XSeries:13.3.2 is served by Central
+                        today WITH org.spigotmc:spigot:1.21.6-R0.1-SNAPSHOT in provided scope. It
+                        was published 2025-06-29, one day before legacy OSSRH shut down, and OSSRH
+                        did not enforce this rule. The Central Portal does, and the Portal is the
+                        only path now. Both facts are true; the publishing channel is what changed.
+
+                        No released Bukkit-family coordinate can be substituted either: none has
+                        ever existed, for licensing reasons dating to CraftBukkit's 2014 takedown
+                        (see 08-GATE04-SPIKE.md). Resolving this needs one of the two architectural
+                        options in 08-RELEASE-PACKAGE.md #2.2 - a maintainer decision, not a config
+                        change.
+
+                        Do not flip autoPublish to true. Release authorisation is `accept-only`.
                     -->
                     <autoPublish>false</autoPublish>
-                    <waitUntil>published</waitUntil>
+                    <waitUntil>validated</waitUntil>
                 </configuration>
             </plugin>
         </plugins>
