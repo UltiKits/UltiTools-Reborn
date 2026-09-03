@@ -28,13 +28,14 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.CredentialStore;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 文件操作管理器
- * 负责处理来自WebSocket的文件操作请求
+ * File operation manager.
+ * Handles file operation requests received over the WebSocket connection.
  *
  * <p>The remote file API is confined to two layers (D-14): an unconditional, non-configurable
  * deny layer for credential-bearing files and the framework's own action-log directory, and an
@@ -69,9 +70,21 @@ public class FileOperationManager {
      */
     private static final List<PathMatcher> DENY_GLOB_MATCHERS = buildDenyGlobMatchers();
 
-    /** D-16's exact-basename credential set — matched case-insensitively, see {@link #basenameOf}. */
+    /**
+     * D-16's exact-basename credential set — matched case-insensitively, see {@link #basenameOf}.
+     * <p>
+     * <b>Plan 08-15 checkpoint decision ({@code outside-roots-keep-filename}):</b> the credential
+     * file moved outside every default editable root (D-15) to
+     * {@code <server root>/.ultikits/credentials.json} — the remote file surface cannot reach it
+     * by path at all any more, so this entry stops being the *only* protection. It is kept
+     * anyway, referencing {@link CredentialStore#CREDENTIAL_FILE_NAME} rather than a duplicated
+     * literal, as defence in depth: it costs nothing, and it still protects an operator who
+     * widens the editable roots to include the new location's parent. {@code "data.json"} stays
+     * in this set too — not dead weight, but the pre-6.3.0 name, still live at its old location
+     * for any install that has not yet restarted onto a migrated {@code CredentialStore}.
+     */
     private static final Set<String> DENY_EXACT_BASENAMES = new HashSet<String>(Arrays.asList(
-        "data.json", "secring.gpg", "access_key.txt", ".dev.vars"
+        "data.json", CredentialStore.CREDENTIAL_FILE_NAME, "secring.gpg", "access_key.txt", ".dev.vars"
     ));
 
     /**
@@ -120,8 +133,8 @@ public class FileOperationManager {
     }
 
     /**
-     * 设置WebSocket客户端
-     * @param client WebSocket客户端
+     * Sets the WebSocket client.
+     * @param client the WebSocket client
      */
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
@@ -225,11 +238,18 @@ public class FileOperationManager {
      * is persistent access an operator cannot revoke by changing a password, unlike a compromised
      * editable-root grant, which a config edit closes immediately.
      * <p>
-     * <b>{@code plugins/UltiTools/data.json}</b> holds the live UltiCloud access and refresh
-     * tokens ({@code CloudAuthManager}), which is why D-19 names it explicitly rather than leaving
-     * it to the glob patterns. It is matched by exact basename below, not merely by the
-     * literal {@code plugins/UltiTools} prefix, so a credential file with the same name anywhere
-     * else is caught too.
+     * <b>The credential file</b> holds the live UltiCloud access and refresh tokens
+     * ({@code CloudAuthManager}), which is why D-19 names it explicitly rather than leaving it to
+     * the glob patterns. As of plan 08-15 it lives at
+     * {@code <server root>/.ultikits/credentials.json} — outside every default editable root
+     * (D-15), so the editable-root layer below can no longer reach it at all, regardless of
+     * configuration. This layer's basename entries are kept anyway as defence in depth for both
+     * names: {@code "credentials.json"} (current, referencing
+     * {@link com.ultikits.ultitools.utils.CredentialStore#CREDENTIAL_FILE_NAME}) and
+     * {@code "data.json"} (the pre-6.3.0 name, still live at
+     * {@code plugins/UltiTools/data.json} for any install that has not yet restarted onto a
+     * migrated {@code CredentialStore}). Matched by exact basename, not by directory prefix, so a
+     * credential file with either name anywhere else is caught too.
      * <p>
      * <b>The {@code plugins/UltiTools/security/} rule</b> is what lets the remote action log
      * ({@code RemoteActionLog}) live inside {@code getDataFolder()} — Bukkit convention intact —
@@ -238,14 +258,6 @@ public class FileOperationManager {
      * <p>
      * Folds in the pre-6.3.0 {@link #BLOCKED_FILES}/{@link #BLOCKED_EXTENSIONS} sets so every
      * unconditional refusal produces the same non-configurable decision shape.
-     * <p>
-     * 本层是不可配置的拒绝层（D-16），不读取任何配置键，也不查询任何 {@code Capability}——这里的
-     * 任何一条规则都不能被配置打开。授权面板管理文件，不等于授权它拿走面板自己的钥匙（D-01）：
-     * 被窃取的刷新令牌是持久性访问权限，操作员无法通过改密码撤销；而一次误配置的可编辑根目录，
-     * 一次配置修改就能立即关闭。{@code plugins/UltiTools/data.json} 保存着 UltiCloud
-     * 的实时访问与刷新令牌，D-19 因此显式点名了它，而不是交给通配模式兜底。{@code plugins/UltiTools/security/}
-     * 规则使远程动作日志得以留在 {@code getDataFolder()} 内、符合 Bukkit 约定，而不必物理迁移；
-     * 代价是日志与凭据文件现在共享同一个信任锚点。
      *
      * @param normalizedPath the path already stripped of a leading slash, forward-slash separated
      * @return a denied, non-configurable {@link AccessDecision} if this layer refuses the path;
@@ -337,7 +349,7 @@ public class FileOperationManager {
     }
 
     /**
-     * 处理文件操作请求
+     * Handles a file operation request.
      * <p>
      * Dispatches to one of the four operation handlers inside a {@link CompletableFuture#runAsync}
      * hop, then records exactly one {@link RemoteActionLog} entry per operation (D-22) — at this
@@ -368,7 +380,7 @@ public class FileOperationManager {
             String capturedOperationId = operationId;
             String capturedActor = actor;
 
-            // 异步处理文件操作
+            // Handle the file operation asynchronously
             CompletableFuture.runAsync(() -> {
                 AccessDecision decision;
                 switch (capturedOperation) {
@@ -436,7 +448,7 @@ public class FileOperationManager {
     }
     
     /**
-     * 处理文件读取操作
+     * Handles a file read operation.
      *
      * @return the {@link AccessDecision} that gated this read — the value
      *         {@link #recordFileDecision} records, regardless of whether the read then succeeded
@@ -463,7 +475,7 @@ public class FileOperationManager {
 
             int limit = operationData.has("limit") && !operationData.get("limit").isJsonNull()
                 ? operationData.get("limit").getAsInt() : 0;
-            if (limit <= 0) limit = 1000; // 默认限制1000行
+            if (limit <= 0) limit = 1000; // Default limit of 1000 lines
 
             StringBuilder content = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
@@ -492,7 +504,7 @@ public class FileOperationManager {
     }
 
     /**
-     * 处理文件写入操作
+     * Handles a file write operation.
      *
      * @return the {@link AccessDecision} that gated this write
      */
@@ -515,7 +527,7 @@ public class FileOperationManager {
                 return writeDecision;
             }
 
-            // 确保父目录存在
+            // Ensure the parent directory exists
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
@@ -540,7 +552,7 @@ public class FileOperationManager {
     }
     
     /**
-     * 处理目录列表操作
+     * Handles a directory listing operation.
      *
      * @return the {@link AccessDecision} that gated listing the directory itself — one decision
      *         for the whole operation, not one per returned row (see {@link #recordFileDecision})
@@ -634,7 +646,7 @@ public class FileOperationManager {
     }
 
     /**
-     * 处理文件删除操作
+     * Handles a file delete operation.
      *
      * @return the {@link AccessDecision} that gated this delete
      */
@@ -681,7 +693,7 @@ public class FileOperationManager {
 
             boolean deleted = false;
             if (file.isDirectory()) {
-                // 递归删除目录（谨慎操作）
+                // Recursively delete the directory (use with caution)
                 deleted = deleteDirectory(file);
             } else {
                 deleted = file.delete();
@@ -797,7 +809,7 @@ public class FileOperationManager {
     }
 
     /**
-     * 递归删除目录
+     * Recursively deletes a directory.
      */
     private boolean deleteDirectory(File dir) {
         File[] files = dir.listFiles();
@@ -813,9 +825,6 @@ public class FileOperationManager {
         return dir.delete();
     }
     
-    /**
-     * 获取安全的文件路径（防止路径遍历攻击）
-     */
     /**
      * Resolves a requested path to a real {@link File} handle, refusing anything that does not
      * canonically resolve inside one of the configured {@link #editableRoots} (D-21).
@@ -914,7 +923,7 @@ public class FileOperationManager {
     }
     
     /**
-     * 发送文件操作结果
+     * Sends the file operation result.
      */
     private void sendFileOperationResult(String operationId, String operation, String path, 
                                        boolean success, String message, JsonObject data) {

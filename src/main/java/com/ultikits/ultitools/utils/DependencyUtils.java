@@ -23,18 +23,6 @@ import java.util.Set;
  * misses that merge entirely) -- before {@code @since 6.3.0} a class annotated only {@code
  * @UltiToolsModule(scanBasePackages = {...})} silently fell through to the plugin class's own
  * package, discarding its declared value (SILENT-22).
- * <br>
- * 处理插件依赖和包扫描操作的实用工具类。
- * 此类帮助根据 {@link ComponentScan} 和 {@link EnableAutoRegister} 等注解
- * 确定应该扫描哪些包以查找组件。
- * <p>
- * {@code @UltiToolsModule} 同时把 {@link ComponentScan} 与 {@link EnableAutoRegister} 作为元注解
- * 携带，其 {@code scanBasePackages()}/{@code scanBasePackageClasses()} 属性通过
- * {@code @AliasFor} 指向 {@link ComponentScan} 的 {@code basePackages()}/
- * {@code basePackageClasses()}。因此解析必须走 {@link MergedAnnotationResolver#find}，而不是
- * 只能看到类上直接注解、完全错过这层合并的 JDK 自带反射查询——在 {@code @since 6.3.0} 之前，
- * 一个只标注了 {@code @UltiToolsModule(scanBasePackages = {...})} 的类会静默落回插件类自身的
- * 包名，丢弃它声明的值（SILENT-22）。
  *
  * @author wisdomme
  * @since 6.0.0
@@ -53,17 +41,9 @@ public class DependencyUtils {
      * duplicates collapsed to their first occurrence, mirroring {@code
      * PluginManager.getPluginScanPackages}'s shape. Falls back to the plugin class's own package
      * only when no source contributes anything.
-     * <br>
-     * 获取模块包。
-     * <p>
-     * 累加式而非首个匹配优先：每一个已声明的来源——{@link ComponentScan#value()}、
-     * {@link ComponentScan#basePackages()}、{@link ComponentScan#basePackageClasses()} 以及
-     * {@link EnableAutoRegister#scanPackage()}——都会按声明顺序贡献包名，重复项只保留首次出现的
-     * 那个，与 {@code PluginManager.getPluginScanPackages} 的形状一致。只有当没有任何来源贡献
-     * 任何内容时，才回退到插件类自身的包名。
      *
-     * @param plugin UltiTools plugin instance <br> UltiTools模块实例
-     * @return Plugin packages <br> 模块包
+     * @param plugin UltiTools plugin instance
+     * @return Plugin packages
      */
     public static String[] getPluginPackages(UltiToolsPlugin plugin) {
         Class<?> pluginClass = plugin.getClass();

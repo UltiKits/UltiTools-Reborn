@@ -15,7 +15,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 语言实体类
+ * Language entity class.
  *
  * @author wisdomme
  * @version 1.0.0
@@ -24,13 +24,13 @@ public class Language {
     private static final Logger LOGGER = Logger.getLogger(Language.class.getName());
     private static final Gson GSON = new Gson();
     private static final Type MAP_TYPE = new TypeToken<Map<String, String>>() {}.getType();
-    
+
     private final Map<String, String> dictionary;
 
     /**
-     * 使用json文件读取创建语言字典
+     * Creates a language dictionary by reading a JSON file.
      *
-     * @param file 语言json文件
+     * @param file the language JSON file
      */
     public Language(File file) {
         Map<String, String> tempDict = Collections.emptyMap();
@@ -43,18 +43,18 @@ public class Language {
     }
 
     /**
-     * 使用字典直接创建
+     * Creates directly from a dictionary.
      *
-     * @param dictionary 语言字典
+     * @param dictionary the language dictionary
      */
     public Language(Map<String, String> dictionary) {
         this.dictionary = dictionary != null ? dictionary : Collections.emptyMap();
     }
 
     /**
-     * 使用json创建语言字典
+     * Creates a language dictionary from JSON.
      *
-     * @param json json字符串
+     * @param json the JSON string
      */
     public Language(String json) {
         Map<String, String> tempDict = GSON.fromJson(json, MAP_TYPE);
@@ -62,10 +62,10 @@ public class Language {
     }
 
     /**
-     * 获取对应的语言翻译
+     * Gets the corresponding language translation.
      *
-     * @param str 需要翻译的字符串
-     * @return 翻译后的字符串，若字典中没有则返回原文
+     * @param str the string to translate
+     * @return the translated string, or the original text if not found in the dictionary
      */
     public String getLocalizedText(String str) {
         return dictionary.getOrDefault(str, str);

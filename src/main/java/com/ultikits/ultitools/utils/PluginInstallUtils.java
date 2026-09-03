@@ -35,9 +35,6 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
  * Utility class for plugin installation and management operations.
  * Provides methods to download, install, and uninstall UltiTools plugins
  * from the remote plugin repository.
- * <br>
- * 插件安装和管理操作的实用工具类。
- * 提供从远程插件仓库下载、安装和卸载UltiTools插件的方法。
  *
  * @author wisdomme
  * @since 6.0.0
@@ -57,9 +54,6 @@ public class PluginInstallUtils {
     /**
      * Get the base URL for API calls.
      * Uses lazy initialization to avoid requiring UltiTools at class loading time.
-     * <br>
-     * 获取API调用的基础URL。
-     * 使用延迟初始化以避免在类加载时需要UltiTools。
      *
      * @return the base URL
      */
@@ -80,8 +74,6 @@ public class PluginInstallUtils {
     /**
      * Set a custom base URL for testing purposes.
      * This should only be used in unit tests.
-     * <br>
-     * 设置自定义的基础URL，仅用于测试目的。
      *
      * @param url the custom base URL, or null to reset to default
      */
@@ -92,8 +84,6 @@ public class PluginInstallUtils {
     /**
      * Reset the base URL to force re-initialization.
      * This should only be used in unit tests.
-     * <br>
-     * 重置基础URL以强制重新初始化，仅用于测试目的。
      */
     static void resetBaseUrl() {
         baseUrl = null;
@@ -137,8 +127,6 @@ public class PluginInstallUtils {
     /**
      * Extract the "data" field from a backend API envelope response.
      * The backend wraps responses as {"code":"200","msg":"Success","data":...}.
-     * <br>
-     * 从后端API信封响应中提取"data"字段。
      *
      * @param body the raw JSON response body
      * @param clazz the class to deserialize the data field into
@@ -164,8 +152,6 @@ public class PluginInstallUtils {
 
     /**
      * Extract the "data" field from a backend API envelope response (generic type version).
-     * <br>
-     * 从后端API信封响应中提取"data"字段（泛型版本）。
      *
      * @param body the raw JSON response body
      * @param type the Type to deserialize the data field into
@@ -192,8 +178,6 @@ public class PluginInstallUtils {
     /**
      * Extract a String value from the "data" field of a backend API envelope response.
      * Handles both quoted JSON strings and primitive values.
-     * <br>
-     * 从后端API信封响应的"data"字段中提取字符串值。
      *
      * @param body the raw JSON response body
      * @return the data as a String, or null if absent or response indicates error
@@ -220,12 +204,10 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin list online.
-     * <br>
-     * 在线获取插件列表。
      *
-     * @param page     页数
-     * @param pageSize 每页数量
-     * @return 插件列表
+     * @param page     the page number
+     * @param pageSize the number of items per page
+     * @return the plugin list
      */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
         List<PluginEntity> pluginEntities = new ArrayList<>();
@@ -264,12 +246,10 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin download link.
-     * <br>
-     * 获取插件下载链接。
      *
-     * @param idString 插件ID
-     * @param version  版本
-     * @return 插件下载链接
+     * @param idString the plugin ID
+     * @param version  the version
+     * @return the plugin download link
      */
     public static String getPluginVersionDownloadLink(String idString, String version) {
         PluginEntity plugin = getPlugin(idString);
@@ -289,11 +269,9 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin versions.
-     * <br>
-     * 获取插件版本列表。
      *
-     * @param idString 插件ID
-     * @return 插件版本列表
+     * @param idString the plugin ID
+     * @return the plugin version list
      */
     public static List<String> getPluginVersions(String idString) {
         PluginEntity plugin = getPlugin(idString);
@@ -311,11 +289,9 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin latest version.
-     * <br>
-     * 获取插件最新版本。
      *
-     * @param idString 插件ID
-     * @return 插件最新版本
+     * @param idString the plugin ID
+     * @return the plugin's latest version
      */
     public static String getPluginLatestVersion(String idString) {
         PluginEntity plugin = getPlugin(idString);
@@ -332,11 +308,9 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin latest version download link.
-     * <br>
-     * 获取插件最新版本下载链接。
      *
-     * @param idString Plugin identify string <br> 插件ID
-     * @return Download link for latest version <br> 插件最新版本下载链接
+     * @param idString Plugin identify string
+     * @return Download link for latest version
      */
     public static String getPluginLatestDownloadLink(String idString) {
         PluginEntity plugin = getPlugin(idString);
@@ -353,11 +327,9 @@ public class PluginInstallUtils {
 
     /**
      * Get plugin information by identify string.
-     * <br>
-     * 通过标识字符串获取插件信息。
      *
-     * @param idString Plugin identify string <br> 插件ID
-     * @return Plugin entity or null if not found <br> 插件信息，未找到返回null
+     * @param idString Plugin identify string
+     * @return Plugin entity or null if not found
      */
     public static PluginEntity getPlugin(String idString) {
         String normalized = normalizeIdentifyString(idString);
@@ -374,11 +346,9 @@ public class PluginInstallUtils {
 
     /**
      * Install latest plugin.
-     * <br>
-     * 安装最新插件。
      *
-     * @param idString 插件ID
-     * @return 是否安装成功
+     * @param idString the plugin ID
+     * @return whether the install succeeded
      */
     public static boolean installLatestPlugin(String idString) {
         String latestVersion = getPluginLatestVersion(idString);
@@ -401,12 +371,10 @@ public class PluginInstallUtils {
 
     /**
      * Install plugin.
-     * <br>
-     * 安装插件。
      *
-     * @param idString 插件ID
-     * @param version  版本
-     * @return 是否安装成功
+     * @param idString the plugin ID
+     * @param version  the version
+     * @return whether the install succeeded
      */
     public static boolean installPlugin(String idString, String version) {
         PluginEntity plugin = getPlugin(idString);
@@ -433,8 +401,6 @@ public class PluginInstallUtils {
     /**
      * Find the JAR file for a plugin by its identify-string.
      * Scans all JARs in the given directory, reads plugin.yml from each.
-     * <br>
-     * 通过identify-string查找插件的JAR文件。
      *
      * @param pluginsFolder the folder to scan
      * @param identifyString the identify-string to match
@@ -472,8 +438,6 @@ public class PluginInstallUtils {
 
     /**
      * Update a plugin module: download latest version and delete old JAR.
-     * <br>
-     * 更新插件模块：下载最新版本并删除旧JAR。
      *
      * @param identifyString the plugin identify string
      * @return true if update succeeded
@@ -507,11 +471,9 @@ public class PluginInstallUtils {
 
     /**
      * Uninstall plugin.
-     * <br>
-     * 卸载插件。
      *
-     * @param name 插件名称
-     * @return 是否卸载成功
+     * @param name the plugin name
+     * @return whether the uninstall succeeded
      * @throws IOException if an I/O error occurs
      */
     public static boolean uninstallPlugin(String name) throws IOException {

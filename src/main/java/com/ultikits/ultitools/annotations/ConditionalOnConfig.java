@@ -8,14 +8,11 @@ import java.lang.annotation.Target;
 /**
  * Conditionally registers a component based on a YAML config value.
  * <p>
- * When placed on a {@code @Service}, {@code @CmdExecutor}, {@code @EventListener},
+ * This is the framework-supported replacement for an in-code {@code if (config.isEnabled())}
+ * block: when placed on a {@code @Service}, {@code @CmdExecutor}, {@code @EventListener},
  * or any component class, the framework checks the specified config file and key
  * during component scanning. If the config value is {@code false} (or missing),
  * the component is skipped entirely.
- * <p>
- * 根据 YAML 配置值条件性地注册组件。放在 {@code @Service}、{@code @CmdExecutor}、
- * {@code @EventListener} 或任何组件类上时，框架在组件扫描期间检查指定的配置文件和键。
- * 如果配置值为 {@code false}（或缺失），则完全跳过该组件。
  *
  * <p>Usage example:
  * <pre>{@code
@@ -33,8 +30,6 @@ import java.lang.annotation.Target;
 public @interface ConditionalOnConfig {
     /**
      * Config file path relative to the plugin data folder.
-     * <p>
-     * 相对于插件数据目录的配置文件路径。
      *
      * @return the config file path
      */
@@ -42,8 +37,6 @@ public @interface ConditionalOnConfig {
 
     /**
      * Dot-separated or slash-separated YAML key path.
-     * <p>
-     * 点分隔或斜杠分隔的 YAML 键路径。
      *
      * @return the config key path
      */
@@ -51,8 +44,6 @@ public @interface ConditionalOnConfig {
 
     /**
      * If true, register when the config value is false (inverted logic).
-     * <p>
-     * 如果为 true，则在配置值为 false 时注册（反转逻辑）。
      *
      * @return true to negate the condition
      */

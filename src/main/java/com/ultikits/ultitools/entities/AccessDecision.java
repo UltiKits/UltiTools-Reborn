@@ -16,9 +16,6 @@ package com.ultikits.ultitools.entities;
  * <p>
  * Immutable value type shaped like {@code TriggerContext}: private final fields, a private
  * constructor, and named static factories.
- * <p>
- * 命令与文件两个策略判定方法在 6.3.0 起改用的、携带原因的返回类型。区分「可配置」拒绝（操作员可以
- * 通过配置开关改变）与「不可配置」拒绝（没有任何配置能改变它），二者绝不能被合并成同一句话（D-17）。
  *
  * @since 6.3.0
  */

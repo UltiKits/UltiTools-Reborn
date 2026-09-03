@@ -25,23 +25,20 @@ import com.ultikits.ultitools.context.MergedAnnotationResolver;
 
 /**
  * Command manager.
- * <p>
- * 命令管理器
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Constructs Bukkit's PluginCommand and reaches its private CommandMap field -- see 08-GATE05-TRIAGE.md
 public class CommandManager {
     private final Map<UltiToolsPlugin, List<Command>> commandListMap = new HashMap<>();
     private final Map<String, List<Command>> externalCommandMap = new HashMap<>();
 
     /**
      * Manually register a command. Only used to register classes annotated with @CmdExecutor. Dependencies will be injected automatically.
-     * <p>
-     * 手动注册一个命令。仅用于注册被@CmdExecutor注解的类。会自动注入依赖。
      *
-     * @param plugin      UltiTools Plugin instance <br> 模块实例
-     * @param clazz       Command executor class <br> 命令执行器类
-     * @param permission  Permission <br> 权限
-     * @param description Description <br> 描述
-     * @param aliases     Aliases <br> 别名
+     * @param plugin      UltiTools Plugin instance
+     * @param clazz       Command executor class
+     * @param permission  Permission
+     * @param description Description
+     * @param aliases     Aliases
      */
     public void register(UltiToolsPlugin plugin, Class<? extends CommandExecutor> clazz, String permission, String description, String... aliases) {
         CommandExecutor commandExecutor = UltiTools.getInstance().getDependenceManagers().getContext().getBean(clazz);
@@ -50,14 +47,12 @@ public class CommandManager {
 
     /**
      * Manually register a command, will not be managed by the container. Dependencies will not be injected automatically.
-     * <p>
-     * 手动注册一个命令，不会被容器管理。不会自动注入依赖。
      *
-     * @param plugin          UltiTools Plugin instance <br> 模块实例
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
-     * @param permission      Permission <br> 权限
-     * @param description     Description <br> 描述
-     * @param aliases         Aliases <br> 别名
+     * @param plugin          UltiTools Plugin instance
+     * @param commandExecutor Command executor instance
+     * @param permission      Permission
+     * @param description     Description
+     * @param aliases         Aliases
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         registerCommandDirect(commandExecutor, permission, plugin.i18n(description), aliases);
@@ -70,11 +65,9 @@ public class CommandManager {
 
     /**
      * Manually register a command. Only used to register classes annotated with @CmdExecutor. Dependencies will be injected automatically.
-     * <p>
-     * 手动注册一个命令。仅用于注册被@CmdExecutor注解的类。会自动注入依赖。
      *
-     * @param plugin UltiTools Plugin instance <br> 模块实例
-     * @param clazz  Command executor class <br> 命令执行器类
+     * @param plugin UltiTools Plugin instance
+     * @param clazz  Command executor class
      */
     public void register(UltiToolsPlugin plugin, Class<? extends CommandExecutor> clazz) {
         CommandExecutor commandExecutor = plugin.getContext().getBean(clazz);
@@ -83,11 +76,9 @@ public class CommandManager {
 
     /**
      * Manually register a command, will not be managed by the container. Dependencies will not be injected automatically.
-     * <p>
-     * 手动注册一个命令，不会被容器管理。不会自动注入依赖。
      *
-     * @param plugin          UltiTools Plugin instance <br> 模块实例
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param plugin          UltiTools Plugin instance
+     * @param commandExecutor Command executor instance
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
@@ -107,16 +98,11 @@ public class CommandManager {
      * container involvement -- the primitive behind {@link #registerCoreCommand(CommandExecutor)},
      * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}, and the
      * unannotated-class fallback in {@link #register(UltiToolsPlugin, CommandExecutor)}.
-     * <p>
-     * 直接向 Bukkit 的命令表注册 {@code commandExecutor}，不涉及任何插件容器——是
-     * {@link #registerCoreCommand(CommandExecutor)}、
-     * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}，以及
-     * {@link #register(UltiToolsPlugin, CommandExecutor)} 中未注解类回退路径共用的底层原语。
      *
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
-     * @param permission      Permission <br> 权限
-     * @param description     Description <br> 描述
-     * @param aliases         Aliases <br> 别名
+     * @param commandExecutor Command executor instance
+     * @param permission      Permission
+     * @param description     Description
+     * @param aliases         Aliases
      */
     private void registerCommandDirect(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
@@ -131,12 +117,8 @@ public class CommandManager {
      * Resolves {@code commandExecutor}'s {@code @CmdExecutor} annotation (if present) and
      * dispatches to {@link #registerCommandDirect(CommandExecutor, String, String, String...)};
      * logs and does nothing otherwise.
-     * <p>
-     * 解析 {@code commandExecutor} 的 {@code @CmdExecutor} 注解（如果存在）并派发给
-     * {@link #registerCommandDirect(CommandExecutor, String, String, String...)}；否则记录日志
-     * 并且不做任何事。
      *
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param commandExecutor Command executor instance
      */
     private void registerCommandDirect(CommandExecutor commandExecutor) {
         Class<? extends CommandExecutor> clazz = commandExecutor.getClass();
@@ -151,9 +133,8 @@ public class CommandManager {
 
     /**
      * Register all classes annotated with @CmdExecutor in the specified package. Dependencies will be injected automatically.
-     * <p>
      *
-     * @param plugin UltiTools Plugin instance <br> 模块实例
+     * @param plugin UltiTools Plugin instance
      */
     public void registerAll(UltiToolsPlugin plugin) {
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
@@ -167,11 +148,9 @@ public class CommandManager {
 
     /**
      * Get the plugin instance by command.
-     * <p>
-     * 通过命令获取模块实例
      *
-     * @param command Command <br> 命令
-     * @return UltiTools plugin <br> 模块实例
+     * @param command Command
+     * @return UltiTools plugin
      */
     public UltiToolsPlugin getPluginByCommand(Command command) {
         for (Map.Entry<UltiToolsPlugin, List<Command>> entry : commandListMap.entrySet()) {
@@ -185,7 +164,7 @@ public class CommandManager {
     }
 
     /**
-     * @param name Command name <br> 命令名
+     * @param name Command name
      */
     public void unregister(String name) {
         PluginCommand command = getCommand(name, UltiTools.getInstance());
@@ -193,7 +172,7 @@ public class CommandManager {
     }
 
     /**
-     * @param plugin UltiTools Plugin instance <br> 模块实例
+     * @param plugin UltiTools Plugin instance
      */
     public void unregisterAll(UltiToolsPlugin plugin) {
         List<Command> commands = commandListMap.get(plugin);
@@ -215,11 +194,8 @@ public class CommandManager {
     /**
      * Register command for core UltiTools commands that don't belong to a specific plugin module.
      * This method is specifically for commands that are part of the main UltiTools plugin.
-     * <p>
-     * 为不属于特定插件模块的核心UltiTools命令注册命令。
-     * 此方法专门用于主UltiTools插件的命令。
      *
-     * @param commandExecutor Command executor instance <br> 命令执行器实例
+     * @param commandExecutor Command executor instance
      */
     public void registerCoreCommand(CommandExecutor commandExecutor) {
         registerCommandDirect(commandExecutor);
@@ -228,8 +204,6 @@ public class CommandManager {
     /**
      * Register all @CmdExecutor commands from an external plugin's IoC container.
      * Uses raw description (no i18n) since external plugins don't have UltiTools i18n.
-     * <p>
-     * 注册外部插件 IoC 容器中所有 @CmdExecutor 命令。
      *
      * @param adapter the external plugin adapter
      * @since 6.2.2
@@ -247,8 +221,6 @@ public class CommandManager {
 
     /**
      * Unregister all commands for an external plugin.
-     * <p>
-     * 注销外部插件的所有命令。
      *
      * @param pluginName the external plugin name
      * @since 6.2.2

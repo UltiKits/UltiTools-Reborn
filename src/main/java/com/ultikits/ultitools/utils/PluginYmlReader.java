@@ -30,16 +30,6 @@ import org.bukkit.configuration.file.YamlConfiguration;
  * malformed YAML - returns {@link PluginYmlInfo#EMPTY} rather than throwing, logging at most one
  * WARNING. This class runs once per plugin class during dependency-graph construction, and a
  * single bad archive must not take the whole graph down (T-04-20).
- * <br>
- * 直接从一个类的代码源读取该模块自身的 {@code plugin.yml}，只需要一个裸的
- * {@code Class<?>}——在任何 {@code UltiToolsPlugin} 实例存在之前（D-12）。这是代码库中
- * 第三处原本会各自打开 JAR 读取 {@code plugin.yml} 的地方；在这里把它抽取一次就是这个类
- * 存在的意义。
- * <p>
- * 每一条失败路径——代码源为 null、代码源是目录且没有 {@code plugin.yml}
- * （测试/开发 classpath 下的常见情况）、JAR 条目缺失、归档不可读、或 YAML 格式错误——
- * 都返回 {@link PluginYmlInfo#EMPTY} 而不是抛出异常，最多记一条 WARNING。这个类在依赖图
- * 构建期间对每个插件类都会运行一次，单个损坏的归档不能拖垮整张图（T-04-20）。
  *
  * @author wisdomme
  * @since 6.3.0

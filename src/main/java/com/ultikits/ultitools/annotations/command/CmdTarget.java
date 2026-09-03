@@ -16,11 +16,6 @@ import java.lang.annotation.Target;
  * CONSOLE, are both ambiguous and are refused at plugin load, naming the offending class and
  * method - never silently resolved to either reading. See
  * {@code .planning/phases/01-adjudication-foundations-compatibility-baseline/01-ADJUDICATION.md}.
- * <p>
- * 指令目标注解，限制哪种发送者——玩家、控制台或两者——可以执行某个指令类或其中的
- * {@code @CmdMapping} 方法。当类级与方法级同时存在 {@code @CmdTarget} 时，方法级取值只能
- * <b>收窄</b>类级取值；放宽或横向切换（PLAYER 与 CONSOLE 互换）都是歧义组合，会在插件加载期
- * 被拒绝并点名违规的类与方法。
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#sender-limitation">@CmdTarget</a>
  */

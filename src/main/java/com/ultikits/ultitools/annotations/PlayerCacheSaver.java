@@ -5,8 +5,6 @@ import java.util.UUID;
 /**
  * Optional interface for services with @PlayerCache(saveBeforeRemove = true).
  * Called before the cache entry is removed on player quit.
- * <p>
- * 可选接口，用于在玩家退出前保存缓存数据。
  *
  * @since 6.2.0
  */

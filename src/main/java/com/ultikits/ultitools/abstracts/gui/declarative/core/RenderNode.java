@@ -14,18 +14,19 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * RenderNode 是虚拟渲染树的节点，代表一个要渲染的槽位。
+ * RenderNode is a node in the virtual render tree, representing one slot to be rendered.
  * <p>
- * RenderNode 是框架内部使用的对象，用于：
+ * RenderNode is a framework-internal object used to:
  * <ul>
- *   <li>描述每个槽位应该显示什么（Icon）</li>
- *   <li>记录槽位位置（slotIndex）</li>
- *   <li>支持稳定标识（slotKey）用于 diff</li>
- *   <li>组织成树结构以支持布局计算</li>
+ *   <li>describe what each slot should display (Icon)</li>
+ *   <li>record the slot's position (slotIndex)</li>
+ *   <li>support stable identification (slotKey) for diffing</li>
+ *   <li>organize into a tree structure to support layout calculation</li>
  * </ul>
  * <p>
- * <b>注意：</b> RenderNode 不直接操作 Bukkit Inventory，
- * 它只是一个虚拟表示，由 {@link GuiRenderer} 转换为实际的 Inventory 操作。
+ * <b>Note:</b> RenderNode never touches the Bukkit Inventory directly;
+ * it is only a virtual representation, translated into actual Inventory operations by
+ * {@link GuiRenderer}.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -34,21 +35,21 @@ import java.util.function.Consumer;
 public class RenderNode {
 
     /**
-     * 槽位的唯一标识，用于 diff 算法识别相同节点。
-     * 如果为 null，则使用 slotIndex 进行识别。
+     * The slot's unique identifier, used by the diff algorithm to recognize the same node.
+     * If null, slotIndex is used for identification instead.
      */
     @Nullable
     private final SlotKey key;
 
     /**
-     * 槽位在 Inventory 中的索引（0-based）。
-     * -1 表示尚未分配位置（如容器节点）。
+     * The slot's index within the Inventory (0-based).
+     * -1 means no position has been assigned yet (e.g. a container node).
      * -- GETTER --
-     *  获取槽位索引。
+     *  Gets the slot index.
      *
      *
      * -- SETTER --
-     *  设置槽位索引。
+     *  Sets the slot index.
      *
      */
     @Setter
@@ -56,41 +57,41 @@ public class RenderNode {
     private int slotIndex;
 
     /**
-     * 要在此槽位显示的 Icon。
-     * 如果为 null，表示此槽位应该为空。
+     * The Icon to display in this slot.
+     * If null, this slot should be empty.
      */
     @Nullable
     private Icon icon;
 
     /**
-     * 点击事件处理器。
+     * The click event handler.
      */
     @Nullable
     private Consumer<InventoryClickEvent> clickHandler;
 
     /**
-     * 父节点。
+     * The parent node.
      */
     @Nullable
     private RenderNode parent;
 
     /**
-     * 子节点（用于容器类型）。
+     * The child nodes (for container-type nodes).
      */
     @NotNull
     private final List<RenderNode> children;
 
     /**
-     * 节点元数据，用于存储额外信息。
+     * Node metadata, used to store extra information.
      */
     @NotNull
     private final java.util.Map<String, Object> metadata;
 
     /**
-     * 创建一个新的 RenderNode。
+     * Creates a new RenderNode.
      *
-     * @param key       槽位标识，可为 null
-     * @param slotIndex 槽位索引
+     * @param key       the slot identifier, may be null
+     * @param slotIndex the slot index
      */
     public RenderNode(@Nullable SlotKey key, int slotIndex) {
         this.key = key;
@@ -100,11 +101,11 @@ public class RenderNode {
     }
 
     /**
-     * 创建一个叶子 RenderNode（没有子节点）。
+     * Creates a leaf RenderNode (no child nodes).
      *
-     * @param key       槽位标识
-     * @param slotIndex 槽位索引
-     * @param icon      图标
+     * @param key       the slot identifier
+     * @param slotIndex the slot index
+     * @param icon      the icon
      */
     public RenderNode(@Nullable SlotKey key, int slotIndex, @Nullable Icon icon) {
         this(key, slotIndex);
@@ -114,9 +115,9 @@ public class RenderNode {
     // Getters and Setters
 
     /**
-     * 获取槽位标识。
+     * Gets the slot identifier.
      *
-     * @return SlotKey，可能为 null
+     * @return the SlotKey, may be null
      */
     @Nullable
     public SlotKey getKey() {
@@ -124,9 +125,9 @@ public class RenderNode {
     }
 
     /**
-     * 获取图标。
+     * Gets the icon.
      *
-     * @return Icon，可能为 null
+     * @return the Icon, may be null
      */
     @Nullable
     public Icon getIcon() {
@@ -134,18 +135,18 @@ public class RenderNode {
     }
 
     /**
-     * 设置图标。
+     * Sets the icon.
      *
-     * @param icon 图标
+     * @param icon the icon
      */
     public void setIcon(@Nullable Icon icon) {
         this.icon = icon;
     }
 
     /**
-     * 获取点击处理器。
+     * Gets the click handler.
      *
-     * @return 点击处理器，可能为 null
+     * @return the click handler, may be null
      */
     @Nullable
     public Consumer<InventoryClickEvent> getClickHandler() {
@@ -153,18 +154,18 @@ public class RenderNode {
     }
 
     /**
-     * 设置点击处理器。
+     * Sets the click handler.
      *
-     * @param clickHandler 点击处理器
+     * @param clickHandler the click handler
      */
     public void setClickHandler(@Nullable Consumer<InventoryClickEvent> clickHandler) {
         this.clickHandler = clickHandler;
     }
 
     /**
-     * 获取父节点。
+     * Gets the parent node.
      *
-     * @return 父节点，可能为 null
+     * @return the parent node, may be null
      */
     @Nullable
     public RenderNode getParent() {
@@ -172,18 +173,18 @@ public class RenderNode {
     }
 
     /**
-     * 设置父节点。
+     * Sets the parent node.
      *
-     * @param parent 父节点
+     * @param parent the parent node
      */
     void setParent(@Nullable RenderNode parent) {
         this.parent = parent;
     }
 
     /**
-     * 获取子节点列表（不可修改）。
+     * Gets the list of child nodes (unmodifiable).
      *
-     * @return 子节点列表
+     * @return the list of child nodes
      */
     @NotNull
     public List<RenderNode> getChildren() {
@@ -191,9 +192,9 @@ public class RenderNode {
     }
 
     /**
-     * 添加子节点。
+     * Adds a child node.
      *
-     * @param child 子节点
+     * @param child the child node
      */
     public void addChild(@NotNull RenderNode child) {
         children.add(child);
@@ -201,9 +202,9 @@ public class RenderNode {
     }
 
     /**
-     * 移除子节点。
+     * Removes a child node.
      *
-     * @param child 子节点
+     * @param child the child node
      */
     public void removeChild(@NotNull RenderNode child) {
         children.remove(child);
@@ -211,7 +212,7 @@ public class RenderNode {
     }
 
     /**
-     * 清空所有子节点。
+     * Clears all child nodes.
      */
     public void clearChildren() {
         for (RenderNode child : children) {
@@ -221,10 +222,10 @@ public class RenderNode {
     }
 
     /**
-     * 获取元数据。
+     * Gets a metadata value.
      *
-     * @param key 键
-     * @return 值，不存在则返回 null
+     * @param key the key
+     * @return the value, or null if it does not exist
      */
     @Nullable
     public Object getMetadata(@NotNull String key) {
@@ -232,10 +233,10 @@ public class RenderNode {
     }
 
     /**
-     * 设置元数据。
+     * Sets a metadata value.
      *
-     * @param key   键
-     * @param value 值
+     * @param key   the key
+     * @param value the value
      */
     public void setMetadata(@NotNull String key, @Nullable Object value) {
         if (value == null) {
@@ -246,27 +247,27 @@ public class RenderNode {
     }
 
     /**
-     * 检查是否是叶子节点（没有子节点）。
+     * Checks whether this is a leaf node (no child nodes).
      *
-     * @return 如果是叶子节点则返回 true
+     * @return true if this is a leaf node
      */
     public boolean isLeaf() {
         return children.isEmpty();
     }
 
     /**
-     * 检查是否是容器节点（有子节点）。
+     * Checks whether this is a container node (has child nodes).
      *
-     * @return 如果是容器节点则返回 true
+     * @return true if this is a container node
      */
     public boolean isContainer() {
         return !children.isEmpty();
     }
 
     /**
-     * 获取所有叶子节点的列表（递归）。
+     * Gets the list of all leaf nodes (recursively).
      *
-     * @return 所有叶子节点
+     * @return all leaf nodes
      */
     @NotNull
     public List<RenderNode> getAllLeaves() {
@@ -286,9 +287,9 @@ public class RenderNode {
     }
 
     /**
-     * 计算子树占用的槽位数量。
+     * Calculates the number of slots occupied by this subtree.
      *
-     * @return 槽位数量
+     * @return the slot count
      */
     public int calculateSlotCount() {
         if (isLeaf()) {
@@ -302,9 +303,9 @@ public class RenderNode {
     }
 
     /**
-     * 创建此节点的深拷贝（不包括子节点）。
+     * Creates a deep copy of this node (excluding its children).
      *
-     * @return 新的 RenderNode
+     * @return the new RenderNode
      */
     @NotNull
     public RenderNode copy() {
@@ -320,7 +321,7 @@ public class RenderNode {
         if (this == o) return true;
         if (!(o instanceof RenderNode)) return false;
         RenderNode that = (RenderNode) o;
-        // 优先使用 key 比较，如果没有 key 则使用 slotIndex
+        // Prefer comparing by key; fall back to slotIndex when there is no key.
         if (key != null && that.key != null) {
             return key.equals(that.key);
         }

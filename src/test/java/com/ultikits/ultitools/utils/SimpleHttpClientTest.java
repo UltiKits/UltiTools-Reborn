@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -51,10 +52,18 @@ class SimpleHttpClientTest {
         @Test
         @DisplayName("close 方法不应该抛出异常")
         void closeShouldNotThrowException() {
+            // GATE-06 (issue #345): the previous body called close() with no assertion at all.
+            // Response.close() is currently a true no-op (nothing to release, per its javadoc),
+            // so this cannot check any state change -- but wrapping the call is still a real check:
+            // it names the exact behaviour being verified and fails if AutoCloseable#close is ever
+            // given a body that can throw, matching the idiom this file's own sibling assertions
+            // (isOkShould...) and ExternalPluginIntegrationTest's doesNotThrowAnyException() cases
+            // already use for "must not throw" tests.
             SimpleHttpClient.Response response = new SimpleHttpClient.Response(200, "OK");
-            
-            // Should not throw any exception
-            response.close();
+
+            assertThatCode(response::close)
+                    .as("Response.close() must not throw")
+                    .doesNotThrowAnyException();
         }
 
         @Test

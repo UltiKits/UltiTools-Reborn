@@ -7,8 +7,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Bean definition to hold metadata about a bean.
- * <br>
- * Bean定义类，用于保存Bean的元数据。
  */
 @ApiStatus.Internal
 public class BeanDefinition {

@@ -555,6 +555,39 @@
     "status": "ANNOUNCED"
   },
   {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager#commitTokenIfCurrent(com.ultikits.ultitools.entities.TokenEntity,long)",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager",
+    "memberName": "commitTokenIfCurrent",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own asynchronous credential producers, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The generation-comparison-then-write guard is preserved unchanged, including its {@code synchronized} coordination with invalidateCredentialOperations() and clearToken(); the write itself now goes through CredentialStore for an atomic replace. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager#currentCredentialGeneration()",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager",
+    "memberName": "currentCredentialGeneration",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own asynchronous credential producers, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The cancel-is-not-invalidate guard this method reads from is preserved unchanged; the credential file I/O this class used to imply now lives in CredentialStore. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager#invalidateCredentialOperations()",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager",
+    "memberName": "invalidateCredentialOperations",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own teardown path, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The guard's behaviour is preserved unchanged, including its {@code synchronized} coordination with commitTokenIfCurrent(TokenEntity, long) and clearToken(); the credential file I/O this class used to imply now lives in CredentialStore. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "status": "ANNOUNCED"
+  },
+  {
     "key": "com.ultikits.ultitools.utils.SecurityPolicy#addDangerousClass(java.lang.String)",
     "className": "com.ultikits.ultitools.utils.SecurityPolicy",
     "memberName": "addDangerousClass",

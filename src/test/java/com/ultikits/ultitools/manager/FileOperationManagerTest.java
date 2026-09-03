@@ -1421,6 +1421,52 @@ class FileOperationManagerTest {
         }
 
         /**
+         * Plan 08-15 Task 2, four new tests pinning the re-decided credential guard
+         * (checkpoint {@code outside-roots-keep-filename}): a read attempt and a write attempt at
+         * the current location ({@code .ultikits/credentials.json}) are both refused, and a read
+         * attempt at the OLD location ({@code plugins/UltiTools/data.json}) is refused too — an
+         * install that has not yet restarted onto a migrated {@code CredentialStore} still has a
+         * live file there, and the remote surface must not become a way to read it during that
+         * window. The fourth ("absent from a directory listing") lives outside this nested class,
+         * alongside {@code shouldMarkInaccessibleEntriesInList}, which it mirrors.
+         */
+        @Test
+        @DisplayName("新位置 .ultikits/credentials.json 的读取被拒绝，且拒绝不可通过配置改变")
+        void readRefusalForCredentialFileAtNewLocation() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleReadOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleReadOperation", ".ultikits/credentials.json");
+
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("新位置 .ultikits/credentials.json 的写入被拒绝，且拒绝不可通过配置改变")
+        void writeRefusalForCredentialFileAtNewLocation() throws Exception {
+            JsonObject outsideRoots = invokeHandlerAndCapturePanelMessage("handleWriteOperation", "world/level.dat");
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleWriteOperation", ".ultikits/credentials.json");
+
+            assertThat(outsideRoots.get("message").getAsString()).contains("ultipanel.files.editable-roots");
+            assertThat(credential.get("message").getAsString())
+                    .isNotEqualTo(outsideRoots.get("message").getAsString())
+                    .contains("cannot be changed through configuration");
+        }
+
+        @Test
+        @DisplayName("旧位置 plugins/UltiTools/data.json 的读取在重启窗口期内仍然被拒绝")
+        void readRefusalForCredentialFileAtOldLocationDuringTheRestartWindow() throws Exception {
+            JsonObject credential =
+                    invokeHandlerAndCapturePanelMessage("handleReadOperation", "plugins/UltiTools/data.json");
+
+            assertThat(credential.get("message").getAsString())
+                    .as("an unrestarted install still has a live credential file at the old location")
+                    .contains("cannot be changed through configuration");
+        }
+
+        /**
          * Invokes one of the four private handlers via reflection against the base
          * {@link #fileOperationManager} (default editable roots: {@code plugins}, {@code logs}) and
          * returns the {@code data} object of the single captured panel message.
@@ -1663,6 +1709,39 @@ class FileOperationManagerTest {
         assertThat(allowed.has("writable")).isTrue();
 
         JsonObject credential = findEntryByName(files, "data.json");
+        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
+        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
+        assertThat(credential.has("size")).isFalse();
+        assertThat(credential.has("lastModified")).isFalse();
+        assertThat(credential.has("readable")).isFalse();
+        assertThat(credential.has("writable")).isFalse();
+    }
+
+    /**
+     * Plan 08-15 Task 2's fourth new test (the other three live in
+     * {@code ReasonCarryingRefusalTests}): mirrors {@link #shouldMarkInaccessibleEntriesInList()}
+     * but for the credential file's current (&gt;= 6.3.0) name and location,
+     * {@code .ultikits/credentials.json} -- confirming the re-decided guard marks it, rather than
+     * silently omitting it, exactly as it already does for the pre-6.3.0 name.
+     */
+    @Test
+    @DisplayName("新位置 .ultikits/credentials.json 在目录列表中被标记为不可访问，而不是被省略（D-18/Plan 08-15）")
+    void shouldMarkCredentialFileInaccessibleAtItsNewLocationInList() throws Exception {
+        setServerRootAndEditableRoots(tempDir);
+
+        File dir = new File(tempDir, ".ultikits");
+        dir.mkdirs();
+        new File(dir, "allowed.txt").createNewFile();
+        new File(dir, "credentials.json").createNewFile(); // unconditionally denied (D-16/plan 08-15)
+
+        com.google.gson.JsonArray files = invokeListAndCaptureFiles(".ultikits");
+
+        assertThat(files.size()).isEqualTo(2);
+
+        JsonObject allowed = findEntryByName(files, "allowed.txt");
+        assertThat(allowed.get("accessible").getAsBoolean()).isTrue();
+
+        JsonObject credential = findEntryByName(files, "credentials.json");
         assertThat(credential.get("accessible").getAsBoolean()).isFalse();
         assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
         assertThat(credential.has("size")).isFalse();

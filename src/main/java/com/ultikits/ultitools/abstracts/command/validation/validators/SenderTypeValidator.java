@@ -10,8 +10,6 @@ import java.lang.reflect.Method;
 
 /**
  * Validates that the command sender matches the expected target type.
- * <p>
- * 验证命令发送者是否匹配预期的目标类型。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -25,7 +23,6 @@ public class SenderTypeValidator implements CommandValidator {
     
     /**
      * Creates a validator that accepts any sender type.
-     * 创建一个接受任何发送者类型的验证器。
      */
     public SenderTypeValidator() {
         this.expectedType = CmdTarget.CmdTargetType.BOTH;
@@ -33,7 +30,6 @@ public class SenderTypeValidator implements CommandValidator {
     
     /**
      * Creates a validator for the specified sender type.
-     * 创建指定发送者类型的验证器。
      *
      * @param expectedType the expected sender type
      */
@@ -73,9 +69,6 @@ public class SenderTypeValidator implements CommandValidator {
      * composition rule is implemented (D-01: narrowing-only override). By the time a matched
      * method reaches here, {@code ComponentScanner} has already refused any class whose
      * composition is ambiguous, so this is a plain lookup - it does not re-validate.
-     * <p>
-     * 从上下文或方法注解确定有效的目标类型，委托给 CmdTargetComposition#resolve——
-     * 唯一实现类/方法组合规则的地方。
      *
      * @param context the command context
      * @return the effective target type
@@ -97,7 +90,6 @@ public class SenderTypeValidator implements CommandValidator {
     
     /**
      * Creates a validator from a CmdTarget annotation.
-     * 从 CmdTarget 注解创建验证器。
      *
      * @param annotation the annotation
      * @return a new validator

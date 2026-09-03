@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -19,7 +21,10 @@ import java.util.concurrent.TimeUnit;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.exceptions.CommandException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.TestHelper;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -119,6 +124,33 @@ class UltiToolsCommandsTest {
         
         assertThat(result).isTrue();
         // Should complete without exception
+    }
+
+    @Test
+    @DisplayName("GATE-05 group two (08-21): should wrap a reloadPlugins() IOException as CommandException")
+    void testReloadPluginsWrapsIOExceptionAsCommandException() throws IOException {
+        // Given - reload plugins() failing is exercised directly, not through the full
+        // onCommand dispatch (which defers to a scheduled task and swallows the exception into
+        // an async runnable), so the assertion below reaches reloadPlugins() synchronously.
+        IOException cause = new IOException("disk error");
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getPluginManager()).thenReturn(mockPluginManager);
+            try {
+                doThrow(cause).when(ultiTools).reloadPlugins();
+            } catch (IOException ignored) {
+                // reloadPlugins() declares IOException; doThrow(...).when(...) never actually
+                // invokes the real method, so this branch is unreachable at runtime and exists
+                // only to satisfy the checked-exception signature on the stubbed call.
+            }
+        });
+        UltiToolsCommands freshExecutor = new UltiToolsCommands();
+
+        // When / Then
+        assertThatThrownBy(freshExecutor::reloadPlugins)
+                .isInstanceOf(CommandException.class)
+                .hasCause(cause)
+                .extracting(t -> ((CommandException) t).getErrorCode())
+                .isEqualTo(ErrorCode.COMMAND_EXECUTION_FAILED);
     }
 
     @Test

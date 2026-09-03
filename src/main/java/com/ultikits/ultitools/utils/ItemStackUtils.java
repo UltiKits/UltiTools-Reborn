@@ -14,9 +14,6 @@ import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 /**
  * Utility class for ItemStack serialization and deserialization.
  * Uses Base64 encoding to convert ItemStack arrays to/from strings for storage.
- * <p>
- * ItemStack 序列化和反序列化工具类。
- * 使用 Base64 编码将 ItemStack 数组转换为字符串用于存储。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -32,8 +29,6 @@ public final class ItemStackUtils {
     
     /**
      * Serializes an array of ItemStack to a Base64-encoded string.
-     * <p>
-     * 将 ItemStack 数组序列化为 Base64 编码的字符串。
      *
      * @param items the ItemStack array to serialize
      * @return the Base64-encoded string, or null if serialization fails
@@ -61,8 +56,6 @@ public final class ItemStackUtils {
     
     /**
      * Deserializes a Base64-encoded string back to an array of ItemStack.
-     * <p>
-     * 将 Base64 编码的字符串反序列化为 ItemStack 数组。
      *
      * @param data the Base64-encoded string
      * @return the ItemStack array, or null if deserialization fails
@@ -90,8 +83,6 @@ public final class ItemStackUtils {
     
     /**
      * Serializes a single ItemStack to a Base64-encoded string.
-     * <p>
-     * 将单个 ItemStack 序列化为 Base64 编码的字符串。
      *
      * @param item the ItemStack to serialize
      * @return the Base64-encoded string, or null if serialization fails
@@ -105,8 +96,6 @@ public final class ItemStackUtils {
     
     /**
      * Deserializes a Base64-encoded string back to a single ItemStack.
-     * <p>
-     * 将 Base64 编码的字符串反序列化为单个 ItemStack。
      *
      * @param data the Base64-encoded string
      * @return the ItemStack, or null if deserialization fails or array is empty
@@ -121,8 +110,6 @@ public final class ItemStackUtils {
     
     /**
      * Checks if a serialized string is valid.
-     * <p>
-     * 检查序列化字符串是否有效。
      *
      * @param data the Base64-encoded string to check
      * @return true if the string can be deserialized, false otherwise

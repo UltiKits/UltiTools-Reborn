@@ -25,8 +25,6 @@ import lombok.Getter;
 /**
  * UltiPanel WebSocket Client
  * <p>
- * 新的WebSocket客户端，基于Java-WebSocket库
- * <p>
  * New WebSocket client based on Java-WebSocket library
  */
 @Getter
@@ -49,39 +47,43 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private int reconnectAttempts = 0;
     private boolean intentionalDisconnect = false;
 
-    /** 心跳间隔（秒）。 */
+    /** Heartbeat interval, in seconds. */
     private static final long HEARTBEAT_INTERVAL_SECONDS = 60;
 
     /**
-     * 判定「静默失效」的阈值：两个心跳周期没收到 pong。
+     * Threshold for declaring a connection "silently dead": no pong received across two
+     * heartbeat intervals.
      * <p>
-     * 取两个周期而不是一个，是为了容忍单次丢包或一次调度抖动 —— 误判的代价是把一条好连接
-     * 踢掉重连，而漏判只是晚一个周期发现。
+     * Two intervals rather than one, to tolerate a single dropped packet or one scheduling
+     * jitter - the cost of a false positive is kicking a good connection into reconnecting,
+     * while a false negative only delays detection by one interval.
      */
     private static final long PONG_TIMEOUT_MS = HEARTBEAT_INTERVAL_SECONDS * 2 * 1000;
 
-    /** 最近一次发出 ping 的时间。 */
+    /** Timestamp of the most recent ping sent. */
     private volatile long lastPingTime = 0;
-    /** 最近一次收到 pong 的时间。0 表示从未收到过。 */
+    /** Timestamp of the most recent pong received. 0 means none has ever been received. */
     private volatile long lastPongTime = 0;
-    /** 最近一次测得的往返延迟，毫秒。 */
+    /** Most recently measured round-trip latency, in milliseconds. */
     private volatile long latencyMs = -1;
 
     /**
-     * 时钟。生产环境就是 {@code System::currentTimeMillis}，测试可以替换成假时钟。
+     * Clock. In production this is simply {@code System::currentTimeMillis}; tests can
+     * substitute a fake clock.
      * <p>
-     * 存在的唯一理由是让「超过阈值未收到 pong」这条判定可以被单元测试覆盖而不用
-     * {@code Thread.sleep} —— 真等两个心跳周期是 120 秒，那种测试没人会留着。
+     * The only reason this exists is so the "no pong received past the threshold" check can be
+     * covered by a unit test without {@code Thread.sleep} - actually waiting out two heartbeat
+     * intervals is 120 seconds, and nobody keeps a test like that around.
      */
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
     /**
-     * 构造函数
+     * Constructor.
      *
-     * @param url      WebSocket服务器URL
-     * @param serverId 服务器ID
-     * @param token    认证token
-     * @throws URISyntaxException 如果URL格式不正确
+     * @param url      the WebSocket server URL
+     * @param serverId the server ID
+     * @param token    the auth token
+     * @throws URISyntaxException if the URL is malformed
      */
     public UltiPanelWebSocketClient(String url, String serverId, String token) throws URISyntaxException {
         super(new URI(url), getHeaders(token));
@@ -97,7 +99,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 连接到WebSocket服务器
+     * Connects to the WebSocket server.
      */
     @Override
     public void connect() {
@@ -109,7 +111,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 断开WebSocket连接
+     * Disconnects the WebSocket connection.
      */
     public void disconnect() {
         intentionalDisconnect = true;
@@ -122,9 +124,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 发送消息到服务器
+     * Sends a message to the server.
      *
-     * @param message JSON消息对象
+     * @param message the JSON message object
      */
     public void sendMessage(JsonObject message) {
         if (!isOpen()) {
@@ -132,14 +134,14 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             return;
         }
 
-        // 添加时间戳
+        // Add a timestamp
         if (!message.has("timestamp")) {
             message.addProperty("timestamp", System.currentTimeMillis());
         }
 
         String messageStr = gson.toJson(message);
-        
-        // 记录发送的消息日志
+
+        // Log the outgoing message
         String msgType = message.has("type") && !message.get("type").isJsonNull() 
             ? message.get("type").getAsString() : "未知";
         UltiTools.getInstance().getLogger().log(Level.FINE, 
@@ -150,10 +152,10 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 发送Ping消息
+     * Sends a ping message.
      */
     public void sendPing() {
-        // 记录发出时间，供 recordPong() 算往返延迟
+        // Record the send time, so recordPong() can compute the round-trip latency
         lastPingTime = clock.getAsLong();
         JsonObject pingMessage = new JsonObject();
         pingMessage.addProperty("type", "ping");
@@ -162,9 +164,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 订阅服务器状态
+     * Subscribes to a server's status.
      *
-     * @param serverId 要订阅的服务器ID
+     * @param serverId the server ID to subscribe to
      */
     public void subscribeToServer(String serverId) {
         JsonObject subscribeMessage = new JsonObject();
@@ -175,9 +177,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 取消订阅服务器状态
+     * Unsubscribes from a server's status.
      *
-     * @param serverId 要取消订阅的服务器ID
+     * @param serverId the server ID to unsubscribe from
      */
     public void unsubscribeFromServer(String serverId) {
         JsonObject unsubscribeMessage = new JsonObject();
@@ -188,52 +190,53 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 设置消息处理器
+     * Sets the message handler.
      *
-     * @param handler 消息处理器
+     * @param handler the message handler
      */
     public void setMessageHandler(Consumer<JsonObject> handler) {
         this.messageHandler = handler;
     }
 
     /**
-     * 设置连接成功处理器
+     * Sets the on-connect handler.
      *
-     * @param handler 连接成功处理器
+     * @param handler the on-connect handler
      */
     public void setOnConnectHandler(Runnable handler) {
         this.onConnectHandler = handler;
     }
 
     /**
-     * 设置断开连接处理器
+     * Sets the on-disconnect handler.
      *
-     * @param handler 断开连接处理器
+     * @param handler the on-disconnect handler
      */
     public void setOnDisconnectHandler(Runnable handler) {
         this.onDisconnectHandler = handler;
     }
 
     /**
-     * 设置错误处理器
+     * Sets the error handler.
      *
-     * @param handler 错误处理器
+     * @param handler the error handler
      */
     public void setOnErrorHandler(Consumer<String> handler) {
         this.onErrorHandler = handler;
     }
 
     /**
-     * 设置重连耗尽处理器（当所有重连尝试都失败后调用）
+     * Sets the reconnect-exhausted handler (invoked once every reconnection attempt has
+     * failed).
      *
-     * @param handler 重连耗尽处理器
+     * @param handler the reconnect-exhausted handler
      */
     public void setOnReconnectExhaustedHandler(Runnable handler) {
         this.onReconnectExhaustedHandler = handler;
     }
 
     /**
-     * 启动心跳任务
+     * Starts the heartbeat task.
      */
     private void startHeartbeat() {
         heartbeatTask = heartbeatExecutor.scheduleWithFixedDelay(this::heartbeatTick,
@@ -241,16 +244,20 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 一次心跳：先判活，再发 ping。
+     * One heartbeat: check liveness first, then send a ping.
      * <p>
-     * 「先判活」是本方法存在的理由。在此之前，连接健康的唯一判据是 socket 有没有断
-     * —— 而一条 TCP 连接完全可以在不产生 {@code onClose} 的情况下静默失效（中间设备
-     * 超时、对端进程挂起、NAT 表项过期）。那种状态下 ping 发得出去、{@code onClose}
-     * 不触发、重连逻辑不启动，连接看着是好的，实际已经死了。
+     * "Check liveness first" is the reason this method exists. Before it, the only signal of
+     * connection health was whether the socket had closed - and a TCP connection can go
+     * silently dead without ever producing {@code onClose} (an intermediate device timing out,
+     * the peer process hanging, a NAT table entry expiring). In that state pings still go out,
+     * {@code onClose} never fires, and reconnection logic never starts - the connection looks
+     * fine but is actually dead.
      * <p>
-     * 判定为静默失效时**走 {@code close()} 而不是自己另起一套重连**：close 会触发
-     * {@code onClose}，复用既有的重连状态机（含 #181 加的全局预算）。另起一套就会变成
-     * 第二个「决定要不要重连」的地方，那正是 #181 的成因。
+     * When a silent failure is declared, this method **routes through {@code close()} rather
+     * than starting a second reconnection path of its own**: closing triggers {@code onClose},
+     * reusing the existing reconnect state machine (including the global budget #181 added).
+     * Starting a second path would become a second place deciding whether to reconnect - exactly
+     * what caused #181.
      */
     void heartbeatTick() {
         if (!isOpen()) {
@@ -262,7 +269,8 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
                 "WebSocket 已 %d 秒未收到 pong（阈值 %d 秒），判定为静默失效，主动重连",
                 silentFor / 1000, PONG_TIMEOUT_MS / 1000));
-            // 不设 intentionalDisconnect —— 这不是「有意断开」，重连必须继续
+            // Do not set intentionalDisconnect - this is not an "intentional disconnect";
+            // reconnection must continue
             close(4000, "Heartbeat timeout: no pong received");
             return;
         }
@@ -273,10 +281,11 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 收到 pong 时调用：记录时间并算出往返延迟。
+     * Called when a pong is received: records the time and computes the round-trip latency.
      * <p>
-     * 由 {@link #onMessage(String)} 在分发给 messageHandler 之前调用 —— pong 是链路层面的
-     * 事实，不该依赖上层处理器是否接线。
+     * Called by {@link #onMessage(String)} before dispatching to messageHandler - a pong is a
+     * link-layer fact and should not depend on whether an upper-layer handler happens to be
+     * wired up.
      */
     private void recordPong() {
         lastPongTime = clock.getAsLong();
@@ -286,15 +295,18 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 根据 pong 应答判断连接是否还活着。
+     * Determines whether the connection is still alive, based on pong responses.
      *
-     * <p><b>从未收到过 pong 时返回 true。</b> 这一条是刻意的：否则新建立的连接会在第一个
-     * 心跳周期就被判死。代价是这套机制发现不了「对端从来就不应答 pong」的情况 —— 但那是
-     * 安全的方向：面板若压根没实现 pong，我们不该把好连接反复踢掉。它能发现的是
-     * 「曾经在应答、后来不答了」，也就是静默失效。
+     * <p><b>Returns true when no pong has ever been received.</b> This is deliberate: otherwise
+     * a newly established connection would be declared dead within its first heartbeat
+     * interval. The cost is that this mechanism cannot detect "the peer never answers pong at
+     * all" - but that is the safe direction: if the panel simply never implemented pong, a good
+     * connection should not be repeatedly kicked. What it can detect is "used to answer, and
+     * stopped" - that is, a silent failure.
      *
-     * @param timeoutMs 判定阈值，毫秒
-     * @return 最近一次 pong 在阈值之内，或从未收到过 pong
+     * @param timeoutMs the liveness threshold, in milliseconds
+     * @return true if the most recent pong is within the threshold, or none has ever been
+     *         received
      */
     public boolean isAlive(long timeoutMs) {
         if (lastPongTime == 0) {
@@ -304,30 +316,30 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     }
 
     /**
-     * 最近一次测得的往返延迟，毫秒；尚未测到时为 -1。
+     * Most recently measured round-trip latency, in milliseconds; -1 if not yet measured.
      *
-     * @return 延迟毫秒数，或 -1
+     * @return the latency in milliseconds, or -1
      */
     public long getLatencyMs() {
         return latencyMs;
     }
 
     /**
-     * 最近一次收到 pong 的时间戳；从未收到过时为 0。
+     * Timestamp of the most recent pong received; 0 if none has ever been received.
      *
-     * @return 时间戳，毫秒
+     * @return the timestamp, in milliseconds
      */
     public long getLastPongTime() {
         return lastPongTime;
     }
 
-    /** 仅供测试替换时钟。 */
+    /** Test-only clock substitution. */
     @org.jetbrains.annotations.ApiStatus.Internal
     void setClock(java.util.function.LongSupplier clock) {
         this.clock = clock;
     }
 
-    // WebSocketClient实现
+    // WebSocketClient implementation
 
     @Override
     public void onOpen(ServerHandshake handshakedata) {
@@ -339,10 +351,10 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             onConnectHandler.run();
         }
 
-        // 发送初始ping消息
+        // Send the initial ping message
         sendPing();
-        
-        // 启动心跳任务
+
+        // Start the heartbeat task
         startHeartbeat();
     }
 
@@ -351,18 +363,21 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         try {
             JsonObject jsonMessage = JsonParser.parseString(message).getAsJsonObject();
 
-            // isJsonPrimitive 而不是 !isJsonNull：后者挡不住 type 是对象或数组的情况，
-            // 那会让 getAsString() 在这里抛 UnsupportedOperationException——而这一行
-            // 只是为了打一条 FINE 日志，却会因此让消息根本到不了下面的 messageHandler，
-            // 并被记成「消息解析失败」。诊断信息与真实原因不符，且畸形消息在到达真正的
-            // 分发逻辑之前就被吞掉了。见 issue #234。
+            // isJsonPrimitive rather than !isJsonNull: the latter does not guard against type
+            // being an object or array, which would make getAsString() throw
+            // UnsupportedOperationException right here - and this line exists only to emit a
+            // FINE log, yet the exception would keep the message from ever reaching
+            // messageHandler below and get it logged as a "message parse failure" instead. The
+            // diagnostic would not match the real cause, and a malformed message would be
+            // swallowed before it ever reached the real dispatch logic. See issue #234.
             String messageType = jsonMessage.has("type") && jsonMessage.get("type").isJsonPrimitive()
                 ? jsonMessage.get("type").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 String.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : "未知"));
 
-            // pong 在分发之前就记下来。它是链路层面的事实，不该取决于上层处理器
-            // 有没有接线——存活判定是本类自己的职责。
+            // The pong is recorded before dispatch. It is a link-layer fact and should not
+            // depend on whether an upper-layer handler happens to be wired up - liveness
+            // detection is this class's own responsibility.
             if ("pong".equals(messageType)) {
                 recordPong();
             }

@@ -52,13 +52,19 @@ import lombok.Getter;
  * Base command executor with improved architecture using Chain of Responsibility pattern.
  * This class provides a cleaner, more extensible command handling system.
  * <p>
- * 使用责任链模式改进架构的基础命令执行器。
- * 此类提供更清晰、更可扩展的命令处理系统。
+ * The default validator chain applies four validators in order: sender type (driven by the
+ * class-level {@code @CmdTarget}, overridable per method), permission and operator requirement
+ * (driven by {@code @CmdExecutor}), cooldown (applied only after a successful invocation), and
+ * usage locking (acquired and released around the call in a try-finally). Execution flow in
+ * {@link #onCommand}: help short-circuit, immutable {@link CommandContext} construction, scored
+ * method matching via {@link #matchMethod}, parameter parsing, the validator chain, an
+ * argument-count check, then invocation. Subclasses MUST implement {@link #handleHelp}.
  *
  * @author wisdomme
  * @version 2.0.0
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes the mapped @CmdMapping method -- see 08-GATE05-TRIAGE.md
 public abstract class BaseCommandExecutor implements TabExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();
@@ -76,7 +82,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Creates a new command executor with default validators.
-     * 使用默认验证器创建新的命令执行器。
      */
     public BaseCommandExecutor() {
         this.parserRegistry = TypeParserRegistry.getInstance();
@@ -99,16 +104,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * {@code PluginManager.validateCommandExecutorContract}). There is no opt-out: Phase 3 D-08's
      * module-granularity isolation is the accepted escape hatch -- only this module fails to
      * load, every other module still starts.
-     * <p>
-     * 使用自定义验证器链创建新的命令执行器。
-     * <p>
-     * 这是 {@link #createDefaultValidatorChain()} 所警示的构造入口的另一半：这里直接传入的链
-     * 同样受相同的加载时契约约束。若本类的某个 {@code @CmdMapping} 方法——或本类本身——声明了
-     * {@code @CmdCD}，而 {@code validatorChain} 中不含 {@code CooldownValidator}；或声明了
-     * {@code @UsageLimit}（{@code NONE} 之外的任意范围），而其中不含 {@code UsageLockValidator}，
-     * 该模块会在加载时被拒绝，并指出本类与问题映射方法（SILENT-11 / D-01, D-04；由
-     * {@code PluginManager.validateCommandExecutorContract} 强制执行）。此拒绝没有开关：Phase 3
-     * D-08 的模块粒度隔离是被接受的退路——只有本模块加载失败，其余模块正常启动。
      *
      * @param validatorChain the custom validator chain
      */
@@ -133,17 +128,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * property, config key, or annotation attribute disables this check. Phase 3 D-08's
      * module-granularity isolation is the accepted escape hatch instead -- only the offending
      * module fails to load, every other module still starts.
-     * <p>
-     * 创建具有标准验证器的默认验证器链。
-     * 重写此方法以自定义验证管道。
-     * <p>
-     * 若某次重写在本类的某映射——或本类本身——声明了 {@code @CmdCD} 或 {@code @UsageLimit}
-     * （{@code NONE} 之外的任意范围）的同时，从链中省略了对应的 {@code CooldownValidator} 或
-     * {@code UsageLockValidator}，会在加载时被拒绝，并指出问题类，以及（已知时）问题映射方法
-     * （SILENT-11 / D-01, D-04；由 {@code PluginManager.validateCommandExecutorContract} 强制
-     * 执行，挂在容器组装的最后一步，早于任何命令抵达 Bukkit）。此拒绝没有开关：没有系统属性、
-     * 配置项或注解属性可以关闭这项检查。Phase 3 D-08 的模块粒度隔离是被接受的退路——只有问题模块
-     * 加载失败，其余模块正常启动。
      *
      * @return the validator chain
      */
@@ -201,7 +185,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
 
     /**
      * Scans methods for command mappings.
-     * 扫描方法以获取命令映射。
      */
     private void scanCommandMappings() {
         // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
@@ -221,15 +204,13 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Handles the help command. Override to provide custom help.
-     * 处理帮助命令。重写以提供自定义帮助。
      *
      * @param sender the command sender
      */
     protected abstract void handleHelp(CommandSender sender);
-    
+
     /**
      * Gets the help command string.
-     * 获取帮助命令字符串。
      *
      * @return the help command
      */
@@ -307,8 +288,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Executes the command method.
      * Supports both synchronous and asynchronous execution via @AsyncCommand or @RunAsync.
-     * 执行命令方法。
-     * 通过 @AsyncCommand 或 @RunAsync 支持同步和异步执行。
      *
      * @param context          the command context
      * @param method           the method to execute
@@ -510,7 +489,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
 
     /**
      * Matches arguments to a registered method.
-     * 将参数匹配到已注册的方法。
      *
      * @param args the command arguments
      * @return the matched method, or null if not found
@@ -540,7 +518,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Calculates a match score for format vs actual args.
-     * 计算格式与实际参数的匹配分数。
+     * Weights: an exact literal match scores 10, a {@code <param>} placeholder scores 1, and an
+     * exact-length match earns a +5 bonus. A format string is written against these three numbers.
      *
      * @param formatArgs the format arguments
      * @param actualArgs the actual arguments
@@ -591,7 +570,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Parses command arguments into named parameters.
-     * 将命令参数解析为命名参数。
      *
      * @param args   the command arguments
      * @param format the command format
@@ -643,14 +621,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Validates the parameter count.
-     * 验证参数数量。
      */
     protected boolean validateParameterCount(String[] args, String format, CommandSender sender, Command command) {
-        // 空 format 代表裸命令，期望零参数，必须在 split 之前短路。
-        // Java 的 "".split(" ") 返回长度为 1 的数组（内含一个空字符串），
-        // 因此下面两条比较都会读错：零参数时 1 != 0 判为参数不足，裸命令的方法体
-        // 一次也执行不到；带一个参数时 1 == 1 反而判为合法。
-        //
         // An empty format is a bare command taking no arguments, and must short-circuit
         // before the split: "".split(" ") returns a length-1 array holding one empty
         // string, so both comparisons below read the wrong thing -- with no arguments it
@@ -691,7 +663,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Builds the method parameters from the command context.
-     * 从命令上下文构建方法参数。
      *
      * @param context the command context
      * @param method  the method to invoke
@@ -764,7 +735,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Parses a parameter value to the target type.
-     * 将参数值解析为目标类型。
      *
      * @param values the string values
      * @param type   the target type
@@ -808,8 +778,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Generates tab completion suggestions.
      * Override this method to provide custom suggestions.
-     * 生成 Tab 补全建议。
-     * 重写此方法以提供自定义建议。
      *
      * @param player  the player requesting completion
      * @param command the command
@@ -822,7 +790,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Gets all registered command mappings.
-     * 获取所有已注册的命令映射。
      *
      * @return unmodifiable map of format to method
      */
@@ -832,7 +799,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Adds a custom validator to the chain.
-     * 向链中添加自定义验证器。
      *
      * @param validator the validator to add
      */
@@ -842,7 +808,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     /**
      * Removes a validator from the chain.
-     * 从链中移除验证器。
      *
      * @param validator the validator to remove
      */

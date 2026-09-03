@@ -31,12 +31,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code private} and {@code static} methods are not a capability gap but a usage error. The JVM
  * dispatches them with {@code invokespecial} and {@code invokestatic}, neither of which consults
  * the subclass, so no inheritance-based AOP framework can intercept them.
- * <p>
- * 这里只做诊断，不做决策。check 列出每一条不可代理的原因与补救说明，由 AopProxyResolver 决定
- * 如何处置：final 类让加载失败（根本无法生成子类），其余每一条都是「某个方法够不着」，改为忽略
- * 并打警告。这与 Spring 一致——它对 final 类抛异常，对织不进去的方法上的注解则忽略。忽略不等于
- * 静默：每一条都会被点名，因为一个悄悄不起作用的注解，正是让 @ExceptionCatch 从 6.2.0 到
- * 6.3.0 长期失效的那种失败方式。isProxyable 是同一组规则的纯谓词形式。见 issue #309。
  *
  * @author wisdomme
  * @since 6.3.0
@@ -77,11 +71,6 @@ public final class AopEligibility {
      * Scans the class itself - callers on the startup path that already hold a
      * {@link MethodScan} should call {@link #findAopAnnotatedMethods(MethodScan)} instead, so the
      * hierarchy is not walked a second time (D-37).
-     * <p>
-     * 只收集<b>方法本身</b>带 AOP 注解的方法，并遍历整个继承层级。类级注解有意不在此体现：
-     * 本方法的结果会送进 check，而 check 会把不可代理的条目变成加载失败——对作者显式点名的方法
-     * 是对的，对被类级注解顺带覆盖到的方法则是误伤。类级覆盖改由 AopProxyResolver 处理。
-     * 已经持有 MethodScan 的调用方应改用 findAopAnnotatedMethods(MethodScan)，避免重复扫描。
      *
      * @param beanClass the class to scan
      * @return the methods carrying a method-level AOP annotation, subclass overrides first
@@ -196,11 +185,6 @@ public final class AopEligibility {
      * The bean class is a parameter rather than being derived from the method because two of the
      * five rules are relative to it. A method is not intrinsically unproxyable; it is unproxyable
      * <em>from a particular subclass</em>. See issue #309.
-     * <p>
-     * 与 check 共用同一枚 Rule 规则；新增第六条规则若缺少 violates 或 describe 任意一半都无法
-     * 编译，这取代了旧版靠注释提醒人工同步的做法。此方法只调用 violates，从不调用会拼接字符串
-     * 的 describe——后者只留给 check 的报告路径。bean 类是参数而非从方法推导，因为五条规则里
-     * 有两条是相对于它的：一个方法不是天然不可代理，而是<em>相对某个子类</em>不可代理。
      *
      * @param method    the method to test, may be null
      * @param beanClass the class the proxy will extend, may be null
@@ -228,8 +212,6 @@ public final class AopEligibility {
      * decides the same question when it collapses override slots. Two copies reading different
      * sources would let the scan treat two declarations as one method while this treats them as
      * different packages.
-     * <p>
-     * 代理生成在 bean 所在的包里，别的包中的 package-private 声明既覆写不了也 super 不到。
      */
     private static boolean isInaccessible(Method method, Class<?> beanClass) {
         return ReflectionUtil.isPackagePrivate(method.getModifiers())
@@ -248,11 +230,6 @@ public final class AopEligibility {
      * {@code take(Object)} and both come back as separate methods - but only the first is
      * {@code super}-invokable. Bridge and synthetic declarations are deliberately included in the
      * scan here, because they are exactly what does the shadowing.
-     * <p>
-     * <p>
-     * 泛型覆写的擦除另一半：编译器为 Child 生成桥接方法 take(Object)，getAllMethods 会跳过桥接
-     * 且按擦除参数比较，于是父类的 take(Object) 作为独立方法返回，但它已不可 super 调用。
-     * 此处有意连桥接与合成方法一起扫描，因为遮蔽正是它们造成的。
      *
      * @param method    the method to test
      * @param beanClass the class the proxy will extend
@@ -284,9 +261,6 @@ public final class AopEligibility {
      * {@link Rule#describe(Method, Class)}: a counter that stays at zero across a call is stronger
      * evidence than reading the method body, because it also catches a future edit that
      * accidentally reintroduces the cost. Nothing in production code reads this value.
-     * <p>
-     * 记录规则说明文本被构建的次数，仅用于测试证明 isProxyable 从不触达 describe；
-     * 生产代码不读取该值。
      */
     private static final AtomicInteger DESCRIBE_CALLS = new AtomicInteger();
 
@@ -322,12 +296,6 @@ public final class AopEligibility {
      * Enum order is the previous chain's order, and {@link #check} and {@link #isProxyable} both
      * stop at the first violated rule - preserving the old chain's else-if semantics, where only
      * one problem is ever reported per method.
-     * <p>
-     * 五条代理资格规则的统一实现（对应 D-36）。check 与 isProxyable 曾经各自维护一条
-     * if/else-if 链，仅靠一句注释提醒「必须同步修改」。这里每个枚举常量同时提供 violates 与
-     * describe 两半，新增第六条规则若缺任意一半都无法编译。violates 不做任何字符串拼接，
-     * 可在启动路径上安全地每方法每 bean 调用一次；describe 只在 violates 已经为真、且仅从
-     * check 的报告路径被调用。
      */
     private enum Rule {
         /** Static methods are dispatched with {@code invokestatic}, which bypasses the proxy. */

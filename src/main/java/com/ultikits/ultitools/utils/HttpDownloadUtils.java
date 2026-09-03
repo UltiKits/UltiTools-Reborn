@@ -12,40 +12,31 @@ import java.net.URL;
 /**
  * Utility class for HTTP file download operations.
  * Provides methods to download files from URLs with progress tracking support.
- * <br>
- * HTTP文件下载操作的实用工具类。
- * 提供从URL下载文件的方法，支持进度跟踪。
  *
  * @author wisdomme
  * @since 6.0.0
  */
 public class HttpDownloadUtils {
-    
+
     /**
      * Progress callback interface for download operations.
-     * <br>
-     * 下载操作的进度回调接口。
      */
     @FunctionalInterface
     public interface ProgressCallback {
         /**
          * Called when download progress is updated.
-         * <br>
-         * 当下载进度更新时调用。
          *
-         * @param bytesDownloaded Bytes downloaded so far <br> 已下载的字节数
-         * @param totalBytes      Total bytes to download, -1 if unknown <br> 总字节数，未知时为-1
+         * @param bytesDownloaded Bytes downloaded so far
+         * @param totalBytes      Total bytes to download, -1 if unknown
          */
         void onProgress(long bytesDownloaded, long totalBytes);
     }
     /**
      * Download file from URL.
-     * <br>
-     * 从URL下载文件。
      *
-     * @param urlString Download URL <br> 下载地址
-     * @param fileName  File name <br> 文件名
-     * @param savePath  Save path <br> 保存路径
+     * @param urlString Download URL
+     * @param fileName  File name
+     * @param savePath  Save path
      * @throws IOException if an I/O error occurs during download
      */
     public static void download(String urlString, String fileName, String savePath) throws IOException {
@@ -63,21 +54,21 @@ public class HttpDownloadUtils {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {
-            // 设置超时时间
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            // Set the timeouts
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
-            // 设置现代化的用户代理
+            // Set a modern user agent
             conn.setRequestProperty("User-Agent", 
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
             
-            // 检查HTTP响应码
+            // Check the HTTP response code
             int responseCode = conn.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 throw new IOException("HTTP error: " + responseCode + " - " + conn.getResponseMessage());
             }
 
-            // 创建保存目录
+            // Create the save directory
             File saveDir = new File(savePath);
             if (!saveDir.exists() && !saveDir.mkdirs()) {
                 throw new IOException("Failed to create directory: " + savePath);
@@ -93,11 +84,11 @@ public class HttpDownloadUtils {
                 throw new SecurityException("Path traversal detected: " + fileName);
             }
 
-            // 使用try-with-resources确保资源正确关闭
+            // Use try-with-resources to ensure resources are closed properly
             try (InputStream inputStream = conn.getInputStream();
                  FileOutputStream fos = new FileOutputStream(file)) {
 
-                byte[] buffer = new byte[8192]; // 增大缓冲区提高性能
+                byte[] buffer = new byte[8192]; // Larger buffer for better throughput
                 int bytesRead;
                 while ((bytesRead = inputStream.read(buffer)) != -1) {
                     fos.write(buffer, 0, bytesRead);
@@ -110,13 +101,11 @@ public class HttpDownloadUtils {
 
     /**
      * Download file from URL with progress callback.
-     * <br>
-     * 从URL下载文件并提供进度回调。
      *
-     * @param urlString        Download URL <br> 下载地址
-     * @param fileName         File name <br> 文件名
-     * @param savePath         Save path <br> 保存路径
-     * @param progressCallback Progress callback <br> 进度回调
+     * @param urlString        Download URL
+     * @param fileName         File name
+     * @param savePath         Save path
+     * @param progressCallback Progress callback
      * @throws IOException if an I/O error occurs during download
      */
     public static void download(String urlString, String fileName, String savePath, 
@@ -135,24 +124,24 @@ public class HttpDownloadUtils {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {
-            // 设置超时时间
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            // Set the timeouts
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
-            // 设置现代化的用户代理
+            // Set a modern user agent
             conn.setRequestProperty("User-Agent", 
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
             
-            // 检查HTTP响应码
+            // Check the HTTP response code
             int responseCode = conn.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 throw new IOException("HTTP error: " + responseCode + " - " + conn.getResponseMessage());
             }
 
-            // 获取文件大小
+            // Get the file size
             long contentLength = conn.getContentLengthLong();
 
-            // 创建保存目录
+            // Create the save directory
             File saveDir = new File(savePath);
             if (!saveDir.exists() && !saveDir.mkdirs()) {
                 throw new IOException("Failed to create directory: " + savePath);
@@ -168,7 +157,7 @@ public class HttpDownloadUtils {
                 throw new SecurityException("Path traversal detected: " + fileName);
             }
 
-            // 使用try-with-resources确保资源正确关闭
+            // Use try-with-resources to ensure resources are closed properly
             try (InputStream inputStream = conn.getInputStream();
                  FileOutputStream fos = new FileOutputStream(file)) {
 
@@ -192,11 +181,9 @@ public class HttpDownloadUtils {
 
     /**
      * Download content from URL to byte array.
-     * <br>
-     * 从URL下载内容到字节数组。
      *
-     * @param urlString Download URL <br> 下载地址
-     * @return Downloaded content as byte array <br> 下载的内容作为字节数组
+     * @param urlString Download URL
+     * @return Downloaded content as byte array
      * @throws IOException if an I/O error occurs during download
      */
     public static byte[] downloadToByteArray(String urlString) throws IOException {
@@ -208,21 +195,21 @@ public class HttpDownloadUtils {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {
-            // 设置超时时间
-            conn.setConnectTimeout(10 * 1000); // 10秒连接超时
-            conn.setReadTimeout(30 * 1000);    // 30秒读取超时
+            // Set the timeouts
+            conn.setConnectTimeout(10 * 1000); // 10-second connect timeout
+            conn.setReadTimeout(30 * 1000);    // 30-second read timeout
             
-            // 设置现代化的用户代理
+            // Set a modern user agent
             conn.setRequestProperty("User-Agent", 
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
             
-            // 检查HTTP响应码
+            // Check the HTTP response code
             int responseCode = conn.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 throw new IOException("HTTP error: " + responseCode + " - " + conn.getResponseMessage());
             }
 
-            // 使用try-with-resources读取内容
+            // Use try-with-resources to read the content
             try (InputStream inputStream = conn.getInputStream();
                  ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                 

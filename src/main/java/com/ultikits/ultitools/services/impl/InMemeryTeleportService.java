@@ -21,7 +21,7 @@ import com.ultikits.ultitools.services.TeleportService;
 import com.ultikits.ultitools.utils.XVersionUtils;
 
 /**
- * 传送服务实现类
+ * Teleport service implementation.
  *
  * @author wisdomme
  * @version 1.0.0

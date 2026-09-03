@@ -32,10 +32,6 @@ import java.util.List;
  * builds a description only for a method that actually violates - the same split
  * {@code aop/AopEligibility} uses, for the same reason: building a remediation string for every
  * method and discarding most of them is wasted work on the plugin-load path.
- * <p>
- * {@code @CmdTarget} 类级与方法级组合规则的唯一实现。D-01 裁定为「只能收窄的覆盖」：方法级取值
- * 只能收窄类级取值，放宽与横向切换都在加载期被拒绝，且拒绝方式相同——三值枚举不是全序，
- * PLAYER 到 CONSOLE 既不是放宽也不是合法，是独立的第三类。
  *
  * @author wisdomme
  * @since 6.3.0

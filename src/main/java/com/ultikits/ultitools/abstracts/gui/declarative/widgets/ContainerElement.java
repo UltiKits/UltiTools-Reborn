@@ -10,7 +10,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Container 对应的 Element。
+ * The Element counterpart of Container.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -41,8 +41,8 @@ public class ContainerElement extends Element {
 
     @Override
     public void performRebuild() {
-        // Container 只是布局容器，不直接构建 RenderNode
-        // 子元素的 RenderNode 会在收集阶段被处理
+        // Container is only a layout container and does not build a RenderNode directly —
+        // its children's RenderNodes are handled during the collection phase
         for (Element child : childElements) {
             if (child.isDirty()) {
                 child.performRebuild();

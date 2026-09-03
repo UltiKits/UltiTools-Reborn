@@ -78,11 +78,6 @@ public class ServerPropertiesManager {
      * with three different fixes, collapsed into one value. The batch path has to tell
      * the caller which one happened, so the real outcome is produced here and
      * {@code setProperty} keeps its original contract by narrowing it.
-     * <p>
-     * 为什么要在 {@link #setProperty(String, String)} 旁边多这一个：那个布尔值是有损的。
-     * {@code false} 可能是「键不在白名单」「没有 server.properties 可写」或「写入本身失败」，
-     * 三种处置完全不同的情况被压成了同一个值。批量路径必须告诉调用方是哪一种，
-     * 所以真实结果在这里产生，{@code setProperty} 通过收窄它来保持原有契约。
      */
     private WriteOutcome writeProperty(String key, String value) {
         if (!SAFE_KEYS.contains(key)) return WriteOutcome.REJECTED;
@@ -107,13 +102,13 @@ public class ServerPropertiesManager {
         return WriteOutcome.WRITTEN;
     }
 
-    /** What actually happened to one key. 一个键的真实去向。 */
+    /** What actually happened to one key. */
     private enum WriteOutcome {
-        /** Written to disk. 已写入。 */
+        /** Written to disk. */
         WRITTEN,
-        /** Not on {@link #SAFE_KEYS}; never attempted. 不在白名单，根本没尝试。 */
+        /** Not on {@link #SAFE_KEYS}; never attempted. */
         REJECTED,
-        /** On the whitelist, but reading or writing the file failed. 在白名单里，但读写失败。 */
+        /** On the whitelist, but reading or writing the file failed. */
         FAILED
     }
 
@@ -125,11 +120,6 @@ public class ServerPropertiesManager {
      * single key. Keys carrying an explicit JSON {@code null} are not part of that
      * promise — a {@code null} reads as "leave this one alone", so it is recorded in
      * {@link #getSkipped()} for visibility but never fails the batch.
-     * <p>
-     * 一次 {@code set_all} 的结果。{@link #isSuccess()} 的含义是
-     * <em>调用方要求写的每一个键现在都在磁盘上</em>，也就是单键 {@code set} 早就在报的那件事的批量版。
-     * 值为 JSON {@code null} 的键不在这个承诺范围内 —— {@code null} 读作「这个别动」，
-     * 因此它只被记进 {@link #getSkipped()} 以便可见，不会让整批失败。
      */
     @ApiStatus.Internal
     public static final class SetAllResult {
@@ -143,9 +133,6 @@ public class ServerPropertiesManager {
          * Public so callers outside this package can build one. Each list is copied before
          * being wrapped — {@code unmodifiableList} is a view, so wrapping the caller's list
          * directly would leave this "immutable" object mutable through the original reference.
-         * <p>
-         * 公开是为了包外也能构造。每个列表都先复制再包装 —— {@code unmodifiableList} 是视图，
-         * 直接包装调用方的列表会让这个「不可变」对象仍能通过原引用被改。
          */
         public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
                             List<String> skipped, List<String> malformed) {
@@ -156,22 +143,22 @@ public class ServerPropertiesManager {
             this.malformed = Collections.unmodifiableList(new ArrayList<>(malformed));
         }
 
-        /** Keys written to disk. 已写入磁盘的键。 */
+        /** Keys written to disk. */
         public List<String> getUpdated() { return updated; }
 
-        /** Keys refused because they are not on the whitelist. 因不在白名单而被拒的键。 */
+        /** Keys refused because they are not on the whitelist. */
         public List<String> getRejected() { return rejected; }
 
-        /** Whitelisted keys whose write failed. 在白名单里但写入失败的键。 */
+        /** Whitelisted keys whose write failed. */
         public List<String> getFailed() { return failed; }
 
-        /** Keys whose value was an explicit JSON null. 值为 JSON null 因而被跳过的键。 */
+        /** Keys whose value was an explicit JSON null. */
         public List<String> getSkipped() { return skipped; }
 
-        /** Keys whose value was not a JSON primitive. 值不是 JSON 原始值因而无法作为属性写入的键。 */
+        /** Keys whose value was not a JSON primitive. */
         public List<String> getMalformed() { return malformed; }
 
-        /** Every requested key was written. 要求写的键全部写成功。 */
+        /** Every requested key was written. */
         public boolean isSuccess() {
             return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty();
         }
@@ -185,10 +172,6 @@ public class ServerPropertiesManager {
          * and a malformed key means fix the payload. Collapsing them into one label would
          * send the reader looking in the wrong place — which is the failure mode this
          * whole change exists to remove.
-         * <p>
-         * 一句话说明哪里没成，用于日志或错误响应；全部成功时返回 {@code null}。
-         * 三类分开写，是因为它们要三种不同的处置：被拒 = 别再要这个键，写入失败 = 去看磁盘，
-         * 畸形 = 去修载荷。合成一个标签会把人指向错误的方向，而那正是这次改动要消灭的失败形态。
          */
         public String describeFailure() {
             if (isSuccess()) return null;
@@ -269,12 +252,6 @@ public class ServerPropertiesManager {
      * {@code config_update_response} is supposed to distinguish "delivered" from
      * "took effect". Before this returned anything, that path had no way to learn the
      * answer and reported success unconditionally.
-     * <p>
-     * 应用一批属性、把结果发回面板，并把结果交还给调用方。
-     * <b>返回值才是重点</b>：{@code handleSetAll} 用不到它（它只负责拼一条消息），
-     * 但 {@code fileName: server_properties} 的 {@code update_config} 也走这里，
-     * 而它的 {@code config_update_response} 要区分「已下发」和「已生效」。
-     * 在这个方法有返回值之前，那条路径没有任何途径知道答案，只能无条件报成功。
      *
      * @param values key → value, an explicit JSON null meaning "leave this key alone"
      * @return what happened to each key
@@ -301,13 +278,6 @@ public class ServerPropertiesManager {
             // been written as motd=Hello. One malformed key used to abort the whole batch
             // before any response was built, which is the same "nobody can tell why"
             // shape this issue is about.
-            //
-            // server.properties 是一张扁平的字符串表，所以非 JSON 原始值不是「值」而是畸形请求。
-            // 守卫必须放在取值之前，因为 Gson 的失败方式并不统一：JsonObject 抛
-            // UnsupportedOperationException，空数组和多元素数组抛 IllegalStateException，
-            // 而**单元素数组根本不抛** —— 它静默拆包，{"motd": ["Hello"]} 会被写成 motd=Hello。
-            // 而且过去一个畸形键就会在任何响应被构造之前中断整批，正是本 issue 说的那种
-            // 「没人查得到原因」的形状。
             if (!value.isJsonPrimitive()) {
                 malformed.add(key);
                 continue;
@@ -336,7 +306,8 @@ public class ServerPropertiesManager {
         response.addProperty("type", "server_properties_result");
         response.addProperty("action", "set_all");
         response.addProperty("success", result.isSuccess());
-        // updated 保持数字，面板一直读的是这个字段；被挡下的键走新增的数组字段。
+        // "updated" stays a number — the panel has always read this field; blocked keys
+        // go through the newly added array fields.
         response.addProperty("updated", result.getUpdated().size());
         response.add("rejected", toJsonArray(result.getRejected()));
         response.add("failed", toJsonArray(result.getFailed()));
@@ -357,15 +328,14 @@ public class ServerPropertiesManager {
      * The response above is what the panel reads; this is what a server operator reads.
      * Both are needed: someone changing a setting that silently does not apply otherwise
      * finds nothing on either side.
-     * <p>
-     * 上面那条响应是给面板读的，这条是给服主读的。两边都要有：
-     * 否则改了个设置没生效的人，面板和服务器日志两头都查不到原因。
      */
     private void warnIfIncomplete(SetAllResult result) {
         String failure = result.describeFailure();
         if (failure == null) return;
-        // 这个管理器由 initWebSocketManagers() 在 onEnable 里构造，生产环境下单例一定就绪；
-        // 判空是为了让纯文件逻辑的单元测试不必先装一个全局单例。
+        // This manager is constructed by initWebSocketManagers() in onEnable, so in
+        // production the singleton is always ready by the time this runs; the null check
+        // exists so a pure-file-logic unit test does not need to stand up a global
+        // singleton first.
         UltiTools instance = UltiTools.getInstance();
         if (instance != null && instance.getLogger() != null) {
             instance.getLogger().log(Level.WARNING, failure);

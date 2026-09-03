@@ -10,15 +10,15 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Container 是一个可以包含多个子 Widget 的容器。
+ * Container is a widget that can hold multiple child Widgets.
  * <p>
- * 它负责：
+ * It is responsible for:
  * <ul>
- *   <li>管理子 Widget 列表</li>
- *   <li>为子 Widget 分配槽位</li>
+ *   <li>managing the list of child Widgets</li>
+ *   <li>assigning slots to child Widgets</li>
  * </ul>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
  * Container.builder()
  *     .child(ItemDisplay.builder(item).build())
@@ -41,9 +41,9 @@ public class Container extends Widget {
     }
 
     /**
-     * 创建一个新的 Builder。
+     * Creates a new Builder.
      *
-     * @return Builder
+     * @return the Builder
      */
     @NotNull
     public static Builder builder() {

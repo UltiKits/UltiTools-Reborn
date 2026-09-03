@@ -1,11 +1,14 @@
 package com.ultikits.ultitools.buildtools.deprecation;
 
+import com.ultikits.ultitools.utils.VersionComparatorUtil;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * The D-01 / D-21 / D-22 decision logic: a japicmp {@code <exclude>} entry whose key has no
@@ -53,13 +56,27 @@ public final class RemovalConsistencyEvaluator {
         return "PRIVATE".equals(modifier) || "PACKAGE_PROTECTED".equals(modifier);
     }
 
+    /**
+     * D-06: an exclude is required only when a REMOVED entry's removal is strictly newer than the
+     * configured japicmp baseline - once the baseline advances past {@code removedIn}, the symbol
+     * is absent from both sides of the japicmp comparison and can never be re-flagged against it.
+     * A {@code null} or blank {@code removedIn} is fail-closed: absence of data is not evidence of
+     * safety, so an exclude is still required regardless of the baseline.
+     */
+    private static boolean stillRequiresExclusion(String removedIn, String baselineVersion) {
+        if (removedIn == null || removedIn.trim().isEmpty()) {
+            return true;
+        }
+        return VersionComparatorUtil.isGreaterThan(removedIn, baselineVersion);
+    }
+
     // PMD.NPathComplexity: each `if` in this method is one named D-01/D-21/D-22 consistency
     // rule, applied independently to every key. Read top to bottom, the method IS the rule
     // list -- which is what makes a build gate auditable. Splitting it into per-rule helpers
     // would lower the number while removing the property that the rules can be read in order.
     @SuppressWarnings("PMD.NPathComplexity")
     public static List<Finding> evaluate(Set<RegistryKey> excludeKeys, JapicmpReportReader.Report report,
-            RegistryLedger registry) {
+            RegistryLedger registry, String baselineVersion) {
         List<Finding> findings = new ArrayList<>();
 
         // D-22 scope equality: a report narrower than the framework's declared scope can never
@@ -72,10 +89,15 @@ public final class RemovalConsistencyEvaluator {
 
         Map<String, DeprecationEntry> registryByKey = indexByKeyString(registry);
 
+        // Deterministic iteration order (RegistryKey's own total order) so two runs over the
+        // same inputs produce identical build-failure text, regardless of the caller's Set
+        // implementation or insertion order.
+        Set<RegistryKey> sortedExcludeKeys = new TreeSet<>(excludeKeys);
+
         // D-01 staleness: a member-level exclude key with no registry entry AND no visible trace
         // in the report - neither the exact key nor its enclosing class - protects nothing
         // discoverable. Whole-class excludes are exempt (see class javadoc).
-        for (RegistryKey key : excludeKeys) {
+        for (RegistryKey key : sortedExcludeKeys) {
             if (key.isClassLevel()) {
                 continue;
             }
@@ -102,7 +124,7 @@ public final class RemovalConsistencyEvaluator {
         // D-21 admissibility: an exclude key that is still visible in the report (see class
         // javadoc for when that is possible) and NOT tracked by the deprecation lifecycle must
         // clear the mechanical PRIVATE/PACKAGE_PROTECTED old-side test.
-        for (RegistryKey key : excludeKeys) {
+        for (RegistryKey key : sortedExcludeKeys) {
             JapicmpReportReader.Entry entry = report.entries().get(key);
             if (entry == null || registryByKey.containsKey(key.toString())) {
                 continue;
@@ -112,11 +134,18 @@ public final class RemovalConsistencyEvaluator {
             }
         }
 
-        // D-22 pom-sync: every REMOVED registry entry must have a matching pom exclude, or
-        // japicmp will re-flag it against the old baseline on every subsequent build with no
-        // record of why it is accepted.
+        // D-22 pom-sync, D-06 baseline-aware: a REMOVED registry entry needs a matching pom
+        // exclude only while its removal is still newer than the configured baseline - once the
+        // baseline advances past removedIn, japicmp can never re-flag it against that baseline,
+        // so no exclude is required to protect against a re-flag that cannot happen.
         for (DeprecationEntry entry : registry.entries()) {
-            if (entry.getStatus() == DeprecationEntry.Status.REMOVED && !excludeKeys.contains(entry.getKey())) {
+            if (entry.getStatus() != DeprecationEntry.Status.REMOVED) {
+                continue;
+            }
+            if (excludeKeys.contains(entry.getKey())) {
+                continue;
+            }
+            if (stillRequiresExclusion(entry.getRemovedIn(), baselineVersion)) {
                 findings.add(Finding.missingExclusionForRemoved(entry.getKey()));
             }
         }

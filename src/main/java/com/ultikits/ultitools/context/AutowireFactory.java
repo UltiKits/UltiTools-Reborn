@@ -8,8 +8,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Simple autowire factory to replace Spring's AutowireCapableBeanFactory.
- * <br>
- * 简单的自动装配工厂，用于替换Spring的AutowireCapableBeanFactory。
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Autowiring requires reflection
 @ApiStatus.Internal
@@ -23,8 +21,6 @@ public class AutowireFactory {
 
     /**
      * Autowire bean dependencies.
-     * <br>
-     * 自动装配Bean依赖。
      * <p>
      * An unresolvable {@code @Autowired(required = true)} dependency aborts the owning module:
      * this method throws {@link ContainerException} instead of leaving the field {@code null}.
@@ -33,13 +29,8 @@ public class AutowireFactory {
      * dependency, which still resolves to {@code null} silently. Autowiring stops at the first
      * unresolvable required field rather than continuing and reporting only the last one. See
      * issue #201 (D-08).
-     * <p>
-     * 一个无法解析的 {@code @Autowired(required = true)} 依赖会让所属模块中止加载：本方法会抛出
-     * {@link ContainerException}，而不是把字段留成 {@code null}。其他模块不受影响，因为每个模块
-     * 都拥有自己的 {@link SimpleContainer}。{@code @Autowired(required = false)} 是为真正可选的
-     * 依赖提供的文档化退出方式，那种情况仍会静默解析为 {@code null}。
      *
-     * @param bean the bean to autowire <br> 要自动装配的Bean
+     * @param bean the bean to autowire
      * @throws ContainerException if a {@code required = true} dependency cannot be resolved
      */
     public void autowireBean(Object bean) {

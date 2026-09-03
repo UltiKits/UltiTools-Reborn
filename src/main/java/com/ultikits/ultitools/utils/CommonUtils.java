@@ -1,66 +1,53 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.ultikits.ultitools.UltiTools;
 
 /**
  * Common utility class providing general-purpose helper methods.
  * This class contains utility methods used throughout the UltiTools plugin.
- * <br>
- * 通用工具类，提供通用的辅助方法。
- * 此类包含在整个UltiTools插件中使用的实用方法。
  *
  * @author wisdomme
  * @since 6.0.0
  */
 public class CommonUtils {
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     /**
      * get UltiTools UUID
-     * <br>
-     * 获取UltiTools UUID
+     * <p>
+     * Reads the current UUID without writing to the credential store when one already exists --
+     * only the first-ever call (or a rare concurrent race against another first-ever call) needs
+     * to write. WR-01 (08-REVIEW.md): the previous unconditional {@link CredentialStore#update}
+     * call rewrote the live-credential file on every invocation, including the common
+     * already-exists case, which needlessly widened the write window on the single-owner store.
      *
      * @return UUID
      * @throws IOException if an I/O error occurs
      */
-    @SuppressWarnings("unchecked")
-    public static synchronized String getUltiToolsUUID() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        Map<String, Object> json;
-        
-        if (dataFile.exists()) {
-            try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                json = GSON.fromJson(reader, Map.class);
-                if (json == null) {
-                    json = new LinkedHashMap<>();
-                }
-            }
-        } else {
-            json = new LinkedHashMap<>();
-        }
-        
-        if (!json.containsKey("uuid")) {
-            json.put("uuid", UUID.randomUUID().toString().replace("-", ""));
-            if (!dataFile.getParentFile().exists()) {
-                dataFile.getParentFile().mkdirs();
-            }
-            try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                GSON.toJson(json, writer);
+    public static String getUltiToolsUUID() throws IOException {
+        CredentialStore.ReadResult current = CredentialStore.read();
+        if (current.isParsed()) {
+            Object existingUuid = current.data().get("uuid");
+            if (existingUuid != null) {
+                return existingUuid.toString();
             }
         }
-        
-        return json.get("uuid").toString();
+        // Absent, or a first-ever/racing generation: fall through to update(), which re-reads
+        // under the store lock and only then decides whether a uuid still needs generating. This
+        // also preserves update()'s parse-failure handling (isParseFailure() throws) for a torn
+        // credential file, matching the pre-fix behavior for that case.
+        String[] uuidHolder = new String[1];
+        CredentialStore.update(existing -> {
+            Object existingUuid = existing.get("uuid");
+            if (existingUuid != null) {
+                uuidHolder[0] = existingUuid.toString();
+            } else {
+                String generated = UUID.randomUUID().toString().replace("-", "");
+                existing.put("uuid", generated);
+                uuidHolder[0] = generated;
+            }
+            return existing;
+        });
+        return uuidHolder[0];
     }
 }

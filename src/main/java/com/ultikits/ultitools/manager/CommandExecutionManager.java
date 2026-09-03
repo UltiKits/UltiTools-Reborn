@@ -22,8 +22,8 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 命令执行管理器
- * 负责处理来自WebSocket的命令执行请求
+ * Command execution manager.
+ * Handles command execution requests received over the WebSocket connection.
  */
 @ApiStatus.Internal
 public class CommandExecutionManager {
@@ -43,7 +43,6 @@ public class CommandExecutionManager {
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
 
     /**
-     * 远程命令执行黑名单
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
      * default, used only when {@code ultipanel.commands.blocklist} is absent from config.yml —
      * see {@link #loadConfiguration()}.
@@ -69,12 +68,6 @@ public class CommandExecutionManager {
      * make D-03's honest "block nothing" escape value silently impossible (T-06-12). The shipped
      * ten-command default applies only when the key is absent; an explicit empty list is honored
      * as the operator deliberately granting every command.
-     * <p>
-     * 从 config.yml 加载 {@code ultipanel.commands.blocklist}，复刻
-     * {@code ErrorReportCollector.loadConfiguration()} 的结构：对 {@link UltiTools#getInstance()}
-     * 判空，单个 try/catch，失败分支保留当前黑名单并记录警告。通过 {@code isSet(path)} 区分「键缺失」
-     * 与「显式空列表」——Bukkit 的 {@code getStringList} 对二者都返回空列表，若不加区分，D-03 的
-     * 「清空即放行一切」这一诚实的逃生阀就会被悄悄堵死。出厂十条默认值仅在键缺失时生效。
      */
     public final void loadConfiguration() {
         try {
@@ -105,7 +98,6 @@ public class CommandExecutionManager {
     }
 
     /**
-     * 设置命令黑名单
      * Set the blocklist of commands that should not be executed remotely. This is now
      * {@link #loadConfiguration()}'s config-load target, not just a test-only seam — it has zero
      * production call sites of its own, but every operator-configured blocklist reaches this
@@ -120,21 +112,16 @@ public class CommandExecutionManager {
     /**
      * Whether a command is allowed for remote execution.
      * <p>
-     * Extracts the base command (first word, namespace-prefix stripped) and checks it against the
-     * operator-configured blocklist at {@code ultipanel.commands.blocklist} in
-     * {@code plugins/UltiTools/config.yml}. The blocklist is editable in both directions — an
-     * operator may remove any of the ten shipped defaults, add to them, or clear the list
-     * entirely — and there is deliberately no unoverridable floor beneath it (D-04): a floor
-     * would constrain the operator without constraining an attacker who already holds the
+     * Extracts the base command (the first word) and strips any namespace prefix (e.g.
+     * {@code bukkit:op} -> {@code op}, {@code minecraft:stop} -> {@code stop}) BEFORE checking it
+     * against the operator-configured blocklist at {@code ultipanel.commands.blocklist} in
+     * {@code plugins/UltiTools/config.yml} — so both the bare command and its namespaced form are
+     * blocked; the stripping order is what makes that true. The blocklist is editable in both
+     * directions — an operator may remove any of the ten shipped defaults, add to them, or clear
+     * the list entirely — and there is deliberately no unoverridable floor beneath it (D-04): a
+     * floor would constrain the operator without constraining an attacker who already holds the
      * operator's identity, since the same outcomes remain reachable through other commands or a
      * third-party plugin's own admin commands.
-     * <p>
-     * 检查某条命令是否允许远程执行。提取基础命令（去除命名空间前缀后的第一个词）并对照操作员可
-     * 配置的黑名单——{@code plugins/UltiTools/config.yml} 中的
-     * {@code ultipanel.commands.blocklist}。该黑名单双向可编辑：操作员可以移除任意一条出厂默认
-     * 项、添加新项，或将其完全清空。这里刻意不设置任何不可覆盖的底线（D-04）——设置底线只会约束
-     * 操作员本人，而不会约束已经掌握了操作员身份的攻击者，因为攻击者仍可以通过其他命令或第三方
-     * 插件自己的管理命令达到同样的效果。
      *
      * @param command The command to check (with or without leading slash)
      * @return an {@link AccessDecision} naming why a refused command was refused
@@ -168,15 +155,15 @@ public class CommandExecutionManager {
     }
 
     /**
-     * 设置WebSocket客户端
-     * @param client WebSocket客户端
+     * Sets the WebSocket client.
+     * @param client the WebSocket client
      */
     public void setWebSocketClient(UltiPanelWebSocketClient client) {
         this.webSocketClient = client;
     }
     
     /**
-     * 执行命令
+     * Executes a command received from the panel.
      */
     public void executeCommand(JsonObject commandData) {
         try {
@@ -192,7 +179,6 @@ public class CommandExecutionManager {
                 return;
             }
 
-            // 安全检查：检查命令是否在黑名单中
             // Security check: verify command is not blocked
             AccessDecision decision = isCommandAllowed(command);
             if (!decision.isAllowed()) {
@@ -211,7 +197,7 @@ public class CommandExecutionManager {
                 return;
             }
 
-            // 记录命令执行开始时间
+            // Record command execution start time
             long startTime = System.currentTimeMillis();
 
             UltiTools.getInstance().getLogger().log(Level.INFO,
@@ -242,28 +228,28 @@ public class CommandExecutionManager {
     }
     
     /**
-     * 内部命令执行逻辑
+     * Internal command execution logic.
      */
     private void executeCommandInternal(String command, String executor, String commandId, long startTime) {
         try {
             CommandSender sender;
             
-            // 确定命令执行者
+            // Determine the command executor
             if ("console".equals(executor)) {
                 sender = Bukkit.getConsoleSender();
             } else {
-                // 如果是玩家UUID，查找对应玩家（暂不实现）
+                // If it's a player UUID, look up the corresponding player (not yet implemented)
                 sender = Bukkit.getConsoleSender();
             }
             
-            // 创建自定义CommandSender来捕获输出
+            // Create a custom CommandSender to capture output
             CommandOutputCapture outputCapture = new CommandOutputCapture(sender);
             
-            // 执行命令 (CommandOutputCapture implements ConsoleCommandSender
+            // Execute the command (CommandOutputCapture implements ConsoleCommandSender
             // so Paper's Brigadier dispatcher recognizes the sender type)
             boolean success = Bukkit.dispatchCommand(outputCapture, command);
 
-            // 计算执行时间
+            // Calculate execution time
             long executionTime = System.currentTimeMillis() - startTime;
 
             if (!success) {
@@ -271,13 +257,13 @@ public class CommandExecutionManager {
                     String.format("[远程命令] 命令执行失败: %s", command));
             }
             
-            // 获取命令输出
+            // Get command output
             String output = outputCapture.getOutput();
             if (output.isEmpty()) {
                 output = success ? "Command executed successfully" : "Command execution failed";
             }
             
-            // 发送执行结果
+            // Send execution result
             sendCommandResult(commandId, success, output, executionTime);
             
         } catch (Exception e) {
@@ -300,7 +286,7 @@ public class CommandExecutionManager {
     }
 
     /**
-     * 发送命令执行结果
+     * Sends the command execution result.
      */
     private void sendCommandResult(String commandId, boolean success, String output, long executionTime) {
         try {
@@ -324,7 +310,7 @@ public class CommandExecutionManager {
     }
     
     /**
-     * 命令结果数据类
+     * Command result data class.
      */
     public static class CommandResult {
         private final boolean success;
@@ -343,7 +329,7 @@ public class CommandExecutionManager {
     }
     
     /**
-     * 命令输出捕获器
+     * Command output capture.
      * Implements ConsoleCommandSender (not just CommandSender) because Paper 1.21+
      * requires the sender to be a recognized type when dispatching commands through
      * Brigadier. Paper's VanillaCommandWrapper.getListener() checks instanceof for

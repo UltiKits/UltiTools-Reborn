@@ -29,9 +29,6 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * Utility class for plugin initialization and WebSocket communication.
  * Handles account login, WebSocket connection, and message processing
  * for UltiPanel integration.
- * <br>
- * 插件初始化和WebSocket通信的实用工具类。
- * 处理UltiPanel集成的账户登录、WebSocket连接和消息处理。
  *
  * @author wisdomme
  * @since 6.0.0
@@ -42,47 +39,57 @@ public class PluginInitiationUtils {
     /** Authentication token for API requests */
     private static TokenEntity token;
 
-    /** {@code server_properties} 走独立管理器，不是一个真正的配置文件路径。 */
+    /** {@code server_properties} is handled by its own dedicated manager — it is not a real config file path. */
     private static final String SERVER_PROPERTIES_FILE = "server_properties";
 
     /**
-     * 云连接是否处于「应当保持连接」的状态。
+     * Whether the cloud connection is in the "should stay connected" state.
      * <p>
-     * 这是整条重连链的<b>唯一开关</b>。在它存在之前，有四个地方各自独立地决定「要不要继续
-     * 重连」，而谁都不是所有者：{@code UltiPanelWebSocketClient.onClose} 按每实例 5 次算、
-     * {@code reinitWebSocket} 造新实例把计数清零、{@code ulticloud logout} 只清凭证根本不碰
-     * 状态机、只有 {@code onDisable} 真正拆得干净。结果是 logout 之后插件仍在拿已作废的凭证
-     * 持续敲面板。见 issue #181 与 #223。
+     * This is the <b>single switch</b> for the entire reconnection chain. Before it existed, four
+     * places each independently decided whether to keep reconnecting, and none of them owned the
+     * decision: {@code UltiPanelWebSocketClient.onClose} counted per instance (5 attempts),
+     * {@code reinitWebSocket} reset the count every time it built a new instance,
+     * {@code ulticloud logout} only cleared the credential and never touched the state machine, and
+     * only {@code onDisable} actually tore everything down cleanly. The result was the plugin
+     * continuing to hammer the panel with an already-invalidated credential after logout. See issue
+     * #181 and #223.
      * <p>
-     * 现在的规则只有一条：<b>{@code reinitWebSocket} 只在本标志为 true 时才会重建连接。</b>
+     * The rule now is a single one: <b>{@code reinitWebSocket} only rebuilds the connection when
+     * this flag is true.</b>
      */
     private static final java.util.concurrent.atomic.AtomicBoolean cloudEnabled =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /**
-     * 云管理器「接线」与「拆线」的互斥锁。
+     * The mutual-exclusion lock between wiring up and tearing down the cloud managers.
      * <p>
-     * {@link #cloudEnabled} 单独用是不够的：它只能表达状态，表达不了「检查与动作之间不许有人插队」。
-     * {@code initializeManagers()} 读到 true 之后、真正接线之前，{@code disableCloud()} 完全可以
-     * 插进来把开关置否并把监听器拆干净，随后前者继续往下又把它们装回去——logout 之后监听器
-     * 还在，甚至还能继续往面板发事件。见 PR #264 的两轮评审。
+     * {@link #cloudEnabled} alone is not enough: it can only express state, not "no one may cut in
+     * between the check and the action." After {@code initializeManagers()} reads true but before it
+     * actually wires anything up, {@code disableCloud()} can cut in, flip the switch off, and tear
+     * the listeners down cleanly — and then the former continues on and wires them right back up,
+     * leaving listeners in place after logout, still able to send events to the panel. See the two
+     * review rounds on PR #264.
      * <p>
-     * 两边都持这把锁之后，二者只能整体先后发生：要么先接线再拆掉（干净），要么先拆再接而接线
-     * 一侧在持锁复查时看到 false 直接返回（也干净）。
+     * Once both sides hold this same lock, the two can only ever happen as a whole, one after the
+     * other: either wire-up completes first and is then torn down (clean), or teardown happens first
+     * and the wiring side, re-checking while holding the lock, sees false and returns immediately
+     * (also clean).
      */
     private static final Object cloudLifecycleLock = new Object();
 
-    /** 外层 reinit 的全局上限。超过之后进入终态，需要 {@code /ulticloud login} 或重启才恢复。 */
+    /** The global cap on outer reinit attempts. Once exceeded, the state machine enters a terminal state and only {@code /ulticloud login} or a restart recovers it. */
     private static final int MAX_REINIT_ATTEMPTS = 10;
 
     /**
-     * 外层重连（reinit 循环）的全局预算与退避。
+     * The global budget and backoff for the outer reconnection (reinit loop).
      * <p>
-     * 客户端自身那 5 次是<b>每实例</b>的上限，而 {@code reinitWebSocket} 每次都造一个新实例，
-     * 于是每实例上限对整体毫无约束——这正是无界循环的成因。本策略是跨实例的，
-     * 只有一次成功的 {@code onOpen} 能把它重置。
+     * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and {@code reinitWebSocket}
+     * builds a brand-new instance every time — so the per-instance cap places no constraint at all
+     * on the whole, which is exactly how the loop became unbounded. This strategy spans instances
+     * instead; only one successful {@code onOpen} resets it.
      * <p>
-     * 顺带启用了 {@link ExponentialBackoffStrategy}——它此前是同包内零引用的死代码。
+     * This is what actually drives the retry: {@link ExponentialBackoffStrategy} is live code, held
+     * as this field, and every attempt advances its backoff delay.
      */
     private static final ExponentialBackoffStrategy reinitBackoff =
             ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
@@ -103,9 +110,6 @@ public class PluginInitiationUtils {
      * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
      * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
      * this repository already has twice, in its command-executor and GUI generations.
-     * <p>
-     * 入站消息 {@code type} 到处理器的分发表，取代原先 24 分支的 {@code switch}
-     * （NPath 复杂度 1514，阈值 200）。Switch 把独立路径数相乘，查表则不会。
      */
     private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
             Collections.unmodifiableMap(buildInboundHandlers());
@@ -130,8 +134,6 @@ public class PluginInitiationUtils {
     /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
      * Registers or updates the server without needing username/password.
-     * <br>
-     * 使用现有令牌登录UltiPanel（来自魔法链接或保存的令牌）。
      *
      * @param existingToken the pre-authenticated token
      * @return true if server registration/update succeeded
@@ -179,8 +181,6 @@ public class PluginInitiationUtils {
 
     /**
      * Initialize websocket.
-     * <br>
-     * 初始化websocket。
      */
     public static void initWebsocket() throws IOException {
         if (token == null || token.getAccess_token() == null) {
@@ -190,79 +190,85 @@ public class PluginInitiationUtils {
             throw new IOException("Cannot initialize WebSocket: auth token has expired");
         }
 
-        // 这里刻意**不**置位 cloudEnabled。
+        // Deliberately does **not** set cloudEnabled here.
         //
-        // 曾经写成在这里 set(true)，那是错的：reinitWebSocket 也会走到这里，于是一个
-        // 正在途中的重连能把刚被 logout 关掉的状态机重新拉起来——两者跑在不同线程上，
-        // 中间还隔着一次 token 刷新的网络调用，窗口可能有数秒。
+        // It used to call set(true) at this point, and that was wrong: reinitWebSocket also reaches
+        // this line, so an in-flight reconnection could resurrect a state machine that had just been
+        // turned off by logout — the two run on different threads, with a token-refresh network call
+        // in between, and that window can be several seconds wide.
         //
-        // 现在只有显式动作才开启：启动时的 UltiTools.onEnable、以及 magic-link 登录成功后
-        // 的 CloudAuthManager，两处都调 enableCloud()。见 issue #223 的 PR 评审。
+        // Now only an explicit action turns it on: UltiTools.onEnable at startup, and CloudAuthManager
+        // after a successful magic-link login — both call enableCloud(). See the PR review on issue
+        // #223.
 
-        // 全程用局部引用挂接线，不要边写静态字段边读它：下面注册的回调是异步触发的，
-        // 触发时静态 panelWS 可能已经不是这一个了。
+        // Wire everything up through a local reference for the whole method; don't write the static
+        // field and then read it back: the callbacks registered below fire asynchronously, and by the
+        // time they fire the static panelWS may no longer be this instance.
         UltiPanelWebSocketClient client = getPanelWebsocketClient();
         panelWS = client;
 
-        // 设置消息处理器
+        // Set the message handler
         client.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
 
-        // 设置连接成功处理器
+        // Set the on-connect-success handler
         client.setOnConnectHandler(() -> onWebSocketOpened(client));
 
-        // 设置重连耗尽处理器 — 尝试刷新令牌并重新建立连接
+        // Set the reconnect-exhausted handler — attempts to refresh the token and re-establish the connection
         client.setOnReconnectExhaustedHandler(PluginInitiationUtils::reinitWebSocket);
 
-        // 连接到WebSocket服务器
+        // Connect to the WebSocket server
         client.connect();
     }
 
     /**
-     * 握手成功之后的接线动作。
+     * The wiring performed once a handshake succeeds.
      * <p>
-     * <b>参数就是这次握手自己的客户端，方法体内绝不重读静态 {@code panelWS}。</b>
-     * onOpen 是异步回调：跑到这里时 {@code disableCloud()} 可能已经把静态字段置空
-     * （{@code /ulticloud logout}，或重连预算耗尽——后者跑在 WebSocket 线程上），
-     * 也可能 {@code reinitWebSocket} 已经把它换成了另一个实例。重读静态字段的话，
-     * {@code subscribeToServer} / {@code uploadConfig} / {@code uploadServerProperties}
-     * 三处都会踩空——{@link #initializeManagers()} 有持锁复查护着，它前后的代码没有。
+     * <b>The parameter is this handshake's own client; the method body never re-reads the static
+     * {@code panelWS}.</b> onOpen is an asynchronous callback: by the time it runs,
+     * {@code disableCloud()} may already have nulled out the static field ({@code /ulticloud logout},
+     * or the reconnect budget being exhausted — the latter runs on the WebSocket thread), or
+     * {@code reinitWebSocket} may already have swapped it for a different instance. Re-reading the
+     * static field would make {@code subscribeToServer} / {@code uploadConfig} /
+     * {@code uploadServerProperties} all silently hit a stale or null reference —
+     * {@link #initializeManagers()} is guarded by a lock-held re-check, but the code around it here is
+     * not.
      * <p>
-     * 往一个已断开的客户端发消息是安全的：{@code sendMessage} 在未连接时打一条 WARNING
-     * 就返回。真正危险的是空引用，所以这里解决的是引用稳定性，不是连接状态。
+     * Sending a message on an already-disconnected client is safe: {@code sendMessage} logs one
+     * WARNING and returns when not connected. The real danger is a null reference, so what this fixes
+     * is reference stability, not connection state.
      * <p>
-     * 包级可见而非 private —— 只为可测。要在测试里触发它，否则得有真实的鉴权 token
-     * 与真实的 WebSocket 握手；与 {@link #handleInboundMessage} 同一处理。
+     * Package-private rather than private — only so it can be tested. Triggering it otherwise would
+     * require a real authenticated token and a real WebSocket handshake; same treatment as
+     * {@link #handleInboundMessage}.
      */
     static void onWebSocketOpened(UltiPanelWebSocketClient client) {
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
 
-        // 握手真正成功了，这里才是「重连成功」这句话唯一站得住的位置。
-        // 外层预算也只在这里清零——若在 reinitWebSocket 里清，「造出了一个客户端」
-        // 就会被当成成功，预算永远用不完。见 issue #181 / #223。
+        // The handshake has genuinely succeeded — this is the only place where the phrase
+        // "reconnection succeeded" actually holds. The outer budget is also only reset here —
+        // resetting it inside reinitWebSocket would treat "a client was built" as success, and the
+        // budget would never run out. See issue #181 / #223.
         onWebSocketConnected();
         UltiTools.getInstance().getLogger().log(Level.INFO,
             "WebSocket connected to UltiPanel");
 
-        // 订阅当前服务器
+        // Subscribe to the current server
         client.subscribeToServer(client.getServerId());
 
-        // 初始化所有管理器
+        // Initialize all managers
         initializeManagers();
 
-        // 上传配置
+        // Upload config
         uploadConfig(client);
 
-        // 上传服务器属性到云端 —— 由 SERVER_PROPERTIES 能力开关决定（D-11/D-12）
+        // Upload server properties to the cloud — gated by the SERVER_PROPERTIES capability switch (D-11/D-12)
         if (Capability.SERVER_PROPERTIES.isEnabled()) {
             uploadServerProperties(client);
         } else {
             logSkippedCapability(Capability.SERVER_PROPERTIES);
         }
     }
-    
-    /**
-     * 初始化所有管理器
-     */
+
     /**
      * A dispatch-table entry pairing a handler with the {@link Capability} that must be enabled
      * before it runs (D-10), and with which side records that decision's verdict in the
@@ -290,12 +296,6 @@ public class PluginInitiationUtils {
      * fixed by the message {@code type} alone; {@link #resolved(Function, VerdictRecorder,
      * BiConsumer)} covers {@code file_operation}, the one entry whose capability depends on the
      * message's {@code operation} field rather than its {@code type}.
-     * <p>
-     * 分发表条目，把处理器与「必须先启用才能运行」的 {@link Capability}、以及「由哪一侧记录裁决」
-     * 绑在一起（D-10, CR-01）。只暴露两个静态工厂，没有任何绕开能力声明或记录方声明的构造路径——
-     * 漏传参数是真正的编译错误；但传 {@code null} 能编译通过，只在
-     * {@link #buildInboundHandlers()} 运行时（类初始化阶段，而非编译期）被
-     * {@link IllegalArgumentException} 立即拦下（IN-01, 06-REVIEW.md 已纠正此前过度表述）。
      */
     static final class InboundHandlerEntry {
         private final Capability capability;
@@ -429,8 +429,9 @@ public class PluginInitiationUtils {
     private static Map<String, InboundHandlerEntry> buildInboundHandlers() {
         Map<String, InboundHandlerEntry> handlers = new HashMap<>();
 
-        // 系统基础消息 —— 协议层/回声消息，显式声明 Capability.NONE（D-10）：从不拦截，从不记录。
-        // NONE 分支从不到达 recordAction，VerdictRecorder 的取值在此不生效，统一声明 GATE。
+        // System-level base messages — protocol-layer/echo messages, explicitly declared
+        // Capability.NONE (D-10): never blocked, never recorded. The NONE branch never reaches
+        // recordAction, so VerdictRecorder's value has no effect here; GATE is declared uniformly.
         handlers.put("ping",
                 InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handlePing(message)));
         handlers.put("pong",
@@ -444,7 +445,8 @@ public class PluginInitiationUtils {
         handlers.put("error",
                 InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE, (message, data) -> handleError(data)));
 
-        // 服务器监控消息 —— 处理器不做第二层裁决，网关记录 ALLOWED（VerdictRecorder.GATE）。
+        // Server monitoring messages — the handler performs no second-layer decision, the gate
+        // records ALLOWED (VerdictRecorder.GATE).
         handlers.put("server_status", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
                 (message, data) -> handleServerStatusRequest(data)));
         handlers.put("plugin_list", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
@@ -454,36 +456,41 @@ public class PluginInitiationUtils {
         handlers.put("metrics_data", InboundHandlerEntry.of(Capability.MONITORING, VerdictRecorder.GATE,
                 (message, data) -> handleMetricsRequest(data)));
 
-        // 操作控制消息 —— execute_command 的处理器自己做 isCommandAllowed() 二次裁决并自己记录
-        // 结果（CommandExecutionManager.executeCommand），因此声明 VerdictRecorder.HANDLER（CR-01）。
+        // Operation-control messages — execute_command's handler performs its own isCommandAllowed()
+        // second-layer decision and records its own result (CommandExecutionManager.executeCommand),
+        // so it declares VerdictRecorder.HANDLER (CR-01).
         handlers.put("execute_command", InboundHandlerEntry.of(Capability.COMMANDS, VerdictRecorder.HANDLER,
                 (message, data) -> UltiTools.getInstance().getCommandExecutionManager().executeCommand(data)));
         handlers.put("command_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
                 (message, data) -> handleCommandResult(data)));
-        // file_operation 的能力取决于 data.operation，不是常量 —— D-10 的 resolver 场景（D-09）。
-        // 处理器自己做 isPathAllowed() 二次裁决并自己记录结果（FileOperationManager.recordFileDecision），
-        // 因此同样声明 VerdictRecorder.HANDLER（CR-01）。
+        // file_operation's capability depends on data.operation, not a constant — D-10's resolver
+        // scenario (D-09). The handler performs its own isPathAllowed() second-layer decision and
+        // records its own result (FileOperationManager.recordFileDecision), so it likewise declares
+        // VerdictRecorder.HANDLER (CR-01).
         handlers.put("file_operation", InboundHandlerEntry.resolved(
                 PluginInitiationUtils::resolveFileOperationCapability, VerdictRecorder.HANDLER,
                 (message, data) -> UltiTools.getInstance().getFileOperationManager().handleFileOperation(data)));
         handlers.put("file_operation_result", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
                 (message, data) -> handleFileOperationResult(data)));
 
-        // 数据流消息 —— log_stream 与 log_stream_control 共享同一个处理器，
-        // 这是原先两个 case 标签之间 fall-through 的等价写法。处理器不做第二层裁决。
+        // Data-stream messages — log_stream and log_stream_control share the same handler; this is
+        // the equivalent of the fall-through the two former case labels used to express. The handler
+        // performs no second-layer decision.
         BiConsumer<JsonObject, JsonObject> logStreamHandler =
                 (message, data) -> UltiTools.getInstance().getLogStreamManager().handleLogStreamMessage(data);
         handlers.put("log_stream", InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
         handlers.put("log_stream_control",
                 InboundHandlerEntry.of(Capability.LOGS, VerdictRecorder.GATE, logStreamHandler));
-        // backup_operation 是今天的纯日志占位符，但其声明意图是产出文件的操作 —— 因此按更严格
-        // 的一侧声明为 FILE_WRITE，而不是等桩实现落地时才回头改声明。处理器不做第二层裁决。
+        // backup_operation is a pure logging placeholder today, but its declared intent is a
+        // file-producing operation — so it is declared FILE_WRITE on the stricter side rather than
+        // waiting to revisit the declaration once the stub implementation lands. The handler performs
+        // no second-layer decision.
         handlers.put("backup_operation", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
                 (message, data) -> handleBackupOperation(data)));
         handlers.put("backup_progress", InboundHandlerEntry.of(Capability.NONE, VerdictRecorder.GATE,
                 (message, data) -> handleBackupProgress(data)));
 
-        // 配置管理消息 —— 处理器不做第二层裁决。
+        // Config-management messages — the handler performs no second-layer decision.
         handlers.put("upload_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpload(data)));
         handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
@@ -551,8 +558,6 @@ public class PluginInitiationUtils {
      * {@code PluginInitiationUtilsDispatchTableTest} can assert the table's key set and entry
      * identities without duplicating {@link #buildInboundHandlers()}'s routing record in a second
      * place. Not a registration point — the returned map is already unmodifiable.
-     * <p>
-     * 包级可见而非 public —— 只为可测，不是注册入口。
      *
      * @return the unmodifiable inbound dispatch table
      */
@@ -580,15 +585,17 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 处理面板下发的入站 WebSocket 消息。
+     * Handles an inbound WebSocket message dispatched by the panel.
      * <p>
-     * 从 {@code initWebsocket()} 的 lambda 中提取出来，唯一目的是让它可以被单元测试直接调用：
-     * 原先它是 {@code setMessageHandler} 的匿名 lambda，要构造它需要真实的鉴权 token 与真实的
-     * WebSocket 客户端，畸形输入这条路径因此完全没有测试覆盖。见 issue #234。
+     * Extracted out of {@code initWebsocket()}'s lambda for the sole purpose of letting it be called
+     * directly by a unit test: it used to be an anonymous lambda passed to
+     * {@code setMessageHandler}, and constructing that required a real authenticated token and a
+     * real WebSocket client, so this path's malformed-input handling had no test coverage at all.
+     * See issue #234.
      * <p>
-     * 包级可见而非 public —— 它不是对外 API，只是为了可测。
+     * Package-private rather than public — it is not a public API, only testable this way.
      *
-     * @param message 面板下发的消息，允许为 null
+     * @param message the message dispatched by the panel, may be {@code null}
      */
     static void handleInboundMessage(JsonObject message) {
         if (message == null) {
@@ -597,19 +604,23 @@ public class PluginInitiationUtils {
             return;
         }
 
-        // type 与 data 使用同一套守卫。原先这里是 message.get("type").getAsString()：
-        // 缺 type 字段时 get 返回 null，.getAsString() 随即抛 NPE，而它写在 try 之外，
-        // 下面那个 catch 接不住。
+        // type and data share the same guard. This used to be
+        // message.get("type").getAsString(): with a missing type field, get() returns null and
+        // .getAsString() immediately throws an NPE — and that call sat outside the try, so the
+        // catch below could not catch it.
         //
-        // 该 NPE 不会中断接收循环 —— UltiPanelWebSocketClient.onMessage 把
-        // messageHandler.accept 包在自己的 try 里。但它会被记成「WebSocket消息解析失败」，
-        // 而解析其实是成功的：消息被静默丢弃，诊断指向错误的方向，且那里只传了
-        // e.getMessage() 没有堆栈。
+        // That NPE does not interrupt the receive loop — UltiPanelWebSocketClient.onMessage wraps
+        // messageHandler.accept in its own try. But it would be logged as "WebSocket message parse
+        // failed" when parsing had in fact succeeded: the message was silently dropped, the
+        // diagnostic pointed in the wrong direction, and that call site only passed
+        // e.getMessage(), no stack trace.
         //
-        // 用 isJsonPrimitive 而不是 !isJsonNull：后者只挡 JSON null，挡不住 type 是对象
-        // 或数组——那种情况下 getAsString() 抛 UnsupportedOperationException。非基本类型
-        // 的 type 和缺字段、JSON null、空串属于同一类畸形，应当走同一条 WARNING 分支，
-        // 而不是被当成「处理消息时发生错误」记成 SEVERE。
+        // Uses isJsonPrimitive rather than !isJsonNull: the latter only guards against a JSON null
+        // and not against type being an object or array — in that case getAsString() throws
+        // UnsupportedOperationException. A non-primitive type belongs to the same class of
+        // malformed input as a missing field, a JSON null, or an empty string, and should take the
+        // same WARNING branch rather than being logged as SEVERE under "an error occurred while
+        // handling the message."
         //
         // The superseded WIRE-17 dispatch cluster (deleted in 6.3.0, GEN-11) used !isJsonNull()
         // for this same check, which only guards a JSON null and not a non-primitive type — this
@@ -639,7 +650,7 @@ public class PluginInitiationUtils {
             data = message.has("data") && message.get("data").isJsonObject()
                 ? message.getAsJsonObject("data") : null;
 
-            // 记录接收到的消息处理日志
+            // Log that the received message has started processing
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 String.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
 
@@ -680,7 +691,7 @@ public class PluginInitiationUtils {
             // does not publish rather than guessing.
         }
 
-        // 记录消息处理完成日志
+        // Log that message processing has completed
         UltiTools.getInstance().getLogger().log(Level.FINE,
             String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
 
@@ -971,23 +982,27 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 把所有 WebSocket 管理器接到当前连接上。
+     * Wires all WebSocket managers up to the current connection.
      * <p>
-     * 本方法挂在 {@code onConnectHandler} 上，而 {@code /ulticloud logout} 之后仍可能有一次
-     * 在途的握手落地。不设防的话，{@code disableCloud()} 刚摘掉的监听器会被这次迟到的 onOpen
-     * 原样装回去——这正是 #181/#223 里「谁都不是所有者」那个毛病换个地方重现。
+     * This method hangs off {@code onConnectHandler}, and an in-flight handshake can still land
+     * after {@code /ulticloud logout}. Without a guard, the listeners {@code disableCloud()} just
+     * tore down would be reinstalled verbatim by this late-arriving onOpen — the exact same "no one
+     * owns the decision" defect from #181/#223, resurfacing in a different place.
      * <p>
-     * <b>光检查 {@link #cloudEnabled} 是不够的。</b>那只是一次锁外的读：读到 true 之后、
-     * 真正接线之前，{@code disableCloud()} 完全可以插进来把开关置否并拆干净，然后本方法
-     * 继续往下把监听器又装回去。所以接线与拆线必须落在同一把 {@link #cloudLifecycleLock} 上，
-     * 并在<b>持锁期间</b>复查开关。见 PR #264 的两轮评审。
+     * <b>Checking {@link #cloudEnabled} alone is not enough.</b> That is only a read taken outside
+     * the lock: after it reads true but before this method actually wires anything up,
+     * {@code disableCloud()} can cut in, flip the switch off and tear everything down cleanly, and
+     * then this method continues on and wires the listeners right back up. So wiring and teardown
+     * must both land on the same {@link #cloudLifecycleLock}, and the switch must be re-checked
+     * <b>while holding the lock</b>. See the two review rounds on PR #264.
      * <p>
-     * 包级可见而非 private —— 只为可测。
+     * Package-private rather than private — only so it can be tested.
      */
     static void initializeManagers() {
         synchronized (cloudLifecycleLock) {
-            // 持锁复查：disableCloud() 拿的是同一把锁，所以到这里为止它要么还没开始、
-            // 要么已经整个跑完，不可能卡在中间。
+            // Re-check while holding the lock: disableCloud() holds the same lock, so by this point
+            // it has either not started yet or has already run to completion — it cannot be stuck
+            // in the middle.
             if (!cloudEnabled.get()) {
                 UltiTools.getInstance().getLogger().log(Level.FINE,
                     "云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）");
@@ -998,38 +1013,45 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * {@link #initializeManagers()} 的实际接线动作。调用方必须持有 {@link #cloudLifecycleLock}。
+     * The actual wiring performed by {@link #initializeManagers()}. Callers must hold
+     * {@link #cloudLifecycleLock}.
      * <p>
-     * D-11/D-12：四个出站能力（{@code monitoring}/{@code logs}/{@code player-events}/
-     * {@code server-properties}）在这里由 {@link Capability#isEnabled()} 决定是否<b>开始采集</b>，
-     * 而不是采集之后在发送出口丢弃——后者会让数据已经被收集进内存，只是没被传走，D-12 明确否决
-     * 这种「exposed but not transmitted」的形状。每一处 client 引用装配调用都刻意保持无条件：
-     * 装一个 client 引用本身不启动任何采集，让它无条件执行才能保证每个管理器 getter
-     * 永远非空、每个管理器永远存在（D-11）——分发表里有两处对管理器 getter 的解引用没有空判断。
+     * D-11/D-12: the four outbound capabilities ({@code monitoring}/{@code logs}/
+     * {@code player-events}/{@code server-properties}) decide here, via
+     * {@link Capability#isEnabled()}, whether to <b>start collecting</b> data at all — not whether
+     * to discard it at the send-side after collection. The latter would still leave data already
+     * gathered into memory, just never transmitted, and D-12 explicitly rejects that
+     * "exposed but not transmitted" shape. Every client-reference wiring call is deliberately kept
+     * unconditional: assigning a client reference by itself starts no collection, and running it
+     * unconditionally is what guarantees every manager getter is always non-null and every manager
+     * always exists (D-11) — the dispatch table has two manager-getter dereferences with no null
+     * check.
      */
     private static void wireManagers() {
         try {
-            // 初始化服务器监控管理器 —— 引用装配与「是否开始监控」分离，见方法javadoc
+            // Wire up the server monitor manager — reference assignment is kept separate from
+            // "whether to start monitoring"; see this method's javadoc
             UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(panelWS);
             if (Capability.MONITORING.isEnabled()) {
-                // 启动监控（会立即发送状态并开始定期发送）
+                // Start monitoring (sends status immediately and then periodically)
                 UltiTools.getInstance().getServerMonitorManager().startMonitoring();
             } else {
                 logSkippedCapability(Capability.MONITORING);
             }
 
-            // 初始化命令执行管理器
+            // Wire up the command execution manager
             UltiTools.getInstance().getCommandExecutionManager().setWebSocketClient(panelWS);
 
-            // 初始化文件操作管理器
+            // Wire up the file operation manager
             UltiTools.getInstance().getFileOperationManager().setWebSocketClient(panelWS);
 
-            // 初始化服务器属性管理器
+            // Wire up the server properties manager
             if (UltiTools.getInstance().getServerPropertiesManager() != null) {
                 UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(panelWS);
             }
 
-            // 初始化日志流管理器 —— logs 关闭时 SystemLogHandler 从不挂上根 logger
+            // Wire up the log stream manager — while logs is disabled, SystemLogHandler is never
+            // attached to the root logger
             if (UltiTools.getInstance().getLogStreamManager() != null) {
                 if (Capability.LOGS.isEnabled()) {
                     UltiTools.getInstance().getLogStreamManager().initialize(panelWS);
@@ -1038,7 +1060,8 @@ public class PluginInitiationUtils {
                 }
             }
 
-            // 初始化玩家事件管理器 —— player-events 关闭时 Bukkit 监听器从不被注册
+            // Wire up the player event manager — while player-events is disabled, the Bukkit
+            // listener is never registered
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 if (Capability.PLAYER_EVENTS.isEnabled()) {
                     UltiTools.getInstance().getPlayerEventManager().initialize(panelWS);
@@ -1054,35 +1077,42 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 为一个被跳过的出站能力记一条 INFO，说明是哪个能力、哪个配置键导致的跳过。
+     * Logs one INFO entry for a skipped outbound capability, naming which capability and which
+     * config key caused the skip.
      * <p>
-     * 这一条日志尤其对 {@link Capability#MONITORING} 重要：{@code sendBatchUpdate} 每 5 秒一次是
-     * 面板判断「服务器是否在线」的唯一依据，关掉 monitoring 会让升级后的服务器在面板上显示为离线
-     * ——这是最糟的失败形状，症状指向了错误的方向（运维会去查网络和令牌，而不是配置）。D-08 已经
-     * 把 monitoring 的出厂默认设为开启作为第一层缓解，这条日志是第二层。
+     * This log line matters especially for {@link Capability#MONITORING}: {@code sendBatchUpdate}
+     * firing every 5 seconds is the panel's sole basis for deciding "is the server online" — turning
+     * monitoring off makes an upgraded server show as offline on the panel, which is the worst shape
+     * a failure can take, because the symptom points operators in the wrong direction (they go check
+     * the network and the token, not the config). D-08 already
+     * set monitoring's out-of-the-box default to enabled as the first layer of mitigation; this log
+     * line is the second.
      *
-     * @param capability 被跳过的能力
+     * @param capability the capability that was skipped
      */
     private static void logSkippedCapability(Capability capability) {
         UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
                 "[UltiPanel] Skipped %s wiring — capability disabled (%s)",
                 capability.name(), capability.getConfigPath()));
     }
-    
+
     /**
-     * 处理配置更新。
+     * Handles a config update.
      *
-     * <p>这条路径过去有三处与面板对不上，而且失败是静默的（issue #236）：面板在
-     * {@code data.configData} 里发内容、这里读 {@code data.config}；面板用
-     * {@code data.fileName} 指定文件、这里除 {@code server_properties} 外从不读它；
-     * 面板不发 {@code requestId}、这里以 {@code requestId} 存在与否作为「是不是一条请求」
-     * 的判据，缺了就只记一行 {@code Level.FINE} 然后丢弃——而 {@code FINE} 在默认日志
-     * 配置下不打印。于是面板收到 HTTP 200、服务器上什么也没变、两端都不报错。
+     * <p>This path used to disagree with the panel in three places, and each failure was silent
+     * (issue #236): the panel sends content in {@code data.configData}, and this read
+     * {@code data.config}; the panel names the file with {@code data.fileName}, and this never read
+     * it except for {@code server_properties}; the panel does not send {@code requestId}, and this
+     * used whether {@code requestId} was present as the test for "is this a request" — when it was
+     * missing, the code just logged one {@code Level.FINE} line and dropped the message, and
+     * {@code FINE} does not print under the default log configuration. So the panel got an HTTP 200,
+     * nothing changed on the server, and neither side reported an error.
      *
-     * <p>现在的判据换成「有没有配置内容」：没有内容才是回声/回执，有内容就是一条请求，
-     * 缺 {@code requestId} 也照样应用，只是记 WARNING 说明结果无法回报。
+     * <p>The test is now "is there config content": no content means this is an echo/acknowledgement,
+     * content means it is a request, and a missing {@code requestId} is still applied — it just logs
+     * a WARNING explaining that the result cannot be reported back.
      *
-     * <p>包级可见而非 private —— 只为可测。
+     * <p>Package-private rather than private — only so it can be tested.
      */
     static void handleConfigUpdate(JsonObject data) {
         if (data == null) {
@@ -1093,7 +1123,7 @@ public class PluginInitiationUtils {
         String requestId = readString(data, "requestId");
         String configContent = readConfigContent(data);
 
-        // server_properties 的「取」请求：没有内容也是一条正当请求，不是回声。
+        // server_properties's "get" request: no content is still a legitimate request, not an echo.
         if (SERVER_PROPERTIES_FILE.equals(fileName) && configContent == null) {
             ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
             if (spm != null) {
@@ -1104,8 +1134,9 @@ public class PluginInitiationUtils {
             return;
         }
 
-        // 没有配置内容 = 转发层回来的回执或本机自己发出去的回声。这是唯一一种
-        // 「什么都不做」还算正常的情况，所以保持 FINE。
+        // No config content = an acknowledgement bounced back by the forwarding layer, or this
+        // server's own echo. This is the one case where doing nothing is still normal, so it stays
+        // at FINE.
         if (configContent == null) {
             if (data.has("message") && !data.get("message").isJsonNull()) {
                 UltiTools.getInstance().getLogger().log(Level.FINE,
@@ -1118,8 +1149,9 @@ public class PluginInitiationUtils {
         }
 
         if (requestId == null) {
-            // 以前这里直接 return。缺 requestId 是对端的协议缺陷，不是「这条消息不必处理」，
-            // 把它当成后者就是把缺陷伪装成正常路径。
+            // This used to just return here. A missing requestId is the counterpart's protocol
+            // defect, not "this message need not be handled" — treating it as the latter dresses
+            // the defect up as a normal path.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                     "收到不含 requestId 的配置更新请求，仍会应用，但无法向面板回报结果");
         }
@@ -1128,27 +1160,28 @@ public class PluginInitiationUtils {
             applyConfigUpdate(fileName, configContent);
             sendConfigUpdateResponse(requestId, true, null);
         } catch (IOException | RuntimeException e) {
-            // RuntimeException 也接：JsonParser 解析畸形 configData 抛的是它，
-            // 过去这类失败会一路冒到 handleInboundMessage 的 catch，记成
-            // 「处理消息类型 update_config 时发生错误」而面板永远等不到回复。
+            // RuntimeException is caught too: JsonParser throws it when configData is malformed.
+            // This class of failure used to bubble all the way up to handleInboundMessage's catch and
+            // get logged as "an error occurred while handling message type update_config" — and the
+            // panel would never get a reply.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                     String.format("应用配置更新失败（文件: %s）: %s", fileName, e.getMessage()), e);
             sendConfigUpdateResponse(requestId, false, e.getMessage());
         }
     }
 
-    /** 读一个可能缺失、也可能是 JSON null 的字符串字段。 */
+    /** Reads a string field that may be missing, or may be a JSON null. */
     private static String readString(JsonObject data, String field) {
         return (data.has(field) && !data.get(field).isJsonNull())
                 ? data.get(field).getAsString() : null;
     }
 
     /**
-     * 取配置内容，优先 {@code data.configData}。
+     * Reads the config content, preferring {@code data.configData}.
      *
-     * <p>{@code data.config} 是本方法过去唯一读的字段，但在树内找不到任何生产者——
-     * 面板一直发的是 {@code configData}。保留它只是为了兼容可能存在的第三方面板，
-     * 读到就记废弃日志。
+     * <p>{@code data.config} used to be the only field this method read, but no producer of it can
+     * be found anywhere in the tree — the panel has always sent {@code configData}. It is kept only
+     * for compatibility with a possible third-party panel; reading it logs a deprecation warning.
      */
     private static String readConfigContent(JsonObject data) {
         String configData = readString(data, "configData");
@@ -1164,13 +1197,13 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 按 {@code fileName} 决定写到哪里。
+     * Decides where to write based on {@code fileName}.
      *
-     * <p>三条分支对应三种载荷形状，这是原来「fileName 从不读」掩盖掉的东西：
-     * {@code server_properties} 是一份扁平的属性表，交给专用管理器；
-     * 指定了文件名就是那一个配置文件自己的 {@code {配置项: 值}}；
-     * 没有文件名才是 {@link com.ultikits.ultitools.manager.ConfigManager#toJson()}
-     * 那种全量嵌套结构。
+     * <p>The three branches correspond to three payload shapes — exactly what the former
+     * "fileName is never read" covered up: {@code server_properties} is a flat property table
+     * handed to its own dedicated manager; a named file is that one config file's own
+     * {@code {key: value}} map; and no file name at all means the full nested structure from
+     * {@link com.ultikits.ultitools.manager.ConfigManager#toJson()}.
      */
     private static void applyConfigUpdate(String fileName, String configContent) throws IOException {
         if (SERVER_PROPERTIES_FILE.equals(fileName)) {
@@ -1178,12 +1211,13 @@ public class PluginInitiationUtils {
             if (spm == null) {
                 throw new IOException("ServerPropertiesManager is not available");
             }
-            // 走 applySetAll 而不是 handleServerProperties，是为了拿到返回值。
-            // 后者是 void，于是这条路径过去只能无条件报成功——面板拿到的 status
-            // 表达的是「消息处理完了」，不是「配置生效了」，而这两件事在
-            // SAFE_KEYS 白名单挡下某个键时就分岔了。见 issue #281。
-            // 两条消息都还在发：applySetAll 自己发 server_properties_result，
-            // 这里抛出的异常由调用方转成 config_update_response 的 error。
+            // Goes through applySetAll rather than handleServerProperties in order to get a return
+            // value back. The latter is void, so this path used to be able only to unconditionally
+            // report success — the status the panel got meant "the message finished processing," not
+            // "the config took effect," and those two things diverge the moment the SAFE_KEYS
+            // whitelist blocks a key. See issue #281.
+            // Both messages are still sent: applySetAll sends its own server_properties_result, and
+            // an exception thrown here is turned by the caller into config_update_response's error.
             ServerPropertiesManager.SetAllResult result = spm.applySetAll(
                     com.google.gson.JsonParser.parseString(configContent).getAsJsonObject());
             if (!result.isSuccess()) {
@@ -1199,12 +1233,12 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 回一条 {@code config_update_response}。
+     * Sends back one {@code config_update_response}.
      *
-     * <p>载荷放在 {@code data} 里，与其余所有 插件→Worker 的消息一致
-     * （见 {@code CommandExecutionManager.sendCommandResult}）。此前这一条是扁平写法，
-     * 字段直接挂在顶层；Worker 侧两种都读（ultipanel-api-worker#30），所以这次改动
-     * 不需要和面板同时上线。
+     * <p>The payload sits in {@code data}, matching every other plugin-to-Worker message
+     * (see {@code CommandExecutionManager.sendCommandResult}). This one used to be a flat write with
+     * fields hanging directly off the top level; the Worker side reads both shapes
+     * (ultipanel-api-worker#30), so this change did not need to ship simultaneously with the panel.
      */
     private static void sendConfigUpdateResponse(String requestId, boolean success, String error) {
         if (requestId == null || panelWS == null) {
@@ -1224,13 +1258,13 @@ public class PluginInitiationUtils {
         panelWS.sendMessage(response);
     }
     
-    // ========== 系统基础消息处理器 ==========
-    
+    // ========== System base message handlers ==========
+
     /**
-     * 处理ping消息
+     * Handles a ping message
      */
     private static void handlePing(JsonObject message) {
-        // 发送pong响应
+        // Send pong response
         JsonObject pongResponse = new JsonObject();
         pongResponse.addProperty("type", "pong");
         pongResponse.addProperty("timestamp", System.currentTimeMillis());
@@ -1244,7 +1278,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理pong消息
+     * Handles a pong message
      */
     private static void handlePong(JsonObject data) {
         UltiTools.getInstance().getLogger().log(Level.FINE, "Received pong response");
@@ -1257,7 +1291,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理订阅消息
+     * Handles a subscribe message
      */
     private static void handleSubscribe(JsonObject data) {
         if (data != null) {
@@ -1275,7 +1309,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理取消订阅消息
+     * Handles an unsubscribe message
      */
     private static void handleUnsubscribe(JsonObject data) {
         if (data != null) {
@@ -1286,7 +1320,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理通知消息
+     * Handles a notification message
      */
     private static void handleNotification(JsonObject data) {
         if (data != null) {
@@ -1298,7 +1332,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理错误消息
+     * Handles an error message
      */
     private static void handleError(JsonObject data) {
         if (data != null) {
@@ -1308,10 +1342,10 @@ public class PluginInitiationUtils {
         }
     }
     
-    // ========== 服务器监控消息处理器 ==========
-    
+    // ========== Server monitoring message handlers ==========
+
     /**
-     * 处理玩家事件
+     * Handles a player event
      */
     private static void handlePlayerEvent(JsonObject data) {
         if (data != null) {
@@ -1326,10 +1360,10 @@ public class PluginInitiationUtils {
         }
     }
     
-    // ========== 操作控制消息处理器 ==========
-    
+    // ========== Operation control message handlers ==========
+
     /**
-     * 处理命令执行结果
+     * Handles a command execution result
      */
     private static void handleCommandResult(JsonObject data) {
         // command_result messages are echoed back from DO — already logged by
@@ -1341,7 +1375,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理文件操作结果
+     * Handles a file operation result
      */
     private static void handleFileOperationResult(JsonObject data) {
         if (data != null) {
@@ -1360,10 +1394,10 @@ public class PluginInitiationUtils {
         }
     }
     
-    // ========== 数据流消息处理器 ==========
-    
+    // ========== Data stream message handlers ==========
+
     /**
-     * 处理备份操作
+     * Handles a backup operation
      */
     private static void handleBackupOperation(JsonObject data) {
         if (data != null) {
@@ -1375,7 +1409,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理备份进度
+     * Handles backup progress
      */
     private static void handleBackupProgress(JsonObject data) {
         if (data != null) {
@@ -1389,14 +1423,14 @@ public class PluginInitiationUtils {
         }
     }
     
-    // ========== 配置管理消息处理器 ==========
-    
+    // ========== Config management message handlers ==========
+
     /**
-     * 处理配置上传
+     * Handles a config upload
      */
     private static void handleConfigUpload(JsonObject data) {
         if (data != null) {
-            // 只处理明确的配置上传请求（包含requestId），忽略服务器的确认消息
+            // Only handle explicit config upload requests (carrying a requestId); ignore server acknowledgement messages
             if (data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
                 String configType = data.get("configType").getAsString();
@@ -1411,22 +1445,22 @@ public class PluginInitiationUtils {
                     String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
                 
                 try {
-                    // 处理配置上传逻辑
+                    // Handle the config upload logic
                     handleConfigUploadLogic(data);
-                    
-                    // 发送成功响应
+
+                    // Send success response
                     JsonObject response = new JsonObject();
                     response.addProperty("type", "upload_config_response");
                     response.addProperty("status", "success");
                     response.addProperty("serverId", panelWS.getServerId());
                     response.addProperty("requestId", requestId);
                     panelWS.sendMessage(response);
-                    
+
                 } catch (Exception e) {
                     sendErrorResponse("Failed to upload config: " + e.getMessage());
                 }
             } else {
-                // 识别并忽略服务器确认消息
+                // Recognize and ignore server acknowledgement messages
                 if (data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
@@ -1440,7 +1474,7 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理配置上传逻辑
+     * Handles the config upload logic
      */
     private static void handleConfigUploadLogic(JsonObject data) throws Exception {
         String configType = data.get("configType").getAsString();
@@ -1448,36 +1482,36 @@ public class PluginInitiationUtils {
         Object configContent = data.get("configContent");
         String format = data.get("format").getAsString();
         boolean backup = data.get("backup").getAsBoolean();
-        
+
         UltiTools.getInstance().getLogger().log(Level.FINE, 
             String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s", 
                 configType, configName, format, backup));
-        
-        // 根据配置类型处理不同的配置文件
+
+        // Handle different config files based on config type
         switch (configType) {
             case "plugin_config":
-                // 处理插件配置
+                // Handle plugin config
                 if (configContent instanceof JsonObject) {
                     ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
                 }
                 break;
             case "server_properties":
-                // 处理服务器属性配置
+                // Handle server.properties config
                 UltiTools.getInstance().getLogger().log(Level.FINE, "Processing server.properties config");
                 break;
             case "permissions":
-                // 处理权限配置
+                // Handle permissions config
                 UltiTools.getInstance().getLogger().log(Level.FINE, "Processing permissions config");
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported config type: " + configType);
         }
     }
-    
-    // ========== 工具方法 ==========
-    
+
+    // ========== Utility methods ==========
+
     /**
-     * 发送错误响应
+     * Sends an error response
      */
     private static void sendErrorResponse(String errorMessage) {
         JsonObject errorResponse = new JsonObject();
@@ -1492,11 +1526,11 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理插件列表请求
+     * Handles a plugin list request
      */
     private static void handlePluginListRequest(JsonObject data) {
         try {
-            // 只处理明确的插件列表请求（包含requestId），忽略服务器的确认消息
+            // Only handle explicit plugin list requests (carrying a requestId); ignore server acknowledgement messages
             if (data != null && data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
                 
@@ -1509,7 +1543,7 @@ public class PluginInitiationUtils {
                 JsonObject responseData = new JsonObject();
                 JsonArray plugins = new JsonArray();
                 
-                // 获取所有插件信息
+                // Collect all plugin info
                 for (org.bukkit.plugin.Plugin plugin : org.bukkit.Bukkit.getPluginManager().getPlugins()) {
                     JsonObject pluginInfo = new JsonObject();
                     pluginInfo.addProperty("name", plugin.getName());
@@ -1526,7 +1560,7 @@ public class PluginInitiationUtils {
                 
                 panelWS.sendMessage(response);
             } else {
-                // 识别并忽略服务器确认消息
+                // Recognize and ignore server acknowledgement messages
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
@@ -1540,22 +1574,22 @@ public class PluginInitiationUtils {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Error handling plugin list request: " + e.getMessage());
         }
     }
-    
+
     /**
-     * 处理服务器状态请求
+     * Handles a server status request
      */
     private static void handleServerStatusRequest(JsonObject data) {
         try {
-            // 只处理明确的状态请求（包含requestId），忽略服务器的确认消息
+            // Only handle explicit status requests (carrying a requestId); ignore server acknowledgement messages
             if (data != null && data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
                 UltiTools.getInstance().getLogger().log(Level.FINE, 
                     String.format("收到服务器状态请求，请求ID: %s", requestId));
-                
-                // 立即发送当前服务器状态，包含请求ID
+
+                // Immediately send the current server status, including the request id
                 UltiTools.getInstance().getServerMonitorManager().sendServerStatusWithRequestId(requestId);
             } else {
-                // 忽略服务器的确认消息和其他非请求消息
+                // Ignore server acknowledgement messages and other non-request messages
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
@@ -1571,16 +1605,16 @@ public class PluginInitiationUtils {
     }
     
     /**
-     * 处理性能数据请求
+     * Handles a metrics data request
      */
     private static void handleMetricsRequest(JsonObject data) {
         try {
-            // 只处理明确的性能数据请求（包含requestId），忽略服务器的确认消息
+            // Only handle explicit metrics data requests (carrying a requestId); ignore server acknowledgement messages
             if (data != null && data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
                 UltiTools.getInstance().getServerMonitorManager().sendMetricsDataWithRequestId(requestId);
             } else {
-                // 识别并忽略服务器确认消息
+                // Recognize and ignore server acknowledgement messages
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
@@ -1596,18 +1630,18 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 上传本地配置到服务器
+     * Uploads the local config to the server
      */
     private static void uploadConfig(UltiPanelWebSocketClient client) {
         JsonObject configMessage = new JsonObject();
         configMessage.addProperty("type", "upload_config");
         
         JsonObject data = new JsonObject();
-        data.addProperty("configType", "plugin_config");  // 添加必需的配置类型
-        data.addProperty("configName", "UltiTools.yml");   // 添加配置文件名
+        data.addProperty("configType", "plugin_config");  // The required config type
+        data.addProperty("configName", "UltiTools.yml");   // The config file name
         data.addProperty("configContent", ConfigEditorUtils.getConfigMapString());
-        data.addProperty("format", "yaml");                // 添加格式信息
-        data.addProperty("backup", true);                  // 添加备份标志
+        data.addProperty("format", "yaml");                // The format info
+        data.addProperty("backup", true);                  // The backup flag
         data.addProperty("comment", ConfigEditorUtils.getCommentMapString());
         data.addProperty("serverId", client.getServerId());
         
@@ -1649,37 +1683,41 @@ public class PluginInitiationUtils {
      * Re-initialize the WebSocket connection with a fresh token.
      * Disconnects the old client (if any), refreshes the token if needed,
      * and creates a new WebSocket client.
-     * <br>
-     * 使用新令牌重新初始化WebSocket连接。
      */
     public static void reinitWebSocket() {
-        // 闸门一：logout 之后不再重连。
-        // 这是让 `/ulticloud logout` 真正生效的那一行——在它存在之前，logout 只清凭证，
-        // 这条链会继续拿着已作废的 token 重连，401 循环照跑，实测只有重新 login 或重启
-        // 服务器才停得下来。见 issue #223。
+        // Gate one: no more reconnecting after logout.
+        // This is the line that makes `/ulticloud logout` actually take effect — before it existed,
+        // logout only cleared the credential, and this chain kept reconnecting with the
+        // already-invalidated token, running a 401 loop that measurement showed only stopped with a
+        // fresh login or a server restart. See issue #223.
         if (!cloudEnabled.get()) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "Cloud features are disabled — skipping WebSocket re-initialization");
             return;
         }
 
-        // 闸门二：全局预算。客户端自身的 5 次上限是每实例的，而这里每次都造新实例，
-        // 所以那个上限对整体等于不存在。见 issue #181。
+        // Gate two: the global budget. The client's own limit of 5 attempts is per-instance, and
+        // this method builds a new instance every time, so that per-instance cap places no
+        // constraint on the whole. See issue #181.
         if (!reinitBackoff.shouldContinue()) {
-            // 先把话说完再拆线：下面的 disableCloud() 会关掉日志上传通道，这句得赶在那之前发出去。
+            // Finish saying this before tearing down: the disableCloud() call below shuts off the
+            // log upload channel, and this line has to go out before that happens.
             UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
                 "WebSocket re-initialization gave up after %d attempts. Cloud features are now idle. "
                     + "Run /ulticloud login to retry, or restart the server.",
                 MAX_REINIT_ATTEMPTS));
-            // 「now idle」必须是真的。曾经这里只有一句 cloudEnabled.set(false)：状态机确实停了，
-            // 但心跳线程、日志传输器与 root logger handler、玩家事件监听器、token 刷新调度
-            // 以及静态 panelWS/token 引用全都留着继续跑——日志宣告空转，实际在漏。
-            // 终态与 logout 是同一件事，就该走同一条拆线路径。
+            // "now idle" must actually be true. This used to be a single cloudEnabled.set(false)
+            // call: the state machine did stop, but the heartbeat thread, the log transporter and
+            // root logger handler, the player event listener, the token refresh schedule, and the
+            // static panelWS/token references all kept running — the log line declared idleness
+            // while things were still leaking. A terminal state and logout are the same event and
+            // should go through the same teardown path.
             //
-            // 复用 disableCloud() 是安全的：它第一件事就是把 cloudEnabled 置否，所以其中的
-            // stopWebsocket() 即使触发 onClose→重连链，也会被本方法开头的闸门一挡回去；
-            // 它顺带做的 reinitBackoff.reset() 同样无害——闸门一已经拦死，预算再也消耗不到，
-            // 而恢复只能靠 /ulticloud login，那条路本来就会 reset。
+            // Reusing disableCloud() is safe: its first action is flipping cloudEnabled off, so even
+            // if its own stopWebsocket() triggers the onClose reconnect chain, it gets caught by gate
+            // one at the top of this method; its incidental reinitBackoff.reset() is likewise
+            // harmless — gate one has already sealed things off, so the budget never gets consumed
+            // again, and recovery can only come through /ulticloud login, which resets it anyway.
             disableCloud();
             return;
         }
@@ -1687,7 +1725,7 @@ public class PluginInitiationUtils {
         UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
             "Re-initializing WebSocket connection (attempt %d/%d)...",
             reinitBackoff.getAttemptCount() + 1, MAX_REINIT_ATTEMPTS));
-        reinitBackoff.getNextDelay();   // 记一次尝试；实际的等待由客户端侧的调度承担
+        reinitBackoff.getNextDelay();   // Record one attempt; the actual wait is handled by the client-side scheduler
 
         // Disconnect old client
         if (panelWS != null) {
@@ -1720,9 +1758,11 @@ public class PluginInitiationUtils {
             }
         }
 
-        // 二次确认。从方法开头那次 cloudEnabled 检查到这里，中间隔了一次 token 刷新
-        // ——那是网络调用，窗口可能有数秒。logout 若发生在这个窗口内，必须在这里被看见，
-        // 否则我们会造出一个新的已认证客户端，把刚关掉的状态机重新拉起来。
+        // Second confirmation. Between the cloudEnabled check at the top of this method and here,
+        // a token refresh has happened in between — a network call, and that window can be several
+        // seconds wide. If a logout happens inside this window, it must be seen here, otherwise a
+        // newly-authenticated client gets built that resurrects the state machine that was just
+        // turned off.
         if (!cloudEnabled.get()) {
             UltiTools.getInstance().getLogger().log(Level.INFO,
                 "Cloud features were disabled during re-initialization — aborting");
@@ -1732,11 +1772,12 @@ public class PluginInitiationUtils {
         // Create new WebSocket connection
         try {
             initWebsocket();
-            // 这里刻意不打「re-initialized successfully」。
-            // initWebsocket() 返回只说明客户端被造出来、connect() 被发起了——connect() 是异步的，
-            // 握手与认证都还没发生。实测这句之后紧跟着的就是一条 401。成功的那句现在由
-            // onOpen 打（见 initWebsocket 里的 onConnectHandler），那才是真的连上了。
-            // 见 issue #223。
+            // Deliberately does not log "re-initialized successfully" here.
+            // initWebsocket() returning only means the client was built and connect() was
+            // dispatched — connect() is asynchronous, and the handshake and authentication have not
+            // happened yet. Measurement showed a 401 immediately following this line. The success
+            // message is now logged by onOpen (see initWebsocket's onConnectHandler), which is the
+            // point where the connection is actually up. See issue #223.
             UltiTools.getInstance().getLogger().log(Level.FINE,
                 "WebSocket re-initialization dispatched — awaiting handshake");
         } catch (IOException e) {
@@ -1746,18 +1787,21 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 关闭云连接并让重连状态机进入明确的 disabled 态。
+     * Closes the cloud connection and puts the reconnection state machine into an explicit
+     * disabled state.
      * <p>
-     * 供 {@code /ulticloud logout} 调用。与 {@link #stopWebsocket()} 的区别是：后者只断开当前
-     * 客户端，而重连链会把它重新拉起来；本方法先把 {@link #cloudEnabled} 置否，因此
-     * {@link #reinitWebSocket()} 之后会直接返回，状态机不会自我复活。
+     * Called by {@code /ulticloud logout}. The difference from {@link #stopWebsocket()} is that the
+     * latter only disconnects the current client, and the reconnection chain will bring it back up;
+     * this method first flips {@link #cloudEnabled} off, so {@link #reinitWebSocket()} returns
+     * immediately afterward and the state machine does not resurrect itself.
      * <p>
-     * 顺带摘掉 root logger 上的日志 handler 与传输线程，并停掉 token 刷新调度——
-     * 都是「云功能已关闭」这句话应当为真的组成部分。
+     * Also strips the log handler and the transport thread off the root logger, and stops the token
+     * refresh schedule — all part of what makes the statement "cloud features are disabled" true.
      * <p>
-     * 整个方法持有 {@link #cloudLifecycleLock}，与 {@code initializeManagers()} 互斥。
-     * 不然的话，一次在途的 onOpen 可以在「置否」与「拆线」之间挤进来，把刚要拆的东西
-     * 又装回去。见 PR #264 的两轮评审。
+     * The whole method holds {@link #cloudLifecycleLock}, mutually exclusive with
+     * {@code initializeManagers()}. Without it, an in-flight onOpen could cut in between "flip off"
+     * and "tear down" and reinstall what was about to be torn down. See the two review rounds on PR
+     * #264.
      */
     public static void disableCloud() {
         synchronized (cloudLifecycleLock) {
@@ -1765,57 +1809,69 @@ public class PluginInitiationUtils {
         }
     }
 
-    /** {@link #disableCloud()} 的实际拆线动作。调用方必须持有 {@link #cloudLifecycleLock}。 */
+    /** The actual teardown performed by {@link #disableCloud()}. Callers must hold {@link #cloudLifecycleLock}. */
     private static void doDisableCloud() {
-        // 前三步的顺序是这条方法里最容易写反的地方，写反了两个方向都会漏：
+        // The order of the first three steps is the easiest place in this method to get backwards,
+        // and getting it backwards leaks in either direction:
         //
-        //   1. 关闸——cloudEnabled 置否，reinit 链不再产生新的刷新。
-        //   2. 停生产者——停掉刷新调度与 magic-link 轮询，不再有新任务被派出去。
-        //   3. 作废在途——推进凭证代际，让已经在 HTTP 请求里的那些结果一律过期。
+        //   1. Close the gate — flip cloudEnabled off, so the reinit chain produces no new refreshes.
+        //   2. Stop the producers — stop the refresh schedule and the magic-link polling, so no new
+        //      task is dispatched.
+        //   3. Invalidate in-flight work — advance the credential generation, so any result already
+        //      in an HTTP request becomes uniformly stale.
         //
-        // 作废**必须**排在停生产者之后。反过来（先作废再停）的话，两者之间启动的新任务
-        // 会快照到已经递增的那一代，于是它反而「合法」了，延迟返回的响应照样把凭证写回
-        // data.json——这正是把作废提到最前面时踩到的坑。
+        // Invalidation **must** come after stopping the producers. The other way around (invalidate
+        // first, then stop) would let any new task started in between snapshot the already-advanced
+        // generation, making it "legitimate" after all — its late-returning response would still
+        // write the credential back, which is exactly the trap of moving invalidation to the very
+        // front.
         //
-        // 而作废也不能等到整个拆线跑完：拆线还要关日志流、停监控、摘监听器、断 socket，
-        // 是个不短的过程，这段时间里一次在途的轮询完全可以先提交成功，调用方（logout
-        // 命令）就会看到一份「拆线之前不存在、拆线之后存在」的凭证。
+        // Nor can invalidation wait for the whole teardown to finish: teardown still has to close the
+        // log stream, stop monitoring, strip listeners, and disconnect the socket, which is not a
+        // short process, and during that time an in-flight poll could still commit successfully — the
+        // caller (the logout command) would then see a credential that "did not exist before teardown,
+        // exists after it."
         //
-        // 最后一道保险在 clearToken() 里：它自己也推进一次代际，那一次发生在生产者全部
-        // 停掉之后，任何仍在途的结果到那里都已过期。
+        // The last safeguard lives in clearToken(): it also advances a generation itself, and that
+        // happens after every producer has stopped, so any result still in flight by that point is
+        // already stale.
         cloudEnabled.set(false);
         reinitBackoff.reset();
 
         teardownStep("stopping token refresh scheduler",
             CloudAuthManager::stopTokenRefreshScheduler);
 
-        // 停掉还没走完的 magic-link 轮询。不停的话，一次「login 之后马上改主意 logout」
-        // 会在轮询下一周期拿到 completed 时把服务器悄悄登回去——那条分支自己会
-        // enableCloud() 加 initWebsocket()。
+        // Stop any magic-link polling still in progress. Without this, a "logout right after login,
+        // second-guessing the decision" sequence could quietly log the server back in the next time
+        // polling picks up a completed result — that branch itself calls enableCloud() plus
+        // initWebsocket().
         teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
 
         teardownStep("invalidating in-flight credential operations",
             CloudAuthManager::invalidateCredentialOperations);
 
-        // 顺序有讲究：先关日志传输器，再断开 socket。
-        // 反过来的话，传输器 flush 时 socket 已经断了，sendBatch() 会一条都发不出去。
-        // （flushLogs 本身也已改成有界，两层都要有——顺序对了是让排队的日志还有机会送出去，
-        //  有界是为了 socket 本来就断着的情况。）
+        // Order matters here: close the log transporter first, then disconnect the socket.
+        // The other way around, the transporter's flush would find the socket already closed and
+        // sendBatch() would send nothing at all. (flushLogs itself is already bounded too — both
+        // layers are needed: the right order gives queued logs a chance to actually go out, and the
+        // bound covers the case where the socket is already down.)
         teardownStep("shutting down log stream manager",
             () -> UltiTools.getInstance().getLogStreamManager().shutdown());
 
-        // 停掉服务器监控。它自带一个 ScheduledExecutorService（每 5 秒 batch_update）
-        // 外加两个主线程 Bukkit 定时任务（1Hz 的 TPS/CPU、5 秒一次的世界/玩家/插件快照）。
-        // 在此之前 stopMonitoring() 在整个 src/main 里没有任何调用方：写好了、测过了，
-        // 就是没接线。不停的话，「云功能已关闭」之后主线程仍在按 5 秒遍历所有世界和区块。
+        // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update every 5
+        // seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a world/player/plugin
+        // snapshot every 5 seconds). Before this line, stopMonitoring() had no caller anywhere in
+        // src/main — written, tested, just never wired up. Without stopping it, the main thread would
+        // keep iterating every world and chunk every 5 seconds after "cloud features are disabled."
         teardownStep("stopping server monitor", () -> {
             if (UltiTools.getInstance().getServerMonitorManager() != null) {
                 UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
             }
         });
 
-        // 摘掉玩家事件监听器。云关掉之后再收玩家事件是纯浪费——事件处理器里那句
-        // isConnected() 判断只是让它不发消息，监听本身还在跑。见 issue #180。
+        // Strip the player event listener. Still receiving player events after cloud is disabled is
+        // pure waste — the isConnected() check inside the event handler only suppresses sending a
+        // message; the listener itself keeps running. See issue #180.
         teardownStep("shutting down player event manager", () -> {
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 UltiTools.getInstance().getPlayerEventManager().shutdown();
@@ -1825,20 +1881,22 @@ public class PluginInitiationUtils {
         stopWebsocket();
         panelWS = null;
 
-        // 清掉本类持有的 token。它与 CloudAuthManager 清掉的凭证是**两份**，
-        // 不清的话，一个正在途中的 reinit 仍然握着可用的 refresh token。
+        // Clear the token held by this class. It is a **separate** copy from the credential
+        // CloudAuthManager clears — without clearing it, an in-flight reinit would still be holding
+        // a usable refresh token.
         token = null;
     }
 
     /**
-     * 跑一步拆线动作，失败只记 FINE 不向外抛。
+     * Runs one teardown step; a failure is only logged at FINE, never thrown out.
      * <p>
-     * 拆线的每一步都必须尽力执行完：任何一步抛出去都会让它后面的步骤被跳过，而那些
-     * 步骤正是「云功能已关闭」这句话的组成部分。原先这是六段一模一样的 try/catch，
-     * 提取出来只是把那个不变量说清楚一次，行为不变。
+     * Every teardown step must run to the best of its ability: any step throwing would skip every
+     * step after it, and those steps are exactly what makes the statement "cloud features are
+     * disabled" true. This used to be six identical try/catch blocks; extracting it only states that
+     * invariant once — the behaviour is unchanged.
      *
-     * @param what 失败时写进日志的动作描述
-     * @param action 拆线动作
+     * @param what   the action description written to the log on failure
+     * @param action the teardown action
      */
     private static void teardownStep(String what, Runnable action) {
         try {
@@ -1850,34 +1908,42 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 重连成功时调用：把外层预算清零。
+     * Called when a reconnection succeeds: resets the outer budget.
      * <p>
-     * 只有<b>真正握手成功</b>才配重置预算。若在 {@code reinitWebSocket} 里重置，
-     * 那么「造出了一个客户端」就会被当成成功，预算永远用不完，闸门等于没加。
+     * Only a <b>genuinely successful handshake</b> is entitled to reset the budget. Resetting it
+     * inside {@code reinitWebSocket} instead would treat "a client was built" as success, the budget
+     * would never run out, and the gate would amount to nothing added.
      */
     static void onWebSocketConnected() {
         reinitBackoff.reset();
     }
 
     /**
-     * 在云生命周期锁内，原子地「复查代际 → 开启状态机 → 建连 → 起刷新调度」。
+     * Atomically, inside the cloud lifecycle lock: "re-check the credential generation → turn the
+     * state machine on → connect → start the refresh schedule."
      * <p>
-     * 只让写凭证那一步对 logout 原子是不够的：magic-link 轮询在提交凭证之后还要做
-     * {@code enableCloud()} + {@code initWebsocket()} + {@code startTokenRefreshScheduler()}，
-     * 这一串才是真正把服务器连回去的动作。logout 挤在「提交成功」与「开始激活」之间的话，
-     * 拆线拆的是一个还没建起来的连接，随后轮询线程照样把它建起来——logout 于是被撤销。
+     * Making only the credential-write step atomic against logout is not enough: after committing a
+     * credential, magic-link polling still has to do {@code enableCloud()} +
+     * {@code initWebsocket()} + {@code startTokenRefreshScheduler()}, and that sequence is what
+     * actually connects the server back. If logout lands in the gap between "commit succeeded" and
+     * "activation started," teardown tears down a connection that has not been built yet, and the
+     * polling thread goes ahead and builds it anyway — undoing the logout.
      * <p>
-     * 这里与 {@code disableCloud()} 抢同一把 {@link #cloudLifecycleLock}，因此二者只能整体
-     * 先后发生：要么先激活再被拆掉（干净），要么先拆线、本方法持锁复查代际时看到已变而
-     * 直接返回 false（也干净）。
+     * This method contends for the same {@link #cloudLifecycleLock} as {@code disableCloud()}, so
+     * the two can only ever happen as a whole, one after the other: either activation completes
+     * first and is then torn down (clean), or teardown happens first and this method, re-checking
+     * the generation while holding the lock, sees it has changed and returns false directly (also
+     * clean).
      * <p>
-     * 锁内刻意<b>不</b>做 {@code loginWithToken()} —— 那是一次 HTTP 往返，持锁做会让
-     * {@code /ulticloud logout} 在主线程上阻塞数秒。它只向面板注册服务器，不改本地状态，
-     * 放在锁外重复执行也无害。
+     * Deliberately does <b>not</b> call {@code loginWithToken()} while holding the lock — that is an
+     * HTTP round trip, and doing it under the lock would block {@code /ulticloud logout} on the main
+     * thread for several seconds. It only registers the server with the panel and does not change
+     * local state, so running it again outside the lock is harmless.
      *
-     * @param generation 调用方出发时记下的凭证代际
-     * @return 已激活返回 true；代际已变、激活被放弃则返回 false
-     * @throws IOException 建连失败
+     * @param generation the credential generation the caller recorded when it started
+     * @return {@code true} if activated; {@code false} if the generation had already changed and
+     *         activation was abandoned
+     * @throws IOException if establishing the connection fails
      */
     public static boolean activateCloudIfCurrent(long generation) throws IOException {
         synchronized (cloudLifecycleLock) {
@@ -1886,7 +1952,8 @@ public class PluginInitiationUtils {
                     "Cloud activation aborted — a logout happened while this login was completing");
                 return false;
             }
-            // 显式开启：logout 之后重新 login 必须能把状态机拉回来。
+            // Explicit turn-on: a fresh login after logout must be able to pull the state machine
+            // back up.
             enableCloud();
             initWebsocket();
             CloudAuthManager.startTokenRefreshScheduler();
@@ -1895,18 +1962,19 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * 把状态机置为「应当保持连接」，并清零外层重连预算。
+     * Sets the state machine to "should stay connected" and resets the outer reconnection budget.
      * <p>
-     * <b>只有显式动作才应当调用它</b>：服务器启动时的云登录，以及 {@code /ulticloud login}
-     * 成功之后。{@link #initWebsocket()} 刻意不调——它同时被 {@link #reinitWebSocket()} 复用，
-     * 在那里置位会让一个正在途中的重连把刚被 logout 关掉的状态机重新拉起来。
+     * <b>Only an explicit action should call this</b>: cloud login at server startup, and after a
+     * successful {@code /ulticloud login}. {@link #initWebsocket()} deliberately does not call it —
+     * it is also reused by {@link #reinitWebSocket()}, and setting it there would let an in-flight
+     * reconnection resurrect a state machine that had just been turned off by logout.
      */
     public static void enableCloud() {
         cloudEnabled.set(true);
         reinitBackoff.reset();
     }
 
-    /** 供测试断言状态机是否处于启用态。 */
+    /** Lets a test assert whether the state machine is currently enabled. */
     static boolean isCloudEnabled() {
         return cloudEnabled.get();
     }
@@ -1926,7 +1994,6 @@ public class PluginInitiationUtils {
         apiUrl = apiUrl.trim();
 
         // Derive WebSocket URL from the API base URL
-        // 从API基础URL派生WebSocket URL
         String wsUrl;
         if (apiUrl.startsWith("https://")) {
             wsUrl = "wss://" + apiUrl.substring("https://".length()) + "/ws";

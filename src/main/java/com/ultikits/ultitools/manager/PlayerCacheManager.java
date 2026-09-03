@@ -34,11 +34,10 @@ import org.jetbrains.annotations.ApiStatus;
  * A non-bean instance -- one that is never resolved from any {@code SimpleContainer}, e.g. a
  * command validator {@code new}-ed directly in a constructor -- can register itself via {@link
  * #tryRegister(Object)} even before the core plugin is enabled; see that method's javadoc.
- * <p>
- * 管理带有 @PlayerCache 注解的字段，在玩家退出时自动清理。
  *
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Sweeps @PlayerCache-annotated fields -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class PlayerCacheManager {
 

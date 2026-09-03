@@ -1,11 +1,6 @@
 package com.ultikits.ultitools.utils;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -27,9 +22,6 @@ import com.ultikits.ultitools.entities.TokenEntity;
 /**
  * Manages UltiCloud authentication tokens.
  * Supports magic-link login (no password needed) and token persistence.
- * <br>
- * 管理UltiCloud身份验证令牌。
- * 支持魔法链接登录（无需密码）和令牌持久化。
  */
 public class CloudAuthManager {
 
@@ -43,31 +35,39 @@ public class CloudAuthManager {
     /** Basic auth header for OAuth2 client credentials (client:112233) */
     private static final String OAUTH2_BASIC_AUTH = "Basic Y2xpZW50OjExMjIzMw==";
 
-    private static TokenEntity currentToken;
+    /**
+     * Written by the refresh executor thread, read by any caller of {@link #getCurrentToken()} or
+     * {@link #hasValidToken()} without holding a lock -- {@code volatile} is required so a value
+     * published there is visible to a subsequent read on another thread (D-12's visibility hole).
+     */
+    private static volatile TokenEntity currentToken;
     private static ScheduledExecutorService pollExecutor;
     private static ScheduledFuture<?> pollTask;
     private static ScheduledExecutorService refreshExecutor;
     private static ScheduledFuture<?> refreshTask;
 
     /**
-     * 凭证的生命周期代际。
+     * The credential lifecycle generation.
      * <p>
-     * 存在的理由只有一句：<b>取消不等于失效。</b>{@link #stopTokenRefreshScheduler()} 与
-     * {@link #stopPolling()} 用的是 {@code cancel(false)} 加 {@code shutdown()}，两者都只
-     * 承诺不再调度新的执行，对一个已经进入 HTTP 请求的任务毫无约束——而
-     * {@link #refreshToken(String)} 在返回<b>之前</b>就 {@link #saveToken(TokenEntity)} 写盘。
-     * 于是这样的时序完全成立：
+     * The reason this exists fits in one sentence: <b>cancellation is not invalidation.</b>
+     * {@link #stopTokenRefreshScheduler()} and {@link #stopPolling()} both use {@code cancel(false)}
+     * plus {@code shutdown()}, and both only promise not to schedule a new execution -- neither
+     * constrains a task that has already entered an HTTP request. Meanwhile
+     * {@link #refreshToken(String)} calls {@link #saveToken(TokenEntity)} to write to disk
+     * <b>before</b> it returns. So the following timing is entirely possible:
      * <pre>
-     *   1. 刷新任务发出 HTTP 请求（网络往返，秒级）
-     *   2. 管理员 /ulticloud logout → 停调度器 → clearToken() 清掉 data.json
-     *   3. HTTP 返回 → saveToken() 把新凭证写回 data.json
-     *   4. 重启服务器 → 读到有效凭证 → 自动登录
+     *   1. A refresh task issues an HTTP request (network round trip, seconds).
+     *   2. An admin runs /ulticloud logout -&gt; the scheduler stops -&gt; clearToken() wipes data.json.
+     *   3. The HTTP response arrives -&gt; saveToken() writes the new credential back to data.json.
+     *   4. The server restarts -&gt; it reads a valid credential -&gt; it logs in automatically.
      * </pre>
-     * logout 于是成了一条没有效果的命令，而它恰恰是安全语义的。
+     * logout thereby becomes a command with no effect, which is exactly the security property it
+     * exists to provide.
      * <p>
-     * 规则：一切在途的异步凭证操作出发时记下当时的代际，提交结果之前用
-     * {@link #commitTokenIfCurrent(TokenEntity, long)} 比对；拆线路径调
-     * {@link #invalidateCredentialOperations()} 推进代际，迟到的结果一律作废。
+     * Rule: every in-flight asynchronous credential operation records the generation it saw when it
+     * started, and compares against it via {@link #commitTokenIfCurrent(TokenEntity, long)} before
+     * committing its result; the teardown path calls {@link #invalidateCredentialOperations()} to
+     * advance the generation, so any late-arriving result is discarded unconditionally.
      */
     private static final java.util.concurrent.atomic.AtomicLong credentialGeneration =
             new java.util.concurrent.atomic.AtomicLong();
@@ -79,7 +79,21 @@ public class CloudAuthManager {
      */
     public static TokenEntity loadSavedToken() {
         try {
-            Map<String, Object> data = readDataFile();
+            CredentialStore.ReadResult result = CredentialStore.read();
+            if (result.isAbsent()) {
+                return null;
+            }
+            if (result.isParseFailure()) {
+                // Distinguishable from absence: a torn/corrupt credential file must not be
+                // silently treated as "no saved token" -- that would swallow the failure instead
+                // of reporting it (D-12, T-08-53).
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "Saved credential file exists but could not be parsed as valid JSON; "
+                        + "treating it as no saved token rather than deleting it. "
+                        + "Use /ulticloud login to re-authenticate.");
+                return null;
+            }
+            Map<String, Object> data = result.data();
             Object savedToken = data.get("cloud_token");
             if (savedToken == null) {
                 return null;
@@ -131,7 +145,8 @@ public class CloudAuthManager {
      * @return a new TokenEntity with fresh access and refresh tokens, or null on failure
      */
     public static TokenEntity refreshToken(String refreshTokenValue) {
-        // 出发时记下代际。整个 HTTP 往返期间 logout 都可能发生，而下面的提交必须能看见。
+        // Record the generation when this starts. logout can happen at any point during the
+        // HTTP round trip, and the commit below must be able to see it.
         final long generation = credentialGeneration.get();
         String apiUrl = HttpRequestUtils.getBaseUrl();
         if (apiUrl == null || apiUrl.trim().isEmpty()) {
@@ -158,8 +173,9 @@ public class CloudAuthManager {
                 TokenEntity newToken = GSON.fromJson(response.body(), TokenEntity.class);
                 if (newToken != null && newToken.getAccess_token() != null) {
                     newToken.decodeJwtPayload();
-                    // 不能直接 saveToken：这次请求可能是在 logout 之前发出、logout 之后才回来的。
-                    // 直接写盘会把刚被 clearToken() 清掉的凭证原样填回 data.json，重启后自动重连。
+                    // Cannot call saveToken directly: this request may have been sent before logout
+                    // and only returned after it. Writing directly would put the credential
+                    // clearToken() just wiped straight back into data.json, auto-reconnecting on restart.
                     if (!commitTokenIfCurrent(newToken, generation)) {
                         return null;
                     }
@@ -181,7 +197,6 @@ public class CloudAuthManager {
      */
     public static void saveToken(TokenEntity token) throws IOException {
         currentToken = token;
-        Map<String, Object> data = readDataFile();
 
         // Store token fields as a map (Gson will serialize properly)
         Map<String, Object> tokenMap = new LinkedHashMap<>();
@@ -192,55 +207,92 @@ public class CloudAuthManager {
         tokenMap.put("scope", token.getScope());
         tokenMap.put("jti", token.getJti());
 
-        data.put("cloud_token", tokenMap);
-        writeDataFile(data);
+        CredentialStore.update(existing -> {
+            existing.put("cloud_token", tokenMap);
+            return existing;
+        });
     }
 
     /**
      * Clear the saved token (logout).
      */
     public static synchronized void clearToken() throws IOException {
-        // 清凭证本身就意味着「此前的一切凭证操作作废」。再推一次代际是第二道关门：
-        // 拆线时推的那一次，与拆线中途才启动的生产者之间仍可能有缝，而这一次发生在
-        // 生产者全部停掉之后，任何仍在途的结果到这里都已过期。
+        // Clearing the credential already means "everything before this is invalid". Advancing the
+        // generation a second time here is a second gate: the advance done at the start of teardown
+        // may still leave a gap against a producer that started mid-teardown, while this one happens
+        // after every producer has stopped, so any result still in flight is already stale by now.
         credentialGeneration.incrementAndGet();
         currentToken = null;
-        Map<String, Object> data = readDataFile();
-        data.remove("cloud_token");
-        writeDataFile(data);
+        CredentialStore.update(existing -> {
+            existing.remove("cloud_token");
+            return existing;
+        });
     }
 
     /**
-     * 取当前的凭证代际。异步凭证操作在<b>出发时</b>调它记下自己那一代。
+     * Get the current credential generation. Asynchronous credential operations call this
+     * <b>when they start</b> to record their own generation.
      *
-     * @return 当前代际
+     * @return the current generation
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * asynchronous credential producers, not a supported external API -- measured 0 downstream
+     * references across every published module JAR and every local module/plugin source. The
+     * cancel-is-not-invalidate guard this method reads from is preserved unchanged; the credential
+     * file I/O this class used to imply now lives in {@link CredentialStore}. Scheduled for
+     * removal once issue #298's session-based credential lifecycle redesign replaces the whole
+     * generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static long currentCredentialGeneration() {
         return credentialGeneration.get();
     }
 
     /**
-     * 让一切在途的凭证操作作废。
+     * Invalidate every credential operation currently in flight.
      * <p>
-     * 拆线路径（{@code disableCloud()} / {@code /ulticloud logout}）必须调它。只停调度器
-     * 是不够的——见 {@link #credentialGeneration} 上的说明。
+     * The teardown path ({@code disableCloud()} / {@code /ulticloud logout}) must call this.
+     * Stopping the scheduler alone is not enough -- see the note on {@link #credentialGeneration}.
+     *
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * teardown path, not a supported external API -- measured 0 downstream references across
+     * every published module JAR and every local module/plugin source. The guard's behaviour is
+     * preserved unchanged, including its {@code synchronized} coordination with
+     * {@link #commitTokenIfCurrent(TokenEntity, long)} and {@link #clearToken()}; the credential
+     * file I/O this class used to imply now lives in {@link CredentialStore}. Scheduled for
+     * removal once issue #298's session-based credential lifecycle redesign replaces the whole
+     * generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static synchronized void invalidateCredentialOperations() {
         credentialGeneration.incrementAndGet();
     }
 
     /**
-     * 仅当代际未变时才提交凭证。
+     * Commit the credential only if the generation has not changed.
      * <p>
-     * 与 {@link #invalidateCredentialOperations()} 和 {@link #clearToken()} 同步在类锁上，
-     * 因此「比对代际」与「写入」之间不存在窗口：拆线要么整个发生在提交之前（这次提交被
-     * 拒），要么整个发生在提交之后（拆线把刚写的清掉）。两种都是干净的。
+     * Synchronized on the class lock together with {@link #invalidateCredentialOperations()} and
+     * {@link #clearToken()}, so there is no window between "compare the generation" and "write":
+     * teardown either happens entirely before this commit (in which case the commit is rejected)
+     * or entirely after it (in which case teardown clears what was just written). Both outcomes
+     * are clean.
      *
-     * @param token 待提交的凭证
-     * @param generation 调用方出发时记下的代际
-     * @return 已提交返回 true；代际已变、结果被丢弃则返回 false
-     * @throws IOException 写入失败
+     * @param token the credential to commit
+     * @param generation the generation the caller recorded when it started
+     * @return true if committed; false if the generation had changed and the result was discarded
+     * @throws IOException if the write fails
+     * @deprecated This is an internal coordination primitive for {@code CloudAuthManager}'s own
+     * asynchronous credential producers, not a supported external API -- measured 0 downstream
+     * references across every published module JAR and every local module/plugin source. The
+     * generation-comparison-then-write guard is preserved unchanged, including its
+     * {@code synchronized} coordination with {@link #invalidateCredentialOperations()} and
+     * {@link #clearToken()}; the write itself now goes through {@link CredentialStore} for an
+     * atomic replace. Scheduled for removal once issue #298's session-based credential lifecycle
+     * redesign replaces the whole generation-counter pattern.
+     * @removeIn 6.4.0
      */
+    @Deprecated(since = "6.3.0", forRemoval = true)
     public static synchronized boolean commitTokenIfCurrent(TokenEntity token, long generation)
             throws IOException {
         if (generation != credentialGeneration.get()) {
@@ -276,10 +328,11 @@ public class CloudAuthManager {
      * @return the magic link URL, or null on failure
      */
     public static String requestMagicLink(Consumer<String> errorCallback) {
-        // 代际必须在**这里**捕获，而不是等到 startPolling()。下面那次 POST 是阻塞的，
-        // logout 完全可以整个发生在它的往返期间；等 POST 回来才读代际的话，读到的是
-        // 已经递增过的那一代，这次登录于是"看起来是新的"，它后来拿到的 token 会被接受、
-        // activateCloudIfCurrent() 会把服务器重新连上——而这次 logout 从头到尾都没看见它。
+        // The generation must be captured **here**, not deferred to startPolling(). The POST below
+        // is blocking, and logout can happen entirely during that round trip; reading the generation
+        // only after the POST returns would read the already-incremented one, making this login
+        // "look new" so its eventual token gets accepted and activateCloudIfCurrent() reconnects the
+        // server -- even though this logout never saw this login at all.
         final long generation = credentialGeneration.get();
         String apiUrl = HttpRequestUtils.getBaseUrl();
         if (apiUrl == null || apiUrl.trim().isEmpty()) {
@@ -344,14 +397,15 @@ public class CloudAuthManager {
     }
 
     /**
-     * 带显式代际的轮询入口。
+     * The polling entry point with an explicit generation.
      * <p>
-     * 代际由<b>发起整次登录的那一刻</b>决定，不能在这里就地读：调用方在到达这里之前
-     * 通常已经做过一次阻塞的 HTTP 请求，那段时间里发生的 logout 必须对这次登录可见。
+     * The generation is decided at <b>the moment the whole login started</b> and must not be read
+     * fresh here: by the time the caller reaches this point it has usually already made a blocking
+     * HTTP request, and a logout that happened during that time must be visible to this login.
      *
-     * @param requestId magic-link 请求 ID
-     * @param onComplete 登录完成回调，可为 null
-     * @param generation 发起这次登录时的凭证代际
+     * @param requestId the magic-link request ID
+     * @param onComplete called when login completes, or null if no callback is needed
+     * @param generation the credential generation captured when this login started
      */
     public static void startPolling(String requestId, Consumer<TokenEntity> onComplete,
                                     final long generation) {
@@ -371,7 +425,7 @@ public class CloudAuthManager {
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
-    /** 查一次登录状态。任何异常都只记 FINE——轮询要继续，直到超时或拿到终态。 */
+    /** Check login status once. Any exception is logged at FINE only -- polling must continue until it times out or reaches a terminal state. */
     private static void pollLoginStatusOnce(String requestId, Consumer<TokenEntity> onComplete,
                                             long generation) {
         try {
@@ -405,14 +459,16 @@ public class CloudAuthManager {
     }
 
     /**
-     * 处理一次拿到 {@code completed} 的登录：落凭证、再激活云功能。
+     * Handle a login that just reached {@code completed}: persist the credential, then reactivate
+     * cloud features.
      * <p>
-     * 两步都要对 logout 设防，而且是两道不同的闸：
-     * {@link #commitTokenIfCurrent(TokenEntity, long)} 保证凭证不会在 logout 之后被写回；
-     * {@code activateCloudIfCurrent} 保证连接不会在 logout 之后被重新建起来。只有前者是
-     * 不够的——真正把服务器连回去的是后面那一串。
+     * Both steps must guard against logout, and they are two distinct gates:
+     * {@link #commitTokenIfCurrent(TokenEntity, long)} guarantees the credential is not written back
+     * after logout; {@code activateCloudIfCurrent} guarantees the connection is not rebuilt after
+     * logout. The first alone is not enough -- it is the sequence after it that actually reconnects
+     * the server.
      *
-     * @throws IOException 凭证落盘失败
+     * @throws IOException if persisting the credential fails
      */
     private static void completeMagicLinkLogin(JsonObject responseBody,
                                                Consumer<TokenEntity> onComplete,
@@ -427,7 +483,7 @@ public class CloudAuthManager {
         }
         token.decodeJwtPayload();
 
-        // logout 可能发生在「本次登录发起」与「本次轮询拿到 completed」之间。
+        // logout can happen between "this login started" and "this poll reached completed".
         if (!commitTokenIfCurrent(token, generation)) {
             return;
         }
@@ -444,9 +500,11 @@ public class CloudAuthManager {
         }
 
         try {
-            // 锁外：一次 HTTP 往返，只向面板注册服务器，不改本地状态。
+            // Outside the lock: one HTTP round trip that only registers the server with the panel
+            // and does not change any local state.
             PluginInitiationUtils.loginWithToken(token);
-            // 锁内：复查代际之后再开状态机、建连、起刷新调度。
+            // Inside the lock: re-check the generation before opening the state machine, building
+            // the connection, and starting the refresh schedule.
             PluginInitiationUtils.activateCloudIfCurrent(generation);
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
@@ -521,25 +579,4 @@ public class CloudAuthManager {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> readDataFile() throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (dataFile.exists()) {
-            try (Reader reader = Files.newBufferedReader(dataFile.toPath(), StandardCharsets.UTF_8)) {
-                Map<String, Object> json = GSON.fromJson(reader, Map.class);
-                return json != null ? json : new LinkedHashMap<>();
-            }
-        }
-        return new LinkedHashMap<>();
-    }
-
-    private static void writeDataFile(Map<String, Object> data) throws IOException {
-        File dataFile = new File(UltiTools.getInstance().getDataFolder(), "data.json");
-        if (!dataFile.getParentFile().exists()) {
-            dataFile.getParentFile().mkdirs();
-        }
-        try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
-            GSON.toJson(data, writer);
-        }
-    }
 }

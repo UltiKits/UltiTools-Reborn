@@ -251,20 +251,24 @@ class MysqlDataStoreTest {
     class GetOperatorTests {
 
         @Test
-        @DisplayName("应该抛出 RuntimeException 当实体类没有 @Table 注解")
+        @DisplayName("GATE-05 group two (08-21): should throw DataAccessException when the entity class has no @Table annotation")
         void shouldThrowRuntimeExceptionWhenNoTableAnnotation() {
             // Arrange
             setupMysqlConfig();
 
-            try (MockedConstruction<HikariDataSource> ignored = 
+            try (MockedConstruction<HikariDataSource> ignored =
                     mockConstruction(HikariDataSource.class)) {
-                
+
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Act & Assert
+                // GATE-05 group two (08-21): tightened from RuntimeException to the typed
+                // DataAccessException this site now throws, plus its DATA_ENTITY_INVALID code.
                 assertThatThrownBy(() -> store.getOperator(mockPlugin, NoTableAnnotationEntity.class))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("No Table annotation is presented!");
+                    .isInstanceOf(DataAccessException.class)
+                    .hasMessageContaining("No Table annotation is presented!")
+                    .extracting(t -> ((DataAccessException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_ENTITY_INVALID);
             }
         }
 

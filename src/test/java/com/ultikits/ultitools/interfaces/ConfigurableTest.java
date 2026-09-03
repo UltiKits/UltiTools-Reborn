@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
@@ -239,12 +240,19 @@ class ConfigurableTest {
 
         @Test
         @DisplayName("保存配置应该不抛出异常")
-        void shouldNotThrowException() throws IOException {
-            // Arrange
+        void shouldNotThrowException() {
+            // GATE-06 (issue #345): the previous body called saveConfig with no assertion, paired
+            // with shouldThrowIOException below which does assert (via assertThatThrownBy) that a
+            // throwing implementation's IOException propagates uninterrupted. Wrapping this side in
+            // assertThatCode(...).doesNotThrowAnyException() makes the pairing explicit: together
+            // the two tests characterise that Configurable#saveConfig's checked IOException is
+            // neither swallowed on the happy path nor added artificially -- it is purely a function
+            // of what the implementation itself does.
             Configurable configurable = new DefaultConfigurable();
 
-            // Act & Assert - 不应该抛出异常
-            configurable.saveConfig("config/test.yml", TestConfigEntity.class);
+            assertThatCode(() -> configurable.saveConfig("config/test.yml", TestConfigEntity.class))
+                    .as("a non-throwing Configurable implementation's saveConfig must not throw")
+                    .doesNotThrowAnyException();
         }
 
         @Test

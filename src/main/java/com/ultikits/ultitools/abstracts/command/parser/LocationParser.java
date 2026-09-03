@@ -15,14 +15,6 @@ import java.util.List;
  *   <li>world,x,y,z,yaw,pitch</li>
  *   <li>x,y,z (uses sender's world if available)</li>
  * </ul>
- * <p>
- * Bukkit Location 类型解析器。
- * 支持格式：
- * <ul>
- *   <li>世界名,x,y,z</li>
- *   <li>世界名,x,y,z,yaw,pitch</li>
- *   <li>x,y,z（使用发送者的世界）</li>
- * </ul>
  *
  * @since 6.2.0
  */

@@ -9,8 +9,6 @@ import org.bukkit.entity.Player;
 
 /**
  * Completer that suggests online player names.
- * <p>
- * 建议在线玩家名称的补全器。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -23,7 +21,6 @@ public class OnlinePlayersCompleter implements TabCompleter {
     
     /**
      * Creates a completer that includes all online players.
-     * 创建包含所有在线玩家的补全器。
      */
     public OnlinePlayersCompleter() {
         this(false, false);
@@ -31,7 +28,6 @@ public class OnlinePlayersCompleter implements TabCompleter {
     
     /**
      * Creates a completer with custom options.
-     * 使用自定义选项创建补全器。
      *
      * @param excludeSelf     whether to exclude the requesting player
      * @param vanishedVisible whether to show vanished players

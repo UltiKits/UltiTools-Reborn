@@ -33,9 +33,8 @@ import lombok.Getter;
 
 /**
  * Abstract class representing a configuration entity.
- * <p>
- * 配置实体的抽象类。
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
 public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
@@ -47,10 +46,8 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Constructor for AbstractConfigEntity.
-     * <p>
-     * AbstractConfigEntity的构造函数。
      *
-     * @param configFilePath the path to the configuration file, for example: config/config.yml <br> 配置文件在resource文件夹的路径，例如：config/config.yml
+     * @param configFilePath the path to the configuration file, for example: config/config.yml
      */
     public AbstractConfigEntity(String configFilePath) {
         this.configFilePath = configFilePath;
@@ -58,10 +55,8 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Saves the configuration to the file.
-     * <p>
-     * 将配置保存到文件。
      *
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException if an I/O error occurs
      */
     @SuppressWarnings("unchecked")
     public void save() throws IOException {
@@ -87,11 +82,9 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Initializes the configuration entity.
-     * <p>
-     * 初始化配置实体。
      *
-     * @param ultiToolsPlugin the plugin instance <br> 插件实例
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @param ultiToolsPlugin the plugin instance
+     * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
         this.ultiToolsPlugin = ultiToolsPlugin;
@@ -160,11 +153,6 @@ public abstract class AbstractConfigEntity {
      * comment-writing API. No blank leading element is added (Claude's Discretion, D-07) - it
      * would produce a diff on every regenerated file for a purely cosmetic gain, contrary to
      * D-01's touch-as-little-as-possible posture.
-     * <p>
-     * 把 {@code @ConfigEntry.comment()} 的值按行拆分成一个 {@link List}，每行一个元素，顺序不变，
-     * 供 {@link org.bukkit.configuration.ConfigurationSection} 的注释写入 API 使用。不添加空白的
-     * 首行元素（Claude 自行裁量，D-07）——那样会让每次重新生成的文件都产生一次纯粹为了排版的 diff，
-     * 与 D-01"尽量少碰操作员文件"的立场相悖。
      *
      * @param comment the raw {@code comment()} attribute value, possibly empty
      * @return one element per line, or an empty list if {@code comment} is blank
@@ -179,18 +167,17 @@ public abstract class AbstractConfigEntity {
     /**
      * Updates the properties of the configuration entity.
      * <p>
-     * 更新配置实体的属性。
-     *
-     * <p>
-     * 字段的遍历方式与路径推导必须与 {@code init()} / {@code save()} / {@code reload()} 完全一致，
-     * 否则会出现「写进去了、其实没写」：这四个方法各自遍历 {@code @ConfigEntry} 字段，
-     * 而本方法过去两处都跟它们不一样 ——
-     * 用 {@code getDeclaredFields()} 而非 {@link ReflectionUtil#getFields(Class)}（漏掉父类字段），
-     * 且不把空的 {@code path} 归一到字段名。后者的后果最隐蔽：{@code @ConfigEntry} 不写
-     * {@code path} 是受支持的写法，{@code init}/{@code save} 会按字段名读写它，
-     * {@link #toJsonObject()} 也按字段名把它发给面板，而这里去 JSON 里找空字符串键，
-     * 永远找不到——字段被跳过，随后 {@code config.save} 照常执行，调用方收到成功。
-     *
+     * The field traversal and path-derivation must match {@code init()} / {@code save()} /
+     * {@code reload()} exactly, or a write can silently no-op: all four methods walk
+     * {@code @ConfigEntry} fields, and this method previously diverged from them in two ways --
+     * using {@code getDeclaredFields()} instead of {@link ReflectionUtil#getFields(Class)}
+     * (missing inherited fields), and not normalizing an empty {@code path} to the field name.
+     * The second divergence was the more hidden one: omitting {@code path} on
+     * {@code @ConfigEntry} is a supported style, {@code init}/{@code save} read and write it by
+     * field name, and {@link #toJsonObject()} also sends it to the panel by field name -- but
+     * this method was looking for an empty-string key in the JSON, which never exists, so the
+     * field was silently skipped while {@code config.save} still ran and the caller still
+     * received success.
      * <p>
      * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
      * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
@@ -200,23 +187,13 @@ public abstract class AbstractConfigEntity {
      * restored to the value it held before the call, so memory never disagrees with disk (D-01,
      * D-04). Unlike {@link #reload()}, this entity keeps running after a refusal, so its
      * in-memory state must not be left holding a rejected value.
-     * <p>
-     * 自 6.3.0 起（SILENT-14，收尾 CR-01）本方法会先校验更新后的完整字段状态——与
-     * {@link #init(UltiToolsPlugin)}/{@link #reload()} 已经在用的同一个 {@link #validateFields()}
-     * ——然后才会执行 {@code config.set(...)} 或 {@code config.save(...)}。违规的值会以
-     * {@link ConfigurationException} 拒绝而不是被写入：操作员的文件保持字节级不变，本次调用
-     * 触碰过的每个字段都会被恢复为调用前的值，内存与磁盘不会产生分歧（D-01、D-04）。与
-     * {@link #reload()} 不同，这个实体在拒绝后仍会继续运行，所以内存状态不能停留在被拒绝的值上。
      *
-     * @param jsonObject the JSON object containing the new properties <br> 包含新属性的JSON对象
-     * @throws IOException            if an I/O error occurs <br> 如果发生I/O错误
+     * @param jsonObject the JSON object containing the new properties
+     * @throws IOException            if an I/O error occurs
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a {@code @Range}/
      *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
      *                                 - the file is not written and touched fields are restored
-     *                                 <br> 若更新后的字段状态违反了 {@code @Range}/{@code @NotEmpty}/
-     *                                 {@code @Size}/{@code @Pattern} 约束——文件不会被写入，
-     *                                 被触碰过的字段会被恢复
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         Gson gson = new Gson();
@@ -273,10 +250,8 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Converts the configuration entity to a JSON object.
-     * <p>
-     * 将配置实体转换为JSON对象。
      *
-     * @return the JSON object representation of the configuration entity <br> 配置实体的JSON对象表示
+     * @return the JSON object representation of the configuration entity
      */
     public JsonObject toJsonObject() {
         Gson gson = new Gson();
@@ -293,16 +268,15 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Gets the comments of the configuration entity.
-     * <p>
-     * 获取配置实体的注释。
      *
-     * @return a JSON object containing the comments <br> 包含注释的JSON对象
+     * @return a JSON object containing the comments
      */
     public JsonObject getComments() {
         JsonObject jsonObject = new JsonObject();
-        // 与 updateProperties 同样的两处对齐：走完整字段树、空 path 归一到字段名。
-        // 不归一的话，没写 path 的字段其注释会被塞在 "" 这个键下，而 toJsonObject()
-        // 是按字段名发值的，面板两边对不上，那条注释永远显示不出来。
+        // Same two alignments as updateProperties: walk the full field tree, normalize an empty
+        // path to the field name. Without normalizing, a field with no path would have its
+        // comment filed under the "" key, while toJsonObject() sends values by field name - the
+        // panel's two sides would never match up and that comment would never display.
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {
                 ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
@@ -323,9 +297,6 @@ public abstract class AbstractConfigEntity {
      * A violation refuses this config's module instead of rewriting the value - the operator's
      * file is never modified (D-01). Every violating field is collected and named in a single
      * refusal; the module author must fix the value(s) on disk and restart.
-     * <p>
-     * 验证所有带验证注解的字段。违反约束将拒绝加载该模块，而不是改写字段值——操作员的文件绝不会
-     * 被修改（D-01）。所有违规字段会被收集进同一次拒绝里；需要由服务器操作员修正磁盘上的值后重启。
      *
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if any field violates its validation constraint, or if this
@@ -373,11 +344,6 @@ public abstract class AbstractConfigEntity {
      * value, is what this proves: the framework needs every registered config class to still be
      * buildable through one of its two documented idioms (D-02). Neither resolving is a genuine
      * config-class error (D-03).
-     * <p>
-     * 通过与 {@code ConfigManager.registerAll} 注册期完全相同的两步回退方式构造并丢弃本类的一个
-     * 实例——{@code (String)} 构造函数优先，其次是可访问的无参构造函数。这里证明的是"能否构造"
-     * 而非构造出的值：框架需要确认每个已注册的配置类仍然可以通过两种受支持写法之一构建
-     * （D-02）。两者都无法解析属于真正的配置类错误（D-03）。
      *
      * @throws ConfigurationException if neither constructor resolves
      */
@@ -396,8 +362,6 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Describes the single validation constraint {@code field} violates, if any.
-     * <p>
-     * 描述 {@code field} 违反的单个校验约束（如果有的话）。
      *
      * @param field the field to check, already made accessible
      * @return a violation description naming the field, its actual value (redacted for
@@ -442,19 +406,8 @@ public abstract class AbstractConfigEntity {
      * fail-closed preference. The reason for the widening is new, not cosmetic: before the
      * write-path refusal added by this same 6.3.0 change, a {@code @Pattern} refusal message
      * went only to the local console; now both remote config-write handlers forward it
-     * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaves
+     * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaks
      * the server, not just the console.
-     * <p>
-     * 判断字段名是否形似存放密钥。只有 {@code @Pattern} 违规会回显任意字符串值；
-     * {@code @Range}/{@code @Size} 违规始终只回显数字或长度，{@code @NotEmpty} 违规按定义就是
-     * 空值，两者都不会泄露密钥原文（T-04-04）。
-     * <p>
-     * 6.3.0 起（04-REVIEW.md WR-03）扩展覆盖 {@code key}/{@code auth}/{@code private}/
-     * {@code cert}，接受由此产生的误判（例如仅仅叫 {@code publicKey} 的字段也会被打码）作为
-     * 更安全的默认行为，遵循 Phase 2 D-15 的失败即拒绝取向。这次扩展的原因是新出现的，
-     * 不是装饰性的：在本次 6.3.0 变更新增写路径拒绝之前，{@code @Pattern} 拒绝消息只会留在
-     * 本地控制台；现在两个远程配置写入处理器都会把它原样通过 WebSocket 转发给 UltiPanel
-     * （T-04-56），命名启发式的遗漏泄露的就不只是控制台，而是服务器本身。
      */
     private boolean isSecretShapedFieldName(String fieldName) {
         String lower = fieldName.toLowerCase(Locale.ROOT);
@@ -500,10 +453,8 @@ public abstract class AbstractConfigEntity {
     /**
      * Adds a configuration change listener.
      * The listener will be notified when the configuration is reloaded.
-     * <p>
-     * 添加配置变更监听器。当配置重载时，监听器将被通知。
      *
-     * @param listener the listener to add <br> 要添加的监听器
+     * @param listener the listener to add
      */
     public void addChangeListener(ConfigChangeListener listener) {
         if (listener != null) {
@@ -513,10 +464,8 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Removes a configuration change listener.
-     * <p>
-     * 移除配置变更监听器。
      *
-     * @param listener the listener to remove <br> 要移除的监听器
+     * @param listener the listener to remove
      */
     public void removeChangeListener(ConfigChangeListener listener) {
         changeListeners.remove(listener);
@@ -524,8 +473,6 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Removes all configuration change listeners.
-     * <p>
-     * 移除所有配置变更监听器。
      */
     public void clearChangeListeners() {
         changeListeners.clear();
@@ -533,10 +480,8 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Gets the number of registered change listeners.
-     * <p>
-     * 获取已注册的变更监听器数量。
      *
-     * @return the number of listeners <br> 监听器数量
+     * @return the number of listeners
      */
     public int getChangeListenerCount() {
         return changeListeners.size();
@@ -545,8 +490,6 @@ public abstract class AbstractConfigEntity {
     /**
      * Notifies all registered listeners about the configuration change.
      * Individual listener exceptions do not affect other listeners.
-     * <p>
-     * 通知所有已注册的监听器配置已变更。单个监听器的异常不影响其他监听器。
      */
     protected void notifyChangeListeners() {
         for (ConfigChangeListener listener : changeListeners) {
@@ -561,10 +504,8 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Reloads the configuration from file and notifies all listeners.
-     * <p>
-     * 从文件重新加载配置并通知所有监听器。
      *
-     * @throws IOException if an I/O error occurs <br> 如果发生I/O错误
+     * @throws IOException if an I/O error occurs
      */
     public void reload() throws IOException {
         if (ultiToolsPlugin == null) {

@@ -30,11 +30,6 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * (SILENT-04). Not {@code static}: {@code DataStoreManager} registers exactly one {@code
  * JsonStore} instance, and instance scoping is what stops the cache from outliving a {@code
  * /reload}.
- * <br>
- * Json存储方式抽象类。操作器缓存按（请求方身份，实体类）而非仅按实体类分组——解析到两个不同身份
- * 的调用方（插件路径上的两个插件，或外部 {@code File} 路径上的两个数据文件夹）永远不会共享同一个
- * {@link DataOperator} 实例（SILENT-04）。非 {@code static}：{@code DataStoreManager} 只注册一个
- * {@code JsonStore} 实例，实例级作用域正是防止缓存在 {@code /reload} 后继续存活的原因。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -228,8 +223,8 @@ public class JsonStore implements DataStore {
      * out for the same identity, so a single {@code @Transactional} method's writes across
      * several of that plugin's entities are governed by the same transaction.
      *
-     * @param scope the identity token minted for the caller <br> 为调用方铸造的身份令牌
-     * @return this store's manager for that caller's identity <br> 该调用方身份对应的管理器
+     * @param scope the identity token minted for the caller
+     * @return this store's manager for that caller's identity
      */
     public JsonTransactionManager transactionManagerFor(DataScope scope) {
         return transactionManagerFor(identityOf(scope));

@@ -8,9 +8,6 @@ import java.util.List;
 /**
  * Type parser for Bukkit Enchantment.
  * Supports parsing by name (e.g., "SHARPNESS", "PROTECTION").
- * <p>
- * Bukkit Enchantment 类型解析器。
- * 支持通过名称解析（例如 "SHARPNESS"、"PROTECTION"）。
  *
  * @since 6.2.0
  */

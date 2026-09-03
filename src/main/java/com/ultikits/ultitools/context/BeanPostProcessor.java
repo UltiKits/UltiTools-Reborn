@@ -4,8 +4,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Bean post processor interface to customize bean initialization.
- * <br>
- * Bean后处理器接口，用于自定义Bean初始化。
  */
 @ApiStatus.Internal
 public interface BeanPostProcessor {
@@ -13,12 +11,10 @@ public interface BeanPostProcessor {
     /**
      * Apply this BeanPostProcessor to the given new bean instance before any bean
      * initialization callbacks.
-     * <br>
-     * 在任何Bean初始化回调之前，将此BeanPostProcessor应用于给定的新Bean实例。
      *
-     * @param bean the new bean instance <br> 新的Bean实例
-     * @param beanName the name of the bean <br> Bean的名称
-     * @return the bean instance to use <br> 要使用的Bean实例
+     * @param bean the new bean instance
+     * @param beanName the name of the bean
+     * @return the bean instance to use
      */
     default Object postProcessBeforeInitialization(Object bean, String beanName) {
         return bean;
@@ -27,12 +23,10 @@ public interface BeanPostProcessor {
     /**
      * Apply this BeanPostProcessor to the given new bean instance after any bean
      * initialization callbacks.
-     * <br>
-     * 在任何Bean初始化回调之后，将此BeanPostProcessor应用于给定的新Bean实例。
      *
-     * @param bean the new bean instance <br> 新的Bean实例
-     * @param beanName the name of the bean <br> Bean的名称
-     * @return the bean instance to use <br> 要使用的Bean实例
+     * @param bean the new bean instance
+     * @param beanName the name of the bean
+     * @return the bean instance to use
      */
     default Object postProcessAfterInitialization(Object bean, String beanName) {
         return bean;

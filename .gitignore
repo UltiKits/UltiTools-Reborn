@@ -142,6 +142,7 @@ CLAUDE.md
 secring.gpg
 .claude/settings.local.json
 data.json
+.ultikits/
 
 # Eclipse / JDT
 .classpath

@@ -14,8 +14,6 @@ import static com.ultikits.ultitools.utils.MessageUtils.coloredMsg;
 
 /**
  * Base class for confirmation dialogs with OK and Cancel buttons.
- * <p>
- * 带有确定和取消按钮的确认对话框基类。
  *
  * @author wisdomme
  * @version 2.0.0
@@ -60,8 +58,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     
     /**
      * Sets up the dialog content. Override to add custom content.
-     * <p>
-     * 设置对话框内容。重写以添加自定义内容。
      *
      * @param event the inventory open event
      */
@@ -71,8 +67,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     
     /**
      * Sets up the OK and Cancel buttons.
-     * <p>
-     * 设置确定和取消按钮。
      */
     protected void setupConfirmationButtons() {
         // Cancel button
@@ -87,9 +81,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     /**
      * Creates the OK button.
      * Override to customize.
-     * <p>
-     * 创建确定按钮。
-     * 重写以自定义。
      *
      * @return the OK button icon
      */
@@ -103,9 +94,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     /**
      * Creates the Cancel button.
      * Override to customize.
-     * <p>
-     * 创建取消按钮。
-     * 重写以自定义。
      *
      * @return the Cancel button icon
      */
@@ -119,9 +107,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     /**
      * Gets the OK button display name.
      * Override to customize.
-     * <p>
-     * 获取确定按钮的显示名称。
-     * 重写以自定义。
      *
      * @return the OK button name
      */
@@ -132,9 +117,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     /**
      * Gets the Cancel button display name.
      * Override to customize.
-     * <p>
-     * 获取取消按钮的显示名称。
-     * 重写以自定义。
      *
      * @return the Cancel button name
      */
@@ -144,8 +126,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     
     /**
      * Called when the OK button is clicked.
-     * <p>
-     * 当点击确定按钮时调用。
      *
      * @param event the click event
      */
@@ -154,9 +134,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     /**
      * Called when the Cancel button is clicked.
      * Default implementation does nothing.
-     * <p>
-     * 当点击取消按钮时调用。
-     * 默认实现不做任何事情。
      *
      * @param event the click event
      */
@@ -166,8 +143,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     
     /**
      * Builder for creating confirmation dialogs.
-     * <p>
-     * 用于创建确认对话框的构建器。
      */
     public static class Builder {
         private final Player player;
@@ -266,8 +241,6 @@ public abstract class BaseConfirmationPage extends BaseInventoryPage {
     
     /**
      * Creates a new builder for confirmation dialogs.
-     * <p>
-     * 创建确认对话框的新构建器。
      *
      * @param player the player to show the dialog to
      * @return a new builder

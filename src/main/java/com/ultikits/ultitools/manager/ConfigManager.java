@@ -29,11 +29,9 @@ public class ConfigManager {
 
     /**
      * Register config entity.
-     * <br>
-     * 注册配置实体
      *
-     * @param ultiToolsPlugin UltiTools module <br> UltiTools模块
-     * @param configEntity    Config entity <br> 配置实体
+     * @param ultiToolsPlugin UltiTools module
+     * @param configEntity    Config entity
      */
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
         ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
@@ -74,12 +72,10 @@ public class ConfigManager {
 
     /**
      * Register all config entities in the specified package.
-     * <br>
-     * 注册指定包下的所有配置实体
      *
-     * @param plugin      UltiTools module <br> UltiTools模块
-     * @param packageName Package name <br> 包名
-     * @param classLoader Class loader <br> 类加载器
+     * @param plugin      UltiTools module
+     * @param packageName Package name
+     * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
@@ -109,20 +105,26 @@ public class ConfigManager {
                 // succeeds on the first catch-free path above and never reaches this branch.
                 throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                // GATE-05 group two (08-21): routed to the typed configuration hierarchy. The
+                // only IOException register() itself declares comes from its directory-config
+                // branch's mkdirs() failure -- but that branch is guarded by
+                // "if (file.isDirectory())", which for a not-yet-created directory is always
+                // false (isDirectory() implies exists()), so mkdirs() is never actually reached
+                // via this call chain today. Typed anyway for defense in depth against that
+                // guard being fixed later, and because register()'s own declared "throws
+                // IOException" makes no promise about which branch produced it.
+                throw ConfigurationException.loadFailed(path, e);
             }
         }
     }
 
     /**
      * Get config entity.
-     * <br>
-     * 获取配置实体
      *
-     * @param plugin UltiTools module <br> UltiTools模块
-     * @param type   Config entity type <br> 配置实体类型
-     * @param <T>    Config entity type <br> 配置实体类型
-     * @return Config entity <br> 配置实体
+     * @param plugin UltiTools module
+     * @param type   Config entity type
+     * @param <T>    Config entity type
+     * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, Class<T> type) {
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
@@ -139,14 +141,12 @@ public class ConfigManager {
 
     /**
      * Get config entity by path.
-     * <br>
-     * 通过路径获取配置实体
      *
-     * @param plugin UltiTools module <br> UltiTools模块
-     * @param path   Config entity path <br> 配置实体路径
-     * @param type   Config entity type <br> 配置实体类型
-     * @param <T>    Config entity type <br> 配置实体类型
-     * @return Config entity <br> 配置实体
+     * @param plugin UltiTools module
+     * @param path   Config entity path
+     * @param type   Config entity type
+     * @param <T>    Config entity type
+     * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
@@ -162,13 +162,11 @@ public class ConfigManager {
 
     /**
      * Get all config entities by type.
-     * <br>
-     * 通过类型获取所有配置实体
      *
-     * @param plugin UltiTools module <br> UltiTools模块
-     * @param type   Config entity type <br> 配置实体类型
-     * @param <T>    Config entity type <br> 配置实体类型
-     * @return Config entity list <br> 配置实体列表
+     * @param plugin UltiTools module
+     * @param type   Config entity type
+     * @param <T>    Config entity type
+     * @return Config entity list
      */
     public <T extends AbstractConfigEntity> List<T> getConfigEntities(UltiToolsPlugin plugin, Class<T> type) {
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
@@ -186,11 +184,9 @@ public class ConfigManager {
 
     /**
      * Get all config entities for a plugin.
-     * <br>
-     * 获取插件的所有配置实体
      *
-     * @param plugin UltiTools module <br> UltiTools模块
-     * @return All config entities <br> 所有配置实体
+     * @param plugin UltiTools module
+     * @return All config entities
      */
     public Map<String, AbstractConfigEntity> getAllConfigEntities(UltiToolsPlugin plugin) {
         return pluginConfigMap.get(plugin);
@@ -198,10 +194,8 @@ public class ConfigManager {
 
     /**
      * Reload all configs.
-     * <br>
-     * 重新加载所有配置
      *
-     * @param plugin UltiTools module <br> UltiTools模块
+     * @param plugin UltiTools module
      */
     public void reloadConfigs(UltiToolsPlugin plugin) {
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
@@ -219,8 +213,6 @@ public class ConfigManager {
 
     /**
      * Save all configs.
-     * <br>
-     * 保存所有配置
      */
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
@@ -239,11 +231,9 @@ public class ConfigManager {
 
     /**
      * Builds a JSON string from all config entities using the provided extractor function.
-     * <br>
-     * 使用提供的提取函数从所有配置实体构建JSON字符串
      *
-     * @param extractor function to extract JsonObject from config entity <br> 从配置实体提取JsonObject的函数
-     * @return JSON string <br> JSON字符串
+     * @param extractor function to extract JsonObject from config entity
+     * @return JSON string
      */
     private String buildJsonFromConfigs(Function<AbstractConfigEntity, JsonObject> extractor) {
         Gson gson = new Gson();
@@ -260,10 +250,8 @@ public class ConfigManager {
 
     /**
      * Get all comments.
-     * <br>
-     * 获取所有注释
      *
-     * @return all comments <br> 所有注释
+     * @return all comments
      */
     public final String getComments() {
         return buildJsonFromConfigs(AbstractConfigEntity::getComments);
@@ -271,10 +259,8 @@ public class ConfigManager {
 
     /**
      * Cast config to JSON format.
-     * <br>
-     * 将配置转换为JSON格式
      *
-     * @return config in JSON format <br> JSON格式的配置
+     * @return config in JSON format
      */
     public final String toJson() {
         return buildJsonFromConfigs(AbstractConfigEntity::toJsonObject);
@@ -282,23 +268,17 @@ public class ConfigManager {
 
     /**
      * Load config from JSON string.
-     * <br>
-     * 从JSON字符串加载配置
      *
      * <p>
      * Since 6.3.0, a value violating its {@code @Range}/{@code @NotEmpty}/{@code @Size}/
      * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
      * instead of being written - the operator's file is not modified for that config entity
      * (SILENT-14).
-     * <p>
-     * 自 6.3.0 起，违反 {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} 约束的值
-     * 会以 {@link com.ultikits.ultitools.exceptions.ConfigurationException} 拒绝而不是被写入——
-     * 该配置实体对应的操作员文件不会被修改（SILENT-14）。
      *
-     * @param json JSON string <br> JSON字符串
-     * @throws IOException              if an I/O error occurs <br> 如果发生I/O错误
+     * @param json JSON string
+     * @throws IOException              if an I/O error occurs
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
-     *                                 validation constraint <br> 若某个值违反了校验约束
+     *                                 validation constraint
      */
     public final void loadFromJson(String json) throws IOException {
         Gson gson = new Gson();
@@ -325,34 +305,31 @@ public class ConfigManager {
 
     /**
      * Load a single config file from a JSON string.
-     * <br>
-     * 从JSON字符串加载单个配置文件
      *
-     * <p>{@link #loadFromJson(String)} 接受的是 {@code {插件名: {配置路径: {配置项: 值}}}}
-     * 这样的全量嵌套结构，也就是 {@link #toJson()} 的产物。本方法接受的是最里面那一层
-     * ——某一个配置文件自己的 {@code {配置项: 值}}——由 {@code configFilePath} 指定写到哪。
-     * 面板按文件名下发单个配置时用的是后一种形状，见 issue #236。
+     * <p>{@link #loadFromJson(String)} accepts the full nested structure
+     * {@code {pluginName: {configPath: {key: value}}}} -- the same shape {@link #toJson()}
+     * produces. This method accepts just the innermost layer -- one config file's own
+     * {@code {key: value}} map -- and writes it to whichever file {@code configFilePath}
+     * names. The panel uses this narrower shape when pushing a single config by filename;
+     * see issue #236.
      *
-     * <p>配置路径在单个插件内唯一（{@code pluginConfigMap} 的内层 key 就是它），
-     * 跨插件则可能重名。找不到和命中多个都抛异常而不是静默跳过：
-     * 「调用方以为写了、实际什么也没发生」正是这条链路上原来的毛病。
+     * <p>A config path is unique within a single plugin (it is the inner key of
+     * {@code pluginConfigMap}), but may collide across plugins. Both "not found" and
+     * "matched more than one" throw rather than silently doing nothing -- "the caller
+     * thinks it wrote something and nothing actually happened" was exactly the original
+     * defect on this path.
      *
      * <p>
      * Since 6.3.0, a value violating its {@code @Range}/{@code @NotEmpty}/{@code @Size}/
      * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
      * instead of being written - the operator's file is not modified (SILENT-14).
-     * <p>
-     * 自 6.3.0 起，违反 {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} 约束的值
-     * 会以 {@link com.ultikits.ultitools.exceptions.ConfigurationException} 拒绝而不是被写入——
-     * 操作员的文件不会被修改（SILENT-14）。
      *
      * @param configFilePath config file path as registered, e.g. {@code config/lang.yml}
-     *                       <br> 注册时使用的配置文件路径
-     * @param json           JSON object of that file's entries <br> 该文件配置项的JSON对象
+     * @param json           JSON object of that file's entries
      * @throws IOException if the path is blank, unknown, ambiguous, or the JSON is not an object,
-     *                     or if saving fails <br> 路径为空、找不到、跨插件重名、JSON不是对象或保存失败
+     *                     or if saving fails
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
-     *                                 validation constraint <br> 若某个值违反了校验约束
+     *                                 validation constraint
      * @since 6.2.5
      */
     public final void loadFromJson(String configFilePath, String json) throws IOException {

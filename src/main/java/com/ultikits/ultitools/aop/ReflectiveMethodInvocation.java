@@ -12,6 +12,7 @@ import java.util.concurrent.Callable;
  * @author wisdomme
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // AOP interceptor chain tail invokes the target method -- see 08-GATE05-TRIAGE.md
 public class ReflectiveMethodInvocation implements MethodInvocation {
 
     private final Object target;
@@ -23,8 +24,6 @@ public class ReflectiveMethodInvocation implements MethodInvocation {
 
     /**
      * Creates a new reflective method invocation whose chain tail reflects on the target.
-     * <p>
-     * 创建反射式方法调用，链尾通过反射调用目标方法。
      *
      * @param target       the target object
      * @param method       the method to invoke
@@ -42,9 +41,6 @@ public class ReflectiveMethodInvocation implements MethodInvocation {
      * Inheritance-based proxies must pass a {@code superCall} that invokes
      * {@code super.method()}. Reflecting on the target would re-enter the proxy through
      * virtual dispatch and recurse until the stack overflows.
-     * <p>
-     * 继承式代理必须传入调用 {@code super.method()} 的 {@code superCall}。
-     * 对目标做反射调用会经虚方法分派再次进入代理，导致无限递归。
      *
      * @param target       the target object
      * @param method       the method to invoke

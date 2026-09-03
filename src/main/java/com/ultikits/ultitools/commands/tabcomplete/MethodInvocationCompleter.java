@@ -20,13 +20,12 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Completer that invokes suggestion methods annotated with @CmdSuggest.
- * <p>
- * 调用 @CmdSuggest 注解标注的建议方法的补全器。
  *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes a @CmdParam(suggest=) method -- see 08-GATE05-TRIAGE.md
 public class MethodInvocationCompleter implements TabCompleter {
     
     private static final Logger logger = Logger.getLogger(MethodInvocationCompleter.class.getName());
@@ -65,7 +64,6 @@ public class MethodInvocationCompleter implements TabCompleter {
     
     /**
      * Gets the suggest method name for a parameter.
-     * 获取参数的建议方法名称。
      */
     private String getSuggestName(Method method, String paramName) {
         Annotation[][] parameterAnnotations = method.getParameterAnnotations();
@@ -90,15 +88,12 @@ public class MethodInvocationCompleter implements TabCompleter {
      * completion time -- own class first, then {@code @CmdSuggest}-referenced classes -- without
      * a second, independently-maintained lookup implementation. Neither this method nor {@link
      * #findMethodsByName(Class, String)} reads instance state, so both are {@code static}.
-     * <p>
-     * 从执行器类或 @CmdSuggest 类中按名称获取建议方法。
      *
      * @param executor    the executor instance whose class (and {@code @CmdSuggest}-referenced
-     *                    classes) is searched <br> 要搜索的执行器实例
+     *                    classes) is searched
      * @param suggestName the {@code @CmdParam.suggest()} value, a plain method name (with or
-     *                    without a trailing {@code "()"}) <br> {@code @CmdParam.suggest()} 的值
-     * @return the matching methods, or {@code null} if none found <br> 匹配的方法，未找到则为
-     *         {@code null}
+     *                    without a trailing {@code "()"})
+     * @return the matching methods, or {@code null} if none found
      */
     public static Method[] getSuggestMethodsByName(Object executor, String suggestName) {
         if (executor == null) {
@@ -135,7 +130,6 @@ public class MethodInvocationCompleter implements TabCompleter {
     
     /**
      * Finds methods by name in a class.
-     * 在类中按名称查找方法。
      */
     private static Method[] findMethodsByName(Class<?> clazz, String methodName) {
         // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
@@ -152,7 +146,6 @@ public class MethodInvocationCompleter implements TabCompleter {
     
     /**
      * Invokes the suggest method and returns the results.
-     * 调用建议方法并返回结果。
      */
     @SuppressWarnings("unchecked")
     private List<String> invokeSuggestMethod(TabCompletionContext context, Method suggestMethod) {

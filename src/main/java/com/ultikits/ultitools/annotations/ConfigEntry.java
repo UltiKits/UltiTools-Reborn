@@ -10,8 +10,6 @@ import java.lang.annotation.Target;
 
 /**
  * Config entry annotation.
- * <p>
- * 配置项注解。
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/config-file.html">Configuration</a>
  */
@@ -19,17 +17,17 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigEntry {
     /**
-     * @return config entry path <br> 配置项路径
+     * @return config entry path
      */
     String path() default "";
 
     /**
-     * @return config entry comment <br> 配置项注释
+     * @return config entry comment
      */
     String comment() default "";
 
     /**
-     * @return config entry parser <br> 配置项解析器
+     * @return config entry parser
      * @see DefaultConfigParser
      */
     Class<? extends ConfigParser> parser() default DefaultConfigParser.class;

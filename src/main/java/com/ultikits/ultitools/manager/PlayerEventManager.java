@@ -19,54 +19,63 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * 玩家事件管理器
- * 处理玩家相关事件的WebSocket消息
+ * Player event manager.
+ * Handles WebSocket messages for player-related events.
  */
 @SuppressWarnings("deprecation")
 @ApiStatus.Internal
 public class PlayerEventManager implements Listener {
     /**
-     * 必须 volatile。写在 WebSocket 的 onOpen 线程上（{@link #initialize}），读在 Bukkit 主线程上
-     * （三个事件处理器）。只给写方加 {@code synchronized} 不构成发布——读方从不获取同一把监视器，
-     * 两边之间没有 happens-before 边。
+     * Must be volatile. Written on the WebSocket's onOpen thread ({@link #initialize}), read on
+     * the Bukkit main thread (the three event handlers). Adding {@code synchronized} only to the
+     * writer does not establish publication -- the reader never acquires the same monitor, so
+     * there is no happens-before edge between the two sides.
      * <p>
-     * 这一点在加幂等守卫之前是<b>被意外掩盖</b>的：那时每次 {@code initialize} 都会调
-     * {@code registerEvents}，而 Bukkit 注册监听器会写 {@code HandlerList} 的 volatile 字段，
-     * 事件分发再读它，于是本字段的写被顺带发布了出去。守卫跳过注册之后这条捎带链就断了，
-     * 重连后处理器可能一直看着旧的、已断开的客户端，玩家事件被静默丢弃。见 PR #264 的评审。
+     * This was <b>accidentally masked</b> before the idempotency guard was added: back then
+     * every {@code initialize} call also called {@code registerEvents}, and Bukkit's own
+     * listener registration writes a volatile field on {@code HandlerList}, which event dispatch
+     * then reads -- so this field's write got piggybacked out for free. Once the guard started
+     * skipping registration, that piggyback chain broke: after a reconnect, the handler could
+     * keep looking at the old, already-disconnected client, and player events would be silently
+     * dropped. See the PR #264 review.
      */
     private volatile UltiPanelWebSocketClient webSocketClient;
 
     /**
-     * 是否已经把自己挂进 Bukkit 事件系统。
+     * Whether this instance has already hooked itself into the Bukkit event system.
      * <p>
-     * {@link #initialize(UltiPanelWebSocketClient)} 由 {@code initializeManagers()} 调用，而后者挂在
-     * WebSocket 的 {@code onConnectHandler} 上——<b>每次 onOpen 都会跑一遍</b>。没有这个守卫的话，
-     * 断线重连 N 次就会注册 N 份监听器，同一个玩家事件被发 N 遍。见 issue #180。
+     * {@link #initialize(UltiPanelWebSocketClient)} is called by {@code initializeManagers()},
+     * which is itself hung on the WebSocket's {@code onConnectHandler} -- <b>it runs on every
+     * single onOpen</b>. Without this guard, N disconnect-reconnect cycles would register N
+     * copies of the listener, and the same player event would be sent out N times. See issue #180.
      */
     private volatile boolean listenerRegistered = false;
 
     /**
-     * 初始化玩家事件管理器
+     * Initializes the player event manager.
      * <p>
-     * 整个方法与 {@link #shutdown()} 互斥。只让 {@code registerEvents} 单独同步是不够的：
-     * 「赋值客户端」与「注册监听器」之间会留下一个窗口，logout 恰好挤进去的话，
-     * {@code shutdown()} 摘掉的监听器会被紧随其后的 {@code registerEvents} 又装回去，
-     * 于是 {@code disableCloud()} 之后 {@code listenerRegistered} 仍为 true。见 PR #264 的评审。
+     * The whole method is mutually exclusive with {@link #shutdown()}. Synchronizing only {@code
+     * registerEvents} on its own is not enough: a window would be left between "assign the
+     * client" and "register the listener", and if a logout happens to land exactly in that
+     * window, the listener {@code shutdown()} just detached would get reinstalled by the {@code
+     * registerEvents} that follows right behind it -- leaving {@code listenerRegistered} true
+     * even after {@code disableCloud()}. See the PR #264 review.
      *
-     * @param client WebSocket客户端
+     * @param client the WebSocket client
      */
     public synchronized void initialize(UltiPanelWebSocketClient client) {
-        // 客户端每次重连都是新造的实例（见 PluginInitiationUtils.getPanelWebsocketClient），
-        // 所以引用要无条件更新；只有注册动作是幂等的。
+        // The client is a freshly constructed instance on every reconnect (see
+        // PluginInitiationUtils.getPanelWebsocketClient), so the reference must be updated
+        // unconditionally; only the registration action itself is idempotent.
         this.webSocketClient = client;
         registerEvents();
     }
 
     /**
-     * 幂等地注册事件监听器：已注册过就直接返回。
+     * Idempotently registers the event listener: returns immediately if already registered.
      * <p>
-     * 调用方必须已持有本对象的监视器锁（目前唯一调用方是 {@link #initialize}）。
+     * The caller must already hold this object's monitor lock (currently the only caller is
+     * {@link #initialize}).
      */
     private synchronized void registerEvents() {
         if (listenerRegistered) {
@@ -83,11 +92,13 @@ public class PlayerEventManager implements Listener {
     }
 
     /**
-     * 注销事件监听器并断开与客户端的关联。
+     * Unregisters the event listener and detaches the association with the client.
      * <p>
-     * 由 {@code PluginInitiationUtils.disableCloud()} 调用——即 {@code /ulticloud logout} 之后。
-     * 注意与「断线重连」区分：那种断开之后 {@code initialize} 还会被调回来，注销了反而要重注册；
-     * 这里处理的是「云功能被显式关掉」，监听器应当真的摘掉。
+     * Called by {@code PluginInitiationUtils.disableCloud()} -- i.e. after {@code /ulticloud
+     * logout}. Distinct from a "disconnect-and-reconnect": in that case {@code initialize} gets
+     * called back afterward, so unregistering would just mean re-registering again; this method
+     * handles the case where the cloud feature was explicitly turned off, and the listener
+     * should genuinely be detached.
      */
     public synchronized void shutdown() {
         HandlerList.unregisterAll(this);
@@ -95,25 +106,26 @@ public class PlayerEventManager implements Listener {
         this.webSocketClient = null;
     }
 
-    /** 供测试断言幂等守卫的状态。 */
+    /** Lets tests assert the idempotency guard's state. */
     boolean isListenerRegistered() {
         return listenerRegistered;
     }
 
     /**
-     * 处理玩家加入事件
+     * Handles the player-join event.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
-        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
-        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
-        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
         UltiPanelWebSocketClient client = webSocketClient;
         if (client == null || !client.isConnected()) {
             return;
         }
-        
+
         Player player = event.getPlayer();
         JsonObject data = new JsonObject();
         data.addProperty("event_type", "player_join");
@@ -121,30 +133,31 @@ public class PlayerEventManager implements Listener {
         data.addProperty("player_uuid", player.getUniqueId().toString());
         data.addProperty("join_message", event.getJoinMessage());
         data.addProperty("online_count", Bukkit.getOnlinePlayers().size());
-        
+
         sendPlayerEvent(client, data);
-        
-        // 同时发送日志流消息
+
+        // Also send a log-stream message
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
             "玩家加入", player.getName(), 
             String.format("玩家加入服务器，当前在线: %d人", Bukkit.getOnlinePlayers().size())
         );
     }
-    
+
     /**
-     * 处理玩家退出事件
+     * Handles the player-quit event.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
-        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
-        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
-        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
         UltiPanelWebSocketClient client = webSocketClient;
         if (client == null || !client.isConnected()) {
             return;
         }
-        
+
         Player player = event.getPlayer();
         JsonObject data = new JsonObject();
         data.addProperty("event_type", "player_quit");
@@ -152,30 +165,31 @@ public class PlayerEventManager implements Listener {
         data.addProperty("player_uuid", player.getUniqueId().toString());
         data.addProperty("quit_message", event.getQuitMessage());
         data.addProperty("online_count", Math.max(0, Bukkit.getOnlinePlayers().size() - 1));
-        
+
         sendPlayerEvent(client, data);
-        
-        // 同时发送日志流消息
+
+        // Also send a log-stream message
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
             "玩家退出", player.getName(),
             String.format("玩家离开服务器，当前在线: %d人", Math.max(0, Bukkit.getOnlinePlayers().size() - 1))
         );
     }
-    
+
     /**
-     * 处理玩家聊天事件
+     * Handles the player-chat event.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChat(PlayerChatEvent event) {
-        // 单次读进局部变量，全程用同一个引用。字段是 volatile，检查与发送之间
-        // shutdown() 完全可以从另一条线程把它置空——重连预算耗尽时 disableCloud()
-        // 就跑在 WebSocket 线程上，而本方法跑在 Bukkit 主线程。
-        // HandlerList.unregisterAll() 只拦得住未来的派发，拦不住已经在栈上的这一次。
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
         UltiPanelWebSocketClient client = webSocketClient;
         if (client == null || !client.isConnected()) {
             return;
         }
-        
+
         Player player = event.getPlayer();
         JsonObject data = new JsonObject();
         data.addProperty("event_type", "player_chat");
@@ -183,26 +197,28 @@ public class PlayerEventManager implements Listener {
         data.addProperty("player_uuid", player.getUniqueId().toString());
         data.addProperty("message", event.getMessage());
         data.addProperty("format", event.getFormat());
-        
+
         sendPlayerEvent(client, data);
-        
-        // 同时发送日志流消息（聊天消息通常比较频繁，使用debug级别）
+
+        // Also send a log-stream message (chat messages are usually frequent, use debug level)
         UltiTools.getInstance().getLogStreamManager().sendCustomLog(
             "debug",
             String.format("[聊天] <%s> %s", player.getName(), event.getMessage()),
             "plugin:UltiTools"
         );
     }
-    
+
     /**
-     * 发送玩家事件到UltiPanel
+     * Sends a player event to UltiPanel.
      * <p>
-     * 客户端由调用方传入，而不是在这里重新读 {@link #webSocketClient}：三个事件处理器各自
-     * 把那个 volatile 字段单次读进局部变量再一路传下来。否则「检查连接」与「真正发送」读到
-     * 的会是两个不同的值——{@code shutdown()} 恰好挤在中间的话，这里就是一个 NPE。
+     * The client is passed in by the caller rather than re-reading {@link #webSocketClient}
+     * here: each of the three event handlers reads that volatile field into a local variable
+     * once and threads it through from there. Otherwise "check the connection" and "actually
+     * send" could read two different values -- if {@code shutdown()} happens to land in between,
+     * this would be an NPE.
      *
-     * @param client 事件处理器进入时读到的那个客户端
-     * @param data 事件数据
+     * @param client the client the event handler read on entry
+     * @param data the event data
      */
     private void sendPlayerEvent(UltiPanelWebSocketClient client, JsonObject data) {
         JsonObject message = new JsonObject();
@@ -213,16 +229,17 @@ public class PlayerEventManager implements Listener {
 
         client.sendMessage(message);
     }
-    
+
     /**
-     * 获取服务器ID
+     * Gets the server ID.
      * <p>
-     * 取建连时交给客户端的那份 UUID（即 {@code CommonUtils.getUltiToolsUUID()}，见
-     * {@code PluginInitiationUtils.getPanelWebsocketClient}），与所有兄弟 manager 一致。
-     * 在 #180 之前这里返回的是一个写死的占位字符串，意味着全球每台服务器发出的
-     * {@code player_event} 都自称同一身份，面板侧无法路由。
+     * Takes the UUID handed to the client at connect time (i.e. {@code
+     * CommonUtils.getUltiToolsUUID()}, see {@code PluginInitiationUtils.getPanelWebsocketClient}),
+     * consistent with every sibling manager. Before #180, this returned a hardcoded placeholder
+     * string, meaning every server worldwide sent out its {@code player_event} claiming the same
+     * identity, and the panel side had no way to route them.
      *
-     * @return 服务器ID
+     * @return the server ID
      */
     private String getServerId(UltiPanelWebSocketClient client) {
         return client == null ? "unknown" : client.getServerId();

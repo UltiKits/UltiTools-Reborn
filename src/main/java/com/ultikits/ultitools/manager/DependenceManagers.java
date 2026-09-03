@@ -17,8 +17,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Dependence managers.
- * <br>
- * 依赖管理器。
  */
 @ApiStatus.Internal
 public class DependenceManagers {
@@ -39,10 +37,8 @@ public class DependenceManagers {
 
     /**
      * Initialize adventure.
-     * <br>
-     * 初始化adventure。
      *
-     * @param plugin plugin instance <br> 插件实例
+     * @param plugin plugin instance
      */
     public void initAdventure(UltiTools plugin) {
         adventure = BukkitAudiences.create(plugin);
@@ -50,10 +46,8 @@ public class DependenceManagers {
 
     /**
      * Initialize inventory API.
-     * <br>
-     * 初始化inventoryAPI。
      *
-     * @param plugin plugin instance <br> 插件实例
+     * @param plugin plugin instance
      */
     public void initInventoryAPI(UltiTools plugin) {
         new InventoryAPI(plugin).init();
@@ -61,8 +55,6 @@ public class DependenceManagers {
 
     /**
      * Initialize core services provided by UltiTools-API.
-     * <br>
-     * 初始化UltiTools-API提供的核心服务。
      */
     private void initCoreServices() {
         // Register TeleportService
@@ -83,10 +75,8 @@ public class DependenceManagers {
 
     /**
      * Get version comparator.
-     * <br>
-     * 获取版本比较器。
      *
-     * @return version comparator / 版本比较器
+     * @return version comparator
      */
     public java.util.Comparator<String> getVersionComparator() {
         return VersionComparatorUtil.COMPARATOR;
@@ -94,8 +84,6 @@ public class DependenceManagers {
 
     /**
      * Close adventure.
-     * <br>
-     * 关闭adventure。
      */
     public void closeAdventure() {
         if (adventure != null) {
@@ -105,8 +93,6 @@ public class DependenceManagers {
 
     /**
      * Close context.
-     * <br>
-     * 关闭容器上下文。
      */
     public void closeContext() {
         if (context != null) {

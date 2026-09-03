@@ -27,8 +27,6 @@ package com.ultikits.ultitools.aop;
  * Extracted from a private copy inside {@link ProxyFactory}'s {@code InterceptorDispatcher} so both
  * call sites share one implementation - a second, independently-maintained copy is the exact class
  * of defect this milestone exists to close (one rule, implemented twice, silently diverging).
- * <p>
- * 唯一的、可安全传播受检异常的重新抛出工具，供本包内两处反向调用点共用，避免同一机制被实现两次。
  *
  * @author wisdomme
  * @since 6.3.0

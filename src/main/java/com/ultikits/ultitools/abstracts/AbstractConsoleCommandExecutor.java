@@ -10,18 +10,16 @@ import com.ultikits.ultitools.UltiTools;
 
 /**
  * Abstract class representing a console command executor.
- * <p>
- * 控制台指令执行器的抽象类。
  *
  * @see CommandExecutor
  */
 public abstract class AbstractConsoleCommandExecutor extends AbstractCommand {
     /**
-     * @param commandSender the sender of the command <br> 指令发送者
-     * @param command       the command which was executed <br> 被执行的指令
-     * @param s             the alias of the command which was used <br> 被使用的指令别名
-     * @param strings       the arguments passed to the command, split by spaces <br> 通过空格分割的指令参数
-     * @return whether the command was executed successfully <br> 指令是否执行成功
+     * @param commandSender the sender of the command
+     * @param command       the command which was executed
+     * @param s             the alias of the command which was used
+     * @param strings       the arguments passed to the command, split by spaces
+     * @return whether the command was executed successfully
      * @see CommandExecutor#onCommand(CommandSender, Command, String, String[])
      */
     @Override
@@ -46,13 +44,11 @@ public abstract class AbstractConsoleCommandExecutor extends AbstractCommand {
 
     /**
      * Executes the given command, returning its success
-     * <p>
-     * 执行给定的指令，返回是否成功
      *
-     * @param commandSender the sender of the command <br> 指令发送者
-     * @param command       the command which was executed <br> 被执行的指令
-     * @param strings       the arguments passed to the command, split by spaces <br> 通过空格分割的指令参数
-     * @return whether the command was executed successfully <br> 指令是否执行成功
+     * @param commandSender the sender of the command
+     * @param command       the command which was executed
+     * @param strings       the arguments passed to the command, split by spaces
+     * @return whether the command was executed successfully
      */
     protected abstract boolean onConsoleCommand(CommandSender commandSender, Command command, String[] strings);
 

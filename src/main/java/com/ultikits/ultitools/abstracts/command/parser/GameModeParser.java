@@ -8,9 +8,6 @@ import org.bukkit.GameMode;
 /**
  * Type parser for Bukkit GameMode.
  * Supports parsing by name (SURVIVAL, CREATIVE, etc.) or number (0, 1, 2, 3).
- * <p>
- * Bukkit GameMode 类型解析器。
- * 支持通过名称（SURVIVAL、CREATIVE等）或数字（0、1、2、3）解析。
  *
  * @since 6.2.0
  */

@@ -13,22 +13,23 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * GuiRenderer 负责协调 Widget 树的构建、diff 和 Inventory 更新。
+ * GuiRenderer is responsible for coordinating Widget tree construction, diffing, and Inventory
+ * updates.
  * <p>
- * 它是声明式框架的核心引擎，主要职责：
+ * It is the declarative framework's core engine, with the main responsibilities of:
  * <ul>
- * <li>管理 Element 树的生命周期</li>
- * <li>调度重建（支持帧合并）</li>
- * <li>执行 diff 算法</li>
- * <li>应用变更到实际 Inventory</li>
+ * <li>managing the Element tree's lifecycle</li>
+ * <li>scheduling rebuilds (with frame coalescing)</li>
+ * <li>running the diff algorithm</li>
+ * <li>applying changes to the actual Inventory</li>
  * </ul>
  *
- * <p><strong>工作流程：</strong></p>
- * 
+ * <p><strong>Workflow:</strong></p>
+ *
  * <pre>
- * 1. 初始化：createRootElement → build RenderNode 树
- * 2. 渲染：diff → apply to Inventory
- * 3. 更新：setState → scheduleBuild → rebuild → diff → apply
+ * 1. Initialize: createRootElement → build the RenderNode tree
+ * 2. Render: diff → apply to Inventory
+ * 3. Update: setState → scheduleBuild → rebuild → diff → apply
  * </pre>
  *
  * @author UltiTools Team
@@ -51,27 +52,28 @@ public class GuiRenderer {
     @Nullable
     private BuildContext rootContext;
 
-    // 槽位到点击处理器的映射——键是"顶部 GUI 内的槽位索引"，与 handleClick() 里
-    // event.getRawSlot() 越界检查通过后使用的键是同一个空间（D-09 item 4）。这是槽位归属的
-    // 唯一记录：不存在第二份用 event.getSlot() 直接查、可能与这里漂移的映射。
+    // Slot-to-click-handler mapping -- the key is "slot index within the top GUI", the same
+    // space used by the key handleClick() looks up once event.getRawSlot()'s bounds check
+    // passes (D-09 item 4). This is the sole record of slot ownership: there is no second
+    // mapping that looks things up via event.getSlot() directly and could drift from this one.
     private final Map<Integer, Consumer<InventoryClickEvent>> clickHandlers = new HashMap<>();
 
     /**
-     * 创建 GuiRenderer。
+     * Creates a GuiRenderer.
      *
-     * @param gui    关联的 Gui 实例
-     * @param player 玩家
+     * @param gui    the associated Gui instance
+     * @param player the player
      */
     public GuiRenderer(@NotNull Gui gui, @NotNull Player player) {
         this(gui, player, new GuiScheduler());
     }
 
     /**
-     * 创建 GuiRenderer，指定调度器。
+     * Creates a GuiRenderer with the given scheduler.
      *
-     * @param gui       关联的 Gui 实例
-     * @param player    玩家
-     * @param scheduler 调度器
+     * @param gui       the associated Gui instance
+     * @param player    the player
+     * @param scheduler the scheduler
      */
     public GuiRenderer(@NotNull Gui gui, @NotNull Player player, @NotNull GuiScheduler scheduler) {
         this.gui = gui;
@@ -81,16 +83,18 @@ public class GuiRenderer {
     }
 
     /**
-     * 初始化渲染器。
+     * Initializes the renderer.
      * <p>
-     * D-09 item 1：不再接受一次性构建好的 Widget，而是接受一个 {@link Supplier}，
-     * 在每一帧的开头重新调用它，从当前状态重新派生 Widget 树——这是
-     * {@code UI = f(state)} 这句框架宣言第一次真正成立的地方。根 Element 的创建被
-     * 推迟到第一次 {@link #performBuild()} 内部完成，这样 supplier 在首帧也只会被
-     * 调用一次，而不是这里调一次、performBuild() 里再调一次。
+     * D-09 item 1: no longer accepts a Widget built once up front; instead it accepts a
+     * {@link Supplier} that is called again at the start of every frame, re-deriving the Widget
+     * tree from the current state -- this is where the framework's {@code UI = f(state)} tagline
+     * first actually holds. Creating the root Element is deferred until inside the first
+     * {@link #performBuild()} call, so the supplier is called exactly once on the first frame too,
+     * rather than once here and again inside performBuild().
      *
-     * @param widgetSupplier 每帧重新求值的 Widget 树来源
-     * @param context        构建上下文（根 Element 使用；后续帧的重建/重新挂载复用同一个）
+     * @param widgetSupplier the source re-evaluated every frame to produce the Widget tree
+     * @param context        the build context (used for the root Element; later frames' rebuilds
+     *                       and remounts reuse the same one)
      */
     public void initialize(@NotNull Supplier<Widget> widgetSupplier, @NotNull BuildContext context) {
         this.widgetSupplier = widgetSupplier;
@@ -99,20 +103,21 @@ public class GuiRenderer {
     }
 
     /**
-     * 调度重建。
+     * Schedules a rebuild.
      * <p>
-     * 使用帧合并机制，短时间内的多次调用只会触发一次重建。
+     * Uses frame coalescing, so multiple calls within a short window trigger only one rebuild.
      */
     public void scheduleBuild() {
         scheduler.scheduleFrame(this::performBuild);
     }
 
     /**
-     * 立即执行重建（必须在主线程调用）。
+     * Runs a rebuild immediately (must be called on the main thread).
      * <p>
-     * D-09 item 1：每一帧的开头都会重新调用 {@link #widgetSupplier}，把结果喂给
-     * 已挂载的根 Element（{@link Element#update}，其基类实现现在会标记 dirty——见
-     * D-09 item 2），而不是只在 {@link #initialize} 时构建一次、之后再也不重新派生。
+     * D-09 item 1: {@link #widgetSupplier} is called again at the start of every frame, and its
+     * result is fed to the already-mounted root Element ({@link Element#update}, whose base-class
+     * implementation now marks it dirty -- see D-09 item 2), rather than being built once at
+     * {@link #initialize} time and never re-derived again.
      */
     private void performBuild() {
         if (!scheduler.isOnMainThread()) {
@@ -124,7 +129,7 @@ public class GuiRenderer {
             return;
         }
 
-        // 重新从当前状态派生 Widget 树——每帧恰好调用一次
+        // Re-derive the Widget tree from the current state -- called exactly once per frame
         Widget widget = widgetSupplier.get();
 
         if (rootElement == null) {
@@ -132,39 +137,41 @@ public class GuiRenderer {
         } else if (rootElement.canUpdate(widget)) {
             rootElement.update(widget);
         } else {
-            // supplier 返回了与已挂载根类型不兼容的 Widget（T-05-52）：显式重新挂载，
-            // 不能让 Element.update() 的 IllegalArgumentException 逃逸到被调度的帧里，
-            // 那会把 Inventory 半途写坏。
+            // The supplier returned a Widget incompatible with the mounted root's type
+            // (T-05-52): remount explicitly. Element.update()'s IllegalArgumentException must
+            // not be allowed to escape into the scheduled frame, which would leave the
+            // Inventory half-written.
             rootElement.unmount();
             mountRoot(widget);
         }
 
-        // 重建 Element 树（仅重建 dirty 的子树）
+        // Rebuild the Element tree (only the dirty subtrees are rebuilt)
         rebuildElement(rootElement);
 
-        // 收集 RenderNode——快照，而不是活引用，见 collectRenderNodesRecursive
+        // Collect RenderNodes -- a snapshot, not a live reference; see collectRenderNodesRecursive
         List<RenderNode> newRenderNodes = collectRenderNodes(rootElement);
 
         // Diff
         List<RenderNode> oldNodes = lastRenderNodes != null ? lastRenderNodes : Collections.emptyList();
         DiffResult diffResult = differ.diff(oldNodes, newRenderNodes);
 
-        // 应用变更
+        // Apply the changes
         applyDiff(diffResult);
 
-        // 保存当前状态（快照，不会被下一帧对活 RenderNode 的原地修改追溯性改变）
+        // Save the current state (a snapshot -- not retroactively changed by the next frame's
+        // in-place mutation of the live RenderNodes)
         lastRenderNodes = newRenderNodes;
 
-        // 更新点击处理器
+        // Update the click handlers
         updateClickHandlers(newRenderNodes);
     }
 
     /**
-     * 创建并挂载根 Element。
+     * Creates and mounts the root Element.
      * <p>
-     * 供首次构建与"supplier 返回了不兼容类型"两种情况共用。
+     * Shared by both the first build and the "supplier returned an incompatible type" case.
      *
-     * @param widget 根 Widget
+     * @param widget the root Widget
      */
     private void mountRoot(@NotNull Widget widget) {
         BuildContext context = Objects.requireNonNull(rootContext,
@@ -182,9 +189,9 @@ public class GuiRenderer {
     }
 
     /**
-     * 递归重建 Element 树。
+     * Recursively rebuilds the Element tree.
      *
-     * @param element 要重建的 Element
+     * @param element the Element to rebuild
      */
     private void rebuildElement(@NotNull Element element) {
         if (element.isDirty()) {
@@ -197,10 +204,10 @@ public class GuiRenderer {
     }
 
     /**
-     * 收集所有 RenderNode（后序遍历）。
+     * Collects every RenderNode (post-order traversal).
      *
-     * @param element 根 Element
-     * @return RenderNode 列表
+     * @param element the root Element
+     * @return the list of RenderNodes
      */
     @NotNull
     private List<RenderNode> collectRenderNodes(@NotNull Element element) {
@@ -210,19 +217,21 @@ public class GuiRenderer {
     }
 
     private void collectRenderNodesRecursive(@NotNull Element element, @NotNull List<RenderNode> nodes) {
-        // 先收集子节点
+        // Collect the children first
         for (Element child : element.getChildren()) {
             collectRenderNodesRecursive(child, nodes);
         }
 
-        // 如果是 RenderObjectElement，收集其 RenderNode 的快照
+        // If this is a RenderObjectElement, collect a snapshot of its RenderNode
         //
-        // D-09 item 3：getRenderNode() 对同一个 Element 永远返回同一个实例
-        // （RenderObjectElement 只在第一次访问时创建它，此后原地修改）。如果这里直接
-        // 把这个活引用塞进 lastRenderNodes，下一帧 RenderNodeDiffer.diff() 拿到的
-        // “旧节点”和“新节点”会是同一个对象——比较永远等于自身，diff 永远看不到变化。
-        // .copy()（RenderNode.java 里早就写好、此前零调用方的方法）在这里把这次帧的
-        // 状态拍成快照，后续帧对活节点的原地修改不会追溯性地改写这份快照。
+        // D-09 item 3: getRenderNode() always returns the same instance for a given Element
+        // (RenderObjectElement only creates it on first access, and mutates it in place after
+        // that). If this live reference were stuffed directly into lastRenderNodes, the "old
+        // node" and "new node" RenderNodeDiffer.diff() sees on the next frame would be the same
+        // object -- a comparison that is always equal to itself, so the diff would never see any
+        // change. .copy() (a method already written in RenderNode.java, previously with zero
+        // callers) snapshots this frame's state here, so a later frame's in-place mutation of the
+        // live node cannot retroactively rewrite this snapshot.
         if (element instanceof RenderObjectElement) {
             RenderNode node = ((RenderObjectElement) element).getRenderNode();
             if (node != null) {
@@ -232,45 +241,45 @@ public class GuiRenderer {
     }
 
     /**
-     * 应用 diff 结果到 Inventory。
+     * Applies the diff result to the Inventory.
      *
-     * @param diffResult diff 结果
+     * @param diffResult the diff result
      */
     private void applyDiff(@NotNull DiffResult diffResult) {
         if (diffResult.isEmpty()) {
             return;
         }
 
-        // 1. 处理删除
+        // 1. Handle removals
         for (RenderNode removed : diffResult.getRemoved()) {
             clearSlot(removed.getSlotIndex());
         }
 
-        // 2. 处理移动（先清除原位置）
+        // 2. Handle moves (clear the original position first)
         for (DiffResult.RenderNodeMove move : diffResult.getMoved()) {
             clearSlot(move.getFromSlot());
         }
 
-        // 3. 处理新增
+        // 3. Handle additions
         for (RenderNode added : diffResult.getAdded()) {
             setSlot(added.getSlotIndex(), added.getIcon());
         }
 
-        // 4. 处理更新
+        // 4. Handle updates
         for (DiffResult.RenderNodeUpdate update : diffResult.getUpdated()) {
             setSlot(update.getSlotIndex(), update.getNewNode().getIcon());
         }
 
-        // 5. 处理移动（设置新位置）
+        // 5. Handle moves (set the new position)
         for (DiffResult.RenderNodeMove move : diffResult.getMoved()) {
             setSlot(move.getToSlot(), move.getNode().getIcon());
         }
     }
 
     /**
-     * 更新点击处理器映射。
+     * Updates the click-handler mapping.
      *
-     * @param renderNodes 当前的 RenderNode 列表
+     * @param renderNodes the current list of RenderNodes
      */
     private void updateClickHandlers(@NotNull List<RenderNode> renderNodes) {
         clickHandlers.clear();
@@ -283,33 +292,38 @@ public class GuiRenderer {
     }
 
     /**
-     * 处理点击事件。
+     * Handles a click event.
      * <p>
-     * D-09 item 4：obliviate-invs 的 {@code InvListener.onClick} 在应用它自己的
-     * {@code getRawSlot()} 判断之前，就无条件调用了 {@code Gui.onClick(event)}（即
-     * {@link DeclarativeGui#onClick}，它转发到这里）——这是从 jar 的字节码里确认的，不是推测。
-     * 也就是说这个方法会看到<b>每一次</b>点击，包括玩家点击自己背包的情形，不能假设库已经
-     * 帮忙过滤过了。
+     * D-09 item 4: obliviate-invs' {@code InvListener.onClick} unconditionally calls
+     * {@code Gui.onClick(event)} (i.e. {@link DeclarativeGui#onClick}, which forwards here)
+     * before applying its own {@code getRawSlot()} check -- this was confirmed from the jar's
+     * bytecode, not assumed. That means this method sees <b>every</b> click, including the
+     * player clicking their own inventory; it cannot assume the library has already filtered
+     * anything out.
      * <p>
-     * 这里使用 {@link InventoryClickEvent#getRawSlot()} 而不是 {@link InventoryClickEvent#getSlot()}
-     * 做越界检查：{@code getRawSlot()} 是相对于整个组合视图（顶部 GUI + 玩家背包）的绝对索引，
-     * 顶部 GUI 占据 {@code [0, gui.getSize())}，玩家自己的背包则从 {@code gui.getSize()} 开始；
-     * 而 {@code getSlot()} 是相对于"被点击的那个 Inventory"各自独立编号的——顶部 GUI 和玩家背包
-     * 会各自从 0 开始计数，于是同一个数值（比如 4）可能同时是 GUI 的第 4 格、也是玩家背包的第 4
-     * 格。点击窗口外部（比如把物品丢在窗口外）时，Bukkit 报告的 rawSlot 是 -999，同样会被这里
-     * 的越界检查拒绝，不会抛异常。
+     * This uses {@link InventoryClickEvent#getRawSlot()} rather than
+     * {@link InventoryClickEvent#getSlot()} for the bounds check: {@code getRawSlot()} is an
+     * absolute index relative to the whole combined view (top GUI + player inventory) -- the top
+     * GUI occupies {@code [0, gui.getSize())} and the player's own inventory starts at
+     * {@code gui.getSize()} -- whereas {@code getSlot()} is numbered independently relative to
+     * "whichever Inventory was clicked": the top GUI and the player inventory each count from 0
+     * on their own, so the same value (say, 4) could be both the GUI's 4th slot and the player
+     * inventory's 4th slot. Clicking outside the window entirely (e.g. dropping an item outside
+     * it) makes Bukkit report a rawSlot of -999, which this same bounds check also rejects
+     * without throwing.
      * <p>
-     * {@link #clickHandlers} 是这次点击路由的唯一记录——它由 {@link #updateClickHandlers} 用
-     * {@code RenderNode.getSlotIndex()}（同一个"顶部 GUI 内的槽位"编号空间）填充，这里用同一个
-     * 空间去查，不存在第二份可能漂移的记录。
+     * {@link #clickHandlers} is the sole record of this click routing -- it is populated by
+     * {@link #updateClickHandlers} using {@code RenderNode.getSlotIndex()} (the same "slot within
+     * the top GUI" numbering space), and this method looks things up in that same space; there is
+     * no second record that could drift from it.
      *
-     * @param event 点击事件
+     * @param event the click event
      */
     public void handleClick(@NotNull InventoryClickEvent event) {
         int rawSlot = event.getRawSlot();
         if (rawSlot < 0 || rawSlot >= gui.getSize()) {
-            // 越界：玩家点击了自己的背包，或者点在了整个窗口外面（rawSlot == -999）。
-            // 两种情况都不派发，也不抛异常。
+            // Out of bounds: the player clicked their own inventory, or clicked entirely outside
+            // the window (rawSlot == -999). Neither case is dispatched, and neither throws.
             return;
         }
 
@@ -320,10 +334,10 @@ public class GuiRenderer {
     }
 
     /**
-     * 设置槽位内容。
+     * Sets a slot's content.
      *
-     * @param slot 槽位索引
-     * @param icon 图标
+     * @param slot the slot index
+     * @param icon the icon
      */
     private void setSlot(int slot, @Nullable Icon icon) {
         if (slot < 0 || slot >= gui.getSize()) {
@@ -335,20 +349,20 @@ public class GuiRenderer {
     }
 
     /**
-     * 清空槽位。
+     * Clears a slot.
      *
-     * @param slot 槽位索引
+     * @param slot the slot index
      */
     private void clearSlot(int slot) {
         if (slot < 0 || slot >= gui.getSize()) {
             return;
         }
-        // 使用空气 ItemStack 清空
+        // Clear it using an AIR ItemStack
         gui.addItem(slot, new Icon(new org.bukkit.inventory.ItemStack(org.bukkit.Material.AIR)));
     }
 
     /**
-     * 销毁渲染器，清理资源。
+     * Destroys the renderer and releases its resources.
      */
     public void dispose() {
         scheduler.cancelAll();
@@ -366,9 +380,9 @@ public class GuiRenderer {
     }
 
     /**
-     * 获取关联的 Gui 实例。
+     * Gets the associated Gui instance.
      *
-     * @return Gui 实例
+     * @return the Gui instance
      */
     @NotNull
     public Gui getGui() {
@@ -376,9 +390,9 @@ public class GuiRenderer {
     }
 
     /**
-     * 获取调度器。
+     * Gets the scheduler.
      *
-     * @return GuiScheduler
+     * @return the GuiScheduler
      */
     @NotNull
     public GuiScheduler getScheduler() {

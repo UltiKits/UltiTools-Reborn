@@ -12,25 +12,25 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * GridView 是一个网格布局 Widget，将子 Widget 按网格排列。
+ * GridView is a grid-layout Widget that arranges its children in a grid.
  * <p>
- * 支持：
+ * Supports:
  * <ul>
- *   <li>指定起始槽位和行列数</li>
- *   <li>自动计算子 Widget 位置</li>
- *   <li>支持数据列表自动映射</li>
+ *   <li>a specified starting slot and row/column count</li>
+ *   <li>automatic child Widget position calculation</li>
+ *   <li>automatic mapping from a data list</li>
  * </ul>
  *
- * <p><strong>使用示例：</strong></p>
+ * <p><strong>Usage example:</strong></p>
  * <pre>{@code
- * // 手动指定子 Widget
+ * // Manually specify child widgets
  * GridView.builder()
  *     .startSlot(10)
  *     .columns(7)
  *     .children(buttons)
  *     .build();
  *
- * // 从数据列表自动生成
+ * // Auto-generate from a data list
  * GridView.<ItemStack>builder()
  *     .startSlot(10)
  *     .columns(7)
@@ -42,7 +42,7 @@ import java.util.function.Function;
  * @author UltiTools Team
  * @version 1.0.0
  * @since 6.2.0
- * @param <T> 数据类型（如果使用数据列表）
+ * @param <T> the data type (when built from a data list)
  */
 public class GridView<T> extends Widget {
 
@@ -59,10 +59,10 @@ public class GridView<T> extends Widget {
     }
 
     /**
-     * 创建 Builder。
+     * Creates a Builder.
      *
-     * @param <T> 数据类型
-     * @return Builder
+     * @param <T> the data type
+     * @return the Builder
      */
     @NotNull
     public static <T> Builder<T> builder() {
@@ -83,10 +83,10 @@ public class GridView<T> extends Widget {
     }
 
     /**
-     * 计算子 Widget 的实际槽位。
+     * Calculates the actual slot of a child Widget.
      *
-     * @param childIndex 子 Widget 索引
-     * @return 槽位索引
+     * @param childIndex the child Widget's index
+     * @return slot index
      */
     public int calculateSlotForChild(int childIndex) {
         int row = childIndex / columns;
@@ -132,15 +132,16 @@ public class GridView<T> extends Widget {
         }
 
         /**
-         * 设置数据列表和构建器函数。
+         * Sets the data list and the item-builder function.
          * <p>
-         * 数据被转换为 Widget 后原样加入子列表；位置不再在这里计算 -- 从 6.3.0 起，位置由
-         * {@link GridViewElement} 在渲染时作为 parent data 写入（D-11），对任何 Widget 类型
-         * 一视同仁，不再只为 {@link ItemDisplay} 特殊处理。
+         * Each item is converted to a Widget and added to the child list as-is; position is no
+         * longer computed here — as of 6.3.0, {@link GridViewElement} writes the position at
+         * render time as parent data (D-11), applying uniformly to any Widget type rather than
+         * special-casing {@link ItemDisplay}.
          *
-         * @param items       数据列表
-         * @param itemBuilder 构建器函数
-         * @return Builder
+         * @param items       the data list
+         * @param itemBuilder the builder function
+         * @return the Builder
          */
         public Builder<T> items(@NotNull List<T> items, @NotNull Function<T, Widget> itemBuilder) {
             for (T item : items) {

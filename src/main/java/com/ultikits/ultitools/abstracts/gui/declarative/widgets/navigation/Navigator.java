@@ -7,10 +7,10 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Map;
 
 /**
- * 导航器 Widget。
+ * The Navigator Widget.
  * <p>
- * 管理路由栈，并根据当前路由构建 Widget。
- * 通过 {@link Navigator#of(BuildContext)} 获取最近的导航器状态，进而进行页面跳转。
+ * Manages a route stack and builds a Widget from the current route.
+ * Use {@link Navigator#of(BuildContext)} to obtain the nearest navigator state and navigate.
  *
  * @author UltiTools Team
  * @version 1.0.0
@@ -24,10 +24,10 @@ public class Navigator extends StatefulWidget {
     private final Map<String, RouteBuilder> routes;
 
     /**
-     * 创建一个新的 Navigator。
+     * Creates a new Navigator.
      *
-     * @param initialRoute 初始路由名称
-     * @param routes       路由表
+     * @param initialRoute the initial route name
+     * @param routes       the route table
      */
     public Navigator(@NotNull String initialRoute, @NotNull Map<String, RouteBuilder> routes) {
         this.initialRoute = initialRoute;
@@ -50,10 +50,10 @@ public class Navigator extends StatefulWidget {
     }
 
     /**
-     * 获取最近的 NavigatorState。
+     * Gets the nearest NavigatorState.
      *
-     * @param context BuildContext
-     * @return NavigatorState，如果没有找到则返回 null
+     * @param context the BuildContext
+     * @return the NavigatorState, or null if none is found
      */
     @Nullable
     public static NavigatorState of(@NotNull BuildContext context) {

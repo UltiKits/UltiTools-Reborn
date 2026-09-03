@@ -29,8 +29,6 @@ import java.util.Set;
  * remove the defect class, it only moves it to the next attribute nobody wired up yet -- this
  * class is the single general replacement.
  * <p>
- * 通用的合并注解解析：对整个注解树做递归遍历，并通过 {@link AliasFor} 支持显式的元注解属性覆盖。
- * <p>
  * <b>Deliberately cacheless.</b> Phase 1 (D-35/D-38) forbids a {@code static Class}-keyed cache
  * anywhere in this codebase: it would pin every module's {@code Class} objects for the lifetime
  * of the JVM and defeat the plugin class loader's release on module unload (see
@@ -39,12 +37,6 @@ import java.util.Set;
  * per-invocation hot path, so a v1 without a cache is a deliberate choice, not an oversight. Any
  * future cache added here must be instance-scoped and owned by the container/scanner instance
  * that uses it -- never a {@code static} field on this class.
- * <p>
- * 本类刻意不做缓存。Phase 1（D-35/D-38）禁止在本代码库中出现任何以 {@code Class} 为键的
- * {@code static} 缓存：它会为 JVM 的整个生命周期钉住每个模块的 {@code Class} 对象，使插件类加载器
- * 在模块卸载时无法释放它们。本类执行的遍历只在扫描/加载类时运行一次，而不是位于每次调用都会
- * 命中的热路径上，所以 v1 不做缓存是刻意的选择，而非疏漏。未来如果要在此处添加缓存，必须是
- * 实例级别的，且归属于使用它的容器/扫描器实例 -- 绝不能是本类上的 {@code static} 字段。
  * <p>
  * This type is {@link ApiStatus.Internal @ApiStatus.Internal}: module authors need
  * {@code @AliasFor} to work, not to call this resolver directly (D-04).
@@ -65,15 +57,11 @@ public final class MergedAnnotationResolver {
      * hierarchy -- generalizing {@code AnnotationUtils.findAnnotation} from one meta-annotation
      * level to the whole annotation tree, and merging in any {@code @AliasFor} override found
      * along the way.
-     * <p>
-     * 在一个类、它的（元）注解或它的父类层次结构上查找注解 -- 把
-     * {@code AnnotationUtils.findAnnotation} 从单层元注解泛化为整棵注解树，并合并沿途发现的任何
-     * {@code @AliasFor} 覆盖。
      *
-     * @param clazz          the class to search <br> 要搜索的类
-     * @param annotationType the annotation type to find <br> 要查找的注解类型
-     * @param <A>            the annotation type <br> 注解类型
-     * @return the merged annotation if found, or {@code null} <br> 找到则返回合并后的注解，否则返回 {@code null}
+     * @param clazz          the class to search
+     * @param annotationType the annotation type to find
+     * @param <A>            the annotation type
+     * @return the merged annotation if found, or {@code null}
      */
     public static <A extends Annotation> A find(Class<?> clazz, Class<A> annotationType) {
         if (clazz == null || annotationType == null) {
@@ -85,12 +73,10 @@ public final class MergedAnnotationResolver {
     /**
      * Whether {@code annotationType} is present anywhere on {@code clazz}'s annotation tree or
      * superclass hierarchy.
-     * <br>
-     * {@code annotationType} 是否存在于 {@code clazz} 的注解树或父类层次结构中的任意位置。
      *
-     * @param clazz          the class to search <br> 要搜索的类
-     * @param annotationType the annotation type to look for <br> 要查找的注解类型
-     * @return {@code true} if present <br> 如果存在则为 {@code true}
+     * @param clazz          the class to search
+     * @param annotationType the annotation type to look for
+     * @return {@code true} if present
      */
     public static boolean isPresent(Class<?> clazz, Class<? extends Annotation> annotationType) {
         return find(clazz, annotationType) != null;
@@ -105,12 +91,8 @@ public final class MergedAnnotationResolver {
      * The structural checks land in this class's Task 2 commit; this stub exists so every caller
      * of {@link #find} is already wired against the real method signature before the checks
      * themselves are filled in.
-     * <br>
-     * 校验 {@code annotationType} 上每一个标注了 {@link AliasFor} 的属性是否满足 Spring 文档中
-     * 关于显式元注解别名的实现要求；不满足时抛出 {@link ContainerException}，其中同时点名注解与
-     * 出问题的属性（D-02）。
      *
-     * @param annotationType the annotation type to validate <br> 要校验的注解类型
+     * @param annotationType the annotation type to validate
      */
     public static void validateAliases(Class<? extends Annotation> annotationType) {
         if (annotationType == null) {

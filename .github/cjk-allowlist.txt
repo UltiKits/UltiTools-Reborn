@@ -1,0 +1,41 @@
+# D-11's CJK gate allowlist — read by .github/scripts/check-cjk-scope.sh.
+#
+# Format: one entry per non-comment, non-blank line, `<path-glob>:<extended-regex>`, split on the
+# FIRST colon. The path glob is matched against the file path (a `case` pattern — `*` crosses
+# directory separators). The regex is matched against the line's text with `grep -E`.
+#
+# An entry exempts a LINE, not a file. A path glob that matches a whole file does NOT exempt that
+# file's other lines — only lines whose text also matches the paired regex are skipped. There is
+# no mechanism here for a blanket per-file or per-directory exemption, by construction.
+#
+# Adding a fourth entry is a reviewable one-line diff. That is deliberate: a growing allowlist is
+# itself the signal D-11 wants to keep visible. Do not fold new exemptions into an existing entry's
+# regex to avoid a visible line-count change in review.
+#
+# Exactly three entries are authorised by D-11 (see 08-CONTEXT.md):
+#
+#   1. The i18n("...") call-site literals in src/main/java. These are functionally lang/*.json
+#      keys — changing one breaks the message lookup (D-08). (The lang/*.json catalogue files
+#      themselves are excluded from the gate's scan scope entirely, not via this allowlist — see
+#      check-cjk-scope.sh's own header for that structural exclusion and why.)
+#
+#   2. The four bilingual config.yml comment constants in UltiTools.java (COMMAND_BLOCKLIST_COMMENT,
+#      EDITABLE_ROOTS_COMMENT, ACTION_LOG_SIZE_COMMENT, ACTION_LOG_FILES_COMMENT). These are
+#      operator-facing text that is already English-first with a Chinese line beneath it, and stays
+#      as it is (D-08). The regex below matches only those four lines' distinctive opening phrases,
+#      not a bare filename — UltiTools.java's other ~50 CJK lines (javadoc, inline comments) still
+#      fail the gate.
+#
+#   3. README.md's language-label link(s) — a Markdown/HTML anchor whose visible label names the
+#      target language (e.g. the "中文文档" link next to "English"). Per the root monorepo
+#      CLAUDE.md's publication-language policy, links whose label names the target language are a
+#      standing exemption category. README.md is not itself inside check-cjk-scope.sh's default
+#      scan scope (src/main, .github/workflows, buildtools) as of this plan — this entry documents
+#      the exemption for completeness and for any future scope widening that includes it.
+#
+# src/test proper is out of scope entirely (D-08) and needs no entries here. pom.xml and
+# SECURITY.md are likewise outside the covered scope and need no entries.
+
+src/main/java/*:i18n\(\s*"
+src/main/java/com/ultikits/ultitools/UltiTools.java:^\s*"(面板永远不允许远程执行的命令列表|面板文件 API 可以在其中读取|action\.log\.0（当前活跃文件）|保留的 action\.log\.<代数>)
+README.md:<a href="[^"]*">[^<]*</a>

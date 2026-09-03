@@ -23,12 +23,10 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * Scans beans for {@link Scheduled} annotated methods and registers them
  * as Bukkit tasks. Automatically cancels all tasks when a plugin is unloaded.
- * <p>
- * 管理插件模块的定时任务。扫描 Bean 中标注 {@link Scheduled} 的方法并注册为 Bukkit 任务。
- * 插件卸载时自动取消所有任务。
  *
  * @since 6.2.0
  */
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes @Scheduled methods -- see 08-GATE05-TRIAGE.md
 @ApiStatus.Internal
 public class TaskManager {
 
@@ -42,8 +40,6 @@ public class TaskManager {
 
     /**
      * Scan a bean for {@link Scheduled} methods and register them as Bukkit tasks.
-     * <p>
-     * 扫描 Bean 中的 {@link Scheduled} 方法并注册为 Bukkit 任务。
      *
      * @param plugin the owning plugin module
      * @param bean   the bean instance to scan
@@ -114,8 +110,6 @@ public class TaskManager {
 
     /**
      * Cancel all scheduled tasks for a plugin.
-     * <p>
-     * 取消插件的所有定时任务。
      *
      * @param plugin the plugin to cancel tasks for
      */
@@ -149,8 +143,6 @@ public class TaskManager {
 
     /**
      * Scan a bean for {@link Scheduled} methods and register them for an external plugin.
-     * <p>
-     * 扫描 Bean 中的 {@link Scheduled} 方法并为外部插件注册。
      *
      * @param pluginName the external plugin name (used as key)
      * @param bean       the bean instance to scan
@@ -211,8 +203,6 @@ public class TaskManager {
 
     /**
      * Cancel all scheduled tasks for an external plugin.
-     * <p>
-     * 取消外部插件的所有定时任务。
      *
      * @param pluginName the external plugin name
      * @since 6.2.2

@@ -15,9 +15,11 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.exceptions.CommandException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
- * 重载UltiTools-API的指令
+ * The command that reloads UltiTools-API.
  *
  * @author wisdomme, qianmo
  * @version 1.0.0
@@ -30,7 +32,9 @@ public class UltiToolsCommands extends BaseCommandExecutor {
         try {
             UltiTools.getInstance().reloadPlugins();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            // GATE-05 group two (08-21): routed to the typed command hierarchy -- this is a
+            // core command's own execution failing.
+            throw new CommandException(ErrorCode.COMMAND_EXECUTION_FAILED, "Failed to reload plugins", e);
         }
     }
 
@@ -72,7 +76,7 @@ public class UltiToolsCommands extends BaseCommandExecutor {
     }
 
     /**
-     * @param sender 命令发送者
+     * @param sender the command sender
      */
     @Override
     protected void handleHelp(CommandSender sender) {

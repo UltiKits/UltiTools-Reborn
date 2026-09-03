@@ -47,6 +47,8 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
  * Unit tests for BaseDataEntity and AuditableDataEntity.
@@ -198,12 +200,17 @@ public class DataEntityTest {
         }
         
         @Test
-        @DisplayName("Should throw RuntimeException when clone not supported")
+        @DisplayName("GATE-05 group two (08-21): should throw DataAccessException when clone not supported")
         void shouldThrowWhenCloneNotSupported() {
             NonCloneableEntity entity = new NonCloneableEntity();
             entity.setId(UUID.randomUUID());
-            
-            assertThrows(RuntimeException.class, () -> entity.copyWithoutId());
+
+            // GATE-05 group two (08-21): tightened from RuntimeException to the typed
+            // DataAccessException this site now throws, plus its carried ErrorCode and cause.
+            DataAccessException exception = assertThrows(DataAccessException.class,
+                    () -> entity.copyWithoutId());
+            assertEquals(ErrorCode.DATA_OPERATION_FAILED, exception.getErrorCode());
+            assertNotNull(exception.getCause());
         }
         
         @Test

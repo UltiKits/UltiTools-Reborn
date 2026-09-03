@@ -2,6 +2,7 @@ package com.ultikits.ultitools;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.CommandManager;
@@ -25,6 +28,7 @@ import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * Tests for the {@link UltiTools} main plugin class.
@@ -99,6 +103,79 @@ class UltiToolsTest {
             Method method = UltiTools.class.getMethod("getEnv");
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(method.getReturnType()).isEqualTo(YamlConfiguration.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("GATE-05 group two (08-21): getEnv() failure routing")
+    class GetEnvFailureTests {
+
+        // getTextResource(String) is `protected final` on org.bukkit.plugin.java.JavaPlugin, in
+        // a different package this test class does not extend -- javac refuses a direct
+        // `when(ultiTools.getTextResource(...))` call at the source level even though Mockito's
+        // inline mock maker can stub it at the bytecode level. Invoking it reflectively still
+        // dispatches through the mock's interceptor, so Mockito's `when(...)` still picks up the
+        // recorded invocation; only the *call syntax*, not the mocking itself, needs to route
+        // around the access check.
+        private Method getTextResourceMethod;
+
+        // Deliberate access alteration: reaching a protected JavaPlugin method and the
+        // private UltiTools singleton field is the point of this fixture, not a leak.
+        @org.junit.jupiter.api.BeforeEach
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void resolveProtectedMethod() throws NoSuchMethodException {
+            getTextResourceMethod = org.bukkit.plugin.java.JavaPlugin.class
+                    .getDeclaredMethod("getTextResource", String.class);
+            getTextResourceMethod.setAccessible(true);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void resetInstance() throws Exception {
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        }
+
+        private java.io.Reader invokeGetTextResource(UltiTools ultiTools, String name) throws Exception {
+            return (java.io.Reader) getTextResourceMethod.invoke(ultiTools, name);
+        }
+
+        @Test
+        @DisplayName("Should throw ConfigurationException when env.yml is absent from resources")
+        void shouldThrowConfigurationExceptionWhenEnvYmlMissing() {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                try {
+                    when(invokeGetTextResource(ultiTools, "env.yml")).thenReturn(null);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            assertThatThrownBy(UltiTools::getEnv)
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("env.yml not found")
+                    .extracting(t -> ((ConfigurationException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.CONFIG_LOAD_FAILED);
+        }
+
+        @Test
+        @DisplayName("Should throw ConfigurationException when env.yml content is not valid YAML")
+        void shouldThrowConfigurationExceptionWhenEnvYmlMalformed() {
+            TestHelper.mockUltiToolsInstance(ultiTools -> {
+                try {
+                    when(invokeGetTextResource(ultiTools, "env.yml"))
+                            .thenReturn(new java.io.StringReader("api-url: [unterminated"));
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            assertThatThrownBy(UltiTools::getEnv)
+                    .isInstanceOf(ConfigurationException.class)
+                    .hasMessageContaining("env.yml")
+                    .extracting(t -> ((ConfigurationException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.CONFIG_LOAD_FAILED);
         }
     }
 

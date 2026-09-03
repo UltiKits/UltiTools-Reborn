@@ -8,24 +8,24 @@ import java.util.Comparator;
 import java.util.stream.Stream;
 
 /**
- * 文件操作工具类
+ * File operation utility class.
  * <p>
- * 替代 hutool FileUtil / FileNameUtil
- * 
+ * Replaces hutool's FileUtil / FileNameUtil.
+ *
  * @author wisdomme
  * @since 6.2.0
  */
 public final class FileUtils {
-    
+
     private FileUtils() {
         throw new UnsupportedOperationException("Utility class");
     }
-    
+
     /**
-     * 创建文件，如果父目录不存在会自动创建
+     * Creates a file, automatically creating the parent directory if it does not exist.
      *
-     * @param file 文件
-     * @return 是否创建成功
+     * @param file the file
+     * @return whether creation succeeded
      */
     public static boolean touch(File file) {
         if (file == null) {
@@ -34,48 +34,48 @@ public final class FileUtils {
         if (file.exists()) {
             return true;
         }
-        
+
         File parent = file.getParentFile();
         if (parent != null && !parent.exists()) {
             parent.mkdirs();
         }
-        
+
         try {
             return file.createNewFile();
         } catch (IOException e) {
             return false;
         }
     }
-    
+
     /**
-     * 删除文件或目录
+     * Deletes a file or directory.
      *
-     * @param file 文件或目录
-     * @return 是否删除成功
+     * @param file the file or directory
+     * @return whether deletion succeeded
      */
     public static boolean del(File file) {
         if (file == null || !file.exists()) {
             return true;
         }
-        
+
         if (file.isDirectory()) {
             return deleteDirectory(file);
         }
-        
+
         return file.delete();
     }
-    
+
     /**
-     * 递归删除目录
+     * Recursively deletes a directory.
      *
-     * @param directory 目录
-     * @return 是否删除成功
+     * @param directory the directory
+     * @return whether deletion succeeded
      */
     public static boolean deleteDirectory(File directory) {
         if (directory == null || !directory.exists()) {
             return true;
         }
-        
+
         try (Stream<Path> walk = Files.walk(directory.toPath())) {
             walk.sorted(Comparator.reverseOrder())
                 .map(Path::toFile)
@@ -85,12 +85,12 @@ public final class FileUtils {
             return false;
         }
     }
-    
+
     /**
-     * 获取文件主名（不含扩展名）
+     * Gets the file's base name (without extension).
      *
-     * @param file 文件
-     * @return 主文件名
+     * @param file the file
+     * @return the base file name
      */
     public static String mainName(File file) {
         if (file == null) {
@@ -98,12 +98,12 @@ public final class FileUtils {
         }
         return mainName(file.getName());
     }
-    
+
     /**
-     * 获取文件主名（不含扩展名）
+     * Gets the file's base name (without extension).
      *
-     * @param fileName 文件名
-     * @return 主文件名
+     * @param fileName the file name
+     * @return the base file name
      */
     public static String mainName(String fileName) {
         if (fileName == null || fileName.isEmpty()) {
@@ -115,12 +115,12 @@ public final class FileUtils {
         }
         return fileName.substring(0, dotIndex);
     }
-    
+
     /**
-     * 获取文件扩展名
+     * Gets the file extension.
      *
-     * @param file 文件
-     * @return 扩展名（不含点）
+     * @param file the file
+     * @return the extension (without the dot)
      */
     public static String extName(File file) {
         if (file == null) {
@@ -128,12 +128,12 @@ public final class FileUtils {
         }
         return extName(file.getName());
     }
-    
+
     /**
-     * 获取文件扩展名
+     * Gets the file extension.
      *
-     * @param fileName 文件名
-     * @return 扩展名（不含点）
+     * @param fileName the file name
+     * @return the extension (without the dot)
      */
     public static String extName(String fileName) {
         if (fileName == null || fileName.isEmpty()) {
@@ -145,12 +145,12 @@ public final class FileUtils {
         }
         return fileName.substring(dotIndex + 1);
     }
-    
+
     /**
-     * 确保目录存在，不存在则创建
+     * Ensures the directory exists, creating it if not.
      *
-     * @param dir 目录
-     * @return 目录
+     * @param dir the directory
+     * @return the directory
      */
     public static File mkdir(File dir) {
         if (dir != null && !dir.exists()) {
@@ -158,12 +158,12 @@ public final class FileUtils {
         }
         return dir;
     }
-    
+
     /**
-     * 确保文件的父目录存在
+     * Ensures the file's parent directory exists.
      *
-     * @param file 文件
-     * @return 文件
+     * @param file the file
+     * @return the file
      */
     public static File mkParentDirs(File file) {
         if (file != null) {

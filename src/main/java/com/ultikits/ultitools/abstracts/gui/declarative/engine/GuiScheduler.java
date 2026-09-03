@@ -9,24 +9,32 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * GuiScheduler 负责确保所有 GUI 操作都在 Bukkit 主线程执行。
+ * GuiScheduler is responsible for ensuring every GUI operation runs on the Bukkit main thread.
  * <p>
- * 它提供以下功能：
+ * It provides:
  * <ul>
- *   <li>检查当前是否在主线程</li>
- *   <li>将任务调度到主线程执行</li>
- *   <li>帧调度：合并短时间内的多次更新请求</li>
- *   <li>防止重复调度</li>
+ *   <li>a check for whether the current thread is the main thread</li>
+ *   <li>scheduling a task to run on the main thread</li>
+ *   <li>frame scheduling: coalescing multiple update requests within a short window</li>
+ *   <li>prevention of duplicate scheduling</li>
  * </ul>
+ * <p>
+ * <b>Thread-safety contract:</b> {@code State.setState(...)} and {@code Element.markNeedsBuild()}
+ * are safe to call from any thread -- a call made off the main thread is marshalled onto it, and
+ * multiple calls that land within the same frame window are coalesced via this scheduler's
+ * {@link java.util.concurrent.atomic.AtomicBoolean} compare-and-set guard, at a nominal 16ms frame
+ * interval (floored to one Bukkit tick when scheduling has to wait for one). {@link #flush()}, by
+ * contrast, throws {@link IllegalStateException} when called off the main thread -- it runs
+ * pending work synchronously rather than marshalling it.
  *
- * <p><strong>帧调度机制：</strong></p>
+ * <p><strong>Frame scheduling:</strong></p>
  * <pre>
- * 时间轴：
+ * Timeline:
  * |----16ms----|----16ms----|----16ms----|
  *    ↑ ↑           ↑
- *   setState     实际执行重建
+ *   setState     rebuild actually runs
  *    ↑
- *   setState (合并到同一帧)
+ *   setState (coalesced into the same frame)
  * </pre>
  *
  * @author UltiTools Team
@@ -36,8 +44,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class GuiScheduler {
 
     /**
-     * 默认帧间隔（毫秒）。
-     * Minecraft 默认 tick 是 50ms，但 GUI 更新可以更频繁。
+     * The default frame interval, in milliseconds.
+     * Minecraft's default tick is 50ms, but GUI updates can run more frequently.
      */
     private static final long DEFAULT_FRAME_INTERVAL_MS = 16; // ~60 FPS
 
@@ -49,26 +57,26 @@ public class GuiScheduler {
     private long lastFrameTime = 0;
 
     /**
-     * 使用默认插件实例创建 GuiScheduler。
+     * Creates a GuiScheduler using the default plugin instance.
      */
     public GuiScheduler() {
         this(UltiTools.getInstance());
     }
 
     /**
-     * 创建 GuiScheduler。
+     * Creates a GuiScheduler.
      *
-     * @param plugin 插件实例
+     * @param plugin the plugin instance
      */
     public GuiScheduler(@NotNull Plugin plugin) {
         this(plugin, DEFAULT_FRAME_INTERVAL_MS);
     }
 
     /**
-     * 创建 GuiScheduler，指定帧间隔。
+     * Creates a GuiScheduler with the given frame interval.
      *
-     * @param plugin          插件实例
-     * @param frameIntervalMs 帧间隔（毫秒）
+     * @param plugin          the plugin instance
+     * @param frameIntervalMs the frame interval, in milliseconds
      */
     public GuiScheduler(@NotNull Plugin plugin, long frameIntervalMs) {
         this.plugin = plugin;
@@ -76,21 +84,21 @@ public class GuiScheduler {
     }
 
     /**
-     * 检查当前是否在主线程。
+     * Checks whether the current thread is the main thread.
      *
-     * @return 如果在主线程则返回 true
+     * @return true if on the main thread
      */
     public boolean isOnMainThread() {
         return Bukkit.isPrimaryThread();
     }
 
     /**
-     * 确保在主线程执行任务。
+     * Ensures the task runs on the main thread.
      * <p>
-     * 如果当前在主线程，立即执行。
-     * 否则，调度到主线程执行。
+     * If already on the main thread, runs immediately.
+     * Otherwise, schedules it to run on the main thread.
      *
-     * @param task 要执行的任务
+     * @param task the task to run
      */
     public void runOnMainThread(@NotNull Runnable task) {
         if (isOnMainThread()) {
@@ -101,34 +109,34 @@ public class GuiScheduler {
     }
 
     /**
-     * 调度一个帧任务。
+     * Schedules a frame task.
      * <p>
-     * 这个方法实现了帧合并机制：
-     * 在同一帧窗口期内的多次调用只会触发一次实际执行。
+     * This method implements the frame-coalescing mechanism: multiple calls within the same
+     * frame window trigger only one actual execution.
      *
-     * @param frameTask 帧任务
+     * @param frameTask the frame task
      */
     public void scheduleFrame(@NotNull Runnable frameTask) {
         pendingTasks.offer(frameTask);
-        
+
         if (isScheduled.compareAndSet(false, true)) {
             long currentTime = System.currentTimeMillis();
             long timeSinceLastFrame = currentTime - lastFrameTime;
             long delay = Math.max(0, frameIntervalMs - timeSinceLastFrame);
 
             if (delay == 0 && isOnMainThread()) {
-                // 可以直接执行
+                // Can run immediately
                 executeFrame();
             } else {
-                // 调度到下一帧
+                // Schedule for the next frame
                 Bukkit.getScheduler().runTaskLater(plugin, this::executeFrame, 
-                        Math.max(1, delay / 50)); // 转换为 tick
+                        Math.max(1, delay / 50)); // Convert to ticks
             }
         }
     }
 
     /**
-     * 执行所有挂起的帧任务。
+     * Runs every pending frame task.
      */
     private void executeFrame() {
         isScheduled.set(false);
@@ -140,9 +148,9 @@ public class GuiScheduler {
                 if (isOnMainThread()) {
                     task.run();
                 } else {
-                    // 如果不在主线程，重新调度
+                    // Not on the main thread -- reschedule
                     Bukkit.getScheduler().runTask(plugin, task);
-                    break; // 只处理一个，剩下的在下一次 tick 处理
+                    break; // Handle only one; the rest are handled on the next tick
                 }
             } catch (Exception e) {
                 plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());
@@ -152,11 +160,11 @@ public class GuiScheduler {
     }
 
     /**
-     * 立即执行所有挂起的任务（阻塞直到完成）。
+     * Runs every pending task immediately (blocking until complete).
      * <p>
-     * <b>注意：</b> 这个方法只能在主线程调用。
+     * <b>Note:</b> this method may only be called on the main thread.
      *
-     * @throws IllegalStateException 如果不在主线程
+     * @throws IllegalStateException if not on the main thread
      */
     public void flush() {
         if (!isOnMainThread()) {
@@ -171,7 +179,7 @@ public class GuiScheduler {
     }
 
     /**
-     * 取消所有挂起的任务。
+     * Cancels every pending task.
      */
     public void cancelAll() {
         pendingTasks.clear();
