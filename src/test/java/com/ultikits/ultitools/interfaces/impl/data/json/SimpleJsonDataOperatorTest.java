@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -744,8 +745,19 @@ class SimpleJsonDataOperatorTest {
         @Test
         @DisplayName("gc should handle empty directory")
         void testGCEmptyDirectory() {
-            // Should not throw
-            operator.gc();
+            // GATE-06 (issue #345): the previous body called gc() with no assertion at all, so a
+            // gc() that threw or one that started deleting files it should have left alone would
+            // both pass silently. gc() lists ".json" files in storeDir and deletes any whose id has
+            // no live cache entry (see SimpleJsonDataOperator#gc); an empty directory has nothing
+            // to delete, so the real check is that nothing throws AND nothing in the directory
+            // changes as a result.
+            assertThatCode(() -> operator.gc())
+                    .as("gc must not throw when the store directory has no .json files to scan")
+                    .doesNotThrowAnyException();
+            assertThat(storeDir).as("gc on an empty directory must not remove the directory itself").exists();
+            assertThat(storeDir.listFiles())
+                    .as("gc on an empty directory must not create any file")
+                    .isEmpty();
         }
     }
 

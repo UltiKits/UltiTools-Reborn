@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -192,9 +193,14 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): the previous body called onPlayerJoin() with no assertion (the
+        // "// NOPMD - uses Mockito verify()" comment was stale -- no verify() call was present).
+        // With webSocketClient nulled by reflection, mockWebSocketClient is now an orphaned mock:
+        // verifyNoInteractions on it is a real check that the null-client path never reaches the
+        // client at all, rather than merely completing without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
-        void shouldNotThrowWhenWebSocketNull() throws Exception { // NOPMD - uses Mockito verify()
+        void shouldNotThrowWhenWebSocketNull() throws Exception {
             // Arrange
             Field clientField = PlayerEventManager.class.getDeclaredField("webSocketClient");
             clientField.setAccessible(true);
@@ -203,8 +209,9 @@ class PlayerEventManagerTest {
             PlayerMock player = server.addPlayer();
             PlayerJoinEvent event = new PlayerJoinEvent(player, "joined");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerJoin(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
     }
 
@@ -244,6 +251,11 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): named site (manager/PlayerEventManagerTest.java:249). The previous
+        // body called onPlayerQuit() with no assertion. With webSocketClient nulled by reflection,
+        // mockWebSocketClient is now an orphaned mock: verifyNoInteractions on it is a real check
+        // that the null-client path never reaches the client at all, rather than merely completing
+        // without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
         void shouldNotThrowWhenWebSocketNull() throws Exception {
@@ -255,8 +267,9 @@ class PlayerEventManagerTest {
             PlayerMock player = server.addPlayer();
             PlayerQuitEvent event = new PlayerQuitEvent(player, "quit");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerQuit(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
     }
 
@@ -336,6 +349,12 @@ class PlayerEventManagerTest {
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
 
+        // GATE-06 (issue #345): the same assert-nothing shape as the join/quit siblings, found in
+        // this file during re-resolution and fixed for consistency though not itself one of the
+        // 13 named sites -- see 08-GATE06-TRIAGE.md. With webSocketClient nulled by reflection,
+        // mockWebSocketClient is now an orphaned mock: verifyNoInteractions on it is a real check
+        // that the null-client path never reaches the client at all, rather than merely completing
+        // without throwing.
         @Test
         @DisplayName("WebSocket 为 null 时不应该抛出异常")
         void shouldNotThrowWhenWebSocketNull() throws Exception {
@@ -345,11 +364,12 @@ class PlayerEventManagerTest {
             clientField.set(playerEventManager, null);
 
             PlayerMock player = server.addPlayer();
-            org.bukkit.event.player.PlayerChatEvent event = 
+            org.bukkit.event.player.PlayerChatEvent event =
                 new org.bukkit.event.player.PlayerChatEvent(player, "Hello");
 
-            // Act - 不应该抛出异常
+            // Act & Assert
             playerEventManager.onPlayerChat(event);
+            verifyNoInteractions(mockWebSocketClient);
         }
 
         @Test

@@ -433,18 +433,24 @@ class ConfigManagerTest {
             }
         }
 
+        // GATE-06 (issue #345): the previous body caught NullPointerException with an empty block
+        // and no assertion, so it passed identically whether register(null, config) threw or
+        // silently accepted the null plugin -- it could not tell "rejected as expected" from
+        // "silently accepted", exactly the failure this issue named. TestConfigEntity carries a
+        // non-empty @ConfigEntity value (see its declaration above), so register() always reaches
+        // ultiToolsPlugin.getResourceFolderPath() (ConfigManager.java:44) before doing anything
+        // else -- a null plugin throws NullPointerException deterministically on this path, so the
+        // exception is asserted directly rather than merely tolerated.
         @Test
         @DisplayName("null 插件不应该崩溃")
-        void nullPluginShouldNotCrash() throws IOException {
+        void nullPluginShouldNotCrash() {
             // Arrange
             TestConfigEntity config = new TestConfigEntity("test.yml");
 
             // Act & Assert
-            try {
-                configManager.register(null, config);
-            } catch (NullPointerException e) {
-                // 预期的异常
-            }
+            assertThatThrownBy(() -> configManager.register(null, config))
+                    .as("registering with a null plugin must fail fast with NPE, not silently accept it")
+                    .isInstanceOf(NullPointerException.class);
         }
     }
 

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -220,26 +221,53 @@ public class ExternalPluginIntegrationTest {
                     .doesNotThrowAnyException();
         }
 
+        // GATE-06 (issue #345): both tests below called register then unregister with no
+        // assertion, so a bug that registered a command/listener for an adapter with no beans
+        // at all -- e.g. a loop-guard regression that iterates once even over an empty container
+        // -- would pass silently. The name promises "registers nothing"; the fix reads the
+        // manager's own tracking map by reflection (no public getter exists) and asserts that
+        // promise directly, then confirms unregister on an empty registration is a genuine no-op
+        // rather than merely "didn't throw".
         @Test
-        void commandManager_registerAllExternal_withEmptyContainer_registersNothing() {
+        void commandManager_registerAllExternal_withEmptyContainer_registersNothing() throws Exception {
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(mockExternalPlugin);
             SimpleContainer emptyContext = new SimpleContainer();
             emptyContext.refresh();
             adapter.setContext(emptyContext);
 
             commandManager.registerAllExternal(adapter);
-            commandManager.unregisterAllExternal(adapter.getPluginName());
+
+            Field externalCommandMapField = CommandManager.class.getDeclaredField("externalCommandMap");
+            externalCommandMapField.setAccessible(true); // NOPMD
+            Map<String, ?> externalCommandMap = (Map<String, ?>) externalCommandMapField.get(commandManager);
+            assertThat(externalCommandMap)
+                    .as("an empty container must not add a tracking entry for the plugin")
+                    .doesNotContainKey(adapter.getPluginName());
+
+            assertThatCode(() -> commandManager.unregisterAllExternal(adapter.getPluginName()))
+                    .as("unregistering a plugin that never registered anything must not throw")
+                    .doesNotThrowAnyException();
         }
 
         @Test
-        void listenerManager_registerAllExternal_withEmptyContainer_registersNothing() {
+        void listenerManager_registerAllExternal_withEmptyContainer_registersNothing() throws Exception {
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(mockExternalPlugin);
             SimpleContainer emptyContext = new SimpleContainer();
             emptyContext.refresh();
             adapter.setContext(emptyContext);
 
             listenerManager.registerAllExternal(adapter);
-            listenerManager.unregisterAllExternal(adapter.getPluginName());
+
+            Field externalListenerMapField = ListenerManager.class.getDeclaredField("externalListenerMap");
+            externalListenerMapField.setAccessible(true); // NOPMD
+            Map<String, ?> externalListenerMap = (Map<String, ?>) externalListenerMapField.get(listenerManager);
+            assertThat(externalListenerMap)
+                    .as("an empty container must not add a tracking entry for the plugin")
+                    .doesNotContainKey(adapter.getPluginName());
+
+            assertThatCode(() -> listenerManager.unregisterAllExternal(adapter.getPluginName()))
+                    .as("unregistering a plugin that never registered anything must not throw")
+                    .doesNotThrowAnyException();
         }
     }
 
