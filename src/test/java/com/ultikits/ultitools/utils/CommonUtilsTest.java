@@ -11,6 +11,8 @@ import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
@@ -421,8 +423,70 @@ class CommonUtilsTest {
             }
             
             String uuid = CommonUtils.getUltiToolsUUID();
-            
+
             assertThat(uuid).isEqualTo(existingUUID);
+        }
+    }
+
+    @Nested
+    @DisplayName("WR-01: no-write-on-existing-uuid regression guard")
+    class NoWriteOnExistingUuidTests {
+
+        @TempDir
+        File tempDir;
+
+        private MockedStatic<UltiTools> mockedUltiTools;
+        private UltiTools mockUltiToolsInstance;
+
+        @BeforeEach
+        void setUp() {
+            mockUltiToolsInstance = mock(UltiTools.class);
+            mockedUltiTools = mockStatic(UltiTools.class);
+            mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiToolsInstance);
+            when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir);
+            CredentialStore.setTargetPathForTesting(tempDir.toPath().resolve("credentials.json"));
+        }
+
+        @AfterEach
+        void tearDown() {
+            CredentialStore.clearTargetPathForTesting();
+            if (mockedUltiTools != null) {
+                mockedUltiTools.close();
+            }
+        }
+
+        /**
+         * Proves the fast path never touches the filesystem when a uuid already exists. The
+         * file's last-modified time is pinned to a fixed instant far in the past before the call;
+         * {@link CredentialStore#writeLocked} always applies an atomic move that stamps the
+         * replaced file with the current time, so any write -- however small -- is detectable
+         * here regardless of the filesystem's mtime-resolution granularity. Content bytes are
+         * compared too, as a second independent signal.
+         */
+        @Test
+        @DisplayName("getUltiToolsUUID() performs zero writes when a uuid is already present")
+        void shouldNotWriteWhenUuidAlreadyExists() throws Exception {
+            File dataFile = new File(tempDir, "credentials.json");
+            String existingUUID = "nowriteuuid1234nowriteuuid5678ab";
+            JsonObject json = new JsonObject();
+            json.addProperty("uuid", existingUUID);
+            try (FileWriter writer = new FileWriter(dataFile)) {
+                writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(json));
+            }
+
+            byte[] contentBefore = Files.readAllBytes(dataFile.toPath());
+            FileTime pinnedPast = FileTime.from(Instant.parse("2000-01-01T00:00:00Z"));
+            Files.setLastModifiedTime(dataFile.toPath(), pinnedPast);
+
+            String uuid = CommonUtils.getUltiToolsUUID();
+
+            assertThat(uuid).isEqualTo(existingUUID);
+            assertThat(Files.getLastModifiedTime(dataFile.toPath()))
+                    .as("credentials.json must not be rewritten when the uuid already exists")
+                    .isEqualTo(pinnedPast);
+            assertThat(Files.readAllBytes(dataFile.toPath()))
+                    .as("credentials.json content must be byte-identical when not rewritten")
+                    .isEqualTo(contentBefore);
         }
     }
 }
