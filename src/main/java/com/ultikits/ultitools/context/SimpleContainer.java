@@ -385,7 +385,11 @@ public class SimpleContainer {
                 // Prototype: always create new instance
                 // Check circular dependency for prototype
                 if (currentlyCreating.contains(name)) {
-                    throw new RuntimeException("Circular dependency detected for prototype bean '" + name + 
+                    // GATE-05 group two: routed to the typed container hierarchy (08-21). The
+                    // message and the "currently creating" diagnostic are preserved verbatim --
+                    // only the exception's type and carried ErrorCode changed.
+                    throw new ContainerException(ErrorCode.CIRCULAR_DEPENDENCY,
+                        "Circular dependency detected for prototype bean '" + name +
                         "'. Currently creating beans: " + currentlyCreating);
                 }
                 return createBean(name, definition);
@@ -651,7 +655,11 @@ public class SimpleContainer {
             }
             registerBeanDefinition(beanName, definition);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to register bean: " + type.getName(), e);
+            // GATE-05 group two (08-21): routed to the typed container hierarchy. Reachable
+            // today via getBeanName(type) throwing StringIndexOutOfBoundsException for a type
+            // with no derivable simple name (e.g. an anonymous class), when no @Component/
+            // @Service value covers it.
+            throw new ContainerException("Failed to register bean: " + type.getName(), e);
         }
     }
 
@@ -941,7 +949,12 @@ public class SimpleContainer {
             singletonFactories.remove(name);
             earlySingletonObjects.remove(name);
             LOGGER.log(Level.SEVERE, "Failed to create bean: " + name, e);
-            throw new RuntimeException("Failed to create bean: " + name, e);
+            // GATE-05 group two (08-21): routed to the typed container hierarchy. A
+            // ContainerException raised deeper in this method is already caught and rethrown
+            // unchanged by the catch (ContainerException e) clause above, so this branch only
+            // ever wraps a genuinely different failure -- e.g. a no-arg constructor whose body
+            // itself throws.
+            throw new ContainerException("Failed to create bean: " + name, e);
         } finally {
             currentlyCreating.remove(name);
         }
@@ -1088,7 +1101,12 @@ public class SimpleContainer {
                     method.invoke(bean);
                     LOGGER.fine("Invoked @PostConstruct method: " + method.getName());
                 } catch (Exception e) {
-                    throw new RuntimeException("Failed to invoke @PostConstruct method: " + method.getName(), e);
+                    // GATE-05 group two (08-21): routed to the typed container hierarchy.
+                    // @PostConstruct invocation is part of bean creation, so this uses the same
+                    // BEAN_CREATION_FAILED code createBean's own catch-all uses -- and, once
+                    // typed, this propagates through createBean's catch (ContainerException e)
+                    // rethrow-unchanged clause instead of being wrapped a second time.
+                    throw new ContainerException("Failed to invoke @PostConstruct method: " + method.getName(), e);
                 }
             }
         }

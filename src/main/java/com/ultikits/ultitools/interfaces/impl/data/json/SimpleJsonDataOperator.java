@@ -283,7 +283,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         boolean firstCondition = true;
         for (WhereCondition condition : effective) {
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
-                throw new RuntimeException("Query value is not serializable");
+                // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
+                // is a query-condition validation failure.
+                throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
             }
             List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
@@ -426,7 +428,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         boolean firstCondition = true;
         for (WhereCondition condition : whereConditions) {
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
-                throw new RuntimeException("Query value is not serializable");
+                // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- this
+                // is a query-condition validation failure, same as getAll's identical check.
+                throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
             }
             Collection<Map.Entry<Object, T>> collection = new ArrayList<>();
             Set<Map.Entry<Object, T>> values = cache.entrySet();
@@ -476,7 +480,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     public synchronized void update(String column, Object value, Object id) {
         beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
-            throw new RuntimeException("Query value is not serializable");
+            // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Unlike the
+            // two WhereCondition checks above, this validates the value being written by
+            // update(column, value, id) -- a persistence failure, not a query-condition one.
+            throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Query value is not serializable");
         }
         T obj = cache.get(id);
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
@@ -516,7 +523,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     writer.write(GSON.toJson(value));
                 }
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- a
+                // failed write to the JSON store is a persistence failure.
+                throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
+                        "Failed to flush data to disk for key: " + key, e);
             }
         });
     }
@@ -572,7 +582,14 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Transaction failed", e);
+            // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Structurally
+            // unreachable via this Runnable overload today -- Runnable.run() declares no checked
+            // exception, so nothing this method's own Callable<Void> wrapper can throw reaches
+            // here except a RuntimeException, already caught above. This catch exists only to
+            // satisfy transaction(Callable<R>)'s declared "throws Exception"; kept typed for
+            // defense in depth against a future caller that does route a checked exception
+            // through it.
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED, "Transaction failed", e);
         }
     }
 
@@ -599,7 +616,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Batch update failed", e);
+            // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Structurally
+            // unreachable today for the same reason as transaction(Runnable)'s identical catch
+            // above -- update(T) declares no checked exception the loop body could propagate
+            // here -- kept typed for defense in depth.
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED, "Batch update failed", e);
         }
     }
 

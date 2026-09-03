@@ -14,6 +14,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
@@ -113,7 +115,9 @@ public class SQLiteDataStore implements DataStore {
     @SuppressWarnings("unchecked")
     private <T extends BaseDataEntity<String>> DataOperator<T> getOperatorForPath(String dbPath, Class<T> dataEntity) {
         if (!dataEntity.isAnnotationPresent(Table.class)) {
-            throw new RuntimeException("No Table annotation is presented!");
+            // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- the entity
+            // itself is misconfigured, not a runtime data-operation failure.
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "No Table annotation is presented!");
         }
         return (DataOperator<T>) dataOperatorMap.computeIfAbsent(new OperatorKey(dbPath, dataEntity),
                 key -> {

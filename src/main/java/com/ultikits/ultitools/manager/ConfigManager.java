@@ -105,7 +105,15 @@ public class ConfigManager {
                 // succeeds on the first catch-free path above and never reaches this branch.
                 throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                // GATE-05 group two (08-21): routed to the typed configuration hierarchy. The
+                // only IOException register() itself declares comes from its directory-config
+                // branch's mkdirs() failure -- but that branch is guarded by
+                // "if (file.isDirectory())", which for a not-yet-created directory is always
+                // false (isDirectory() implies exists()), so mkdirs() is never actually reached
+                // via this call chain today. Typed anyway for defense in depth against that
+                // guard being fixed later, and because register()'s own declared "throws
+                // IOException" makes no promise about which branch produced it.
+                throw ConfigurationException.loadFailed(path, e);
             }
         }
     }
