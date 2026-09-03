@@ -264,9 +264,21 @@ public final class CredentialStore {
      * an empty map in that case would silently discard whatever the torn file held, which is
      * exactly the swallow-as-absent failure this class exists to prevent. Resolve the parse
      * failure (inspect the file, or overwrite it with {@link #write(Map)}) before calling this.
+     * <p>
+     * WR-03 (08-REVIEW.md): {@code mutator} must not return {@code null}. A caller that mutates
+     * the map it was given in place and forgets the trailing {@code return}, or falls through an
+     * early-return branch without a value, must not have that silently truncate the credential
+     * file to {@code {}} -- this store is the sole owner of a file that holds live OAuth tokens,
+     * so a contract violation here fails loudly ({@link NullPointerException}) rather than
+     * discarding the caller's data. This mirrors {@link ReadResult#data()}, which likewise throws
+     * rather than offering an empty-map fallback for a parse failure -- neither method in this
+     * class treats "something is wrong" as "return an empty document". To clear the file
+     * deliberately, call {@link #write(Map) write(Collections.emptyMap())} instead of relying on
+     * a {@code null} return from {@code mutator}.
      *
      * @param mutator receives a mutable copy of the current document and returns the document to
-     *                persist; a {@code null} return is treated as an empty document
+     *                persist; must not return {@code null}
+     * @throws NullPointerException if {@code mutator} returns {@code null}
      */
     public static void update(UnaryOperator<Map<String, Object>> mutator) {
         Objects.requireNonNull(mutator, "mutator");
@@ -280,7 +292,10 @@ public final class CredentialStore {
             }
             Map<String, Object> mutableCopy = new LinkedHashMap<>(current.data());
             Map<String, Object> updated = mutator.apply(mutableCopy);
-            writeLocked(updated != null ? updated : Collections.emptyMap());
+            Objects.requireNonNull(updated, "update() mutator returned null; return the map it was "
+                    + "given (mutated or not) rather than null. Use write(Collections.emptyMap()) to "
+                    + "clear the credential file deliberately.");
+            writeLocked(updated);
         }
     }
 

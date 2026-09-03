@@ -282,6 +282,39 @@ class CredentialStoreTest {
         }
     }
 
+    @Test
+    @DisplayName("update() throws NullPointerException when the mutator returns null, instead of "
+            + "silently writing an empty document (WR-03)")
+    void updateThrowsWhenMutatorReturnsNull() throws IOException {
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("access_token", "must-not-be-lost");
+        CredentialStore.write(doc);
+
+        assertThatThrownBy(() -> CredentialStore.update(existing -> null))
+                .as("a null mutator return is a caller bug and must fail loudly, not truncate the file")
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    @DisplayName("after update() throws on a null mutator return, the credential file is left "
+            + "untouched -- no partial or empty write occurred (WR-03)")
+    void updateLeavesFileUntouchedWhenMutatorReturnsNull() throws IOException {
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("access_token", "must-not-be-lost");
+        CredentialStore.write(doc);
+        byte[] contentBefore = Files.readAllBytes(dataFile);
+
+        assertThatThrownBy(() -> CredentialStore.update(existing -> null))
+                .isInstanceOf(NullPointerException.class);
+
+        assertThat(Files.readAllBytes(dataFile))
+                .as("a rejected null-mutator update must not truncate or otherwise modify the file")
+                .isEqualTo(contentBefore);
+        CredentialStore.ReadResult reread = CredentialStore.read();
+        assertThat(reread.isParsed()).isTrue();
+        assertThat(reread.data()).containsEntry("access_token", "must-not-be-lost");
+    }
+
     // ---- Deterministic interleaving: no torn file, no lost update (D-14). Each case releases all
     // threads together via a CyclicBarrier so contention is real, joins every thread, and asserts
     // on file content AFTER the join -- the assertion after the join is the point; its absence is
