@@ -155,7 +155,19 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>ultikits-sonatype</publishingServerId>
-                    <autoPublish>true</autoPublish>
+                    <!--
+                        WR-02 (08-REVIEW.md): this module is prepared for Central publishing but
+                        not yet publishable, because the org.spigotmc:spigot-api dependency above
+                        is still a SNAPSHOT coordinate, and Central rejects any POM referencing a
+                        SNAPSHOT dependency (see 08-RELEASE-PACKAGE.md #2.2 for the two
+                        architectural options; resolving that is a separate maintainer decision,
+                        not addressed here). autoPublish left at true would let a `mvn deploy -P
+                        release` attempt publish straight to Central with no staging-review step,
+                        so a premature deploy would fail at Central's own validation gate instead
+                        of failing fast locally. Do not flip this back to true until the
+                        spigot-api SNAPSHOT question above is resolved.
+                    -->
+                    <autoPublish>false</autoPublish>
                     <waitUntil>published</waitUntil>
                 </configuration>
             </plugin>
