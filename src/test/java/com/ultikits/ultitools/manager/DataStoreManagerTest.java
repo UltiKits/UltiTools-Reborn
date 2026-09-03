@@ -460,42 +460,97 @@ class DataStoreManagerTest {
     @DisplayName("并发读写测试")
     class ConcurrentReadWriteTests {
 
+        // GATE-06 (issue #345, D-14): the previous body spawned writer and reader threads,
+        // awaited a CountDownLatch, and ended with no assertion at all -- a thread that threw
+        // before its countDown() would leave the latch permanently short, and latch.await(5, ...)
+        // simply returns false on timeout with nothing checking that return value. The test could
+        // therefore only detect a hang; it could never detect the race its name promises to check.
+        // This version follows the barrier-based shape CredentialStoreTest (plan 08-13) uses:
+        // every thread is released together via a CyclicBarrier so contention is real, every
+        // thread is joined explicitly (with an isAlive() check standing in for the timeout the
+        // latch used to swallow silently), and the assertions run AFTER the join against three
+        // real properties: no thread threw, no concurrent read of an already-registered type ever
+        // observed null or a torn/wrong entry, and the final registered set is exactly what was
+        // registered -- no entry lost or duplicated. writerCount is large enough that, combined
+        // with the initial registrations, it crosses HashMap's default resize threshold (12),
+        // which is what actually exercises the unsynchronized-read-during-resize hazard this test
+        // is named for; see 08-22-SUMMARY.md for the ablation that proves these assertions can
+        // fail (register()'s `synchronized` temporarily removed, observed red, then restored).
         @Test
         @DisplayName("并发读写应该安全")
+        @Timeout(value = 15, unit = TimeUnit.SECONDS)
         void concurrentReadWriteShouldBeSafe() throws Exception {
-            // Arrange
-            int threadCount = 5;
-            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(threadCount * 2);
-            
-            // 注册一些初始数据
-            for (int i = 0; i < 3; i++) {
+            int initialCount = 3;
+            int writerCount = 20;
+            java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(writerCount * 2);
+            java.util.List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
+            java.util.List<DataStore> readResults = new java.util.concurrent.CopyOnWriteArrayList<>();
+            java.util.Set<String> expectedTypes = new java.util.HashSet<>();
+
+            for (int i = 0; i < initialCount; i++) {
                 DataStore store = mock(DataStore.class);
-                when(store.getStoreType()).thenReturn("init-type-" + i);
+                String type = "init-type-" + i;
+                when(store.getStoreType()).thenReturn(type);
                 DataStoreManager.register(store);
+                expectedTypes.add(type);
             }
 
-            // Act - 并发读写
-            for (int i = 0; i < threadCount; i++) {
-                final int index = i;
-                // 写线程
-                new Thread(() -> {
-                    DataStore store = mock(DataStore.class);
-                    when(store.getStoreType()).thenReturn("new-type-" + index);
-                    DataStoreManager.register(store);
-                    latch.countDown();
-                }).start();
-                
-                // 读线程
-                new Thread(() -> {
-                    DataStoreManager.getDatastore("init-type-0");
-                    latch.countDown();
-                }).start();
+            java.util.List<Thread> threads = new java.util.ArrayList<>();
+            for (int i = 0; i < writerCount; i++) {
+                String newType = "new-type-" + i;
+                expectedTypes.add(newType);
+                threads.add(new Thread(() -> {
+                    try {
+                        barrier.await(10, TimeUnit.SECONDS);
+                        DataStore store = mock(DataStore.class);
+                        when(store.getStoreType()).thenReturn(newType);
+                        DataStoreManager.register(store);
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    }
+                }));
+                threads.add(new Thread(() -> {
+                    try {
+                        barrier.await(10, TimeUnit.SECONDS);
+                        readResults.add(DataStoreManager.getDatastore("init-type-0"));
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    }
+                }));
             }
 
-            // 等待完成
-            latch.await(5, TimeUnit.SECONDS);
+            for (Thread t : threads) {
+                t.start();
+            }
+            for (Thread t : threads) {
+                t.join(TimeUnit.SECONDS.toMillis(12));
+            }
 
-            // Assert - 没有异常，测试通过
+            // Assertions AFTER the join -- this is the point; their absence is exactly what made
+            // this test worthless (D-14).
+            assertThat(threads)
+                    .as("every writer/reader thread must have terminated, not merely been waited on")
+                    .allSatisfy(t -> assertThat(t.isAlive()).isFalse());
+            assertThat(failures).as("no writer or reader thread should throw").isEmpty();
+            assertThat(readResults)
+                    .as("every reader must actually have raced the writers")
+                    .hasSize(writerCount);
+            assertThat(readResults)
+                    .as("a concurrent read of an already-registered type must never return null")
+                    .doesNotContainNull();
+            for (DataStore result : readResults) {
+                assertThat(result.getStoreType())
+                        .as("a concurrent read must return the store it asked for, never a torn or wrong entry")
+                        .isEqualTo("init-type-0");
+            }
+
+            Field dataMapField = DataStoreManager.class.getDeclaredField("dataMap");
+            dataMapField.setAccessible(true); // NOPMD
+            @SuppressWarnings("unchecked")
+            Map<String, DataStore> dataMap = (Map<String, DataStore>) dataMapField.get(null);
+            assertThat(dataMap.keySet())
+                    .as("the registered set must be exactly what was registered -- no entry lost or duplicated")
+                    .containsExactlyInAnyOrderElementsOf(expectedTypes);
         }
     }
 
