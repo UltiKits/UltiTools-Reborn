@@ -33,6 +33,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.ultikits.ultitools.exceptions.ContainerException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+
 /**
  * Tests for ProxyFactory.
  * <p>
@@ -112,6 +115,15 @@ class ProxyFactoryTest {
 
     public static class ThrowingTarget {
         public String checked() throws IOException { throw new IOException("checked-boom"); }
+    }
+
+    // GATE-05 group two (08-21) fixture: AopEligibility/AopProxyResolver already refuse a final
+    // class before it ever reaches ProxyFactory in the normal framework pipeline (see
+    // AopEligibilityTest/AopProxyResolverTest), so this class exists to call createProxyClass
+    // directly, bypassing that earlier filter, and force ByteBuddy's own subclass-of-final
+    // failure at the site this test targets.
+    public static final class FinalTarget {
+        public String getValue() { return "x"; }
     }
 
     public static class GenericBase<T> {
@@ -375,6 +387,20 @@ class ProxyFactoryTest {
             assertEquals("method1", proxy.method1());
             assertEquals("method2", proxy.method2());
             assertEquals("method3", proxy.method3());
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): should wrap a ByteBuddy build failure as ContainerException")
+        void shouldWrapByteBuddyFailureAsContainerException() throws Exception {
+            Set<Method> intercepted = Collections.singleton(FinalTarget.class.getMethod("getValue"));
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> proxyFactory.createProxyClass(FinalTarget.class, intercepted));
+
+            assertEquals(ErrorCode.BEAN_CREATION_FAILED, thrown.getErrorCode());
+            assertNotNull(thrown.getCause());
+            assertTrue(thrown.getMessage().contains(FinalTarget.class.getName()));
         }
     }
 
