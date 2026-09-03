@@ -379,10 +379,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             
             Object nonSerializable = new Object();
+            // GATE-05 group two (08-21): tightened from RuntimeException to the typed
+            // DataAccessException this site now throws, plus its carried ErrorCode.
             assertThatThrownBy(() -> operator.getAll(
                 WhereCondition.builder().column("name").value(nonSerializable).build()
-            )).isInstanceOf(RuntimeException.class)
-              .hasMessageContaining("not serializable");
+            )).isInstanceOf(DataAccessException.class)
+              .hasMessageContaining("not serializable")
+              .extracting(t -> ((DataAccessException) t).getErrorCode())
+              .isEqualTo(ErrorCode.DATA_QUERY_FAILED);
         }
     }
 
@@ -538,9 +542,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             Object nonSerializable = new Object();
             
+            // GATE-05 group two (08-21): tightened to the typed DataAccessException, and to
+            // DATA_PERSISTENCE_FAILED rather than getAll/del's DATA_QUERY_FAILED -- this
+            // validates the value being written, not a WhereCondition.
             assertThatThrownBy(() -> operator.update("name", nonSerializable, "1"))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("not serializable");
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("not serializable")
+                .extracting(t -> ((DataAccessException) t).getErrorCode())
+                .isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
         }
     }
 
@@ -595,10 +604,14 @@ class SimpleJsonDataOperatorTest {
             operator.insert(new TestData("1", "test", 10));
             Object nonSerializable = new Object();
             
+            // GATE-05 group two (08-21): tightened to the typed DataAccessException, same
+            // DATA_QUERY_FAILED code as getAll's identical WhereCondition-validation check.
             assertThatThrownBy(() -> operator.del(
                 WhereCondition.builder().column("name").value(nonSerializable).build()
-            )).isInstanceOf(RuntimeException.class)
-              .hasMessageContaining("not serializable");
+            )).isInstanceOf(DataAccessException.class)
+              .hasMessageContaining("not serializable")
+              .extracting(t -> ((DataAccessException) t).getErrorCode())
+              .isEqualTo(ErrorCode.DATA_QUERY_FAILED);
         }
         
         @Test
@@ -697,6 +710,28 @@ class SimpleJsonDataOperatorTest {
             
             assertThat(reloaded).isNotNull();
             assertThat(reloaded.getName()).isEqualTo("data");
+        }
+
+        @Test
+        @DisplayName("GATE-05 group two (08-21): flush should throw DataAccessException when the store location cannot be written")
+        void testFlushThrowsDataAccessExceptionWhenUnwritable() throws Exception {
+            // Given - a storeLocation whose own parent path segment is a regular file, so
+            // neither FileUtils.touch (which swallows its own IOException and merely returns
+            // false) nor Files.newBufferedWriter can create the target file. The write attempt
+            // still throws a genuine IOException regardless of process permissions (unlike
+            // File.setWritable(false), which is a no-op when tests run as root).
+            File blocker = new File(storeDir, "blocker-file");
+            assertThat(blocker.createNewFile()).isTrue();
+            String badStoreLocation = blocker.getAbsolutePath() + File.separator + "subdir";
+            SimpleJsonDataOperator<TestData> badOperator =
+                    new SimpleJsonDataOperator<>(badStoreLocation, TestData.class);
+            badOperator.insert(new TestData("1", "test", 10));
+
+            // When / Then
+            assertThatThrownBy(badOperator::flush)
+                    .isInstanceOf(DataAccessException.class)
+                    .extracting(t -> ((DataAccessException) t).getErrorCode())
+                    .isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
         }
     }
 
