@@ -1,0 +1,52 @@
+name: Snapshot Publish
+
+on:
+  push:
+    branches: [alpha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot-publish:
+    name: Publish SNAPSHOT to Central
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (v4.3.1)
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4 (v4.8.0)
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          server-id: ultikits-sonatype
+          server-username: SONATYPE_USERNAME
+          server-password: SONATYPE_PASSWORD
+
+      - name: Refuse to publish a non-SNAPSHOT version
+        # This workflow fires on every push to alpha. Without this guard, a branch that ever
+        # carries a release version (e.g. mid-release-prep, or a maintainer mistake) would
+        # publish a release from a routine push -- breaching the standing rule that a release
+        # requires an explicit maintainer instruction. A -SNAPSHOT project version is required
+        # to reach the deploy step below.
+        run: |
+          set -euo pipefail
+          VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          echo "Project version: ${VERSION}"
+          if [[ "${VERSION}" != *-SNAPSHOT ]]; then
+            echo "::error::project.version [${VERSION}] does not end in -SNAPSHOT -- refusing to publish. This workflow only ever publishes snapshots; releases require an explicit maintainer instruction."
+            exit 1
+          fi
+
+      - name: Deploy snapshot to Central
+        # Deliberately does not activate the release Maven profile: that profile exists only
+        # to attach GPG signing, and Sonatype performs no validation on snapshot deploys, so
+        # signing is neither required nor meaningful for this job.
+        env:
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        run: mvn -B deploy -Dmaven.test.skip=true
