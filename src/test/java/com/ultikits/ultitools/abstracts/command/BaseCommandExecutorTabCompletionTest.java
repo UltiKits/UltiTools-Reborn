@@ -168,6 +168,80 @@ class BaseCommandExecutorTabCompletionTest {
     // Task 2: one dispatch -- argument-position resolution into commands/tabcomplete/
     // ========================================================================================
 
+
+    @Nested
+    @DisplayName("#398: a first-token <param> is completed, not skipped")
+    class FirstTokenParameterTests {
+
+        /**
+         * The controlled comparison this defect was found by, reproduced as a test.
+         * <p>
+         * {@code FirstTokenExecutor} declares the SAME suggest method on the same parameter name
+         * at two positions -- {@code "<name>"} and {@code "open <name>"} -- exactly as UltiMenu
+         * does. Only the second worked: {@code suggestFirstArgs} collects literal subcommand names
+         * and skips parameter placeholders by construction, and nothing else covered position 0.
+         */
+        @Test
+        @DisplayName("position 0: a bare <param> format yields its suggester's output")
+        void firstTokenParameterIsCompleted() {
+            FirstTokenExecutor executor = new FirstTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+
+            assertThat(completions).contains("example", "spawn");
+        }
+
+        @Test
+        @DisplayName("control, position 1: the same suggester on the same parameter already worked")
+        void laterPositionStillWorks() {
+            FirstTokenExecutor executor = new FirstTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"open", ""});
+
+            // If this ever fails, the position-0 assertion above proves nothing: the two would be
+            // broken together rather than the first one alone.
+            assertThat(completions).contains("example", "spawn");
+        }
+
+        @Test
+        @DisplayName("literal subcommands are still offered alongside the parameter suggestions")
+        void literalsAndParametersAreMerged() {
+            FirstTokenExecutor executor = new FirstTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+
+            // The literal branch must not be displaced by the new one -- both formats are valid
+            // at position 0 and a user needs to see both.
+            assertThat(completions).contains("open", "list");
+        }
+
+        @Test
+        @DisplayName("a partial first token narrows the parameter suggestions")
+        void partialFirstTokenNarrows() {
+            FirstTokenExecutor executor = new FirstTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{"exa"});
+
+            assertThat(completions).contains("example");
+            assertThat(completions).doesNotContain("spawn");
+        }
+
+        @Test
+        @DisplayName("no duplicates when a suggestion also happens to be a literal subcommand")
+        void noDuplicatesAcrossTheTwoSources() {
+            FirstTokenExecutor executor = new FirstTokenExecutor();
+
+            List<String> completions =
+                    executor.onTabComplete(player, mockCommand, "fixture", new String[]{""});
+
+            assertThat(completions).doesNotHaveDuplicates();
+        }
+    }
+
     @Nested
     @DisplayName("Task 2: entry-point dispatch + argument-position resolution")
     class ArgumentPositionResolutionTests {
@@ -473,6 +547,40 @@ class BaseCommandExecutorTabCompletionTest {
      * String)} (16 of UltiWorlds' 24 downstream call sites).
      */
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    /**
+     * Declares one suggest method on the same parameter name at two token positions, so a test can
+     * hold everything constant except the position. Modelled on UltiMenu's {@code MenuCommands},
+     * where {@code /menu open e<TAB>} offered {@code example} and {@code /menu e<TAB>} offered
+     * nothing (#398).
+     */
+    static class FirstTokenExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // not exercised
+        }
+
+        @CmdMapping(format = "<name>")
+        public void quickOpen(@CmdSender CommandSender sender,
+                              @CmdParam(value = "name", suggest = "suggestNames") String name) {
+            // body not exercised
+        }
+
+        @CmdMapping(format = "open <name>")
+        public void open(@CmdSender CommandSender sender,
+                         @CmdParam(value = "name", suggest = "suggestNames") String name) {
+            // body not exercised
+        }
+
+        @CmdMapping(format = "list")
+        public void list(@CmdSender CommandSender sender) {
+            // body not exercised
+        }
+
+        public List<String> suggestNames() {
+            return Arrays.asList("example", "spawn");
+        }
+    }
+
     static class SignatureShapeExecutor extends BaseCommandExecutor {
         @Override
         protected void handleHelp(CommandSender sender) {
