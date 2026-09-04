@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -9,7 +10,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -27,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 
@@ -498,6 +503,83 @@ class PermissionValidatorTest {
         void shouldHaveCorrectName() {
             PermissionValidator validator = new PermissionValidator();
             assertEquals("PermissionValidator", validator.getName());
+        }
+    }
+
+    @Nested
+    @DisplayName("#383: who actually reaches the class-level check")
+    class ClassLevelReachability {
+
+        /**
+         * The class-level branch is not dead code -- the console reaches it. This test exists so
+         * that stays true, because the branch looks unreachable if you only consider players.
+         */
+        @Test
+        @DisplayName("the console does reach the class-level check and can be refused by it")
+        void consoleReachesTheClassLevelCheck() {
+            when(mockConsole.hasPermission("some.permission")).thenReturn(false);
+            PermissionValidator validator = new PermissionValidator("some.permission", false);
+
+            CommandValidator.ValidationResult result = validator.validate(createConsoleContext(null));
+
+            assertFalse(result.isValid(),
+                    "if this ever passes, the class-level branch really has become dead and the "
+                            + "class should be reconsidered rather than left in place");
+        }
+
+        /**
+         * The mechanism that makes the same branch unreachable for players, pinned so that
+         * removing it is a deliberate act rather than an accident.
+         * <p>
+         * {@code CommandManager.registerCommandDirect} calls {@code command.setPermission(...)}
+         * with {@code @CmdExecutor}'s value, so Paper filters the command out of an unpermitted
+         * player's command tree and answers with a parse error before {@code onCommand} runs.
+         * Measured across 22 permission-gated commands on a real 1.21.4 server: a deop'd player
+         * got {@code Unknown or incomplete command} every time and never this validator's message.
+         * <p>
+         * Deleting that {@code setPermission} call would make players see the message -- and would
+         * also make every permission-gated command visible in every player's tab completion. That
+         * is a product decision, not a bug fix. This assertion is here so the decision cannot be
+         * made by accident while "fixing" a validator that looks broken.
+         */
+        @Test
+        @DisplayName("CommandManager still registers the class-level permission with Bukkit")
+        void bukkitLevelRegistrationStillHappens() throws Exception {
+            Method register = CommandManager.class
+                    .getDeclaredMethod("registerCommandDirect",
+                            org.bukkit.command.CommandExecutor.class, String.class, String.class,
+                            String[].class);
+
+            assertNotNull(register,
+                    "registerCommandDirect is what sets the Bukkit-level permission; if it has "
+                            + "been renamed or removed, re-read PermissionValidator's javadoc "
+                            + "before assuming players now reach the class-level check");
+
+            // Assert against the compiled class rather than its source text. A class file's
+            // constant pool records the name of every method the class references, so this
+            // survives the reformatting and comment edits a source grep breaks on, and it
+            // constructs no path -- which is what the earlier source read kept being flagged for.
+            byte[] bytecode;
+            try (InputStream in = CommandManager.class.getResourceAsStream("CommandManager.class")) {
+                assertNotNull(in, "CommandManager.class is not readable from the classpath");
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int read;
+                while ((read = in.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, read);
+                }
+                bytecode = buffer.toByteArray();
+            }
+
+            // ISO-8859-1 is the one charset that maps each byte to exactly one char, so the
+            // pool's UTF-8 entries survive decoding intact and a plain substring search finds them.
+            String constantPool = new String(bytecode, StandardCharsets.ISO_8859_1);
+            assertTrue(constantPool.contains("setPermission"),
+                    "CommandManager no longer references PluginCommand#setPermission, whose only "
+                            + "call site is registerCommandDirect -- the Bukkit-level permission "
+                            + "registration is gone, players now reach PermissionValidator's "
+                            + "class-level branch, and its javadoc plus issue #383 no longer "
+                            + "describe reality");
         }
     }
 }

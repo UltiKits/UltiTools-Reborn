@@ -20,6 +20,13 @@ public @interface CmdExecutor {
     /**
      * @return permission
      */
+    /**
+     * <b>Note on what a player sees when they lack this permission (#383).</b> This value is also
+     * registered with Bukkit, so Paper removes the command from an unpermitted player's command
+     * tree and answers with a parse error -- the framework's own refusal message is shown to the
+     * console only. Declare the permission on {@code @CmdMapping} instead if a player should be
+     * told why. See {@code PermissionValidator}'s class javadoc.
+     */
     String permission() default "";
 
     /**
