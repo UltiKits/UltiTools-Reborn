@@ -336,10 +336,12 @@
                             <include>com.ultikits.ultitools</include>
                         </includes>
                         <!-- Phase 7's authored removal record (D-04), one entry per removed
-                             symbol - 64 entries at HEAD under accessModifier=protected. No entry
-                             is package-wide (criterion 3 forbids it): a bare FQCN is a whole-class
-                             removal, a Class#member(paramTypes) key names one removed member.
-                             Full justification per entry is in
+                             symbol - 67 entries as of this comment's last edit (2026-09-05); the
+                             <excludes> block below is the source of truth for the live count, not
+                             this sentence, so re-count it rather than trust this figure if it
+                             looks stale. No entry is package-wide (criterion 3 forbids it): a bare
+                             FQCN is a whole-class removal, a Class#member(paramTypes) key names
+                             one removed member. Full justification per entry is in
                              .planning/phases/07-generational-removals/07-JAPICMP-BASELINE.md. This
                              list stays populated during the cycle and is emptied at the release
                              boundary by ReleaseBoundaryInvariant (D-05). -->
@@ -458,36 +460,54 @@
                             <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#getVersionWrapper()</exclude>
                             <exclude>com.ultikits.ultitools.context.UltiToolsBean#getVersionWrapper()</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.TempListener#player(java.lang.Class)</exclude>
-                            <!-- BaseDataEntity survives AbstractDataEntity's deletion but no
-                                 longer extends it (it now owns its own id field directly) —
-                                 japicmp attributes SUPERCLASS_REMOVED to the subclass's own FQN,
-                                 not to the deleted superclass, so this needs its own entry even
-                                 though AbstractDataEntity is already excluded above. -->
-                            <exclude>com.ultikits.ultitools.abstracts.data.BaseDataEntity</exclude>
+                            <!-- A bare fully-qualified-name exclude removes the named class AND
+                                 every one of its members from the comparison, permanently - so it
+                                 is legitimate only for a class that no longer exists at all. This
+                                 entry used to name BaseDataEntity here, on the belief that japicmp
+                                 attributes SUPERCLASS_REMOVED to a surviving subclass's own FQN
+                                 and so the subclass needs its own entry even though its deleted
+                                 superclass (AbstractDataEntity) is already excluded above. That
+                                 belief is false in effect: breakBuildIfCausedByExclusion is
+                                 already false (see above), which is precisely what suppresses a
+                                 SUPERCLASS_REMOVED whose deleted supertype is itself excluded.
+                                 This entry - and the three CloudLoginCommand /
+                                 PluginInstallCommands / UltiToolsCommands entries that used to sit
+                                 below the InventoryConfirm block, added for the identical
+                                 AbstractCommandExecutor -> BaseCommandExecutor reason - were
+                                 therefore never necessary and have been removed; each class's
+                                 surviving public API is back under the gate. -->
                             <!-- InventoryConfirm survives OkCancelPage's deletion by migrating
                                  onto BaseConfirmationPage (07-13-PLAN.md's expanded scope): its
                                  superclass changed and three hook methods were renamed/re-scoped
                                  (getOkName/getCancelName -> getOkButtonName/getCancelButtonName,
-                                 onOk -> onConfirm, onCancel narrowed from public to protected) as
-                                 one coordinated migration, not independent member removals — one
-                                 class-level entry covers the whole reported set (confirmed against
-                                 target/japicmp/japicmp.xml: SUPERCLASS_REMOVED + 4 method changes,
-                                 all under InventoryConfirm's own FQN, nothing else). -->
-                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm</exclude>
-                            <!-- Pre-existing gap from plan 07-05 (GEN-01, commit 4706bff), not
-                                 part of this plan's (07-13, GEN-04) declared symbol set. 07-05
-                                 migrated these three core commands from AbstractCommandExecutor to
-                                 BaseCommandExecutor but never ran `mvn -B -o clean verify
-                                 -DskipTests` (only `mvn -B test`), so the japicmp gate — live and
-                                 build-breaking since plan 07-01, which landed before 07-05 — never
-                                 saw this SUPERCLASS_REMOVED change until this plan's own verify
-                                 run. Fixed here under Rule 3 (blocking issue): every later Phase 7
-                                 plan's verify step would otherwise inherit this same red build.
+                                 onOk -> onConfirm, onCancel narrowed from public to protected).
+                                 The SUPERCLASS_REMOVED event needs no entry of its own -
+                                 breakBuildIfCausedByExclusion=false already suppresses it, since
+                                 the deleted superclass OkCancelPage is excluded above. The four
+                                 entries below name the complete set of member-level events
+                                 japicmp reports for this class (confirmed against
+                                 target/japicmp/japicmp.xml), so the rest of InventoryConfirm's
+                                 API stays under the gate instead of being silenced wholesale by a
+                                 single class-level entry. See compatibility/records/6.3.0.md's
+                                 recorded instance for the migration itself. -->
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm#getOkName()</exclude>
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm#getCancelName()</exclude>
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm#onOk(org.bukkit.event.inventory.InventoryClickEvent)</exclude>
+                            <exclude>com.ultikits.ultitools.widgets.impl.InventoryConfirm#onCancel(org.bukkit.event.inventory.InventoryClickEvent)</exclude>
+                            <!-- Pre-existing gap from plan 07-05 (GEN-01, commit 4706bff): these
+                                 three core commands migrated from AbstractCommandExecutor to
+                                 BaseCommandExecutor, and the japicmp gate first saw the resulting
+                                 SUPERCLASS_REMOVED only during a later plan's own verify run,
+                                 because 07-05 ran `mvn -B test`, not `mvn -B -o clean verify
+                                 -DskipTests`. The three bare-FQN entries added here at the time
+                                 have since been found unnecessary and removed - see the retraction
+                                 comment above BaseDataEntity's former entry above:
+                                 AbstractCommandExecutor is itself excluded further below, and
+                                 breakBuildIfCausedByExclusion already suppresses SUPERCLASS_REMOVED
+                                 on a surviving subclass whose deleted supertype is excluded.
                                  AbstractCommandExecutor itself is untouched by this plan; only
-                                 these three framework-owned command classes' own supertype changed. -->
-                            <exclude>com.ultikits.ultitools.commands.CloudLoginCommand</exclude>
-                            <exclude>com.ultikits.ultitools.commands.PluginInstallCommands</exclude>
-                            <exclude>com.ultikits.ultitools.commands.UltiToolsCommands</exclude>
+                                 these three framework-owned command classes' own supertype
+                                 changed. -->
                             <!-- 07-14-PLAN.md (GEN-04, second half — the deprecated overloads
                                  living inside classes that otherwise survive; cluster A's whole-
                                  type removals are the entries above). Every entry here is member-
