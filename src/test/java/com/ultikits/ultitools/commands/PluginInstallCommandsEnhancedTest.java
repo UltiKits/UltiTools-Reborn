@@ -318,19 +318,23 @@ class PluginInstallCommandsEnhancedTest {
     @DisplayName("Player list - should handle invalid page number gracefully")
     void testPlayerListInvalidPageNumber() {
         if (!mockingAvailable) return;
-        
+
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
-        
+
         mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
                 .thenReturn(Collections.emptyList());
-        
+
         executor.listPlugins(player, "invalid");
-        
+
         waitForAsync();
-        
-        // Should default to page 1
+
+        // #380: this used to assert only that *some* message came back, which the removed
+        // behaviour satisfied by silently serving page 1. The contract now is that a non-integer
+        // page is reported rather than guessed at, so the assertion names the message.
         List<String> messages = collectAllMessages(player);
-        assertThat(messages).isNotEmpty();
+        assertThat(messages)
+                .as("a non-integer page must be reported, not silently treated as page 1")
+                .anyMatch(msg -> msg.contains("Failed to parse 'invalid' as Integer"));
     }
 
     @Test
@@ -365,7 +369,11 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
                 .thenReturn(Collections.singletonList(entity));
         
-        executor.listPlugins(player, "invalid");
+        // Uses a valid page deliberately. This test is about the console's plain-text rendering,
+        // and it previously passed "invalid" only because that was silently treated as page 1
+        // (#380). Now a bad page returns before any listing happens, which would make this test
+        // pass for the wrong reason.
+        executor.listPlugins(player, "1");
         
         waitForAsync();
         
