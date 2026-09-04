@@ -127,6 +127,28 @@ public class PluginManager {
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
 
     /**
+     * The framework-owned types whose {@link com.ultikits.ultitools.annotations.Scheduled} methods
+     * this manager registers.
+     * <p>
+     * <b>This set is the wiring, not a description of it.</b> {@link
+     * #registerFrameworkScheduledOwners()} registers exactly the instances whose types appear here
+     * and fails fast if the two disagree, and {@code FrameworkScheduledWiringTest} fails the build
+     * if a framework class carries {@code @Scheduled} without appearing here. Adding a type to
+     * this set and wiring its task are therefore the same act -- which is the point.
+     * <p>
+     * The defect this prevents (#384): {@code TaskManager}'s two original entry points both
+     * iterate a {@code SimpleContainer}'s beans, so an object the framework constructs directly
+     * was reached by neither. {@code PlayerCacheManager.sweepExpiredEntries()} carried a
+     * {@code @Scheduled(period = 5 minutes)} annotation, and its javadoc explained at length why a
+     * clock-driven sweep was chosen over a hand-rolled {@code BukkitRunnable} -- and it never ran
+     * once. Nothing reported an error, because nothing had looked.
+     *
+     * @since 6.3.0
+     */
+    static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
+            new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
+
+    /**
      * Initialize plugin manager. Please do not call this method manually.
      *
      * @throws IOException IO exception
@@ -341,28 +363,6 @@ public class PluginManager {
             taskManager.cancelAllCore();
         }
     }
-
-    /**
-     * The framework-owned types whose {@link com.ultikits.ultitools.annotations.Scheduled} methods
-     * this manager registers.
-     * <p>
-     * <b>This set is the wiring, not a description of it.</b> {@link
-     * #registerFrameworkScheduledOwners()} registers exactly the instances whose types appear here
-     * and fails fast if the two disagree, and {@code FrameworkScheduledWiringTest} fails the build
-     * if a framework class carries {@code @Scheduled} without appearing here. Adding a type to
-     * this set and wiring its task are therefore the same act -- which is the point.
-     * <p>
-     * The defect this prevents (#384): {@code TaskManager}'s two original entry points both
-     * iterate a {@code SimpleContainer}'s beans, so an object the framework constructs directly
-     * was reached by neither. {@code PlayerCacheManager.sweepExpiredEntries()} carried a
-     * {@code @Scheduled(period = 5 minutes)} annotation, and its javadoc explained at length why a
-     * clock-driven sweep was chosen over a hand-rolled {@code BukkitRunnable} -- and it never ran
-     * once. Nothing reported an error, because nothing had looked.
-     *
-     * @since 6.3.0
-     */
-    static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
-            new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
 
     /**
      * Register the {@code @Scheduled} methods of every framework-owned object.

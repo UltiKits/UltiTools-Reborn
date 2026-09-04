@@ -128,6 +128,12 @@ class FrameworkScheduledWiringTest {
         for (String name : candidates) {
             Class<?> clazz;
             try {
+                // The name is not attacker-controlled: it is derived by walking this build's own
+                // target/classes directory, filtered to the com.ultikits.ultitools package, and the
+                // load is non-initialising. Rationale precedes the marker deliberately -- an
+                // Opengrep marker only counts on its own line or the one immediately above, so
+                // putting the justification in between would silently disable the suppression.
+                // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                 clazz = Class.forName(name, false, getClass().getClassLoader());
             } catch (Throwable t) {
                 unloadable.add(name + " (" + t.getClass().getSimpleName() + ")");
