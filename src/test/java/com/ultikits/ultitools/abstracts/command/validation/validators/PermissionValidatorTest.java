@@ -10,10 +10,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -555,16 +555,31 @@ class PermissionValidatorTest {
                             + "been renamed or removed, re-read PermissionValidator's javadoc "
                             + "before assuming players now reach the class-level check");
 
-            // The path is a compile-time constant naming a file inside this repository; nothing
-            // here is derived from input of any kind, so there is no traversal to perform.
-            // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
-            String body = new String(Files.readAllBytes(Paths.get(
-                    "src/main/java/com/ultikits/ultitools/manager/CommandManager.java")),
-                    StandardCharsets.UTF_8);
-            assertTrue(body.contains("command.setPermission(permission)"),
-                    "the Bukkit-level permission registration is gone -- players now reach "
-                            + "PermissionValidator's class-level branch, and its javadoc plus "
-                            + "issue #383 no longer describe reality");
+            // Assert against the compiled class rather than its source text. A class file's
+            // constant pool records the name of every method the class references, so this
+            // survives the reformatting and comment edits a source grep breaks on, and it
+            // constructs no path -- which is what the earlier source read kept being flagged for.
+            byte[] bytecode;
+            try (InputStream in = CommandManager.class.getResourceAsStream("CommandManager.class")) {
+                assertNotNull(in, "CommandManager.class is not readable from the classpath");
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int read;
+                while ((read = in.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, read);
+                }
+                bytecode = buffer.toByteArray();
+            }
+
+            // ISO-8859-1 is the one charset that maps each byte to exactly one char, so the
+            // pool's UTF-8 entries survive decoding intact and a plain substring search finds them.
+            String constantPool = new String(bytecode, StandardCharsets.ISO_8859_1);
+            assertTrue(constantPool.contains("setPermission"),
+                    "CommandManager no longer references PluginCommand#setPermission, whose only "
+                            + "call site is registerCommandDirect -- the Bukkit-level permission "
+                            + "registration is gone, players now reach PermissionValidator's "
+                            + "class-level branch, and its javadoc plus issue #383 no longer "
+                            + "describe reality");
         }
     }
 }
