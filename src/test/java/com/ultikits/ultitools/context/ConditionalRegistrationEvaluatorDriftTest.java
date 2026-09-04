@@ -189,7 +189,9 @@ class ConditionalRegistrationEvaluatorDriftTest {
         SimpleContainer container = containerFor(plugin);
 
         boolean registeredAtScanTime = ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container);
-        assertThat(registeredAtScanTime).isTrue();
+        assertThat(registeredAtScanTime)
+                .as("scan-time decision with enableFeatureA: true must be register")
+                .isTrue();
 
         // 2. Flip the key on disk -- exactly what an operator does before `ul reload`.
         writeYaml("config/config.yml", "enableFeatureA: false\n");
@@ -201,7 +203,12 @@ class ConditionalRegistrationEvaluatorDriftTest {
         // 4. Exactly one WARNING, naming the class, the config file, the key, the direction, and
         // the restart requirement.
         List<LogRecord> warnings = warningsCaptured();
-        assertThat(warnings).hasSize(1);
+        assertThat(warnings)
+                .as("reloadSelf() must emit exactly one @ConditionalOnConfig drift WARNING after "
+                        + "enableFeatureA flipped true -> false; an empty list means "
+                        + "ConditionalRegistrationEvaluator.reportDrift is no longer wired into "
+                        + "UltiToolsPlugin.reloadSelf()")
+                .hasSize(1);
         String message = warnings.get(0).getMessage();
         assertThat(message).contains(FeatureAComponent.class.getName());
         assertThat(message).contains("config/config.yml");
@@ -218,12 +225,17 @@ class ConditionalRegistrationEvaluatorDriftTest {
         SimpleContainer container = containerFor(plugin);
 
         boolean registeredAtScanTime = ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container);
-        assertThat(registeredAtScanTime).isFalse();
+        assertThat(registeredAtScanTime)
+                .as("scan-time decision with enableFeatureA: false must be skip")
+                .isFalse();
 
         writeYaml("config/config.yml", "enableFeatureA: true\n");
 
         List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
-        assertThat(messages).hasSize(1);
+        assertThat(messages)
+                .as("the disabled -> enabled direction must report too; #392 measured BOTH "
+                        + "directions inert, so covering only one would leave half the defect")
+                .hasSize(1);
         String message = messages.get(0);
         assertThat(message).contains(FeatureAComponent.class.getName());
         assertThat(message).contains("config/config.yml");
@@ -232,7 +244,9 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(message).contains("was not registered");
         assertThat(message).contains("restart");
 
-        assertThat(warningsCaptured()).hasSize(1);
+        assertThat(warningsCaptured())
+                .as("the drift message must reach the log, not only the return value")
+                .hasSize(1);
     }
 
     @Test
@@ -242,12 +256,19 @@ class ConditionalRegistrationEvaluatorDriftTest {
         UltiToolsPlugin plugin = mockPlugin();
         SimpleContainer container = containerFor(plugin);
 
-        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container)).isTrue();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .as("scan-time decision with enableFeatureA: true")
+                .isTrue();
 
         // No change to the file before reporting.
         List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
-        assertThat(messages).isEmpty();
-        assertThat(warningsCaptured()).isEmpty();
+        assertThat(messages)
+                .as("an unchanged config must produce no drift report; a report here means "
+                        + "reportDrift compares against something other than the recorded decision")
+                .isEmpty();
+        assertThat(warningsCaptured())
+                .as("an unchanged config must not log a drift WARNING")
+                .isEmpty();
     }
 
     @Test
@@ -258,14 +279,18 @@ class ConditionalRegistrationEvaluatorDriftTest {
         UltiToolsPlugin plugin = mockPlugin();
         SimpleContainer container = containerFor(plugin);
 
-        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureBComponent.class, container)).isTrue();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureBComponent.class, container))
+                .as("negate=true with raw false must register")
+                .isTrue();
 
         // negate=true + raw true -> skipped; the message must say "disabled"/"already
         // registered" (the registration decision), never the raw YAML boolean.
         writeYaml("config/config.yml", "enableFeatureB: true\n");
 
         List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
-        assertThat(messages).hasSize(1);
+        assertThat(messages)
+                .as("negate=true must still report drift when the registration decision flips")
+                .hasSize(1);
         String message = messages.get(0);
         assertThat(message).contains(FeatureBComponent.class.getName());
         assertThat(message).contains("config/config.yml");
@@ -281,14 +306,21 @@ class ConditionalRegistrationEvaluatorDriftTest {
         UltiToolsPlugin plugin = mockPlugin();
         SimpleContainer container = containerFor(plugin);
 
-        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container)).isTrue();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .as("scan-time decision, recorded so clear() has something to release")
+                .isTrue();
 
         writeYaml("config/config.yml", "enableFeatureA: false\n");
 
         ConditionalRegistrationEvaluator.clear(plugin);
 
-        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
-        assertThat(warningsCaptured()).isEmpty();
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin))
+                .as("clear(plugin) must release the record; a report here means PluginManager."
+                        + "unregister would leave the module ClassLoader pinned after unload")
+                .isEmpty();
+        assertThat(warningsCaptured())
+                .as("a released record must not log either")
+                .isEmpty();
     }
 
     @Test
@@ -297,15 +329,25 @@ class ConditionalRegistrationEvaluatorDriftTest {
         // (a) A container with no UltiToolsPlugin bean at all -- mirrors the framework's own
         // core context. Fail-open (true), and nothing is recorded against any plugin.
         SimpleContainer emptyContainer = containerWithNoPlugin();
-        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, emptyContainer)).isTrue();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, emptyContainer))
+                .as("a container with no UltiToolsPlugin bean must fail open (D-20)")
+                .isTrue();
 
         UltiToolsPlugin plugin = mockPlugin();
-        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin))
+                .as("the core-context fail-open path must record nothing against any plugin; a "
+                        + "non-empty list here means the record is keyed on something other than "
+                        + "a resolved UltiToolsPlugin")
+                .isEmpty();
 
         // (b) A class with no @ConditionalOnConfig at all is also a no-op, even against a real,
         // resolvable plugin.
         SimpleContainer container = containerFor(plugin);
-        assertThat(ConditionalRegistrationEvaluator.shouldRegister(PlainComponent.class, container)).isTrue();
-        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(PlainComponent.class, container))
+                .as("an unannotated class always registers")
+                .isTrue();
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin))
+                .as("a class carrying no @ConditionalOnConfig must record nothing, so it can never drift")
+                .isEmpty();
     }
 }

@@ -29,10 +29,11 @@ import java.lang.annotation.Target;
  * com.ultikits.ultitools.context.ConditionalRegistrationEvaluator} for the reporting mechanism
  * and why re-registering on reload was rejected.
  *
- * @apiNote This is <b>not</b> equivalent to an in-code {@code if (config.isEnabled())} block,
- *         which re-reads the config value on every call and therefore does follow a reload. A
- *         module author migrating off a hand-written {@code if} block onto this annotation is
- *         trading that per-call freshness for load-time simplicity -- know that before switching.
+ * <p><b>This is not equivalent to an in-code {@code if (config.isEnabled())} block</b>, which
+ * re-reads the config value on every call and therefore does follow a reload. A module author
+ * migrating off a hand-written {@code if} block onto this annotation is trading that per-call
+ * freshness for load-time simplicity -- know that before switching.
+ *
  * @since 6.2.0
  */
 @Target(ElementType.TYPE)
