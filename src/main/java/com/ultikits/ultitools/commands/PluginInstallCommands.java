@@ -38,7 +38,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (page != null && !page.isEmpty()) {
             try {
                 pageInt = Integer.parseInt(page);
-            } catch (NumberFormatException ignored) {
+            } catch (NumberFormatException e) {
+                // #380: this used to swallow the exception and serve page 1, so
+                // `/upm list not-a-number` looked like it had worked. Report it in the same words
+                // TypeParserRegistry uses for every other command's numeric argument, so the two
+                // paths do not disagree about what a bad number looks like.
+                sender.sendMessage(ChatColor.RED
+                        + "Failed to parse '" + page + "' as Integer");
+                return;
             }
         }
         List<UltiToolsPlugin> installedPlugins = UltiTools.getInstance().getPluginManager().getPluginList();

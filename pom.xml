@@ -348,6 +348,19 @@
                                  of its members. -->
                             <exclude>com.ultikits.ultitools.aop.AopProxyBeanPostProcessor</exclude>
                             <exclude>com.ultikits.ultitools.aop.CglibProxyFactory</exclude>
+                            <!-- #387: public, and removed under same-release exception clause 1
+                                 (proven non-functional: never registered, so its seven handlers
+                                 never fired on any release). Its four unique events moved into
+                                 PlayerEventManager, which IS registered. -->
+                            <exclude>com.ultikits.ultitools.listeners.EnhancedPlayerEventListener</exclude>
+                            <!-- @ApiStatus.Internal removals. Not compatibility events per
+                                 COMPATIBILITY.md, but japicmp reads bytecode rather than
+                                 @ApiStatus, so the gate still needs the entry.
+                                 #390: ContextHolder was never initialised, so every getBean()
+                                 threw; #393's follow-up: UltiToolsBean's five @Bean methods were
+                                 never processed. -->
+                            <exclude>com.ultikits.ultitools.context.ContextHolder</exclude>
+                            <exclude>com.ultikits.ultitools.context.UltiToolsBean</exclude>
                             <!-- Members removed from a class that otherwise survives: fully-
                                  qualified parameter types are required by japicmp's own filter
                                  parser (JApiCmpException otherwise). -->
@@ -357,6 +370,9 @@
                             <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container$Builder#background(com.ultikits.ultitools.abstracts.gui.declarative.widgets.IconWrapper)</exclude>
                             <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView#getMaxRows()</exclude>
                             <exclude>com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView$Builder#rows(int)</exclude>
+                            <!-- #397: a documented no-op with no field, no getter and no callers.
+                                 SimpleContainer is @ApiStatus.Internal. -->
+                            <exclude>com.ultikits.ultitools.context.SimpleContainer#setId(java.lang.String)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.TransactionManager#getConnection()</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setIsolationLevel(int)</exclude>
                             <exclude>com.ultikits.ultitools.interfaces.TransactionManager#setReadOnly(boolean)</exclude>

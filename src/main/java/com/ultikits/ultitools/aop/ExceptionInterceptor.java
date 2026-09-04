@@ -40,7 +40,7 @@ public class ExceptionInterceptor implements MethodInterceptor {
     /**
      * Container used to resolve {@code @ExceptionCatch(handler = "...")} beans.
      * <p>
-     * Injected per plugin rather than read from the global {@code ContextHolder}: each plugin has
+     * Injected per plugin rather than read from a global static holder: each plugin has
      * its own container, and a single static holder would make the last plugin to initialise win,
      * sending every earlier plugin's handler lookup to the wrong container. See issue #190.
      */

@@ -8,8 +8,12 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerChatEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.Plugin;
 
@@ -27,7 +31,7 @@ import org.jetbrains.annotations.ApiStatus;
 public class PlayerEventManager implements Listener {
     /**
      * Must be volatile. Written on the WebSocket's onOpen thread ({@link #initialize}), read on
-     * the Bukkit main thread (the three event handlers). Adding {@code synchronized} only to the
+     * the Bukkit main thread (the seven event handlers). Adding {@code synchronized} only to the
      * writer does not establish publication -- the reader never acquires the same monitor, so
      * there is no happens-before edge between the two sides.
      * <p>
@@ -209,10 +213,117 @@ public class PlayerEventManager implements Listener {
     }
 
     /**
+     * Handles the player-death event.
+     * <p>
+     * Moved here from the former {@code EnhancedPlayerEventListener} (#387). That class carried
+     * {@code @EventListener} but was never registered, so this handler and the three below had
+     * never fired. Registering that class alongside this one was not an option: both emitted the
+     * same {@code player_event} message type, so join/quit/chat would have been sent twice.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
+            return;
+        }
+        Player player = event.getEntity();
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_death");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("death_message", event.getDeathMessage());
+        if (player.getKiller() != null) {
+            data.addProperty("killer", player.getKiller().getName());
+        }
+
+        sendPlayerEvent(client, data);
+    }
+
+    /**
+     * Handles the player-kick event.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerKick(PlayerKickEvent event) {
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
+            return;
+        }
+        Player player = event.getPlayer();
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_kick");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("reason", event.getReason());
+        data.addProperty("cancelled", event.isCancelled());
+
+        sendPlayerEvent(client, data);
+    }
+
+    /**
+     * Handles the player-command event.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerCommandPreprocess(PlayerCommandPreprocessEvent event) {
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
+            return;
+        }
+        Player player = event.getPlayer();
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_command");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("command", event.getMessage());
+        data.addProperty("cancelled", event.isCancelled());
+
+        sendPlayerEvent(client, data);
+    }
+
+    /**
+     * Handles the player-world-change event.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
+        // Read once into a local variable and use that same reference throughout. The field is
+        // volatile, and shutdown() could very well null it out from another thread between the
+        // check and the send -- when a reconnect budget is exhausted, disableCloud() runs on the
+        // WebSocket thread, while this method runs on the Bukkit main thread.
+        // HandlerList.unregisterAll() only blocks future dispatches, not this one already on the stack.
+        UltiPanelWebSocketClient client = webSocketClient;
+        if (client == null || !client.isConnected()) {
+            return;
+        }
+        Player player = event.getPlayer();
+        JsonObject data = new JsonObject();
+        data.addProperty("event_type", "player_world_change");
+        data.addProperty("player_name", player.getName());
+        data.addProperty("player_uuid", player.getUniqueId().toString());
+        data.addProperty("from_world", event.getFrom().getName());
+        data.addProperty("to_world", player.getWorld().getName());
+
+        sendPlayerEvent(client, data);
+    }
+
+    /**
      * Sends a player event to UltiPanel.
      * <p>
      * The client is passed in by the caller rather than re-reading {@link #webSocketClient}
-     * here: each of the three event handlers reads that volatile field into a local variable
+     * here: each of the seven event handlers reads that volatile field into a local variable
      * once and threads it through from there. Otherwise "check the connection" and "actually
      * send" could read two different values -- if {@code shutdown()} happens to land in between,
      * this would be an NPE.

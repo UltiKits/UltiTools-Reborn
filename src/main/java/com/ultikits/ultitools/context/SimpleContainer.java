@@ -729,15 +729,6 @@ public class SimpleContainer {
     }
 
     /**
-     * Set ID.
-     *
-     * @param id container ID
-     */
-    public void setId(String id) {
-        // No-op for now
-    }
-
-    /**
      * Set class loader.
      *
      * @param classLoader class loader
