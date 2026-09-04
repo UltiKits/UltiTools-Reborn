@@ -106,7 +106,7 @@ class I18nKeyContractTest {
         int examined = 0;
 
         for (Path file : sourceFiles()) {
-            String text = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            String text = stripComments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             Matcher m = FORMAT_CALL.matcher(text);
             while (m.find()) {
                 String key = unescape(m.group(1));
@@ -157,7 +157,7 @@ class I18nKeyContractTest {
     private Map<String, String> collectLiteralKeys() throws IOException {
         Map<String, String> keys = new LinkedHashMap<>();
         for (Path file : sourceFiles()) {
-            String text = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            String text = stripComments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             Matcher m = I18N_CALL.matcher(text);
             while (m.find()) {
                 int line = (int) text.substring(0, m.start()).chars().filter(c -> c == '\n').count() + 1;
@@ -165,6 +165,62 @@ class I18nKeyContractTest {
             }
         }
         return keys;
+    }
+
+    /**
+     * Blanks out comments so documentation cannot be mistaken for a call site.
+     * <p>
+     * Javadoc routinely quotes {@code i18n("some.key")} to explain behaviour, and without this the
+     * scan reports those examples as untranslated keys. It reported one the first time a javadoc
+     * example was written, which is how this was found. Comment bodies are replaced with spaces
+     * rather than removed so every subsequent offset -- and therefore every reported line number --
+     * stays correct.
+     * <p>
+     * String literals are tracked, so a {@code "//"} inside one (a URL, say) does not start a
+     * comment. Character literals are tracked for the same reason.
+     */
+    private String stripComments(String source) {
+        StringBuilder out = new StringBuilder(source.length());
+        int i = 0;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '"' || c == '\'') {
+                char quote = c;
+                out.append(c);
+                i++;
+                while (i < source.length()) {
+                    char d = source.charAt(i);
+                    out.append(d);
+                    i++;
+                    if (d == '\\' && i < source.length()) {
+                        out.append(source.charAt(i));
+                        i++;
+                    } else if (d == quote) {
+                        break;
+                    }
+                }
+            } else if (c == '/' && i + 1 < source.length() && source.charAt(i + 1) == '/') {
+                while (i < source.length() && source.charAt(i) != '\n') {
+                    out.append(' ');
+                    i++;
+                }
+            } else if (c == '/' && i + 1 < source.length() && source.charAt(i + 1) == '*') {
+                while (i < source.length()
+                        && !(source.charAt(i) == '*' && i + 1 < source.length()
+                                && source.charAt(i + 1) == '/')) {
+                    out.append(source.charAt(i) == '\n' ? '\n' : ' ');
+                    i++;
+                }
+                if (i < source.length()) {
+                    out.append("  ");
+                    i += 2;
+                }
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
     }
 
     private List<Path> sourceFiles() throws IOException {
