@@ -139,10 +139,18 @@ class ConditionalRegistrationEvaluatorDriftTest {
     /**
      * A {@link SimpleContainer} with {@code plugin} registered as the resolvable
      * {@link UltiToolsPlugin} bean, tracked for {@code close()} in {@link #tearDown()}.
+     * <p>
+     * Also stubs {@code plugin.getContext()} to return this same container (D-03) -- this is
+     * the container {@code reportDrift} reads at claim time via {@code plugin.getContext()},
+     * mirroring production's {@code UltiToolsPlugin#setContext(SimpleContainer)} wiring. A test
+     * that wants a fixture reported "present" must register it into the returned container
+     * (e.g. via {@code registerSingleton}); a test that leaves it unregistered gets "absent" by
+     * construction, no separate stub needed.
      */
     private SimpleContainer containerFor(UltiToolsPlugin plugin) {
         SimpleContainer container = new SimpleContainer();
         container.registerType(UltiToolsPlugin.class, plugin);
+        when(plugin.getContext()).thenReturn(container);
         containers.add(container);
         return container;
     }
@@ -287,6 +295,11 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureBComponent.class, container))
                 .as("negate=true with raw false must register")
                 .isTrue();
+        // The scan-time decision was "register" -- simulate ComponentScanner having gone on to
+        // actually construct the singleton, so the D-03 container query (Task 1) has a real
+        // instance to observe when reportDrift is called below (rather than a coincidental
+        // string match that a fixture with no singleton would produce).
+        container.registerSingleton("featureBComponent", new FeatureBComponent());
 
         // negate=true + raw true -> skipped; the message must say "disabled"/"already
         // registered" (the registration decision), never the raw YAML boolean.
@@ -302,6 +315,96 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(message).contains("enableFeatureB");
         assertThat(message).contains("disabled");
         assertThat(message).contains("already registered");
+    }
+
+    @Test
+    @DisplayName("D-03: an absent instance is never reported as registered, even when the condition now enables it")
+    void absentInstanceIsNeverReportedAsRegistered() throws Exception {
+        // Recorded false at scan time; no singleton and no bean definition are ever registered
+        // for FeatureAComponent in `container` -- the query must read that absence, not assume
+        // presence from the fact that the condition now says "register".
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .as("scan-time decision with enableFeatureA: false must be skip")
+                .isFalse();
+
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("no singleton or definition is registered, so the message must not claim presence")
+                .contains("was not registered at startup")
+                .doesNotContain("already registered");
+    }
+
+    @Test
+    @DisplayName("D-03: a present instance is reported as registered when the condition now disables it")
+    void presentInstanceIsReportedAsRegistered() throws Exception {
+        // Mirror of the above: recorded true at scan time, and a real singleton IS registered
+        // in `container` this time -- the query must read that presence too.
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        container.registerSingleton("featureAComponent", new FeatureAComponent());
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .as("scan-time decision with enableFeatureA: true must be register")
+                .isTrue();
+
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("a real singleton is registered, so the message must claim presence")
+                .contains("already registered")
+                .doesNotContain("was not registered at startup");
+    }
+
+    @Test
+    @DisplayName("D-03 control: the same container answers absent for one fixture and present for another in the same run")
+    void containerQueryDistinguishesPresentFromAbsentInSameRun() throws Exception {
+        // A negative result ("absent") is only trustworthy if paired with a positive control
+        // proving the query itself works -- both fixtures are read from the SAME container in
+        // this single test run.
+        writeYaml("config/config.yml", "enableFeatureA: false\nenableFeatureB: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        // FeatureBComponent (negate=true) is registered as a real singleton; FeatureAComponent
+        // is deliberately left unregistered.
+        container.registerSingleton("featureBComponent", new FeatureBComponent());
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .as("scan-time decision with enableFeatureA: false must be skip")
+                .isFalse();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureBComponent.class, container))
+                .as("negate=true with raw enableFeatureB: true must be skip")
+                .isFalse();
+
+        writeYaml("config/config.yml", "enableFeatureA: true\nenableFeatureB: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(2);
+        String aMessage = messages.stream()
+                .filter(m -> m.contains(FeatureAComponent.class.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no drift message for FeatureAComponent"));
+        String bMessage = messages.stream()
+                .filter(m -> m.contains(FeatureBComponent.class.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no drift message for FeatureBComponent"));
+        assertThat(aMessage)
+                .as("FeatureAComponent is unregistered in this container -- absent")
+                .contains("was not registered at startup");
+        assertThat(bMessage)
+                .as("FeatureBComponent is a real singleton in this same container -- present")
+                .contains("already registered");
     }
 
     @Test
