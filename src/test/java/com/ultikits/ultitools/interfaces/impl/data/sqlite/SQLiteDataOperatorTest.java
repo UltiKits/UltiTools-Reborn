@@ -939,7 +939,7 @@ class SQLiteDataOperatorTest {
             readRowStoredAs("probe", "1");
             try (Connection conn = dataSource.getConnection();
                  Statement stmt = conn.createStatement();
-                 java.sql.ResultSet rs = stmt.executeQuery(
+                 ResultSet rs = stmt.executeQuery(
                          "SELECT active FROM defaulted_bool_entity LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getObject(1))
