@@ -127,6 +127,28 @@ public class PluginManager {
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
 
     /**
+     * The framework-owned types whose {@link com.ultikits.ultitools.annotations.Scheduled} methods
+     * this manager registers.
+     * <p>
+     * <b>This set is the wiring, not a description of it.</b> {@link
+     * #registerFrameworkScheduledOwners()} registers exactly the instances whose types appear here
+     * and fails fast if the two disagree, and {@code FrameworkScheduledWiringTest} fails the build
+     * if a framework class carries {@code @Scheduled} without appearing here. Adding a type to
+     * this set and wiring its task are therefore the same act -- which is the point.
+     * <p>
+     * The defect this prevents (#384): {@code TaskManager}'s two original entry points both
+     * iterate a {@code SimpleContainer}'s beans, so an object the framework constructs directly
+     * was reached by neither. {@code PlayerCacheManager.sweepExpiredEntries()} carried a
+     * {@code @Scheduled(period = 5 minutes)} annotation, and its javadoc explained at length why a
+     * clock-driven sweep was chosen over a hand-rolled {@code BukkitRunnable} -- and it never ran
+     * once. Nothing reported an error, because nothing had looked.
+     *
+     * @since 6.3.0
+     */
+    static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
+            new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
+
+    /**
      * Initialize plugin manager. Please do not call this method manually.
      *
      * @throws IOException IO exception
@@ -135,6 +157,7 @@ public class PluginManager {
         this.classLoader = classLoader;
         this.taskManager = new TaskManager(UltiTools.getInstance());
         this.playerCacheManager = new PlayerCacheManager();
+        registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
         registerPluginDisableListener();
         String currentPath = System.getProperty("user.dir");
@@ -332,6 +355,55 @@ public class PluginManager {
         }
         pluginList.clear();
         pluginClassList.clear();
+
+        // Framework-owned tasks are keyed on no plugin, so the unregister loop above does not
+        // reach them. A repeating task left running here survives /reload and the next onEnable
+        // schedules a second copy against the same object.
+        if (taskManager != null) {
+            taskManager.cancelAllCore();
+        }
+    }
+
+    /**
+     * Register the {@code @Scheduled} methods of every framework-owned object.
+     * <p>
+     * Called from {@link #init(ClassLoader)} once {@code taskManager} and the owner instances
+     * exist. Cancellation is the mirror of this, in {@link #close()}.
+     *
+     * @throws IllegalStateException if the instances offered do not match {@link
+     *         #FRAMEWORK_SCHEDULED_OWNER_TYPES}. This is reachable only by editing one of the two
+     *         without the other, which the guard test already fails the build for; it is a
+     *         belt-and-braces check on an invariant, and cannot be triggered by user
+     *         configuration. Failing loudly here is deliberate -- degrading quietly to "some of
+     *         the tasks got registered" is the exact behaviour this whole change exists to remove.
+     * @since 6.3.0
+     */
+    private void registerFrameworkScheduledOwners() {
+        List<Object> owners = frameworkScheduledOwners();
+        Set<Class<?>> offered = new LinkedHashSet<>();
+        for (Object owner : owners) {
+            offered.add(owner.getClass());
+        }
+        if (!offered.equals(FRAMEWORK_SCHEDULED_OWNER_TYPES)) {
+            throw new IllegalStateException(
+                    "Framework @Scheduled wiring is inconsistent: declared "
+                            + FRAMEWORK_SCHEDULED_OWNER_TYPES + " but frameworkScheduledOwners() offered "
+                            + offered + ". Update both together.");
+        }
+        for (Object owner : owners) {
+            taskManager.registerScheduledMethodsCore(owner);
+        }
+    }
+
+    /**
+     * The live instances corresponding to {@link #FRAMEWORK_SCHEDULED_OWNER_TYPES}, in the same
+     * order.
+     *
+     * @return the framework-owned objects to scan for {@code @Scheduled} methods
+     * @since 6.3.0
+     */
+    private List<Object> frameworkScheduledOwners() {
+        return Collections.<Object>singletonList(playerCacheManager);
     }
 
     /**

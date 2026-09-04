@@ -315,4 +315,58 @@ class TaskManagerTest {
             assertEquals(1, taskManager.getTaskCount(otherPlugin));
         }
     }
+
+    // === Framework-owned (core) bucket -- #384 ===
+
+    @Nested
+    @DisplayName("Framework-owned task registration (#384)")
+    class CoreTaskTests {
+
+        @Test
+        @DisplayName("Should register a framework-owned bean's scheduled methods")
+        void shouldRegisterCoreBean() {
+            taskManager.registerScheduledMethodsCore(new ServiceWithScheduled());
+
+            assertEquals(2, taskManager.getCoreTaskCount());
+        }
+
+        @Test
+        @DisplayName("Core registration does not leak into the per-plugin bucket")
+        void coreRegistrationIsSeparateFromPluginBucket() {
+            taskManager.registerScheduledMethodsCore(new ServiceWithScheduled());
+
+            assertEquals(2, taskManager.getCoreTaskCount());
+            assertEquals(0, taskManager.getTaskCount(mockUltiPlugin));
+        }
+
+        @Test
+        @DisplayName("cancelAllCore cancels framework tasks and leaves plugin tasks alone")
+        void cancelAllCoreOnlyAffectsCoreBucket() {
+            taskManager.registerScheduledMethodsCore(new ServiceWithScheduled());
+            taskManager.registerScheduledMethods(mockUltiPlugin, new ServiceWithDelayedTask());
+
+            taskManager.cancelAllCore();
+
+            assertEquals(0, taskManager.getCoreTaskCount());
+            assertEquals(1, taskManager.getTaskCount(mockUltiPlugin));
+        }
+
+        /**
+         * The concrete #384 regression, stated against the real class rather than a test double.
+         * <p>
+         * {@code PlayerCacheManager.sweepExpiredEntries()} carries {@code @Scheduled} and was
+         * measured on a live server never to run: the framework had no path that scanned an object
+         * it constructs itself. A test double would prove the new bucket works in the abstract;
+         * this proves the actual class whose annotation was inert is now registered.
+         */
+        @Test
+        @DisplayName("PlayerCacheManager's expiry sweep is registered -- the #384 regression")
+        void playerCacheManagerSweepIsRegistered() {
+            taskManager.registerScheduledMethodsCore(new PlayerCacheManager());
+
+            assertEquals(1, taskManager.getCoreTaskCount(),
+                    "PlayerCacheManager declares exactly one @Scheduled method "
+                            + "(sweepExpiredEntries); before #384 it was registered zero times");
+        }
+    }
 }
