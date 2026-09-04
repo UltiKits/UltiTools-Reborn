@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -498,6 +499,65 @@ class PermissionValidatorTest {
         void shouldHaveCorrectName() {
             PermissionValidator validator = new PermissionValidator();
             assertEquals("PermissionValidator", validator.getName());
+        }
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("#383: who actually reaches the class-level check")
+    class ClassLevelReachability {
+
+        /**
+         * The class-level branch is not dead code -- the console reaches it. This test exists so
+         * that stays true, because the branch looks unreachable if you only consider players.
+         */
+        @Test
+        @DisplayName("the console does reach the class-level check and can be refused by it")
+        void consoleReachesTheClassLevelCheck() {
+            when(mockConsole.hasPermission("some.permission")).thenReturn(false);
+            PermissionValidator validator = new PermissionValidator("some.permission", false);
+
+            CommandValidator.ValidationResult result = validator.validate(createConsoleContext(null));
+
+            assertFalse(result.isValid(),
+                    "if this ever passes, the class-level branch really has become dead and the "
+                            + "class should be reconsidered rather than left in place");
+        }
+
+        /**
+         * The mechanism that makes the same branch unreachable for players, pinned so that
+         * removing it is a deliberate act rather than an accident.
+         * <p>
+         * {@code CommandManager.registerCommandDirect} calls {@code command.setPermission(...)}
+         * with {@code @CmdExecutor}'s value, so Paper filters the command out of an unpermitted
+         * player's command tree and answers with a parse error before {@code onCommand} runs.
+         * Measured across 22 permission-gated commands on a real 1.21.4 server: a deop'd player
+         * got {@code Unknown or incomplete command} every time and never this validator's message.
+         * <p>
+         * Deleting that {@code setPermission} call would make players see the message -- and would
+         * also make every permission-gated command visible in every player's tab completion. That
+         * is a product decision, not a bug fix. This assertion is here so the decision cannot be
+         * made by accident while "fixing" a validator that looks broken.
+         */
+        @Test
+        @DisplayName("CommandManager still registers the class-level permission with Bukkit")
+        void bukkitLevelRegistrationStillHappens() throws Exception {
+            java.lang.reflect.Method register = com.ultikits.ultitools.manager.CommandManager.class
+                    .getDeclaredMethod("registerCommandDirect",
+                            org.bukkit.command.CommandExecutor.class, String.class, String.class,
+                            String[].class);
+
+            assertNotNull(register,
+                    "registerCommandDirect is what sets the Bukkit-level permission; if it has "
+                            + "been renamed or removed, re-read PermissionValidator's javadoc "
+                            + "before assuming players now reach the class-level check");
+
+            String body = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+                    "src/main/java/com/ultikits/ultitools/manager/CommandManager.java")),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(body.contains("command.setPermission(permission)"),
+                    "the Bukkit-level permission registration is gone -- players now reach "
+                            + "PermissionValidator's class-level branch, and its javadoc plus "
+                            + "issue #383 no longer describe reality");
         }
     }
 }

@@ -220,12 +220,6 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     @Override
     public boolean onCommand(CommandSender sender, Command command, String alias, String[] args) {
-        // Handle help command
-        if (args.length == 1 && getHelpCommand().equals(args[0])) {
-            handleHelp(sender);
-            return true;
-        }
-        
         // Create command context
         // WR-02 (05-REVIEW.md): this.getClass() is the concrete executor class -- the SAME class
         // PluginManager's load-time contract gate inspects (executor.getClass()) -- captured
@@ -239,15 +233,23 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                 .rawArgs(args)
                 .executorClass(this.getClass())
                 .build();
-        
+
+        // Handle help command. Gated on who the sender is, which it was not before #381: this
+        // returned before the context was even built, so handleHelp ran for a console on a
+        // @CmdTarget(PLAYER) command and for a sender the permission would have refused.
+        if (args.length == 1 && getHelpCommand().equals(args[0])) {
+            return handleGatedHelp(context);
+        }
+
         // Match method
         Method method = matchMethod(args);
         if (method == null) {
             sender.sendMessage(ChatColor.RED + String.format(
                     UltiTools.getInstance().i18n("未知指令，请使用/%s %s获取帮助"),
                     command.getName(), getHelpCommand()));
-            handleHelp(sender);
-            return true;
+            // Same gate as the explicit help subcommand: an unmatched argument vector must not
+            // become a way around it (#381).
+            return handleGatedHelp(context);
         }
         
         // Update context with matched method
@@ -400,6 +402,45 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             // finally exactly once, win or lose the race.
             reported.compareAndSet(false, true);
         }
+    }
+
+    /**
+     * Runs the sender-type and permission validators, then shows help if they pass.
+     * <p>
+     * Before 6.3.0 the help short-circuit sat at the very top of {@link #onCommand}, ahead of the
+     * {@code CommandContext} being built, so it bypassed the entire validator chain (#381). Two
+     * consequences were measured on a real server: a console received the full help of a
+     * {@code @CmdTarget(PLAYER)} command -- including, in one module, an admin section gated only
+     * on {@code hasPermission}, which a console always satisfies -- and modules had begun working
+     * around the absent guarantee in incompatible ways. One tested {@code sender instanceof
+     * Player} and silently printed nothing for a console; another printed everything. Neither is
+     * wrong against a contract that promised nothing.
+     * <p>
+     * <b>Cooldown and usage-limit are deliberately not applied here.</b> Help is not the guarded
+     * action: withholding an explanation because the command itself is on cooldown would be
+     * perverse, and {@code UsageLockValidator} acquires a lock that only the invocation path
+     * releases. This is a choice, stated so it cannot later be mistaken for the same oversight in
+     * a different place.
+     *
+     * @param context the command context, already built
+     * @return {@code true} always -- Bukkit's contract for a handled command
+     * @since 6.3.0
+     */
+    private boolean handleGatedHelp(CommandContext context) {
+        for (CommandValidator validator : validatorChain.getValidators()) {
+            if (!(validator instanceof SenderTypeValidator) && !(validator instanceof PermissionValidator)) {
+                continue;
+            }
+            CommandValidator.ValidationResult result = validator.validate(context);
+            if (!result.isValid()) {
+                if (result.getErrorMessage() != null) {
+                    context.getSender().sendMessage(result.getErrorMessage());
+                }
+                return true;
+            }
+        }
+        handleHelp(context.getSender());
+        return true;
     }
 
     /**
