@@ -411,19 +411,45 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      */
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
-        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + e.getMessage());
+        Throwable cause = e.getCause() != null ? e.getCause() : e;
+        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + describe(cause));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
         try {
             ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
             if (erc != null) {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
                 erc.reportError(cause, extractModuleName(), triggerCtx);
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
         }
+    }
+
+    /**
+     * Renders a throwable for the user in a form that is never {@code "null"}.
+     * <p>
+     * Every command body is invoked reflectively, so anything it throws arrives wrapped in an
+     * {@link java.lang.reflect.InvocationTargetException}, whose own {@code getMessage()} is
+     * {@code null} by construction -- the detail belongs to the cause. Reporting the wrapper's
+     * message therefore appended a literal {@code "null"} to the error prefix for <em>every</em>
+     * command failure, sending the user to look for a null-pointer bug that was not there and
+     * hiding the real one in the server log (#385).
+     * <p>
+     * The cause's own message can also be null -- {@code NullPointerException} thrown by a bare
+     * dereference is the common case -- so the class's simple name is used as the fallback. It is
+     * a poor message, but {@code "NullPointerException"} tells the reader more than
+     * {@code "null"} does, and the full stack trace is one line below in the log either way.
+     *
+     * @param cause the unwrapped throwable
+     * @return its message, or its simple class name when the message is null or blank
+     * @since 6.3.0
+     */
+    private static String describe(Throwable cause) {
+        String message = cause.getMessage();
+        return message == null || message.trim().isEmpty()
+                ? cause.getClass().getSimpleName()
+                : message;
     }
 
     /**
@@ -634,7 +660,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                 return true;
             }
             sender.sendMessage(String.format(
-                    UltiTools.getInstance().i18n("正确用法"),
+                    UltiTools.getInstance().i18n("指令正确用法"),
                     command.getName(), format));
             return false;
         }
@@ -647,13 +673,13 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             // Varargs allows any number of additional arguments
             if (args.length < formatArgs.length - 1) {
                 sender.sendMessage(String.format(
-                        UltiTools.getInstance().i18n("正确用法"),
+                        UltiTools.getInstance().i18n("指令正确用法"),
                         command.getName(), format));
                 return false;
             }
         } else if (formatArgs.length != args.length) {
             sender.sendMessage(String.format(
-                    UltiTools.getInstance().i18n("正确用法"),
+                    UltiTools.getInstance().i18n("指令正确用法"),
                     command.getName(), format));
             return false;
         }
@@ -744,6 +770,17 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         if (values == null || values.length == 0) {
             if (type.equals(String.class)) {
                 return "";
+            }
+            // An array parameter that legitimately received zero values gets the empty array, not
+            // null (#396). validateParameterCount deliberately accepts a varargs command with no
+            // trailing arguments -- `msg <player> <message...>` passes with just the player -- and
+            // parseParameters hands this method the zero-length array that produces. Returning
+            // null there meant every handler that touched its own varargs parameter threw:
+            // `/friend msg <player>` with no message died in String.join with a
+            // NullPointerException. This mirrors both the String case above and Java's own varargs
+            // semantics, where a zero-argument call yields a zero-length array.
+            if (type.isArray()) {
+                return java.lang.reflect.Array.newInstance(type.getComponentType(), 0);
             }
             return null;
         }
