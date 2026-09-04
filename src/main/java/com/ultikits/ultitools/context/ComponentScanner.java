@@ -225,8 +225,10 @@ public class ComponentScanner {
      * Check if a class should be registered based on @ConditionalOnConfig.
      * <p>
      * Delegates to {@link ConditionalRegistrationEvaluator}, the single shared implementation
-     * of this decision (D-17) -- also consulted by {@code ListenerManager}'s package-scan
-     * overload, so the annotation is honoured identically on both reflection paths.
+     * of this decision (D-17). This is the only call site of that evaluator in {@code src/main}
+     * (verified: {@code ListenerManager} and {@code CommandManager} have no package-scan
+     * overload that consults it), so this scanner is the one place the annotation needs to be
+     * honoured correctly.
      *
      * @param clazz the class to check
      * @return true if the class should be registered
