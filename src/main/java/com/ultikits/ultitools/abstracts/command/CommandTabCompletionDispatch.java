@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
+import java.util.Set;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
@@ -85,7 +87,7 @@ public final class CommandTabCompletionDispatch {
             return new ArrayList<>();
         }
         if (args.length == 1) {
-            return suggestFirstToken(mappings, player, command, args);
+            return suggestFirstToken(mappings, player, command, args, executorInstance);
         }
         return suggestSubsequentToken(mappings, player, command, args, executorInstance);
     }
@@ -98,7 +100,8 @@ public final class CommandTabCompletionDispatch {
      * behaviour here is a deliberate, named change (see plan 05-05's SUMMARY).
      */
     private static List<String> suggestFirstToken(BiMap<String, Method> mappings, Player player,
-                                                    Command command, String[] args) {
+                                                    Command command, String[] args,
+                                                    Object executorInstance) {
         Map<String, Method> visible = new LinkedHashMap<>();
         for (Map.Entry<String, Method> entry : mappings.entrySet()) {
             if (isVisible(player, entry.getValue())) {
@@ -107,7 +110,46 @@ public final class CommandTabCompletionDispatch {
         }
         TabCompletionManager manager = TabCompletionManager.getInstance();
         TabCompletionContext context = manager.createContext(player, command, args);
-        return manager.suggestFirstArgs(visible, context);
+
+        Set<String> completions = new TreeSet<>(manager.suggestFirstArgs(visible, context));
+        completions.addAll(firstTokenParameterSuggestions(visible, player, command, args,
+                executorInstance));
+        return new ArrayList<>(completions);
+    }
+
+    /**
+     * Resolves the {@code <param>} slot of every visible format whose <em>first</em> token is a
+     * parameter rather than a literal.
+     * <p>
+     * {@code TabCompletionManager.suggestFirstArgs} skips parameter placeholders by construction --
+     * it collects literal subcommand names -- and until 6.3.0 nothing else covered position 0, so
+     * a format like {@code "<name>"} contributed no candidates at all and its
+     * {@code @CmdParam(suggest = ...)} method was never invoked. That silently disabled completion
+     * for the first argument of roughly forty mappings across nine modules, including
+     * {@code /home <name>}, {@code /warp <name>}, {@code /tpa <player>} and {@code /pay}; two of
+     * them had written a suggester that never ran. See #398.
+     * <p>
+     * Position 1 and later were unaffected, because {@code suggestSubsequentToken} has always
+     * resolved parameter slots. UltiMenu declares the same suggester on {@code "<name>"} and on
+     * {@code "open <name>"}, and only the second worked -- same class, same parameter, same
+     * method, differing only in token position.
+     *
+     * @since 6.3.0
+     */
+    private static List<String> firstTokenParameterSuggestions(Map<String, Method> visible,
+                                                                 Player player, Command command,
+                                                                 String[] args,
+                                                                 Object executorInstance) {
+        List<String> completions = new ArrayList<>();
+        for (Map.Entry<String, Method> entry : visible.entrySet()) {
+            String[] formatArgs = splitFormat(entry.getKey());
+            if (formatArgs.length == 0 || !isParameterToken(formatArgs[0])) {
+                continue;
+            }
+            completions.addAll(suggestParameterSlot(player, command, args, 0, entry.getValue(),
+                    formatArgs[0], executorInstance));
+        }
+        return completions;
     }
 
     /**
