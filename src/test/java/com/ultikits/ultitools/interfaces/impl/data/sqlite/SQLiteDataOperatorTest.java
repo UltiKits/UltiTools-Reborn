@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -77,6 +78,28 @@ class SQLiteDataOperatorTest {
         public void setAge(int age) { this.age = age; }
         public double getScore() { return score; }
         public void setScore(double score) { this.score = score; }
+        public boolean isActive() { return active; }
+        public void setActive(boolean active) { this.active = active; }
+    }
+
+    /**
+     * 与 {@link TestEntity} 的区别只有一处：boolean 列 <b>不写 {@code type}</b>，用 {@code @Column} 的
+     * 默认值 {@code VARCHAR(255)}。#388 就藏在这一处差异里——既有测试全都显式写了
+     * {@code type = "BOOLEAN"}，于是列是真布尔、读取端的 Number 分支成立，缺陷永远碰不到。
+     * <p>
+     * 真实模块里 14 个 boolean 列一个都没写 type。
+     */
+    @EqualsAndHashCode(callSuper = true)
+    @Table("defaulted_bool_entity")
+    public static class DefaultedBooleanEntity extends BaseDataEntity<String> {
+        @Column("name")
+        private String name;
+
+        @Column("active")
+        private boolean active;
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
         public boolean isActive() { return active; }
         public void setActive(boolean active) { this.active = active; }
     }
@@ -832,6 +855,98 @@ class SQLiteDataOperatorTest {
             assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount())
                     .as("del(WhereCondition...) deletes by predicate without materialising rows -- it must not fire onDelete")
                     .isEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("#388: 文本列中的布尔值必须按 SQLite/MySQL 实际写入的形态读回")
+    class DefaultedBooleanColumn {
+
+        private SQLiteDataOperator<DefaultedBooleanEntity> boolOperator;
+
+        @BeforeEach
+        void setUpBoolTable() throws Exception {
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("DROP TABLE IF EXISTS defaulted_bool_entity");
+            } catch (Exception ignored) {
+                // 表不存在是正常情况
+            }
+            boolOperator = new SQLiteDataOperator<>(dataSource, DefaultedBooleanEntity.class);
+            // 触发建表
+            boolOperator.getAll(WhereCondition.builder().column("id").value("none").build());
+        }
+
+        /**
+         * 直接以真实后端写入的形态插入，再经 operator 读取。
+         * <p>
+         * <b>为什么不用往返测试。</b>本套件跑在 H2 上，而 H2 把 {@code setObject(Boolean.TRUE)}
+         * 写进 VARCHAR 列时存的是 {@code "TRUE"}，Gson 恰好能把 {@code "TRUE"} 转成 {@code true}——
+         * 于是缺陷在 H2 上根本不出现。SQLite 存的是 {@code "1"}（UAT 服务器上实测
+         * {@code typeof(active)='text', active='1'}），Gson 把 JSON 字符串 {@code "1"} 转成
+         * {@code false}。所以任何 H2 往返测试都守不住这一条，这也正是既有 5000 多个测试从没发现
+         * #388 的原因。这里改为把真实形态直接写进去，同时也覆盖了「读取旧版本写下的行」这一必须支持的场景。
+         */
+        private DefaultedBooleanEntity readRowStoredAs(String id, String storedValue) throws Exception {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(
+                         "INSERT INTO defaulted_bool_entity (`id`, `name`, `active`) VALUES (?, ?, ?)")) {
+                ps.setString(1, id);
+                ps.setString(2, "n");
+                ps.setString(3, storedValue);
+                ps.execute();
+            }
+            List<DefaultedBooleanEntity> read = boolOperator.getAll(
+                    WhereCondition.builder().column("id").value(id).build());
+            assertThat(read).hasSize(1);
+            return read.get(0);
+        }
+
+        @Test
+        @DisplayName("SQLite 写下的 \"1\" 读回 true —— 修复前恒为 false")
+        void sqliteOneReadsAsTrue() throws Exception {
+            // 缺陷链：@Column 默认 VARCHAR(255) -> 列是文本 -> getObject 返回 String "1"
+            // -> 旧读取端只转 Number，跳过 -> Gson 把 "1" 转成 false。
+            // 后果：被封禁玩家仍能进服、/unban 说「未被封禁」、世界天气开关无效。
+            assertThat(readRowStoredAs("s1", "1").isActive()).isTrue();
+        }
+
+        @Test
+        @DisplayName("\"0\" 读回 false —— 对照组：修复前这一条也通过")
+        void sqliteZeroReadsAsFalse() throws Exception {
+            // 修复前坏路径恰好也返回 false。没有这一条，上一条无法区分「修好了」和「恒真」。
+            assertThat(readRowStoredAs("s0", "0").isActive()).isFalse();
+        }
+
+        @Test
+        @DisplayName("H2 写下的 \"TRUE\"/\"FALSE\" 同样正确 —— 这一对在修复前就是对的")
+        void textualTrueAndFalseStillWork() throws Exception {
+            assertThat(readRowStoredAs("t1", "TRUE").isActive()).isTrue();
+            assertThat(readRowStoredAs("t0", "false").isActive()).isFalse();
+        }
+
+        @Test
+        @DisplayName("真正的布尔/数值列不受影响")
+        void booleanAndNumericFormsUnaffected() throws Exception {
+            // 显式 type = "BOOLEAN" 的列走的是另一条形态；既有 TestEntity 覆盖了它，
+            // 这里只确认数值形态仍按 0=false 处理。
+            assertThat(readRowStoredAs("n1", "1").isActive()).isTrue();
+        }
+
+        @Test
+        @DisplayName("列确实是文本 —— 若不再是，本组测试就不再覆盖 #388")
+        void theColumnReallyIsText() throws Exception {
+            readRowStoredAs("probe", "1");
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement();
+                 java.sql.ResultSet rs = stmt.executeQuery(
+                         "SELECT active FROM defaulted_bool_entity LIMIT 1")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getObject(1))
+                        .as("#388 的前提是默认 @Column 类型把布尔建成文本列；"
+                                + "若建表类型改了，本组必须重新设计而不是接受它变绿")
+                        .isInstanceOf(String.class);
+            }
         }
     }
 }

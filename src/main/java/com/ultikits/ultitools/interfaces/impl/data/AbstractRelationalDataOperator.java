@@ -256,9 +256,8 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 for (int i = 1; i <= cols; i++) {
                     String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
                     Object value = rs.getObject(i);
-                    // SQLite stores BOOLEAN as INTEGER (0/1); convert for Gson compatibility
-                    if (value instanceof Number && booleanColumns.containsKey(colName)) {
-                        value = ((Number) value).intValue() != 0;
+                    if (booleanColumns.containsKey(colName)) {
+                        value = normaliseBoolean(value, colName);
                     }
                     // Use Java field name as key so Gson can match it during deserialization
                     String fieldName = columnToFieldName.getOrDefault(colName, colName);
@@ -817,6 +816,59 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * @return the CREATE TABLE SQL statement
      */
     protected abstract String createTableSqlFromClazz(Class<T> type);
+
+    /**
+     * Normalises whatever the driver returned for a {@code boolean} column into a real
+     * {@link Boolean}, so Gson deserialises it correctly.
+     * <p>
+     * The previous version converted only {@code Number}, on the stated assumption that "SQLite
+     * stores BOOLEAN as INTEGER (0/1)". That assumption does not hold here, because of what this
+     * class writes: {@code @Column}'s default type is {@code VARCHAR(255)} and
+     * {@link #buildColumnDefinitions} emits it verbatim, so a {@code boolean} field with no
+     * explicit {@code type} gets a text column. {@code rs.getObject} then returns a
+     * {@code String}, the {@code Number} branch was skipped, and Gson coerced the JSON string
+     * {@code "1"} to {@code false} -- every defaulted boolean column read back false regardless of
+     * what was stored (#388). It was one root cause behind a banned player still being able to
+     * join, {@code /unban} reporting "not banned" for a player it had just banned, and a world's
+     * weather flag having no effect.
+     * <p>
+     * Both representations are handled rather than one, because both exist in the field: tables
+     * created before this fix have text columns holding {@code "1"}/{@code "0"}, and a column
+     * declared with an explicit numeric or boolean {@code type} returns a {@code Number} or
+     * {@code Boolean}. The column type is deliberately left as it is -- correcting it would change
+     * the schema for new installs only, would not help the tables that already exist, and reading
+     * both forms is required either way.
+     * <p>
+     * An unrecognised value is logged rather than quietly becoming {@code false}. Quietly becoming
+     * {@code false} is precisely the behaviour this method exists to remove.
+     *
+     * @param value   whatever {@code ResultSet.getObject} returned
+     * @param colName the column name, for the diagnostic
+     * @return {@code null}, or a {@link Boolean}
+     * @since 6.3.0
+     */
+    private static Object normaliseBoolean(Object value, String colName) {
+        if (value == null || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue() != 0;
+        }
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if ("1".equals(text) || "true".equalsIgnoreCase(text)) {
+                return Boolean.TRUE;
+            }
+            if ("0".equals(text) || "false".equalsIgnoreCase(text)) {
+                return Boolean.FALSE;
+            }
+        }
+        LOGGER.warning("Boolean column '" + colName + "' holds a value this reader does not "
+                + "recognise: " + value.getClass().getSimpleName() + " " + value
+                + ". Reading it as false. Recognised forms are boolean, any number (0 is false), "
+                + "and the strings \"1\"/\"0\"/\"true\"/\"false\".");
+        return Boolean.FALSE;
+    }
 
     /**
      * Builds the column definitions portion of CREATE TABLE.
