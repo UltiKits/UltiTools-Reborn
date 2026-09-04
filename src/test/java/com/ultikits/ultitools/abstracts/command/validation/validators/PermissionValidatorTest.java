@@ -11,6 +11,9 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -28,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 
@@ -502,7 +506,7 @@ class PermissionValidatorTest {
         }
     }
 
-    @org.junit.jupiter.api.Nested
+    @Nested
     @DisplayName("#383: who actually reaches the class-level check")
     class ClassLevelReachability {
 
@@ -541,7 +545,7 @@ class PermissionValidatorTest {
         @Test
         @DisplayName("CommandManager still registers the class-level permission with Bukkit")
         void bukkitLevelRegistrationStillHappens() throws Exception {
-            java.lang.reflect.Method register = com.ultikits.ultitools.manager.CommandManager.class
+            Method register = CommandManager.class
                     .getDeclaredMethod("registerCommandDirect",
                             org.bukkit.command.CommandExecutor.class, String.class, String.class,
                             String[].class);
@@ -551,9 +555,12 @@ class PermissionValidatorTest {
                             + "been renamed or removed, re-read PermissionValidator's javadoc "
                             + "before assuming players now reach the class-level check");
 
-            String body = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+            // The path is a compile-time constant naming a file inside this repository; nothing
+            // here is derived from input of any kind, so there is no traversal to perform.
+            // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+            String body = new String(Files.readAllBytes(Paths.get(
                     "src/main/java/com/ultikits/ultitools/manager/CommandManager.java")),
-                    java.nio.charset.StandardCharsets.UTF_8);
+                    StandardCharsets.UTF_8);
             assertTrue(body.contains("command.setPermission(permission)"),
                     "the Bukkit-level permission registration is gone -- players now reach "
                             + "PermissionValidator's class-level branch, and its javadoc plus "
