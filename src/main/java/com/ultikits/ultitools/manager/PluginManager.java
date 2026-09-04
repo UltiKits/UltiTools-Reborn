@@ -1213,7 +1213,7 @@ public class PluginManager {
                 new AnnotationLookupCache<>(ExceptionCatch.class);
 
         // The interceptor resolves @ExceptionCatch(handler = "...") beans from THIS container.
-        // Reading the global ContextHolder instead would let the last plugin to initialise
+        // Reading a global static holder instead would let the last plugin to initialise
         // overwrite every earlier plugin's handler lookup. See issue #190.
         ExceptionInterceptor exceptionInterceptor =
                 new ExceptionInterceptor(Collections.emptyList(), context, exceptionCatchCache);
