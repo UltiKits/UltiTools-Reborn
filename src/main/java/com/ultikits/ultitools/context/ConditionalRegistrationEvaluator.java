@@ -193,6 +193,10 @@ public final class ConditionalRegistrationEvaluator {
             snapshot = new LinkedHashMap<>(recorded);
         }
 
+        // Read once per invocation (D-03) -- a null container (no context wired yet) is
+        // tolerated by isActuallyRegistered treating every class as not present.
+        SimpleContainer context = plugin.getContext();
+
         List<String> messages = new ArrayList<>();
         for (Map.Entry<Class<?>, Boolean> entry : snapshot.entrySet()) {
             Class<?> clazz = entry.getKey();
@@ -208,7 +212,11 @@ public final class ConditionalRegistrationEvaluator {
                 if (currentDecision == recordedDecision) {
                     continue;
                 }
-                String message = driftMessage(clazz, condition, currentDecision);
+                // D-03: observe the container at the moment this claim is made, rather than
+                // deriving presence from the re-evaluated condition -- a condition re-evaluating
+                // to "register" says nothing about whether construction actually happened.
+                boolean actuallyPresent = isActuallyRegistered(context, clazz);
+                String message = driftMessage(clazz, condition, currentDecision, actuallyPresent);
                 LOGGER.log(Level.WARNING, message);
                 messages.add(message);
             } catch (RuntimeException e) {
@@ -220,13 +228,43 @@ public final class ConditionalRegistrationEvaluator {
         return Collections.unmodifiableList(messages);
     }
 
-    private static String driftMessage(Class<?> clazz, ConditionalOnConfig condition, boolean currentDecision) {
-        // Report the registration decision, not the raw YAML boolean -- negate=true would
-        // otherwise make the direction word ambiguous relative to what actually happened.
+    /**
+     * Whether {@code clazz} is actually present in {@code context} right now -- a real,
+     * constructed singleton, not merely a registered {@link BeanDefinition} (D-03).
+     * <p>
+     * Deliberately does <b>not</b> use the container's membership-predicate method: that method
+     * ORs a bean definition in with an actual singleton, and using it here would repeat the
+     * exact untrue claim this method exists to avoid. The composition used instead --
+     * {@link SimpleContainer#getBeanNamesForType(Class)} (does not instantiate) followed by
+     * {@link SimpleContainer#getSingleton(String, boolean)} (Level 1 cache read only, no early
+     * reference) -- distinguishes a registered definition from a constructed instance.
+     *
+     * @param context the plugin's container, or {@code null} if none is wired yet
+     * @param clazz   the class to check
+     * @return {@code true} if a constructed singleton assignable to {@code clazz} exists
+     */
+    private static boolean isActuallyRegistered(SimpleContainer context, Class<?> clazz) {
+        if (context == null) {
+            return false;
+        }
+        for (String beanName : context.getBeanNamesForType(clazz)) {
+            if (context.getSingleton(beanName, false) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String driftMessage(Class<?> clazz, ConditionalOnConfig condition,
+            boolean currentDecision, boolean actuallyPresent) {
+        // Report the direction the condition now evaluates to (unchanged) alongside what the
+        // container actually holds right now (D-03) -- the state clause is keyed on the observed
+        // instance, not on currentDecision, so it can never claim a presence the container
+        // doesn't have.
         String directionWord = currentDecision ? "enabled" : "disabled";
-        String stateClause = currentDecision
-                ? "but the component was not registered at startup"
-                : "but the component is already registered";
+        String stateClause = actuallyPresent
+                ? "but the component is already registered"
+                : "but the component was not registered at startup";
         return "[UltiTools-API] @ConditionalOnConfig drift after reload: " + clazz.getName()
                 + " (" + condition.value() + " -> " + condition.path() + ") now evaluates to "
                 + directionWord + ", " + stateClause + ". @ConditionalOnConfig is evaluated once "
