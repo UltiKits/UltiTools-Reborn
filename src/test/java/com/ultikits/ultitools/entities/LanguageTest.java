@@ -45,4 +45,64 @@ class LanguageTest {
         assertEquals("你好", language.getLocalizedText("hello"));
         assertEquals("world", language.getLocalizedText("world"));
     }
+
+    @org.junit.jupiter.api.Nested
+    @org.junit.jupiter.api.DisplayName("fromYaml — #389")
+    class FromYaml {
+
+        private Language parse(String yaml) {
+            return Language.fromYaml(new java.io.StringReader(yaml));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("nested YAML flattens to the dotted keys modules actually use")
+        void nestedYamlFlattensToDottedKeys() {
+            // The shape the eight YAML modules ship, and the keys their code asks for --
+            // e.g. UltiWorlds calls i18n("world.delete.deleting").
+            Language language = parse(
+                    "worlds_enabled: \"§aEnabled!\"\n"
+                            + "world:\n"
+                            + "  delete:\n"
+                            + "    deleting: \"Deleting {WORLD}...\"\n"
+                            + "    success: \"Deleted.\"\n");
+
+            assertEquals("§aEnabled!", language.getLocalizedText("worlds_enabled"));
+            assertEquals("Deleting {WORLD}...", language.getLocalizedText("world.delete.deleting"));
+            assertEquals("Deleted.", language.getLocalizedText("world.delete.success"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("section nodes are not entries")
+        void sectionNodesAreNotEntries() {
+            Language language = parse("world:\n  delete:\n    success: \"Deleted.\"\n");
+
+            // "world" and "world.delete" are sections, not strings. Falling back to the key is
+            // exactly what an absent entry should do.
+            assertEquals("world", language.getLocalizedText("world"));
+            assertEquals("world.delete", language.getLocalizedText("world.delete"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("an unknown key still falls back to itself")
+        void unknownKeyFallsBack() {
+            assertEquals("nope", parse("a: \"b\"\n").getLocalizedText("nope"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("empty YAML yields an empty dictionary, not a failure")
+        void emptyYamlIsEmpty() {
+            assertEquals("anything", parse("").getLocalizedText("anything"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("non-string leaves are skipped rather than coerced")
+        void nonStringLeavesAreSkipped() {
+            // A language file is a string dictionary; a stray number should not silently become
+            // one, because getLocalizedText's contract is that a miss returns the key.
+            Language language = parse("count: 5\nname: \"ok\"\n");
+
+            assertEquals("ok", language.getLocalizedText("name"));
+            assertEquals("count", language.getLocalizedText("count"));
+        }
+    }
 }
