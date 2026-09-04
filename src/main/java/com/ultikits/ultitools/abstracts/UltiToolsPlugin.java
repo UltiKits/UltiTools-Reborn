@@ -60,6 +60,15 @@ import lombok.Setter;
  * @version 1.0.0
  */
 public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
+    /**
+     * Language file extensions, in the order they are tried.
+     * <p>
+     * {@code .json} stays first so a module shipping both keeps exactly the behaviour it had
+     * before 6.3.0. {@code .yml} and {@code .yaml} were added for #389: eight modules ship YAML,
+     * and the loader silently produced an empty dictionary for every one of them.
+     */
+    private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
     private Language language;
     @Getter
     private final String version;
@@ -137,15 +146,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *
      * @return the language code to actually load
      */
-    /**
-     * Language file extensions, in the order they are tried.
-     * <p>
-     * {@code .json} stays first so a module shipping both keeps exactly the behaviour it had
-     * before 6.3.0. {@code .yml} and {@code .yaml} were added for #389: eight modules ship YAML,
-     * and the loader silently produced an empty dictionary for every one of them.
-     */
-    private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
-
     private String resolveLanguageCode() {
         String configured = getLanguageCode();
         List<String> supportedCodes = this.supported();
