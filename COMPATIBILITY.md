@@ -154,7 +154,7 @@ green, but it was never public API and its removal is not a compatibility event.
 
 ### Same-release exceptions applied in 6.3.0
 
-Six removals used the [same-release exception](#exception-removal-in-the-same-release-that-announces-it)
+Seven removals used the [same-release exception](#exception-removal-in-the-same-release-that-announces-it)
 above instead of waiting a full MINOR:
 
 - `aop.CglibProxyFactory` — clause 1, proven non-functional (issue #188).
@@ -168,8 +168,11 @@ above instead of waiting a full MINOR:
   clause 1, proven non-functional on every release since 6.2.0 (Phase 1 D-15).
 - `ListenerManager.registerAll(UltiToolsPlugin, String)` — clause 2, zero callers anywhere in
   `src/main` at removal time.
+- `listeners.EnhancedPlayerEventListener` — clause 1, proven non-functional: it carried
+  `@EventListener`, nothing registered it, and all seven of its handlers were measured never to
+  fire on a real 1.21.4 server (issue #387).
 
-Full reasoning and evidence for all six live in
+Full reasoning and evidence for all seven live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 ### Measurement notes carried forward from the 6.3.0 survey

@@ -5,9 +5,11 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
+import com.ultikits.ultitools.services.GameMailService;
 import com.ultikits.ultitools.services.impl.DefaultEmailService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.impl.InMemoryNotificationService;
+import com.ultikits.ultitools.services.impl.NoOpGameMailService;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
@@ -71,6 +73,15 @@ public class DependenceManagers {
         DefaultEmailService emailService = new DefaultEmailService();
         context.registerSingleton("defaultEmailService", emailService);
         context.registerSingleton(EmailService.class.getName(), emailService);
+
+        // Register GameMailService's no-op fallback (#393). It was the one pluggable service of
+        // the four that never reached a container, so `@Autowired GameMailService` had nothing to
+        // resolve against -- a module could not even reach the isAvailable() check the fallback
+        // exists to answer. Registered here rather than left to @Service: framework-owned classes
+        // are not component-scanned, which is exactly why the annotation alone was inert.
+        NoOpGameMailService gameMailService = new NoOpGameMailService();
+        context.registerSingleton("noOpGameMailService", gameMailService);
+        context.registerSingleton(GameMailService.class.getName(), gameMailService);
     }
 
     /**
