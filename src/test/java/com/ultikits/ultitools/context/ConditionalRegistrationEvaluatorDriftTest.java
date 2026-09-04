@@ -73,6 +73,42 @@ class ConditionalRegistrationEvaluatorDriftTest {
     static class PlainComponent {
     }
 
+    /**
+     * D-03 failure modes 1 and 2: a class carrying {@code @ConditionalOnConfig} whose
+     * registration never reached the container -- either because it carries no component
+     * annotation at all (mode 1: {@code ComponentScanner.processClass}'s {@code isComponent}
+     * gate fails before {@code registerComponent} is ever called), or because
+     * {@code registerComponent} itself logged a SEVERE and returned before
+     * {@code registerBeanDefinition} (mode 2: refused {@code @CmdTarget} composition, or a
+     * throwing {@code getBeanName}). Both leave the container holding neither a bean definition
+     * nor a singleton for this class, which is why one fixture stands in for both rows -- the
+     * two modes are indistinguishable at the container-query level this evaluator reads.
+     */
+    @ConditionalOnConfig(value = "config/config.yml", path = "enableConditionOnly")
+    static class ConditionOnlyNoComponent {
+    }
+
+    /**
+     * D-03 failure mode 3: a class whose {@link BeanDefinition} WAS registered (by
+     * {@code ComponentScanner.registerComponent} in production), but whose construction later
+     * threw and was logged-and-skipped (Phase 3 D-25) rather than completing. The container
+     * holds a definition and no singleton -- this is the failure mode issue #409's own text does
+     * not name.
+     */
+    @ConditionalOnConfig(value = "config/config.yml", path = "enableDefinitionOnly")
+    static class DefinitionOnlyComponent {
+    }
+
+    /**
+     * Control fixture, not itself one of D-03's three failure rows: registered as a genuine
+     * singleton, proving the container query answers "present" when the component truly is --
+     * the fact that makes the three negative results above trustworthy rather than an artefact
+     * of a broken probe.
+     */
+    @ConditionalOnConfig(value = "config/config.yml", path = "enablePresent")
+    static class PresentComponent {
+    }
+
     @BeforeEach
     void setUp() {
         mockConfigManager = mock(ConfigManager.class);
@@ -522,6 +558,84 @@ class ConditionalRegistrationEvaluatorDriftTest {
                 .contains("enabled")
                 .contains("already registered")
                 .doesNotContain("restart");
+    }
+
+    @Test
+    @DisplayName("D-03 modes 1/2: no definition, no singleton -> reported not present "
+            + "(no component annotation / registration refused)")
+    void conditionOnlyNoComponentReportsNotPresent() throws Exception {
+        writeYaml("config/config.yml", "enableConditionOnly: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        // Deliberately neither a bean definition nor a singleton is registered for this class --
+        // mirrors ComponentScanner never reaching registerBeanDefinition (D-03 rows 1 and 2).
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(ConditionOnlyNoComponent.class, container))
+                .as("scan-time decision with enableConditionOnly: false must be skip")
+                .isFalse();
+
+        writeYaml("config/config.yml", "enableConditionOnly: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0))
+                .as("neither a definition nor a singleton exists -- the message must not claim presence")
+                .contains("was not registered at startup")
+                .doesNotContain("already registered");
+    }
+
+    @Test
+    @DisplayName("D-03 mode 3: definition registered but never constructed -> reported not present "
+            + "(the failure mode #409's own text does not name)")
+    void definitionOnlyComponentReportsNotPresent() throws Exception {
+        writeYaml("config/config.yml", "enableDefinitionOnly: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        // A bean definition IS registered (as ComponentScanner.registerComponent would have
+        // done), but construction never ran -- getBeanNamesForType will find a candidate name
+        // via beanDefinitions, but getSingleton(name, false) must still answer null.
+        container.registerBeanDefinition("definitionOnlyComponent",
+                new BeanDefinition(DefinitionOnlyComponent.class, "definitionOnlyComponent"));
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(DefinitionOnlyComponent.class, container))
+                .as("scan-time decision with enableDefinitionOnly: false must be skip")
+                .isFalse();
+
+        writeYaml("config/config.yml", "enableDefinitionOnly: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0))
+                .as("a registered definition with no constructed singleton must still report "
+                        + "not present -- getBeanNamesForType finding a candidate name is not "
+                        + "the same as getSingleton finding an instance")
+                .contains("was not registered at startup")
+                .doesNotContain("already registered");
+    }
+
+    @Test
+    @DisplayName("D-03 control: a genuinely present singleton is reported present, making the "
+            + "three negative results above trustworthy")
+    void presentComponentReportsPresent() throws Exception {
+        writeYaml("config/config.yml", "enablePresent: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        container.registerSingleton("presentComponent", new PresentComponent());
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(PresentComponent.class, container))
+                .as("scan-time decision with enablePresent: true must be register")
+                .isTrue();
+
+        writeYaml("config/config.yml", "enablePresent: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0))
+                .as("a genuine singleton is registered -- the message must claim presence, "
+                        + "proving the query itself works and the three absent results above "
+                        + "are not an artefact of a broken probe")
+                .contains("already registered")
+                .doesNotContain("was not registered at startup");
     }
 
     @Test
