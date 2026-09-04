@@ -268,7 +268,47 @@ public final class ConditionalRegistrationEvaluator {
         return "[UltiTools-API] @ConditionalOnConfig drift after reload: " + clazz.getName()
                 + " (" + condition.value() + " -> " + condition.path() + ") now evaluates to "
                 + directionWord + ", " + stateClause + ". @ConditionalOnConfig is evaluated once "
-                + "at component scan; a restart is required for this change to take effect.";
+                + "at component scan; " + adviceFor(actuallyPresent, currentDecision);
+    }
+
+    /**
+     * D-04: the action advice follows the observed {@code (actuallyPresent, currentDecision)}
+     * pair instead of a single fixed template -- the old unconditional "a restart is required"
+     * sentence sent an operator to restart the server in order to remove a component that was
+     * never actually there.
+     * <p>
+     * Four branches, three from D-04's own decision and a fourth extension it does not
+     * enumerate:
+     * <ul>
+     *   <li>present, now disabled -&gt; a restart is required to remove it</li>
+     *   <li>absent, now disabled -&gt; no restart needed; if the operator expected it to be
+     *       present, the cause is at startup, so the startup log is where to look</li>
+     *   <li>absent, now enabled -&gt; a restart is required to create it</li>
+     *   <li>present, now enabled (D-04 does not name this pair; reachable when a bean is
+     *       registered through a non-scanner path such as {@code registerSingleton}/{@code @Bean}
+     *       after the scan-time decision was recorded) -&gt; applying D-04's own principle, the
+     *       observed state already matches this decision, so no restart is needed</li>
+     * </ul>
+     *
+     * @param actuallyPresent whether a constructed singleton is observed in the container now
+     * @param currentDecision whether the condition currently evaluates to "register"
+     * @return the advice sentence, ending the overall drift message
+     */
+    private static String adviceFor(boolean actuallyPresent, boolean currentDecision) {
+        if (actuallyPresent && !currentDecision) {
+            return "a restart is required to remove the component.";
+        }
+        if (!actuallyPresent && !currentDecision) {
+            return "no action is needed -- the component's absence already matches this "
+                    + "decision; if you expected it to be present, check the startup log for a "
+                    + "registration failure.";
+        }
+        if (!actuallyPresent) {
+            // actuallyPresent is false, currentDecision is true here.
+            return "a restart is required to create the component.";
+        }
+        // actuallyPresent && currentDecision: the fourth combination D-04 does not enumerate.
+        return "no action is needed -- this already matches the current decision.";
     }
 
     /**
