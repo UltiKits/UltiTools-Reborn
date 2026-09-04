@@ -177,6 +177,48 @@ class LocalizedTest {
         }
 
         @Test
+        @DisplayName("#389: JAR 中的 .yml / .yaml 与 .json 同等计入")
+        void jarEntriesIncludeYamlExtensions() throws IOException {
+            // 八个模块只发 lang/*.yml。在 6.3.0 之前它们在这里一个语言都报不出来，
+            // resolveLanguageCode 因此无从判断，createLanguageFromPath 也只找 .json，
+            // 最终静默拿到空字典、玩家看到 raw key（#389）。
+            File jar = new File(tempDir, "yamlmodule.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.yml", "a: b");
+                writeEntry(out, "lang/zh.yaml", "a: b");
+                writeEntry(out, "lang/fr.json", "{}");
+                writeEntry(out, "lang/README.txt", "notes");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactlyInAnyOrder("en", "zh", "fr");
+        }
+
+        @Test
+        @DisplayName("#389: 目录中的 .yml / .yaml 与 .json 同等计入")
+        void directoryEntriesIncludeYamlExtensions() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            assertThat(langDir.mkdirs()).isTrue();
+            Files.write(new File(langDir, "en.yml").toPath(), "a: b".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.yaml").toPath(), "a: b".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "fr.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "README.txt").toPath(), "x".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir))
+                    .containsExactlyInAnyOrder("en", "zh", "fr");
+        }
+
+        @Test
+        @DisplayName("#389: languageCodeOf 只认语言扩展名，且不把纯扩展名当成代码")
+        void languageCodeOfRecognisesOnlyLanguageExtensions() {
+            assertThat(Localized.languageCodeOf("en.json")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("en.yml")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("en.yaml")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("README.txt")).isNull();
+            // 名字就是扩展名本身时不能得出空代码
+            assertThat(Localized.languageCodeOf(".json")).isNull();
+        }
+
+        @Test
         @DisplayName("JAR 中嵌套的 lang/extra/en.json 被忽略，只统计 lang/ 直接子级")
         void nestedJarEntriesAreIgnored() throws IOException {
             File jar = new File(tempDir, "nested.jar");

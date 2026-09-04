@@ -16,11 +16,40 @@ import java.util.jar.JarFile;
  * Localized interface.
  */
 public interface Localized {
+
+    /**
+     * The language-file extensions a code may be declared by, matching
+     * {@code UltiToolsPlugin}'s loader.
+     * <p>
+     * {@code .yml}/{@code .yaml} were added in 6.3.0 (#389): eight of this ecosystem's modules
+     * ship YAML, and while only {@code .json} counted here they reported no supported languages at
+     * all, so {@code resolveLanguageCode} had nothing to consult.
+     *
+     * @since 6.3.0
+     */
+    String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
+    /**
+     * Returns {@code fileName} without its language extension, or {@code null} if it has none.
+     *
+     * @param fileName a file or jar-entry name, without any directory part
+     * @return the language code, or {@code null} when the name is not a language file
+     * @since 6.3.0
+     */
+    static String languageCodeOf(String fileName) {
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            if (fileName.endsWith(extension) && fileName.length() > extension.length()) {
+                return fileName.substring(0, fileName.length() - extension.length());
+            }
+        }
+        return null;
+    }
     /**
      * Get the language code of the plugin module.
      * more <a href="https://en.wikipedia.org/wiki/IETF_language_tag">Language code list</a>
      * <br>
-     * The returned list is derived from the {@code lang/*.json} resources the implementor's own
+     * The returned list is derived from the {@code lang/*.json}, {@code lang/*.yml} and
+     * {@code lang/*.yaml} resources the implementor's own
      * code source (its JAR, or an exploded directory in a development workspace) actually ships.
      * An empty list means no language resources were found -- not that no language is supported.
      * Overriding this method still wins over the derivation.
@@ -40,7 +69,7 @@ public interface Localized {
     }
 
     /**
-     * Enumerates the {@code lang/*.json} resources at the given code-source location, handling
+     * Enumerates the {@code lang/*} language resources at the given code-source location, handling
      * both a packaged JAR and an exploded directory (development workspace) layout. Reuses the
      * {@code getProtectionDomain().getCodeSource()} -&gt; {@code JarFile} idiom
      * {@code UltiToolsPlugin.saveResources()} already uses, so this is correct on a module's
@@ -67,7 +96,7 @@ public interface Localized {
     }
 
     /**
-     * Lists the immediate {@code .json} children of {@code langDir} -- nested entries such as
+     * Lists the immediate language-file children of {@code langDir} -- nested entries such as
      * {@code lang/extra/en.json} are not descended into.
      *
      * @param langDir the {@code lang/} directory to scan
@@ -83,17 +112,20 @@ public interface Localized {
         }
         Set<String> codes = new TreeSet<>();
         for (File file : files) {
-            String name = file.getName();
-            if (file.isFile() && name.endsWith(".json")) {
-                codes.add(name.substring(0, name.length() - ".json".length()));
+            if (!file.isFile()) {
+                continue;
+            }
+            String code = languageCodeOf(file.getName());
+            if (code != null) {
+                codes.add(code);
             }
         }
         return new ArrayList<>(codes);
     }
 
     /**
-     * Enumerates {@code jarFile}'s entries for immediate {@code lang/*.json} children -- neither
-     * non-{@code .json} entries (e.g. {@code lang/README.txt}) nor nested entries (e.g.
+     * Enumerates {@code jarFile}'s entries for immediate {@code lang/*} language children --
+     * neither non-language entries (e.g. {@code lang/README.txt}) nor nested entries (e.g.
      * {@code lang/extra/en.json}) are returned. No entry is extracted; this only reads names.
      *
      * @param jarFile the module's own JAR
@@ -105,14 +137,17 @@ public interface Localized {
             Enumeration<JarEntry> entries = jar.entries();
             while (entries.hasMoreElements()) {
                 String name = entries.nextElement().getName();
-                if (!name.startsWith("lang/") || !name.endsWith(".json")) {
+                if (!name.startsWith("lang/")) {
                     continue;
                 }
                 String remainder = name.substring("lang/".length());
                 if (remainder.isEmpty() || remainder.contains("/")) {
                     continue;
                 }
-                codes.add(remainder.substring(0, remainder.length() - ".json".length()));
+                String code = languageCodeOf(remainder);
+                if (code != null) {
+                    codes.add(code);
+                }
             }
             return new ArrayList<>(codes);
         } catch (IOException e) {

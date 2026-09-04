@@ -5,6 +5,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.net.JarURLConnection;
 import java.net.URL;
@@ -15,6 +17,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarEntry;
@@ -57,6 +60,15 @@ import lombok.Setter;
  * @version 1.0.0
  */
 public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
+    /**
+     * Language file extensions, in the order they are tried.
+     * <p>
+     * {@code .json} stays first so a module shipping both keeps exactly the behaviour it had
+     * before 6.3.0. {@code .yml} and {@code .yaml} were added for #389: eight modules ship YAML,
+     * and the loader silently produced an empty dictionary for every one of them.
+     */
+    private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
     private Language language;
     @Getter
     private final String version;
@@ -156,23 +168,70 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private Language createLanguageFromPath(String folderPath) {
         String resolvedCode = resolveLanguageCode();
-        File file = new File(folderPath + File.separator + "lang" + File.separator + resolvedCode + ".json");
-        if (!file.exists()) {
-            String lanPath = "lang" + File.separator + resolvedCode + ".json";
-            InputStream in = getResource(lanPath);
-            if (in != null) {
-                try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(in))) {
-                    String result = bufferedReader.lines().collect(Collectors.joining(""));
-                    return new Language(result);
-                } catch (IOException e) {
-                    getLogger().error("Failed to read language file", e);
-                    return new Language("{}");
-                }
-            } else {
-                return new Language("{}");
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            Language onDisk = loadLanguageFromDisk(folderPath, resolvedCode, extension);
+            if (onDisk != null) {
+                return onDisk;
             }
-        } else {
+            Language inJar = loadLanguageFromJar(resolvedCode, extension);
+            if (inJar != null) {
+                return inJar;
+            }
+        }
+        // #389: this used to return an empty dictionary without a word. Language.get then falls
+        // back to the key, so every message in the module rendered as its own raw key -- which is
+        // what a player sees, and what nobody sees in the log. Eight of sixteen modules were in
+        // this state for a whole release because they ship lang/*.yml and only .json was looked
+        // for. Whatever the cause next time, it will say so.
+        getLogger().warn("Module '" + getPluginName() + "' has no loadable language file for '"
+                + resolvedCode + "'. Looked for lang/" + resolvedCode + " with extensions "
+                + Arrays.toString(LANGUAGE_EXTENSIONS) + ", on disk under " + folderPath
+                + " and inside the module jar. Every i18n(...) call in this module will render its "
+                + "own key until one is added.");
+        return new Language("{}");
+    }
+
+    /**
+     * Reads {@code <folderPath>/lang/<code><extension>} if it exists, else {@code null}.
+     */
+    private Language loadLanguageFromDisk(String folderPath, String code, String extension) {
+        File file = new File(folderPath + File.separator + "lang" + File.separator + code + extension);
+        if (!file.exists()) {
+            return null;
+        }
+        if (".json".equals(extension)) {
             return new Language(file);
+        }
+        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            return Language.fromYaml(reader);
+        } catch (IOException e) {
+            getLogger().error("Failed to read language file " + file.getPath(), e);
+            return new Language("{}");
+        }
+    }
+
+    /**
+     * Reads {@code lang/<code><extension>} from the module jar if present, else {@code null}.
+     * <p>
+     * The resource path is built with {@code '/'} rather than {@code File.separator}: jar entry
+     * names always use a forward slash, so the separator form would silently find nothing on a
+     * Windows host.
+     */
+    private Language loadLanguageFromJar(String code, String extension) {
+        InputStream in = getResource("lang/" + code + extension);
+        if (in == null) {
+            return null;
+        }
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            if (".json".equals(extension)) {
+                return new Language(reader.lines().collect(Collectors.joining("")));
+            }
+            // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
+            // breaks -- so YAML is handed the reader rather than a flattened string.
+            return Language.fromYaml(reader);
+        } catch (IOException e) {
+            getLogger().error("Failed to read language resource lang/" + code + extension, e);
+            return new Language("{}");
         }
     }
 
