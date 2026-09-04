@@ -178,7 +178,8 @@ class ConditionalRegistrationEvaluatorDriftTest {
     }
 
     @Test
-    @DisplayName("scan enabled -> reload disabled emits exactly one WARNING naming class/file/key/direction/restart")
+    @DisplayName("scan enabled -> reload disabled emits exactly one WARNING naming class/file/key/direction; "
+            + "no restart advised since the instance was never actually constructed (D-04)")
     void reloadAfterFlipToDisabledReportsDriftOnce() throws Exception {
         // 1. Scan-time evaluation: enableFeatureA is true, component is registered.
         writeYaml("config/config.yml", "enableFeatureA: true\n");
@@ -227,7 +228,14 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(message).contains("config/config.yml");
         assertThat(message).contains("enableFeatureA");
         assertThat(message).contains("disabled");
-        assertThat(message).contains("restart");
+        // D-04: this fixture's container never actually holds a FeatureAComponent singleton --
+        // only shouldRegister's decision was recorded "register", nothing was ever constructed
+        // (mirrors a D-03 failure mode) -- so the observed-absent message must NOT ask for a
+        // restart to remove something that was never there, and must name the startup log as
+        // where the real cause lives.
+        assertThat(message).contains("was not registered at startup");
+        assertThat(message).doesNotContain("restart");
+        assertThat(message).contains("startup log");
     }
 
     @Test
@@ -254,8 +262,14 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(message).contains("config/config.yml");
         assertThat(message).contains("enableFeatureA");
         assertThat(message).contains("enabled");
-        assertThat(message).contains("was not registered");
+        // D-04: this fixture's container never holds a FeatureAComponent singleton, so the
+        // observed-presence half of the sentence must name the absence explicitly (not merely
+        // "was not registered" as a fragment, but the full observed-state clause) -- and since
+        // it is absent while the condition now says "enabled", a restart IS required to create
+        // it, unlike the disabled-direction case above.
+        assertThat(message).contains("was not registered at startup");
         assertThat(message).contains("restart");
+        assertThat(message).contains("create");
 
         assertThat(warningsCaptured())
                 .as("the drift message must reach the log, not only the return value")
@@ -405,6 +419,109 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(bMessage)
                 .as("FeatureBComponent is a real singleton in this same container -- present")
                 .contains("already registered");
+    }
+
+    @Test
+    @DisplayName("D-04 branch 1/4: present, now disabled -> advises a restart to remove the component")
+    void presentInstanceNowDisabledAdvisesRestartToRemove() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        container.registerSingleton("featureAComponent", new FeatureAComponent());
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isTrue();
+
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("present + now disabled must advise a restart to remove the component")
+                .contains("disabled")
+                .contains("restart")
+                .contains("remove");
+    }
+
+    @Test
+    @DisplayName("D-04 branch 2/4: absent, now disabled -> no restart needed, points at the startup log")
+    void absentInstanceNowDisabledNeedsNoRestartAndPointsToStartupLog() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+        // Deliberately no singleton registered -- mirrors a D-03 failure mode (registration
+        // never happened even though the scan-time decision was "register").
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isTrue();
+
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("absent + now disabled must NOT ask for a restart -- there is nothing to "
+                        + "remove -- and must point the operator at the startup log")
+                .contains("disabled")
+                .doesNotContain("restart")
+                .contains("startup log");
+        assertThat(message)
+                .as("the message must still be a real, non-empty message naming the class")
+                .contains(FeatureAComponent.class.getName());
+    }
+
+    @Test
+    @DisplayName("D-04 branch 3/4: absent, now enabled -> advises a restart to create the component")
+    void absentInstanceNowEnabledAdvisesRestartToCreate() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isFalse();
+
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("absent + now enabled must advise a restart to create the component")
+                .contains("enabled")
+                .contains("restart")
+                .contains("create");
+    }
+
+    @Test
+    @DisplayName("D-04 branch 4/4 (extension): present, now (still) enabled -> no restart needed, already matches")
+    void presentInstanceNowEnabledNeedsNoRestartExtensionOfD04() throws Exception {
+        // This is the fourth (present, enabled) combination D-04's own three bullets do not
+        // enumerate: reachable when a bean was registered through a non-scanner path (e.g.
+        // registerSingleton/@Bean/manual) after the scan-time decision was recorded false.
+        // Applying D-04's own principle -- the observed state already matches what the
+        // condition now asks for, so no restart is needed.
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isFalse();
+
+        // Registered through a non-scanner path after the scan-time decision was recorded.
+        container.registerSingleton("featureAComponent", new FeatureAComponent());
+
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message)
+                .as("present + now enabled already matches the decision -- no restart needed")
+                .contains("enabled")
+                .contains("already registered")
+                .doesNotContain("restart");
     }
 
     @Test
