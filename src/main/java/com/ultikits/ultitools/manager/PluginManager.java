@@ -62,6 +62,7 @@ import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
+import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -332,6 +333,11 @@ public class PluginManager {
         if (panelResponderRegistry != null) {
             panelResponderRegistry.unregisterAll(plugin.getPluginName());
         }
+        // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392, D-01).
+        // The record holds Class<?> references and would otherwise pin the module's ClassLoader
+        // after unload, exactly like the TabCompletionManager / EventBus / PanelResponderRegistry
+        // releases immediately above.
+        ConditionalRegistrationEvaluator.clear(plugin);
         UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
         plugin.unregisterSelf();
         // unregister() is reachable with an instance the caller constructed directly, which never

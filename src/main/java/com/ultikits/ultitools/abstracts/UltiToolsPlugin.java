@@ -31,6 +31,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.Language;
@@ -627,11 +628,24 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         getListenerManager().unregisterAll(this);
     }
 
+    /**
+     * Reload this plugin's configuration and language files.
+     * <p>
+     * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
+     * is evaluated once, at component-scan time during startup, so a reload can only log that a
+     * watched key has changed direction since then -- it never registers, unregisters, or
+     * rebuilds anything (issue #392, D-01). A module overriding {@code reloadSelf()} without
+     * calling {@code super.reloadSelf()} will not get this report; that is pre-existing
+     * behaviour for the two statements above too, stated here so it is not a surprise.
+     */
     @Override
     public void reloadSelf() {
         getConfigManager().reloadConfigs(this);
         // Reinitialize language in case language setting changed
         language = createLanguageFromPath(resourceFolderPath);
+        // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
+        // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
+        ConditionalRegistrationEvaluator.reportDrift(this);
     }
 
     /**
