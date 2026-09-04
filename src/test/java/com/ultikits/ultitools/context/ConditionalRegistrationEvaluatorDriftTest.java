@@ -38,8 +38,11 @@ import com.ultikits.ultitools.utils.TestHelper;
  * scan-time decision and reports drift as a {@code Level.WARNING} when {@link
  * UltiToolsPlugin#reloadSelf()} is called, so an operator sees the flip instead of silence.
  * <p>
- * This class proves the end-to-end path first (scan -&gt; config flip -&gt; reload -&gt; warning),
- * following the {@code doCallRealMethod()} idiom used by {@code UltiToolsPluginLanguageFallbackTest}.
+ * {@link #reloadAfterFlipToDisabledReportsDriftOnce()} proves the end-to-end path first (scan
+ * -&gt; config flip -&gt; reload -&gt; warning), following the {@code doCallRealMethod()} idiom
+ * used by {@code UltiToolsPluginLanguageFallbackTest}. The remaining tests exercise
+ * {@link ConditionalRegistrationEvaluator#reportDrift(UltiToolsPlugin)} directly, which the
+ * tracer test already proved is reachable from {@code reloadSelf()}.
  *
  * @since 6.3.0
  */
@@ -53,12 +56,21 @@ class ConditionalRegistrationEvaluatorDriftTest {
     private ConfigManager mockConfigManager;
     private final List<LogRecord> captured = new ArrayList<>();
     private Handler captureHandler;
+    private final List<UltiToolsPlugin> registeredPlugins = new ArrayList<>();
+    private final List<SimpleContainer> containers = new ArrayList<>();
 
     abstract static class FixturePlugin extends UltiToolsPlugin {
     }
 
     @ConditionalOnConfig(value = "config/config.yml", path = "enableFeatureA")
     static class FeatureAComponent {
+    }
+
+    @ConditionalOnConfig(value = "config/config.yml", path = "enableFeatureB", negate = true)
+    static class FeatureBComponent {
+    }
+
+    static class PlainComponent {
     }
 
     @BeforeEach
@@ -86,6 +98,14 @@ class ConditionalRegistrationEvaluatorDriftTest {
     @AfterEach
     void tearDown() {
         Logger.getLogger(ConditionalRegistrationEvaluator.class.getName()).removeHandler(captureHandler);
+        // The record is a static map -- release everything this test registered so it cannot
+        // leak into a later test in this class (Task 2, "lifecycle release" coverage note).
+        for (UltiToolsPlugin plugin : registeredPlugins) {
+            ConditionalRegistrationEvaluator.clear(plugin);
+        }
+        for (SimpleContainer container : containers) {
+            container.close();
+        }
     }
 
     private void writeYaml(String relativePath, String content) throws IOException {
@@ -102,6 +122,48 @@ class ConditionalRegistrationEvaluatorDriftTest {
         Files.write(new File(langDir, code + ".json").toPath(), jsonContent.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * A plain {@code mock(UltiToolsPlugin.class)} with {@code getResourceFolderPath()} stubbed to
+     * {@link #tempDir}, tracked for release in {@link #tearDown()}.
+     */
+    private UltiToolsPlugin mockPlugin() {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
+        registeredPlugins.add(plugin);
+        return plugin;
+    }
+
+    /**
+     * A {@link SimpleContainer} with {@code plugin} registered as the resolvable
+     * {@link UltiToolsPlugin} bean, tracked for {@code close()} in {@link #tearDown()}.
+     */
+    private SimpleContainer containerFor(UltiToolsPlugin plugin) {
+        SimpleContainer container = new SimpleContainer();
+        container.registerType(UltiToolsPlugin.class, plugin);
+        containers.add(container);
+        return container;
+    }
+
+    /**
+     * A {@link SimpleContainer} with no {@link UltiToolsPlugin} bean at all -- mirrors the
+     * framework's own core context, which never resolves a plugin (Test 6).
+     */
+    private SimpleContainer containerWithNoPlugin() {
+        SimpleContainer container = new SimpleContainer();
+        containers.add(container);
+        return container;
+    }
+
+    private List<LogRecord> warningsCaptured() {
+        List<LogRecord> warnings = new ArrayList<>();
+        for (LogRecord record : captured) {
+            if (record.getLevel() == Level.WARNING) {
+                warnings.add(record);
+            }
+        }
+        return warnings;
+    }
+
     @Test
     @DisplayName("scan enabled -> reload disabled emits exactly one WARNING naming class/file/key/direction/restart")
     void reloadAfterFlipToDisabledReportsDriftOnce() throws Exception {
@@ -110,6 +172,7 @@ class ConditionalRegistrationEvaluatorDriftTest {
         writeLangFile("en", "{\"greeting\":\"Hi\"}");
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        registeredPlugins.add(plugin);
         when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
         when(plugin.getLanguageCode()).thenReturn("en");
         when(plugin.supported()).thenReturn(Collections.singletonList("en"));
@@ -123,8 +186,7 @@ class ConditionalRegistrationEvaluatorDriftTest {
         resourceFolderPathField.setAccessible(true);
         resourceFolderPathField.set(plugin, tempDir.getAbsolutePath());
 
-        SimpleContainer container = new SimpleContainer();
-        container.registerType(UltiToolsPlugin.class, plugin);
+        SimpleContainer container = containerFor(plugin);
 
         boolean registeredAtScanTime = ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container);
         assertThat(registeredAtScanTime).isTrue();
@@ -138,12 +200,7 @@ class ConditionalRegistrationEvaluatorDriftTest {
 
         // 4. Exactly one WARNING, naming the class, the config file, the key, the direction, and
         // the restart requirement.
-        List<LogRecord> warnings = new ArrayList<>();
-        for (LogRecord record : captured) {
-            if (record.getLevel() == Level.WARNING) {
-                warnings.add(record);
-            }
-        }
+        List<LogRecord> warnings = warningsCaptured();
         assertThat(warnings).hasSize(1);
         String message = warnings.get(0).getMessage();
         assertThat(message).contains(FeatureAComponent.class.getName());
@@ -151,7 +208,104 @@ class ConditionalRegistrationEvaluatorDriftTest {
         assertThat(message).contains("enableFeatureA");
         assertThat(message).contains("disabled");
         assertThat(message).contains("restart");
+    }
 
-        container.close();
+    @Test
+    @DisplayName("scan disabled -> reload enabled reports the reverse direction, mirror wording")
+    void reloadAfterFlipToEnabledReportsDrift() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        boolean registeredAtScanTime = ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container);
+        assertThat(registeredAtScanTime).isFalse();
+
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message).contains(FeatureAComponent.class.getName());
+        assertThat(message).contains("config/config.yml");
+        assertThat(message).contains("enableFeatureA");
+        assertThat(message).contains("enabled");
+        assertThat(message).contains("was not registered");
+        assertThat(message).contains("restart");
+
+        assertThat(warningsCaptured()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("no config change across a reload emits no drift and returns an empty list")
+    void noDriftEmitsNothing() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container)).isTrue();
+
+        // No change to the file before reporting.
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).isEmpty();
+        assertThat(warningsCaptured()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("negate=true reports the registration decision, not the raw YAML boolean")
+    void negateReportsRegistrationDecisionNotRawBoolean() throws Exception {
+        // negate=true + raw false -> registered.
+        writeYaml("config/config.yml", "enableFeatureB: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureBComponent.class, container)).isTrue();
+
+        // negate=true + raw true -> skipped; the message must say "disabled"/"already
+        // registered" (the registration decision), never the raw YAML boolean.
+        writeYaml("config/config.yml", "enableFeatureB: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        assertThat(message).contains(FeatureBComponent.class.getName());
+        assertThat(message).contains("config/config.yml");
+        assertThat(message).contains("enableFeatureB");
+        assertThat(message).contains("disabled");
+        assertThat(message).contains("already registered");
+    }
+
+    @Test
+    @DisplayName("clear(plugin) releases the record so a subsequent reportDrift stays empty despite drift")
+    void clearReleasesRecordedDecisions() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container)).isTrue();
+
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+
+        ConditionalRegistrationEvaluator.clear(plugin);
+
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
+        assertThat(warningsCaptured()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("no UltiToolsPlugin in the container fail-opens and records nothing; unconditional classes record nothing")
+    void coreContextAndUnconditionalClassesRecordNothing() throws Exception {
+        // (a) A container with no UltiToolsPlugin bean at all -- mirrors the framework's own
+        // core context. Fail-open (true), and nothing is recorded against any plugin.
+        SimpleContainer emptyContainer = containerWithNoPlugin();
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, emptyContainer)).isTrue();
+
+        UltiToolsPlugin plugin = mockPlugin();
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
+
+        // (b) A class with no @ConditionalOnConfig at all is also a no-op, even against a real,
+        // resolvable plugin.
+        SimpleContainer container = containerFor(plugin);
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(PlainComponent.class, container)).isTrue();
+        assertThat(ConditionalRegistrationEvaluator.reportDrift(plugin)).isEmpty();
     }
 }
