@@ -432,9 +432,9 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * Every command body is invoked reflectively, so anything it throws arrives wrapped in an
      * {@link java.lang.reflect.InvocationTargetException}, whose own {@code getMessage()} is
      * {@code null} by construction -- the detail belongs to the cause. Reporting the wrapper's
-     * message therefore produced a literal {@code "命令执行出错: null"} for <em>every</em> command
-     * failure, sending the user to look for a null-pointer bug that was not there and hiding the
-     * real one in the server log (#385).
+     * message therefore appended a literal {@code "null"} to the error prefix for <em>every</em>
+     * command failure, sending the user to look for a null-pointer bug that was not there and
+     * hiding the real one in the server log (#385).
      * <p>
      * The cause's own message can also be null -- {@code NullPointerException} thrown by a bare
      * dereference is the common case -- so the class's simple name is used as the fallback. It is
