@@ -335,8 +335,12 @@ public final class DeprecationRegistryGenerator {
      * Reads and parses {@code pom.xml} once. {@link #readPomExcludeKeys(Document)} and
      * {@link #readJapicmpBaselineVersion(Document)} both operate on the same parsed
      * {@link Document} rather than each opening their own XML reader.
+     *
+     * <p>Package-private (not {@code private}) so {@code OverBroadExclusionInvariantTest} can read
+     * the real {@code pom.xml} through the same parser this generator uses, instead of duplicating
+     * the XML-reading logic. Do not narrow this back to {@code private}.
      */
-    private static Document readPomDocument() throws IOException {
+    static Document readPomDocument() throws IOException {
         String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
         return parsePomXml(xml);
     }
@@ -345,8 +349,12 @@ public final class DeprecationRegistryGenerator {
      * Reads {@code pom.xml}'s japicmp {@code <plugin>} block and returns every
      * {@code <exclude>} entry as a {@link RegistryKey} - the pom-side input
      * {@link RemovalConsistencyEvaluator} cross-checks against the report and the registry.
+     *
+     * <p>Package-private (not {@code private}) so {@code OverBroadExclusionInvariantTest} can read
+     * the real exclude-key set through the same parser this generator uses, instead of duplicating
+     * the XML-reading logic. Do not narrow this back to {@code private}.
      */
-    private static Set<RegistryKey> readPomExcludeKeys(Document doc) {
+    static Set<RegistryKey> readPomExcludeKeys(Document doc) {
         Element japicmpPlugin = findJapicmpPlugin(doc);
         Set<RegistryKey> keys = new LinkedHashSet<>();
         if (japicmpPlugin == null) {
