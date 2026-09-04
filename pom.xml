@@ -56,9 +56,14 @@
     </properties>
 
     <distributionManagement>
+        <!-- central-publishing-maven-plugin auto-routes -SNAPSHOT deploys to Central's own snapshot
+             endpoint, but it respects an existing override here rather than always applying its own
+             default, so this entry names the destination explicitly instead of relying on that
+             default. The previous value pointed at the retired legacy OSSRH staging host, which
+             returns 404 at its own root and would silently defeat any deploy. -->
         <snapshotRepository>
             <id>ultikits-sonatype</id>
-            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
         </snapshotRepository>
         <repository>
             <id>ultikits-sonatype</id>
