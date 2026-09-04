@@ -86,10 +86,13 @@ class ConditionalRegistrationEvaluatorDriftTest {
 
             @Override
             public void flush() {
+                // Nothing to flush: publish() appends straight to the in-memory list.
             }
 
             @Override
             public void close() {
+                // Nothing to release: the captured records outlive this handler on purpose, so
+                // a test can still read them after tearDown() detaches it.
             }
         };
         Logger.getLogger(ConditionalRegistrationEvaluator.class.getName()).addHandler(captureHandler);
@@ -157,7 +160,9 @@ class ConditionalRegistrationEvaluatorDriftTest {
     private List<LogRecord> warningsCaptured() {
         List<LogRecord> warnings = new ArrayList<>();
         for (LogRecord record : captured) {
-            if (record.getLevel() == Level.WARNING) {
+            // Level.equals compares intValue(), so this also matches a custom Level
+            // registered at WARNING severity -- which is what "logged as a warning" means.
+            if (Level.WARNING.equals(record.getLevel())) {
                 warnings.add(record);
             }
         }
