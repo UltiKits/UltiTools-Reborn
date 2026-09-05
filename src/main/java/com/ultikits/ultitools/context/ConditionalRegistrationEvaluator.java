@@ -247,20 +247,14 @@ public final class ConditionalRegistrationEvaluator {
         if (context == null) {
             return false;
         }
-        for (String beanName : context.getBeanNamesForType(clazz)) {
-            // isInstance, not a null check: getBeanNamesForType resolves names from definition
-            // and type metadata, while getSingleton returns whatever instance currently sits
-            // under that name. A later registerSingleton(name, other) -- the method is public,
-            // so any module author can pick a colliding name -- shadows a scanned definition
-            // without removing it, and a bare null check would then report an unrelated object
-            // as the conditional component. That is #409's own defect one layer along: claiming
-            // a presence the container was never asked to confirm. This method's javadoc already
-            // says "assignable to clazz"; this is the line that makes that true.
-            if (clazz.isInstance(context.getSingleton(beanName, false))) {
-                return true;
-            }
-        }
-        return false;
+        // One query, asked of the container, rather than a presence answer assembled out here
+        // from a name enumeration. Composing it externally is what produced two successive
+        // false answers of the same shape: first a bare null check that let a name-colliding
+        // object of an unrelated type count as the component, then a name-only search that
+        // could not see an instance bound through registerType at all. Both are #409's own
+        // defect in a new place -- reporting a state the container was never asked to confirm.
+        // SimpleContainer knows where its instances live; ask it.
+        return context.hasConstructedInstanceOfType(clazz);
     }
 
     private static String driftMessage(Class<?> clazz, ConditionalOnConfig condition,

@@ -499,6 +499,35 @@ class ConditionalRegistrationEvaluatorDriftTest {
     }
 
     @Test
+    @DisplayName("An instance bound only through registerType counts as present")
+    void instanceBoundOnlyThroughRegisterTypeIsReportedAsPresent() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        // The scan decided "skip", so nothing was registered by name. The component is then
+        // installed by hand through registerType, which writes to typeMappings and nowhere
+        // else -- no singleton, no definition, no supplier, hence no name. PluginManager uses
+        // this API in production (TransactionManager, UltiToolsPlugin, JavaPlugin), so it is a
+        // real installation path, not a test-only one.
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isFalse();
+        container.registerType(FeatureAComponent.class, new FeatureAComponent());
+
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        // getBean(FeatureAComponent.class) returns the instance, so telling the operator it was
+        // never registered and that a restart will create it is false in both halves. A
+        // name-only presence search cannot see this instance; the container-level query can.
+        assertThat(message)
+                .as("an instance reachable through getBean must not be reported as absent")
+                .contains("already registered");
+    }
+
+    @Test
     @DisplayName("D-04 branch 1/4: present, now disabled -> advises a restart to remove the component")
     void presentInstanceNowDisabledAdvisesRestartToRemove() throws Exception {
         writeYaml("config/config.yml", "enableFeatureA: true\n");

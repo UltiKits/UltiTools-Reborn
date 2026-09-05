@@ -536,7 +536,51 @@ public class SimpleContainer {
     }
 
     /**
+     * Report whether a constructed instance assignable to {@code type} already exists in this
+     * container or any parent, without constructing anything.
+     * <p>
+     * This exists because {@link #getBeanNamesForType(Class)} answers a different question. That
+     * method enumerates <i>names</i>, and it draws them from three of the four places an instance
+     * can live: {@link #singletons}, {@link #beanDefinitions} and {@link #supplierTypes}. It does
+     * not consult {@link #typeMappings}, so an instance installed only through
+     * {@link #registerType(Class, Object)} -- which writes to that map and nowhere else -- is
+     * invisible to a name-based presence check, even though {@link #getBean(Class)} returns it.
+     * A caller asking "is it here?" rather than "what is it called?" needs both.
+     * <p>
+     * Name-derived candidates are additionally type-checked against the retrieved singleton:
+     * the definition and supplier sources match on <i>declared</i> metadata, so a definition
+     * naming {@code type} plus a singleton of something else under the same name would otherwise
+     * report a presence that is not there.
+     * <p>
+     * Neither branch instantiates: {@link #getSingleton(String, boolean)} is a Level 1 cache read
+     * with no early reference, and {@link #typeMappings} holds already-constructed objects.
+     *
+     * @param type the type to look for
+     * @return {@code true} if a constructed instance assignable to {@code type} is already held
+     * @since 6.3.0
+     */
+    public boolean hasConstructedInstanceOfType(Class<?> type) {
+        for (Map.Entry<Class<?>, Object> entry : typeMappings.entrySet()) {
+            if (type.isInstance(entry.getValue())) {
+                return true;
+            }
+        }
+        for (String beanName : getBeanNamesForType(type)) {
+            if (type.isInstance(getSingleton(beanName, false))) {
+                return true;
+            }
+        }
+        return parent != null && parent.hasConstructedInstanceOfType(type);
+    }
+
+    /**
      * Get bean names for type.
+     * <p>
+     * Enumerates names from {@link #singletons}, {@link #beanDefinitions} and
+     * {@link #supplierTypes}, plus any parent container. It deliberately answers "what is it
+     * called", not "is it here": {@link #typeMappings} holds instances bound by
+     * {@link #registerType(Class, Object)} under no name at all, so they cannot appear here.
+     * For a presence question, use {@link #hasConstructedInstanceOfType(Class)}.
      *
      * @param type bean type
      * @return bean names
