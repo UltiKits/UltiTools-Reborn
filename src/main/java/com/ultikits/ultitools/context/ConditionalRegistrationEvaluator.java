@@ -248,7 +248,15 @@ public final class ConditionalRegistrationEvaluator {
             return false;
         }
         for (String beanName : context.getBeanNamesForType(clazz)) {
-            if (context.getSingleton(beanName, false) != null) {
+            // isInstance, not a null check: getBeanNamesForType resolves names from definition
+            // and type metadata, while getSingleton returns whatever instance currently sits
+            // under that name. A later registerSingleton(name, other) -- the method is public,
+            // so any module author can pick a colliding name -- shadows a scanned definition
+            // without removing it, and a bare null check would then report an unrelated object
+            // as the conditional component. That is #409's own defect one layer along: claiming
+            // a presence the container was never asked to confirm. This method's javadoc already
+            // says "assignable to clazz"; this is the line that makes that true.
+            if (clazz.isInstance(context.getSingleton(beanName, false))) {
                 return true;
             }
         }

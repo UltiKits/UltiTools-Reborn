@@ -458,6 +458,47 @@ class ConditionalRegistrationEvaluatorDriftTest {
     }
 
     @Test
+    @DisplayName("A definition-named singleton of an unrelated type is not reported as present")
+    void unrelatedSingletonUnderADefinitionNamedKeyIsNotReportedAsPresent() throws Exception {
+        writeYaml("config/config.yml", "enableFeatureA: true\n");
+        UltiToolsPlugin plugin = mockPlugin();
+        SimpleContainer container = containerFor(plugin);
+
+        // Reaching the collision needs BOTH halves, because getBeanNamesForType draws names
+        // from three sources and only the singleton source already type-checks
+        // (SimpleContainer: `type.isInstance(entry.getValue())`):
+        //   1. a bean DEFINITION under this name whose declared class IS FeatureAComponent --
+        //      this is what makes getBeanNamesForType(FeatureAComponent.class) return the name,
+        //      via `type.isAssignableFrom(entry.getValue().getBeanClass())`;
+        //   2. a SINGLETON under that same name that is NOT a FeatureAComponent -- this is what
+        //      getSingleton then hands back.
+        // registerSingleton is public and takes a caller-chosen name, so this shadowing needs no
+        // internal coincidence; any module author can produce it.
+        //
+        // A test that registers only the singleton proves nothing: source 1 type-checks, the
+        // name is never returned, the loop never runs, and the assertion passes with or without
+        // the fix. That mistake was made once here and is why this comment exists.
+        container.registerBeanDefinition("featureAComponent",
+                new BeanDefinition(FeatureAComponent.class, "featureAComponent"));
+        container.registerSingleton("featureAComponent", new FeatureBComponent());
+
+        assertThat(ConditionalRegistrationEvaluator.shouldRegister(FeatureAComponent.class, container))
+                .isTrue();
+
+        writeYaml("config/config.yml", "enableFeatureA: false\n");
+
+        List<String> messages = ConditionalRegistrationEvaluator.reportDrift(plugin);
+        assertThat(messages).hasSize(1);
+        String message = messages.get(0);
+        // No FeatureAComponent instance exists, so the report must take the absent branch.
+        // Claiming presence here would be #409's own defect one layer along: asserting a state
+        // the container was never asked to confirm.
+        assertThat(message)
+                .as("an unrelated object under a definition-named key is not a FeatureAComponent")
+                .doesNotContain("already registered");
+    }
+
+    @Test
     @DisplayName("D-04 branch 1/4: present, now disabled -> advises a restart to remove the component")
     void presentInstanceNowDisabledAdvisesRestartToRemove() throws Exception {
         writeYaml("config/config.yml", "enableFeatureA: true\n");
