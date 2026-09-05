@@ -193,6 +193,10 @@ public final class ConditionalRegistrationEvaluator {
             snapshot = new LinkedHashMap<>(recorded);
         }
 
+        // Read once per invocation (D-03) -- a null container (no context wired yet) is
+        // tolerated by isActuallyRegistered treating every class as not present.
+        SimpleContainer context = plugin.getContext();
+
         List<String> messages = new ArrayList<>();
         for (Map.Entry<Class<?>, Boolean> entry : snapshot.entrySet()) {
             Class<?> clazz = entry.getKey();
@@ -208,7 +212,11 @@ public final class ConditionalRegistrationEvaluator {
                 if (currentDecision == recordedDecision) {
                     continue;
                 }
-                String message = driftMessage(clazz, condition, currentDecision);
+                // D-03: observe the container at the moment this claim is made, rather than
+                // deriving presence from the re-evaluated condition -- a condition re-evaluating
+                // to "register" says nothing about whether construction actually happened.
+                boolean actuallyPresent = isActuallyRegistered(context, clazz);
+                String message = driftMessage(clazz, condition, currentDecision, actuallyPresent);
                 LOGGER.log(Level.WARNING, message);
                 messages.add(message);
             } catch (RuntimeException e) {
@@ -220,17 +228,89 @@ public final class ConditionalRegistrationEvaluator {
         return Collections.unmodifiableList(messages);
     }
 
-    private static String driftMessage(Class<?> clazz, ConditionalOnConfig condition, boolean currentDecision) {
-        // Report the registration decision, not the raw YAML boolean -- negate=true would
-        // otherwise make the direction word ambiguous relative to what actually happened.
+    /**
+     * Whether {@code clazz} is actually present in {@code context} right now -- a real,
+     * constructed singleton, not merely a registered {@link BeanDefinition} (D-03).
+     * <p>
+     * Deliberately does <b>not</b> use the container's membership-predicate method: that method
+     * ORs a bean definition in with an actual singleton, and using it here would repeat the
+     * exact untrue claim this method exists to avoid. The composition used instead --
+     * {@link SimpleContainer#getBeanNamesForType(Class)} (does not instantiate) followed by
+     * {@link SimpleContainer#getSingleton(String, boolean)} (Level 1 cache read only, no early
+     * reference) -- distinguishes a registered definition from a constructed instance.
+     *
+     * @param context the plugin's container, or {@code null} if none is wired yet
+     * @param clazz   the class to check
+     * @return {@code true} if a constructed singleton assignable to {@code clazz} exists
+     */
+    private static boolean isActuallyRegistered(SimpleContainer context, Class<?> clazz) {
+        if (context == null) {
+            return false;
+        }
+        // One query, asked of the container, rather than a presence answer assembled out here
+        // from a name enumeration. Composing it externally is what produced two successive
+        // false answers of the same shape: first a bare null check that let a name-colliding
+        // object of an unrelated type count as the component, then a name-only search that
+        // could not see an instance bound through registerType at all. Both are #409's own
+        // defect in a new place -- reporting a state the container was never asked to confirm.
+        // SimpleContainer knows where its instances live; ask it.
+        return context.hasConstructedInstanceOfType(clazz);
+    }
+
+    private static String driftMessage(Class<?> clazz, ConditionalOnConfig condition,
+            boolean currentDecision, boolean actuallyPresent) {
+        // Report the direction the condition now evaluates to (unchanged) alongside what the
+        // container actually holds right now (D-03) -- the state clause is keyed on the observed
+        // instance, not on currentDecision, so it can never claim a presence the container
+        // doesn't have.
         String directionWord = currentDecision ? "enabled" : "disabled";
-        String stateClause = currentDecision
-                ? "but the component was not registered at startup"
-                : "but the component is already registered";
+        String stateClause = actuallyPresent
+                ? "but the component is already registered"
+                : "but the component was not registered at startup";
         return "[UltiTools-API] @ConditionalOnConfig drift after reload: " + clazz.getName()
                 + " (" + condition.value() + " -> " + condition.path() + ") now evaluates to "
                 + directionWord + ", " + stateClause + ". @ConditionalOnConfig is evaluated once "
-                + "at component scan; a restart is required for this change to take effect.";
+                + "at component scan; " + adviceFor(actuallyPresent, currentDecision);
+    }
+
+    /**
+     * D-04: the action advice follows the observed {@code (actuallyPresent, currentDecision)}
+     * pair instead of a single fixed template -- the old unconditional "a restart is required"
+     * sentence sent an operator to restart the server in order to remove a component that was
+     * never actually there.
+     * <p>
+     * Four branches, three from D-04's own decision and a fourth extension it does not
+     * enumerate:
+     * <ul>
+     *   <li>present, now disabled -&gt; a restart is required to remove it</li>
+     *   <li>absent, now disabled -&gt; no restart needed; if the operator expected it to be
+     *       present, the cause is at startup, so the startup log is where to look</li>
+     *   <li>absent, now enabled -&gt; a restart is required to create it</li>
+     *   <li>present, now enabled (D-04 does not name this pair; reachable when a bean is
+     *       registered through a non-scanner path such as {@code registerSingleton}/{@code @Bean}
+     *       after the scan-time decision was recorded) -&gt; applying D-04's own principle, the
+     *       observed state already matches this decision, so no restart is needed</li>
+     * </ul>
+     *
+     * @param actuallyPresent whether a constructed singleton is observed in the container now
+     * @param currentDecision whether the condition currently evaluates to "register"
+     * @return the advice sentence, ending the overall drift message
+     */
+    private static String adviceFor(boolean actuallyPresent, boolean currentDecision) {
+        if (actuallyPresent && !currentDecision) {
+            return "a restart is required to remove the component.";
+        }
+        if (!actuallyPresent && !currentDecision) {
+            return "no action is needed -- the component's absence already matches this "
+                    + "decision; if you expected it to be present, check the startup log for a "
+                    + "registration failure.";
+        }
+        if (!actuallyPresent) {
+            // actuallyPresent is false, currentDecision is true here.
+            return "a restart is required to create the component.";
+        }
+        // actuallyPresent && currentDecision: the fourth combination D-04 does not enumerate.
+        return "no action is needed -- this already matches the current decision.";
     }
 
     /**
