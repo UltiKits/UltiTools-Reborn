@@ -307,4 +307,39 @@ class UltiToolsPluginLanguageScopeTest {
             directoryLoader.close();
         }
     }
+
+    /**
+     * 13-REVIEW CR-01: {@code Localized.scanLangResources()} (inherited, drives {@link
+     * Localized#supported()}) already branches on a directory-shaped {@code CodeSource} and scans
+     * {@code <location>/lang/} directly off disk -- {@code loadLanguageFromJar} must resolve the
+     * same module's own {@code lang/en.yml} the same way, not disagree with its own sibling method
+     * by unconditionally trying (and failing) to open the directory as a {@code JarFile} first.
+     */
+    @Test
+    @DisplayName("A CodeSource pointing at a directory loads the module's own lang/ file instead of "
+            + "silently shadowing it with an empty dictionary (13-REVIEW CR-01)")
+    void explodedDirectoryModuleLangFileIsLoadedNotShadowed() throws Throwable {
+        File explodedRoot = new File(tempDir, "exploded-module-with-lang");
+        File classFile = new File(explodedRoot, ModuleFixturePlugin.class.getName().replace('.', '/') + ".class");
+        Files.createDirectories(classFile.getParentFile().toPath());
+        Files.write(classFile.toPath(), compiledFixtureClassBytes());
+
+        File langFile = new File(explodedRoot, "lang" + File.separator + "en.yml");
+        Files.createDirectories(langFile.getParentFile().toPath());
+        Files.write(langFile.toPath(), "probe:\n  marker: MODULE\n".getBytes(StandardCharsets.UTF_8));
+
+        ClassLoader isolatingBase = new LangResourceHidingClassLoader(UltiToolsPluginLanguageScopeTest.class.getClassLoader());
+        ChildFirstClassLoader directoryLoader = new ChildFirstClassLoader(
+                new URL[]{explodedRoot.toURI().toURL()}, isolatingBase);
+        try {
+            Object plugin = newModuleFixtureInstance(directoryLoader);
+
+            Language language = invokeCreateLanguageFromPath(
+                    plugin, new File(tempDir, "no-such-resource-folder").getAbsolutePath());
+
+            assertThat(language.getLocalizedText("probe.marker")).isEqualTo("MODULE");
+        } finally {
+            directoryLoader.close();
+        }
+    }
 }
