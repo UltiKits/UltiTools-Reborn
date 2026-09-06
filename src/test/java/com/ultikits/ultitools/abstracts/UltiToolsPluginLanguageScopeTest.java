@@ -280,7 +280,8 @@ class UltiToolsPluginLanguageScopeTest {
     }
 
     @Test
-    @DisplayName("A CodeSource pointing at a directory (not a jar) degrades without throwing")
+    @DisplayName("A CodeSource pointing at a directory with no matching lang file returns null "
+            + "without throwing (not a false empty Language) -- 13-REVIEW CR-01")
     void unreadableCodeSourceDegradesWithoutThrowing() throws Throwable {
         File explodedRoot = new File(tempDir, "exploded-module");
         File classFile = new File(explodedRoot, ModuleFixturePlugin.class.getName().replace('.', '/') + ".class");
@@ -297,12 +298,11 @@ class UltiToolsPluginLanguageScopeTest {
             assertThatCode(() -> resultHolder.set(invokeLoadLanguageFromJar(plugin, "en", ".json")))
                     .doesNotThrowAnyException();
 
-            // CodeSource resolves to a directory, so opening it as a JarFile fails with an
-            // IOException -- caught and degraded to an empty dictionary, matching saveResources()'s
-            // own logged-and-degraded convention rather than propagating the failure.
-            Language result = (Language) resultHolder.get();
-            assertThat(result).isNotNull();
-            assertThat(result.getLocalizedText("probe.marker")).isEqualTo("probe.marker");
+            // CodeSource resolves to a directory with no lang/en.json inside it -- CR-01's fix
+            // returns null (the same "not found, keep looking" signal a jar-backed lookup gives),
+            // not the pre-fix non-null empty Language that made createLanguageFromPath's extension
+            // loop stop on the very first attempt and suppressed the #389 diagnostic warning.
+            assertThat(resultHolder.get()).isNull();
         } finally {
             directoryLoader.close();
         }

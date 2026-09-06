@@ -212,11 +212,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Reads {@code lang/<code><extension>} from the module jar if present, else {@code null}.
+     * Reads {@code lang/<code><extension>} from the module's own {@link CodeSource} location if
+     * present, else {@code null}. Mirrors {@link Localized#scanLangResources(URL)}'s directory/jar
+     * branch (13-REVIEW CR-01, issue #412 follow-up): an exploded classpath (dev workspace, IDE
+     * launch, or a module test that instantiates a real {@code UltiToolsPlugin} subclass) has a
+     * directory as its {@code CodeSource}, and {@link Localized#supported()} already scans that
+     * directory directly -- this method must not disagree by unconditionally trying (and failing)
+     * to open the directory as a {@code JarFile} first.
      * <p>
-     * The resource path is built with {@code '/'} rather than {@code File.separator}: jar entry
-     * names always use a forward slash, so the separator form would silently find nothing on a
-     * Windows host.
+     * The resource path is built with {@code '/'} for the jar-entry lookup and {@link
+     * File#separator} for the on-disk lookup: jar entry names always use a forward slash, so the
+     * separator form would silently find nothing on a Windows host, and the reverse holds for a
+     * real file path.
      */
     private Language loadLanguageFromJar(String code, String extension) {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
@@ -224,26 +231,49 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return null;
         }
         String rawPath = src.getLocation().getPath();
-        String jarPath = rawPath.startsWith("/") ? rawPath : rawPath.substring(1);
+        File location = new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+        if (location.isDirectory()) {
+            // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
+            // already treats this shape as first-class; loadLanguageFromJar must not disagree.
+            File resource = new File(location, "lang" + File.separator + code + extension);
+            if (!resource.isFile()) {
+                return null;
+            }
+            try (BufferedReader reader = Files.newBufferedReader(resource.toPath(), StandardCharsets.UTF_8)) {
+                return parseLanguageResource(reader, extension);
+            } catch (IOException e) {
+                getLogger().error("Failed to read language resource " + resource + " from " + location, e);
+                return new Language("{}");
+            }
+        }
         String entryName = "lang/" + code + extension;
-        try (JarFile jarFile = new JarFile(jarPath)) {
+        try (JarFile jarFile = new JarFile(location)) {
             JarEntry entry = jarFile.getJarEntry(entryName);
             if (entry == null) {
                 return null;
             }
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8))) {
-                if (".json".equals(extension)) {
-                    return new Language(reader.lines().collect(Collectors.joining("")));
-                }
-                // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
-                // breaks -- so YAML is handed the reader rather than a flattened string.
-                return Language.fromYaml(reader);
+                return parseLanguageResource(reader, extension);
             }
         } catch (IOException e) {
-            getLogger().error("Failed to read language resource " + entryName + " from " + jarPath, e);
+            getLogger().error("Failed to read language resource " + entryName + " from " + location, e);
             return new Language("{}");
         }
+    }
+
+    /**
+     * Parses a {@code lang/*} resource already opened as a {@link BufferedReader} -- shared by
+     * both the on-disk (exploded directory) and in-jar branches of {@link
+     * #loadLanguageFromJar(String, String)} so the two stay in sync.
+     */
+    private static Language parseLanguageResource(BufferedReader reader, String extension) throws IOException {
+        if (".json".equals(extension)) {
+            return new Language(reader.lines().collect(Collectors.joining("")));
+        }
+        // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
+        // breaks -- so YAML is handed the reader rather than a flattened string.
+        return Language.fromYaml(reader);
     }
 
     /**
