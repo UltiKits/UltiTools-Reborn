@@ -1063,6 +1063,21 @@
             <version>5.5.0</version>
             <scope>test</scope>
         </dependency>
+        <!-- Objenesis is already resolved transitively via mockito-core (it backs Mockito's
+             inline mock maker's constructor-bypassing allocation), but 13-01 imports it directly
+             in UltiToolsPluginLanguageScopeTest to allocate a jar-loaded fixture class without
+             invoking any UltiToolsPlugin constructor. analyze-only (FOUND-05, T-01-03b) fails the
+             build on any class used but not explicitly declared, so it is declared here rather
+             than added to ignoredUsedUndeclaredDependencies - unlike that list's entries (arriving
+             solely through paper-api/obliviate-invs and never referenced by name), this one is
+             imported by fully-qualified name in framework test source. Version pinned to the exact
+             one mockito-core 5.5.0 already resolves, so this adds no new version to the tree. -->
+        <dependency>
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>3.3</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
