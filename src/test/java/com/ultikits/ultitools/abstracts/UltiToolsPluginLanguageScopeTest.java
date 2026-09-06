@@ -194,6 +194,10 @@ class UltiToolsPluginLanguageScopeTest {
     }
 
     private static Object newModuleFixtureInstance(ClassLoader moduleLoader) throws Exception {
+        // The class name is a compile-time constant (ModuleFixturePlugin.class.getName()), never
+        // attacker-controllable; loading through the given moduleLoader is required to reproduce
+        // the shared-classloader shadowing that issue #412 describes.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         Class<?> fixtureClass = Class.forName(ModuleFixturePlugin.class.getName(), true, moduleLoader);
         Objenesis objenesis = new ObjenesisStd();
         return objenesis.newInstance(fixtureClass);
