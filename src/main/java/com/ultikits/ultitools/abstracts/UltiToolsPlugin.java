@@ -242,7 +242,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             try (BufferedReader reader = Files.newBufferedReader(resource.toPath(), StandardCharsets.UTF_8)) {
                 return parseLanguageResource(reader, extension);
             } catch (IOException e) {
-                getLogger().error("Failed to read language resource " + resource + " from " + location, e);
+                getLogger().error(e, "Failed to read language resource " + resource + " from " + location);
                 return new Language("{}");
             }
         }
@@ -257,7 +257,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 return parseLanguageResource(reader, extension);
             }
         } catch (IOException e) {
-            getLogger().error("Failed to read language resource " + entryName + " from " + location, e);
+            getLogger().error(e, "Failed to read language resource " + entryName + " from " + location);
             return new Language("{}");
         }
     }
