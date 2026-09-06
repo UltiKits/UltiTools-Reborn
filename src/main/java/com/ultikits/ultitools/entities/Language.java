@@ -29,6 +29,7 @@ public class Language {
     private static final Type MAP_TYPE = new TypeToken<Map<String, String>>() {}.getType();
 
     private final Map<String, String> dictionary;
+    private final Language fallback;
 
     /**
      * Creates a language dictionary by reading a JSON file.
@@ -43,6 +44,7 @@ public class Language {
             LOGGER.log(Level.WARNING, "Failed to load language file: " + file.getPath(), e);
         }
         this.dictionary = tempDict != null ? tempDict : Collections.emptyMap();
+        this.fallback = null;
     }
 
     /**
@@ -52,6 +54,7 @@ public class Language {
      */
     public Language(Map<String, String> dictionary) {
         this.dictionary = dictionary != null ? dictionary : Collections.emptyMap();
+        this.fallback = null;
     }
 
     /**
@@ -62,6 +65,43 @@ public class Language {
     public Language(String json) {
         Map<String, String> tempDict = GSON.fromJson(json, MAP_TYPE);
         this.dictionary = tempDict != null ? tempDict : Collections.emptyMap();
+        this.fallback = null;
+    }
+
+    /**
+     * Creates a language whose dictionary is consulted first, falling back to {@code fallback}
+     * for any key this dictionary does not contain.
+     *
+     * @param dictionary this language's own dictionary, authoritative for every key it contains
+     * @param fallback   consulted only for a key absent from {@code dictionary}; may be {@code null}
+     */
+    private Language(Map<String, String> dictionary, Language fallback) {
+        this.dictionary = dictionary != null ? dictionary : Collections.emptyMap();
+        this.fallback = fallback;
+    }
+
+    /**
+     * Returns a {@code Language} that answers from this dictionary first and, for any key this
+     * dictionary lacks, from {@code fallback} instead of immediately returning the raw key.
+     * <p>
+     * Real-machine finding (phase 13, PR #418): on an upgraded server a module jar adds a
+     * language key, but the copy of that language file already sitting in the module's data
+     * folder -- extracted by an older jar -- does not have it. Before this method existed,
+     * whichever {@code Language} the loader picked (disk, if present at all) was used
+     * exclusively, so a key the disk file lacked rendered as its own raw key even though the
+     * new jar shipped a translation for it. The disk file stays authoritative for every key it
+     * does contain, since server owners customise it.
+     *
+     * @param fallback the language to consult for a key this dictionary does not contain; may be
+     *                 {@code null}, in which case this language is returned unchanged
+     * @return a language falling back to {@code fallback} for missing keys
+     * @since 6.3.0
+     */
+    public Language withFallback(Language fallback) {
+        if (fallback == null) {
+            return this;
+        }
+        return new Language(this.dictionary, fallback);
     }
 
     /**
@@ -100,6 +140,10 @@ public class Language {
     }
 
     public String getLocalizedText(String str) {
-        return dictionary.getOrDefault(str, str);
+        String value = dictionary.get(str);
+        if (value != null) {
+            return value;
+        }
+        return fallback != null ? fallback.getLocalizedText(str) : str;
     }
 }

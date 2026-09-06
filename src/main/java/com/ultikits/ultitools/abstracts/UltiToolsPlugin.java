@@ -9,6 +9,8 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.net.JarURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.security.CodeSource;
@@ -171,10 +173,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         String resolvedCode = resolveLanguageCode();
         for (String extension : LANGUAGE_EXTENSIONS) {
             Language onDisk = loadLanguageFromDisk(folderPath, resolvedCode, extension);
-            if (onDisk != null) {
-                return onDisk;
-            }
             Language inJar = loadLanguageFromJar(resolvedCode, extension);
+            if (onDisk != null) {
+                // Real-machine finding (phase 13, PR #418): on an upgraded server the module jar
+                // adds a key that the copy of this language file already extracted to disk by an
+                // older jar does not have. The disk file stays authoritative for every key it does
+                // contain -- server owners customise it -- but a key it lacks now falls back to
+                // the jar-bundled catalogue for the same code/extension instead of rendering as
+                // its own raw key.
+                return onDisk.withFallback(inJar);
+            }
             if (inJar != null) {
                 return inJar;
             }
@@ -212,28 +220,89 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Reads {@code lang/<code><extension>} from the module jar if present, else {@code null}.
+     * Reads {@code lang/<code><extension>} from the module's own {@link CodeSource} location if
+     * present, else {@code null}. Mirrors {@link Localized#scanLangResources(URL)}'s directory/jar
+     * branch (13-REVIEW CR-01, issue #412 follow-up): an exploded classpath (dev workspace, IDE
+     * launch, or a module test that instantiates a real {@code UltiToolsPlugin} subclass) has a
+     * directory as its {@code CodeSource}, and {@link Localized#supported()} already scans that
+     * directory directly -- this method must not disagree by unconditionally trying (and failing)
+     * to open the directory as a {@code JarFile} first.
      * <p>
-     * The resource path is built with {@code '/'} rather than {@code File.separator}: jar entry
-     * names always use a forward slash, so the separator form would silently find nothing on a
-     * Windows host.
+     * The resource path is built with {@code '/'} for the jar-entry lookup and {@link
+     * File#separator} for the on-disk lookup: jar entry names always use a forward slash, so the
+     * separator form would silently find nothing on a Windows host, and the reverse holds for a
+     * real file path.
      */
     private Language loadLanguageFromJar(String code, String extension) {
-        InputStream in = getResource("lang/" + code + extension);
-        if (in == null) {
+        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
+        if (src == null || src.getLocation() == null) {
             return null;
         }
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            if (".json".equals(extension)) {
-                return new Language(reader.lines().collect(Collectors.joining("")));
+        File location = resolveCodeSourceFile(src.getLocation());
+        if (location.isDirectory()) {
+            // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
+            // already treats this shape as first-class; loadLanguageFromJar must not disagree.
+            File resource = new File(location, "lang" + File.separator + code + extension);
+            if (!resource.isFile()) {
+                return null;
             }
-            // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
-            // breaks -- so YAML is handed the reader rather than a flattened string.
-            return Language.fromYaml(reader);
+            try (BufferedReader reader = Files.newBufferedReader(resource.toPath(), StandardCharsets.UTF_8)) {
+                return parseLanguageResource(reader, extension);
+            } catch (IOException e) {
+                getLogger().error(e, "Failed to read language resource " + resource + " from " + location);
+                return new Language("{}");
+            }
+        }
+        String entryName = "lang/" + code + extension;
+        try (JarFile jarFile = new JarFile(location)) {
+            JarEntry entry = jarFile.getJarEntry(entryName);
+            if (entry == null) {
+                return null;
+            }
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8))) {
+                return parseLanguageResource(reader, extension);
+            }
         } catch (IOException e) {
-            getLogger().error("Failed to read language resource lang/" + code + extension, e);
+            getLogger().error(e, "Failed to read language resource " + entryName + " from " + location);
             return new Language("{}");
         }
+    }
+
+    /**
+     * Resolves a {@link CodeSource} location as a {@link File}, decoding any percent-escaped
+     * characters (spaces, non-ASCII, etc.) that {@link URL#getPath()} does not decode on its
+     * own (13-REVIEW WR-03) -- passing an undecoded {@code %20...} path straight to {@link
+     * File#File(String)} or {@link JarFile#JarFile(File)} finds nothing when the module is
+     * installed under a path containing a space or other URI-escaped character. Falls back to
+     * the previous raw-path substring logic -- matching {@link #getInputStream()}'s own
+     * try/catch({@link URISyntaxException}) shape for the same {@link CodeSource} location --
+     * for the rare case the location cannot be expressed as a {@link URI} at all.
+     *
+     * @param location the {@code CodeSource.getLocation()} URL, never {@code null}
+     * @return the resolved location as a {@link File}
+     */
+    private static File resolveCodeSourceFile(URL location) {
+        try {
+            return new File(location.toURI());
+        } catch (URISyntaxException e) {
+            String rawPath = location.getPath();
+            return new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+        }
+    }
+
+    /**
+     * Parses a {@code lang/*} resource already opened as a {@link BufferedReader} -- shared by
+     * both the on-disk (exploded directory) and in-jar branches of {@link
+     * #loadLanguageFromJar(String, String)} so the two stay in sync.
+     */
+    private static Language parseLanguageResource(BufferedReader reader, String extension) throws IOException {
+        if (".json".equals(extension)) {
+            return new Language(reader.lines().collect(Collectors.joining("")));
+        }
+        // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
+        // breaks -- so YAML is handed the reader rather than a flattened string.
+        return Language.fromYaml(reader);
     }
 
     /**
@@ -537,19 +606,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         } catch (IOException e) {
             getLogger().error("Failed to save resources from jar", e);
-        }
-    }
-
-    private InputStream getResource(String filename) {
-        try {
-            ClassLoader classLoader = this.getClass().getClassLoader();
-            URL resource = classLoader.getResource(filename);
-            if (resource == null) {
-                return null;
-            }
-            return resource.openStream();
-        } catch (IOException ex) {
-            return null;
         }
     }
 

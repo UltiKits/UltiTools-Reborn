@@ -105,4 +105,66 @@ class LanguageTest {
             assertEquals("count", language.getLocalizedText("count"));
         }
     }
+
+    @org.junit.jupiter.api.Nested
+    @org.junit.jupiter.api.DisplayName("withFallback — per-key fallback (#418 real-machine finding)")
+    class WithFallback {
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present only in the fallback is answered from the fallback")
+        void keyOnlyInFallbackIsAnsweredFromFallback() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Map<String, String> jarOnly = new HashMap<>();
+            jarOnly.put("known", "jar-value");
+            jarOnly.put("onlyInJar", "jar-only-value");
+            Language jar = new Language(jarOnly);
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("jar-only-value", merged.getLocalizedText("onlyInJar"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present in both keeps the primary (disk) value")
+        void keyInBothKeepsThePrimaryValue() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Map<String, String> jarOnly = new HashMap<>();
+            jarOnly.put("known", "jar-value");
+            Language jar = new Language(jarOnly);
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("disk-value", merged.getLocalizedText("known"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present in neither still falls back to itself")
+        void keyInNeitherFallsBackToTheKeyItself() {
+            Language disk = new Language(new HashMap<>());
+            Language jar = new Language(new HashMap<>());
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("neither", merged.getLocalizedText("neither"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("withFallback(null) returns this language unchanged")
+        void withFallbackOfNullReturnsThisLanguageUnchanged() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Language merged = disk.withFallback(null);
+
+            assertEquals("disk-value", merged.getLocalizedText("known"));
+            assertEquals("missing", merged.getLocalizedText("missing"));
+        }
+    }
 }
