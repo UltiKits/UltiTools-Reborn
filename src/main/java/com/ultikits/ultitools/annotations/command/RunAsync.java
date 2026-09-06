@@ -9,13 +9,13 @@ import java.lang.annotation.Target;
  * Marks a {@code @CmdMapping} method body as eligible to run off the main thread -- see below
  * for when that is, and is not, actually safe.
  * <p>
- * <b>A command handler that touches world, entity, block, chunk or scheduler state
- * must not be annotated with this annotation ({@code @RunAsync}).</b>
- * Asynchrony here is reserved for pure-CPU or I/O work only. If the body needs to return to
- * Bukkit state afterward -- teleporting a player, reading or writing a block, loading a chunk,
- * touching an entity -- that hand-back must go through
- * {@link org.bukkit.scheduler.BukkitScheduler#runTask(org.bukkit.plugin.Plugin, Runnable)}; this
- * annotation never grants safe access to those APIs by itself.
+ * <b>An {@code @RunAsync} body must not touch world, entity, block or chunk state
+ * directly.</b>
+ * Asynchrony here is reserved for pure-CPU or I/O work. The one Bukkit call an async body
+ * may make is scheduling its state-touching work back onto the main thread through
+ * {@link org.bukkit.scheduler.BukkitScheduler#runTask(org.bukkit.plugin.Plugin, Runnable)};
+ * this annotation never grants safe access to those APIs by itself. A handler whose body
+ * consists only of such state access has no reason to carry the annotation at all.
  * <p>
  * Without this annotation, a synchronous command body is not run inline on the calling thread --
  * the framework already defers it by one tick via {@code runTask()} in
