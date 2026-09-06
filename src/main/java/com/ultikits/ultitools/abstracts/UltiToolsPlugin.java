@@ -173,10 +173,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         String resolvedCode = resolveLanguageCode();
         for (String extension : LANGUAGE_EXTENSIONS) {
             Language onDisk = loadLanguageFromDisk(folderPath, resolvedCode, extension);
-            if (onDisk != null) {
-                return onDisk;
-            }
             Language inJar = loadLanguageFromJar(resolvedCode, extension);
+            if (onDisk != null) {
+                // Real-machine finding (phase 13, PR #418): on an upgraded server the module jar
+                // adds a key that the copy of this language file already extracted to disk by an
+                // older jar does not have. The disk file stays authoritative for every key it does
+                // contain -- server owners customise it -- but a key it lacks now falls back to
+                // the jar-bundled catalogue for the same code/extension instead of rendering as
+                // its own raw key.
+                return onDisk.withFallback(inJar);
+            }
             if (inJar != null) {
                 return inJar;
             }
