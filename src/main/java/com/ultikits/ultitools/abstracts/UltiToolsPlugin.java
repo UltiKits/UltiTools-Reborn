@@ -219,19 +219,29 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Windows host.
      */
     private Language loadLanguageFromJar(String code, String extension) {
-        InputStream in = getResource("lang/" + code + extension);
-        if (in == null) {
+        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
+        if (src == null || src.getLocation() == null) {
             return null;
         }
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            if (".json".equals(extension)) {
-                return new Language(reader.lines().collect(Collectors.joining("")));
+        String rawPath = src.getLocation().getPath();
+        String jarPath = rawPath.startsWith("/") ? rawPath : rawPath.substring(1);
+        String entryName = "lang/" + code + extension;
+        try (JarFile jarFile = new JarFile(jarPath)) {
+            JarEntry entry = jarFile.getJarEntry(entryName);
+            if (entry == null) {
+                return null;
             }
-            // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
-            // breaks -- so YAML is handed the reader rather than a flattened string.
-            return Language.fromYaml(reader);
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8))) {
+                if (".json".equals(extension)) {
+                    return new Language(reader.lines().collect(Collectors.joining("")));
+                }
+                // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
+                // breaks -- so YAML is handed the reader rather than a flattened string.
+                return Language.fromYaml(reader);
+            }
         } catch (IOException e) {
-            getLogger().error("Failed to read language resource lang/" + code + extension, e);
+            getLogger().error("Failed to read language resource " + entryName + " from " + jarPath, e);
             return new Language("{}");
         }
     }
