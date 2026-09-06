@@ -171,21 +171,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private Language createLanguageFromPath(String folderPath) {
         String resolvedCode = resolveLanguageCode();
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            Language onDisk = loadLanguageFromDisk(folderPath, resolvedCode, extension);
-            Language inJar = loadLanguageFromJar(resolvedCode, extension);
-            if (onDisk != null) {
-                // Real-machine finding (phase 13, PR #418): on an upgraded server the module jar
-                // adds a key that the copy of this language file already extracted to disk by an
-                // older jar does not have. The disk file stays authoritative for every key it does
-                // contain -- server owners customise it -- but a key it lacks now falls back to
-                // the jar-bundled catalogue for the same code/extension instead of rendering as
-                // its own raw key.
-                return onDisk.withFallback(inJar);
-            }
-            if (inJar != null) {
-                return inJar;
-            }
+        // Round 5 (own deep review of 0ddc95f, finding 1): the disk and jar catalogues are now
+        // resolved independently of each other's extension. Resolving them together, one shared
+        // extension per loop iteration, meant a module that shipped an old jar's lang/en.json
+        // (extracted to disk) alongside a new jar's lang/en.yml never reached the .yml iteration
+        // at all -- the .json iteration's non-null onDisk short-circuited the loop before the
+        // jar's .yml catalogue, under a different extension, was ever looked at.
+        Language onDisk = resolveDiskLanguage(folderPath, resolvedCode);
+        Language inJar = resolveJarLanguage(resolvedCode);
+        if (onDisk != null && inJar != null) {
+            // Real-machine finding (phase 13, PR #418): on an upgraded server the module jar
+            // adds a key that the copy of this language file already extracted to disk by an
+            // older jar does not have. The disk file stays authoritative for every key it does
+            // contain -- server owners customise it -- but a key it lacks now falls back to
+            // the jar-bundled catalogue instead of rendering as its own raw key.
+            return onDisk.withFallback(inJar);
+        }
+        if (onDisk != null) {
+            return onDisk;
+        }
+        if (inJar != null) {
+            return inJar;
         }
         // #389: this used to return an empty dictionary without a word. Language.get then falls
         // back to the key, so every message in the module rendered as its own raw key -- which is
@@ -198,6 +204,43 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 + " and inside the module jar. Every i18n(...) call in this module will render its "
                 + "own key until one is added.");
         return new Language("{}");
+    }
+
+    /**
+     * Resolves the on-disk language catalogue for {@code code}, trying each of {@link
+     * #LANGUAGE_EXTENSIONS} in order and returning the first that exists -- independently of
+     * whichever extension {@link #resolveJarLanguage(String)} resolves for the same code
+     * (13-REVIEW round 5, own deep review of {@code 0ddc95f}, finding 1).
+     *
+     * @return the resolved on-disk language, or {@code null} if none of the extensions exist on disk
+     */
+    private Language resolveDiskLanguage(String folderPath, String code) {
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            Language onDisk = loadLanguageFromDisk(folderPath, code, extension);
+            if (onDisk != null) {
+                return onDisk;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the jar-bundled language catalogue for {@code code}, trying each of {@link
+     * #LANGUAGE_EXTENSIONS} in order and returning the first that exists -- independently of
+     * whichever extension {@link #resolveDiskLanguage(String, String)} resolves for the same code
+     * (13-REVIEW round 5, own deep review of {@code 0ddc95f}, finding 1).
+     *
+     * @return the resolved jar-bundled language, or {@code null} if none of the extensions exist
+     *         in the jar
+     */
+    private Language resolveJarLanguage(String code) {
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            Language inJar = loadLanguageFromJar(code, extension);
+            if (inJar != null) {
+                return inJar;
+            }
+        }
+        return null;
     }
 
     /**

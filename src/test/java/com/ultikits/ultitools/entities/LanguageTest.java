@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.entities;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.File;
 import java.io.IOException;
@@ -165,6 +166,25 @@ class LanguageTest {
 
             assertEquals("disk-value", merged.getLocalizedText("known"));
             assertEquals("missing", merged.getLocalizedText("missing"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("withFallback(this) refuses to create a self-referential cycle")
+        void withFallbackOfSelfThrows() {
+            Language disk = new Language(new HashMap<>());
+
+            assertThrows(IllegalArgumentException.class, () -> disk.withFallback(disk));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName(
+                "withFallback refuses a fallback whose own chain already contains this language")
+        void withFallbackCreatingATwoLinkCycleThrows() {
+            Language a = new Language(new HashMap<>());
+            // b's chain is b -> a. Asking `a` to fall back to `b` would close the loop a -> b -> a.
+            Language b = new Language(new HashMap<>()).withFallback(a);
+
+            assertThrows(IllegalArgumentException.class, () -> a.withFallback(b));
         }
     }
 }

@@ -95,11 +95,22 @@ public class Language {
      * @param fallback the language to consult for a key this dictionary does not contain; may be
      *                 {@code null}, in which case this language is returned unchanged
      * @return a language falling back to {@code fallback} for missing keys
+     * @throws IllegalArgumentException if {@code fallback} is this language, or if {@code
+     *                                   fallback}'s own fallback chain already contains this
+     *                                   language -- either would make {@link #getLocalizedText}
+     *                                   recurse forever for a key present in neither
      * @since 6.3.0
      */
     public Language withFallback(Language fallback) {
         if (fallback == null) {
             return this;
+        }
+        for (Language link = fallback; link != null; link = link.fallback) {
+            if (link == this) {
+                throw new IllegalArgumentException(
+                        "Cannot use a fallback that is, or already falls back to, this language -- "
+                                + "that would create a fallback cycle.");
+            }
         }
         return new Language(this.dictionary, fallback);
     }

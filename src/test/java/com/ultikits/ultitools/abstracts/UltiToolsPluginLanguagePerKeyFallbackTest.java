@@ -197,6 +197,15 @@ class UltiToolsPluginLanguagePerKeyFallbackTest {
         assertThat(language.getLocalizedText("neitherHasThis")).isEqualTo("neitherHasThis");
     }
 
+    @Test
+    @DisplayName("disk ships .json, jar ships only .yml for the same code -> the jar's .yml key is "
+            + "used, not the raw key (round 5 finding 1)")
+    void diskJsonJarYmlCrossExtensionFallsBackToJarYamlTranslation() throws Throwable {
+        Language language = buildCrossExtensionMergedLanguage();
+
+        assertThat(language.getLocalizedText("crossExtensionKey")).isEqualTo("&cOnly in the yml jar catalogue.");
+    }
+
     /**
      * Builds one exploded module directory (stands in for the module's own jar-bundled {@code
      * lang/en.json}) and one separate on-disk resource folder (stands in for {@code
@@ -223,6 +232,47 @@ class UltiToolsPluginLanguagePerKeyFallbackTest {
         // Deliberately missing "onlyInJar" -- the exact shape of an older jar's extraction that
         // predates the new key, and deliberately a different value for "known" than the jar's, so
         // "disk wins for a key it has" is unambiguous.
+        Files.write(diskLangFile.toPath(),
+                "{\"known\":\"&cDisk-customised translation.\"}".getBytes(StandardCharsets.UTF_8));
+
+        ClassLoader isolatingBase = new LangResourceHidingClassLoader(
+                UltiToolsPluginLanguagePerKeyFallbackTest.class.getClassLoader());
+        directoryLoader = new ChildFirstClassLoader(new URL[]{explodedRoot.toURI().toURL()}, isolatingBase);
+        Object plugin = newModuleFixtureInstance(directoryLoader);
+
+        return invokeCreateLanguageFromPath(plugin, diskResourceFolder.getAbsolutePath());
+    }
+
+    /**
+     * Same shape as {@link #buildMergedLanguage()}, except the on-disk catalogue is {@code
+     * lang/en.json} (as an older jar's {@code saveResources()} extracted it) while the jar-bundled
+     * catalogue for the same code is {@code lang/en.yml} only -- the disk file predates a mid-life
+     * extension change from {@code .json} to {@code .yml} for this module (round 5, own deep review
+     * of {@code 0ddc95f}, finding 1). Resolving the disk and jar catalogues per-extension in the
+     * same loop iteration meant the first matching extension (the stale disk {@code .json})
+     * short-circuited the loop before the jar's {@code .yml} iteration was ever reached, so a key
+     * that exists only in the jar's {@code .yml} rendered as its own raw key even with the round-4
+     * fallback fix in place.
+     */
+    private Language buildCrossExtensionMergedLanguage() throws Throwable {
+        File explodedRoot = new File(tempDir, "exploded-module-jar-catalogue-yml");
+        File classFile = new File(explodedRoot,
+                UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName().replace('.', '/') + ".class");
+        Files.createDirectories(classFile.getParentFile().toPath());
+        Files.write(classFile.toPath(), compiledFixtureClassBytes());
+
+        File jarLangFile = new File(explodedRoot, "lang" + File.separator + "en.yml");
+        Files.createDirectories(jarLangFile.getParentFile().toPath());
+        Files.write(jarLangFile.toPath(),
+                ("known: \"&cJar-shipped translation (yml).\"\n"
+                        + "crossExtensionKey: \"&cOnly in the yml jar catalogue.\"\n")
+                        .getBytes(StandardCharsets.UTF_8));
+
+        File diskResourceFolder = new File(tempDir, "disk-resource-folder-yml");
+        File diskLangFile = new File(diskResourceFolder, "lang" + File.separator + "en.json");
+        Files.createDirectories(diskLangFile.getParentFile().toPath());
+        // The stale disk file from before the module switched language-file extensions -- .json,
+        // not .yml -- and deliberately missing "crossExtensionKey".
         Files.write(diskLangFile.toPath(),
                 "{\"known\":\"&cDisk-customised translation.\"}".getBytes(StandardCharsets.UTF_8));
 
