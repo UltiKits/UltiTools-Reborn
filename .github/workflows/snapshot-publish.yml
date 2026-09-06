@@ -49,4 +49,4 @@ jobs:
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-        run: mvn -B deploy -Dmaven.test.skip=true
+        run: mvn -B deploy -DskipTests
