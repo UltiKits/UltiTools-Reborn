@@ -9,6 +9,8 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.net.JarURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.security.CodeSource;
@@ -230,8 +232,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (src == null || src.getLocation() == null) {
             return null;
         }
-        String rawPath = src.getLocation().getPath();
-        File location = new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+        File location = resolveCodeSourceFile(src.getLocation());
         if (location.isDirectory()) {
             // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
             // already treats this shape as first-class; loadLanguageFromJar must not disagree.
@@ -259,6 +260,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         } catch (IOException e) {
             getLogger().error(e, "Failed to read language resource " + entryName + " from " + location);
             return new Language("{}");
+        }
+    }
+
+    /**
+     * Resolves a {@link CodeSource} location as a {@link File}, decoding any percent-escaped
+     * characters (spaces, non-ASCII, etc.) that {@link URL#getPath()} does not decode on its
+     * own (13-REVIEW WR-03) -- passing an undecoded {@code %20...} path straight to {@link
+     * File#File(String)} or {@link JarFile#JarFile(File)} finds nothing when the module is
+     * installed under a path containing a space or other URI-escaped character. Falls back to
+     * the previous raw-path substring logic -- matching {@link #getInputStream()}'s own
+     * try/catch({@link URISyntaxException}) shape for the same {@link CodeSource} location --
+     * for the rare case the location cannot be expressed as a {@link URI} at all.
+     *
+     * @param location the {@code CodeSource.getLocation()} URL, never {@code null}
+     * @return the resolved location as a {@link File}
+     */
+    private static File resolveCodeSourceFile(URL location) {
+        try {
+            return new File(location.toURI());
+        } catch (URISyntaxException e) {
+            String rawPath = location.getPath();
+            return new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
         }
     }
 
