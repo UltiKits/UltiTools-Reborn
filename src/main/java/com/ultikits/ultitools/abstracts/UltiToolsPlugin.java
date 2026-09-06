@@ -603,19 +603,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
     }
 
-    private InputStream getResource(String filename) {
-        try {
-            ClassLoader classLoader = this.getClass().getClassLoader();
-            URL resource = classLoader.getResource(filename);
-            if (resource == null) {
-                return null;
-            }
-            return resource.openStream();
-        } catch (IOException ex) {
-            return null;
-        }
-    }
-
     /**
      * Gets data operator. Refuses outright if {@code dataClazz} is not registered to this module
      * (D-14) -- checked against the same {@link com.ultikits.ultitools.manager.DataScope} minted
