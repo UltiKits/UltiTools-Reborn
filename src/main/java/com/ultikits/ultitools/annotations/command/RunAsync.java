@@ -6,7 +6,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a {@code @CmdMapping} method body as safe to run off the main thread.
+ * Marks a {@code @CmdMapping} method body as eligible to run off the main thread -- see below
+ * for when that is, and is not, actually safe.
  * <p>
  * <b>A command handler that touches world, entity, block, chunk or scheduler state
  * must not be annotated with this annotation ({@code @RunAsync}).</b>
@@ -25,7 +26,7 @@ import java.lang.annotation.Target;
  * <p>
  * The observable failure when this rule is broken is not a slow command -- it is a crash.
  * Bukkit's async-scheduler dispatch (see {@code runTaskAsynchronously()} in
- * {@code BaseCommandExecutor}) runs the body off the main thread unconditionally, and the first
+ * {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor}) runs the body off the main thread unconditionally, and the first
  * call into world, entity, block or chunk state trips Paper's asynchronous-operation check and
  * kills the command mid-handler.
  * <p>
