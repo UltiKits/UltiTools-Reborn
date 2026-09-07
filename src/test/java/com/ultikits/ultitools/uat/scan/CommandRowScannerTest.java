@@ -7,7 +7,9 @@ import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
+import com.ultikits.ultitools.uat.fixtures.classlevellimits.RedeclaringSubclassWithoutTarget;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.SubclassWithClassLevelLimits;
+import com.ultikits.ultitools.uat.fixtures.classlevellimits.UnannotatedSubclass;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import org.junit.jupiter.api.DisplayName;
@@ -96,6 +98,25 @@ class CommandRowScannerTest {
             }
         }
         assertThat(reloadRows.get(0).get("member")).isEqualTo(expectedWinner);
+    }
+
+    @Test
+    @DisplayName("a subclass that does not redeclare @CmdExecutor produces no rows -- the runtime never registers a Bukkit command for it")
+    void unannotatedSubclassOfAnAnnotatedAncestorProducesNoRows() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(UnannotatedSubclass.class));
+
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a concrete executor that redeclares @CmdExecutor but not @CmdTarget reports no class-level sender restriction -- the runtime's own direct lookup does not inherit the ancestor's")
+    void redeclaringSubclassWithoutOwnCmdTargetReportsNoRestriction() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(RedeclaringSubclassWithoutTarget.class));
+
+        Map<String, Object> goRow = fieldMapOf(rows, "go");
+        assertThat(goRow).doesNotContainKey("cmd_target");
     }
 
     @Test

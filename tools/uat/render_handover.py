@@ -112,6 +112,15 @@ def describe_steps(item):
     kind = item.get('kind')
     if kind in ('command', 'help'):
         steps = item.get('trigger', '')
+        if item.get('manual_register'):
+            # CommandManager.register's autowire-and-register path is skipped entirely for
+            # an @CmdExecutor(manualRegister = true) class -- the module itself must call
+            # CommandManager.register(...) somewhere in its own startup path. Without this
+            # note the handover looks identical to an automatically registered command, and
+            # an executor who only checks the normal registration path records a false
+            # failure for a command that fires through the module's own manual call instead
+            # (Codex review of PR #427).
+            steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
     elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')

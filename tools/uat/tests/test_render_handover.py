@@ -327,6 +327,25 @@ def test_a_manually_registered_listener_row_states_that_in_its_steps(tmp_path):
     assert 'manually registered' in document
 
 
+def test_a_manually_registered_command_row_states_that_in_its_steps(tmp_path):
+    # CommandManager.register's autowire-and-register path is skipped entirely for an
+    # @CmdExecutor(manualRegister = true) class -- the surface preserves that flag, but
+    # rendering only the bare command trigger leaves an executor unable to tell it must check
+    # the module's own manual registration path rather than the automatic one (Codex review
+    # of PR #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'manual_register': True},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'manually registered' in document
+
+
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
     surface = write_surface(tmp_path, [
         {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},

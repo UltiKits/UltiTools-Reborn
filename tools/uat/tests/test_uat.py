@@ -219,3 +219,106 @@ def test_size_argument_accepts_the_ceiling_value_itself():
 def test_size_argument_accepts_the_default_when_omitted():
     args = uat.build_parser().parse_args(['next'])
     assert args.size == 25
+
+
+def test_save_ledger_does_not_truncate_the_original_on_a_serialization_failure(tmp_path):
+    # save_ledger used to open the real ledger path directly with 'w', truncating the only
+    # copy the instant open() succeeds, BEFORE json.dump ever ran. A serialization failure
+    # partway through (or a process kill, which this test cannot simulate directly, but which
+    # fails in exactly the same window) used to leave the ledger empty or corrupt (Codex
+    # review of PR #427).
+    path = tmp_path / 'ledger.json'
+    original_content = '{"original": true}'
+    path.write_text(original_content, encoding='utf-8')
+
+    class Unserializable:
+        pass
+
+    try:
+        uat.save_ledger({'bad': Unserializable()}, str(path))
+        assert False, 'expected a TypeError from json.dump on an unserializable value'
+    except TypeError:
+        pass
+
+    assert path.read_text(encoding='utf-8') == original_content
+
+
+def test_save_ledger_leaves_no_temp_file_behind_after_a_successful_write(tmp_path):
+    path = tmp_path / 'ledger.json'
+    uat.save_ledger({'results': {}, 'scope': ['*']}, str(path))
+
+    assert path.exists()
+    leftover = [p for p in tmp_path.iterdir() if p != path]
+    assert leftover == []
+
+
+def test_save_ledger_leaves_no_temp_file_behind_after_a_failed_write(tmp_path):
+    path = tmp_path / 'ledger.json'
+
+    class Unserializable:
+        pass
+
+    try:
+        uat.save_ledger({'bad': Unserializable()}, str(path))
+    except TypeError:
+        pass
+
+    leftover = list(tmp_path.iterdir())
+    assert leftover == []
+
+
+def _write_registry_and_ledger_for_rebase(tmp_path):
+    items = [
+        {'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A'},
+        {'id': 'COM-bbbbbbbb', 'kind': 'command', 'origin': 'SomeModule', 'cls': 'B'},
+    ]
+    registry = write_registry(tmp_path, items, artifact_sha256='newhash00')
+    ledger = write_ledger(tmp_path, artifact_sha256='oldhash00',
+                           results={'COM-aaaaaaaa': {'status': 'pass'}})
+    return registry, ledger
+
+
+def test_rebase_normalizes_a_wildcard_mixed_with_a_named_scope_to_the_wildcard_alone():
+    # in_scope only recognizes the wildcard when scope equals EXACTLY ['*'] -- storing the
+    # literal ['*', 'framework'] silently narrowed an "everything" request down to matching
+    # only 'framework', since the string '*' never equals a real origin (Codex review of PR
+    # #427).
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        registry, ledger = _write_registry_and_ledger_for_rebase(tmp_path)
+
+        args = type('Args', (), {
+            'registry': registry, 'ledger': ledger, 'scope': ['*', 'framework'],
+            'dry_run': False,
+        })()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            uat.cmd_rebase(args)
+
+        with open(ledger) as f:
+            new_led = json.load(f)
+        assert new_led['scope'] == ['*']
+        # Both items are now in scope -- including SomeModule, which the un-normalized
+        # ['*', 'framework'] would have silently excluded.
+        assert set(new_led['results'].keys()) <= {'COM-aaaaaaaa'}  # only what was carried
+        # framework's own prior result carries forward under the corrected, wildcard scope.
+        assert 'COM-aaaaaaaa' in new_led['results']
+
+
+def test_rebase_leaves_a_pure_wildcard_scope_unchanged():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        registry, ledger = _write_registry_and_ledger_for_rebase(tmp_path)
+
+        args = type('Args', (), {
+            'registry': registry, 'ledger': ledger, 'scope': ['*'], 'dry_run': False,
+        })()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            uat.cmd_rebase(args)
+
+        with open(ledger) as f:
+            new_led = json.load(f)
+        assert new_led['scope'] == ['*']

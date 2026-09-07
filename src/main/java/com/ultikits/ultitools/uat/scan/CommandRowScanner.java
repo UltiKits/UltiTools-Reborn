@@ -7,7 +7,6 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
-import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.RowId;
 import com.ultikits.ultitools.uat.SurfaceRow;
@@ -33,10 +32,20 @@ import java.util.Set;
  * Emits exactly one {@code command} row per {@code @CmdMapping} format found by
  * {@link ReflectionUtil#getAllMethods(Class)}, plus exactly one {@code help} row per
  * {@code @CmdExecutor} class (the {@code handleHelp} output is the first thing a player types).
- * Class-level annotation lookup goes through {@link MergedAnnotationResolver#find(Class, Class)}
- * so {@code @AliasFor} resolves exactly as it does at runtime; method/parameter annotations are
- * read directly since none of {@code @CmdMapping}/{@code @CmdParam}/{@code @CmdSender}/
- * {@code @CmdCD}/{@code @UsageLimit} declare an alias.
+ * <p>
+ * Class-level {@code @CmdExecutor} and {@code @CmdTarget} are both read via plain
+ * {@link Class#getAnnotation(Class)}, not a hierarchy-or-meta-annotation-walking resolver
+ * (Codex review of PR #427) — matching {@code CommandManager.register}'s own direct
+ * {@code isAnnotationPresent(CmdExecutor.class)} and {@code BaseCommandExecutor.
+ * createDefaultValidatorChain}'s own direct {@code this.getClass().getAnnotation
+ * (CmdTarget.class)} exactly. Neither annotation is {@code @Inherited}: an unannotated
+ * subclass of an {@code @CmdExecutor} superclass is never registered as a Bukkit command at
+ * all (the runtime logs a warning and does nothing), so this scanner emits no row for it
+ * rather than a phantom one; a concrete executor that redeclares {@code @CmdExecutor} but
+ * inherits a class-level {@code @CmdTarget} from its superclass is treated by the runtime's
+ * own direct lookup as carrying NO class-level target restriction ({@code BOTH}, via
+ * {@code SenderTypeValidator.fromAnnotation(null)}), not the ancestor's restriction, so this
+ * scanner must not report one either.
  * <p>
  * When two methods on the same class declare {@code @CmdMapping} with the identical
  * {@code format()}, only the FIRST one (in {@link ReflectionUtil#getAllMethods(Class)}'s own
@@ -68,11 +77,11 @@ public final class CommandRowScanner {
         List<SurfaceRow> rows = new ArrayList<>();
         Map<String, String> idOwners = new LinkedHashMap<>();
         for (Class<?> clazz : classes) {
-            CmdExecutor executor = MergedAnnotationResolver.find(clazz, CmdExecutor.class);
+            CmdExecutor executor = clazz.getAnnotation(CmdExecutor.class);
             if (executor == null) {
                 continue;
             }
-            CmdTarget classTarget = MergedAnnotationResolver.find(clazz, CmdTarget.class);
+            CmdTarget classTarget = clazz.getAnnotation(CmdTarget.class);
             // BaseCommandExecutor.scanCommandMappings keys its own mappings map by
             // mapping.format() via putIfAbsent -- so if two methods on this same class declare
             // the identical format string, only the first one (in this same getAllMethods()

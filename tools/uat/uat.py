@@ -35,6 +35,7 @@ import os
 import sys
 import argparse
 import datetime
+import tempfile
 from collections import Counter
 
 REGISTRY_ENV = 'UAT_REGISTRY'
@@ -215,7 +216,29 @@ def save_ledger(led, path):
     # holding the same content always serialize to the same bytes, regardless of which order
     # their keys (or their `results` entries) were added in -- import_verdicts.py's
     # order-independence guarantee (Phase 10, D-10-14) relies on this.
-    json.dump(led, open(path, 'w'), ensure_ascii=False, indent=1, sort_keys=True)
+    #
+    # Written to a sibling temp file and atomically replaced via os.replace, not opened
+    # directly with 'w' (Codex review of PR #427): opening the real ledger path in truncate
+    # mode destroys the only copy the instant open() succeeds, BEFORE json.dump ever runs --
+    # a process kill or a full filesystem partway through serialization then leaves the
+    # ledger empty or truncated, losing both the current results and the embedded
+    # superseded_ledgers history. os.replace is atomic on both POSIX and Windows, so a reader
+    # never observes a partially-written file: the ledger is either the old complete content
+    # or the new complete content, never something in between.
+    directory = os.path.dirname(os.path.abspath(path)) or '.'
+    fd, tmp_path = tempfile.mkstemp(prefix='.ledger-', suffix='.tmp', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(led, handle, ensure_ascii=False, indent=1, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def cmd_status(a):
@@ -434,6 +457,15 @@ def cmd_rebase(a):
         )
 
     scope = sorted(set(a.scope))
+    if '*' in scope and scope != ['*']:
+        # in_scope only recognizes the wildcard when scope equals EXACTLY ['*'] -- a mixed
+        # invocation like `--scope '*' --scope framework` stored the literal two-element list
+        # verbatim, and since the string '*' never equals any real origin, in_scope's
+        # `item['origin'] in scope` fallback then matched ONLY 'framework', silently narrowing
+        # an otherwise-valid "everything" request down to one origin with no error raised
+        # (Codex review of PR #427). Normalize rather than reject: `*` unions with everything
+        # by definition, so any scope containing it collapses to `['*']`.
+        scope = ['*']
     # Refuse a typo'd/unknown origin outright rather than silently carrying forward 0 results
     # indistinguishable from a deliberate "start with nothing" choice.
     known_origins = {i['origin'] for i in reg['items']}

@@ -232,8 +232,9 @@ one observation has already been a real mistake once. So for listener rows, the 
 the *trigger event*, not the registry row: a batch's size counts distinct events, and every handler
 that event reaches is listed under it.
 
-**The verdict row schema.** A completed batch is imported back via `uat.py import-verdicts
-<verdicts-file>`. Each row carries: `id`, `repository`, `issue` (when the row exists to reconfirm a
+**The verdict row schema.** A completed batch is imported back via `tools/uat/import_verdicts.py
+--verdicts <verdicts-file>` (a separate script, not a `uat.py` subcommand — `uat.py` defines no
+`import-verdicts` command). Each row carries: `id`, `repository`, `issue` (when the row exists to reconfirm a
 specific defect), `type` (`repro`, `control`, or `deferred`), `steps`, `observed`, `status`,
 `reason`, `actions[]` (identifiers of the concrete actions taken), `evidence[]` (paths to retained
 evidence), and, when the row is a `fail` that also names a real product defect, `return_to[]`
