@@ -52,6 +52,7 @@ public final class FixtureListeners {
     public static class ManualListener implements Listener {
         @EventHandler
         public void onQuit(PlayerQuitEvent event) {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
     }
 }

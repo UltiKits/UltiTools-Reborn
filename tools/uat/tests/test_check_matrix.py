@@ -425,8 +425,9 @@ class TestJsonOutput:
         surface = write_surface(tmp_path, [])
         assertions = write_assertions(tmp_path, [])
 
-        import subprocess  # nosec B404 -- invokes this repo's own check_matrix.py with a
-                            # fixed argument list, never external or attacker-supplied input
+        # Invokes this repo's own check_matrix.py with a fixed argument list, never
+        # external or attacker-supplied input.
+        import subprocess  # nosec B404
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve().parents[1] / 'check_matrix.py'),
              '--surface', surface, '--assertions', assertions, '--json'],

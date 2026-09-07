@@ -10,9 +10,10 @@ against a real UltiChat build; this suite is the fast, hermetic complement.
 import os
 import shlex
 import stat
-import subprocess  # nosec B404 -- every call below invokes git/bash with a fixed,
-                    # hardcoded argument list built by this test suite itself, never with
-                    # external or attacker-supplied input; see the per-call-site B603 tags.
+# Every subprocess.run call below invokes git/bash with a fixed, hardcoded argument list
+# built by this test suite itself, never external or attacker-supplied input; see the
+# per-call-site B603 tags.
+import subprocess  # nosec B404
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'ci-drift-guard.sh'
