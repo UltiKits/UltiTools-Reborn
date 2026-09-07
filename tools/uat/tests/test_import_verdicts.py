@@ -1,5 +1,8 @@
-"""Tests for tools/uat/import_verdicts.py and the superseded-ledger migration it depends on
-(Phase 10 plan 10-01, Task 2)."""
+"""
+Tests for tools/uat/import_verdicts.py and the ledger migration it depends on.
+
+(Phase 10 plan 10-01, Task 2).
+"""
 import json
 import sys
 from pathlib import Path

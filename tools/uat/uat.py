@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""UAT batch driver. The ledger, not anyone's memory, is the source of truth.
+"""
+UAT batch driver. The ledger, not anyone's memory, is the source of truth.
 
   uat.py status                  what is done, pending, failed, for this framework build
   uat.py next --size 25 [--kind command] [--origin UltiEssentials]
@@ -39,9 +40,12 @@ RUNS_ENV = 'UAT_RUNS'
 
 
 def resolve_path(cli_value, env_var, what):
-    """Resolve one filesystem root: an explicit CLI value wins, then the named
-    environment variable, then a fail-closed error naming both ways to supply it.
-    Never falls back to a hardcoded developer path (Phase 10, D-10-13).
+    """
+    Resolve one filesystem root.
+
+    An explicit CLI value wins, then the named environment variable, then a fail-closed
+    error naming both ways to supply it. Never falls back to a hardcoded developer path
+    (Phase 10, D-10-13).
     """
     if cli_value:
         return cli_value
@@ -66,12 +70,14 @@ def load_reg(path):
 
 
 def migrate_superseded_key(led):
-    """One-shot schema migration (Phase 10, D-10-14): the singular `superseded_ledger`
-    object becomes a `superseded_ledgers` list holding that one entry. A ledger already
-    carrying the list is left unchanged -- idempotent, and safe to call on every read.
-    Recurses into the nested ledger in case an older chain still carries its own
-    singular key, though no ledger observed in this migration carries more than one
-    level of nesting.
+    """
+    Migrate the singular `superseded_ledger` key to the `superseded_ledgers` list.
+
+    A one-shot schema migration (Phase 10, D-10-14): the singular `superseded_ledger` object
+    becomes a `superseded_ledgers` list holding that one entry. A ledger already carrying the
+    list is left unchanged -- idempotent, and safe to call on every read. Recurses into the
+    nested ledger in case an older chain still carries its own singular key, though no ledger
+    observed in this migration carries more than one level of nesting.
     """
     if 'superseded_ledgers' in led:
         return led
@@ -85,9 +91,11 @@ def migrate_superseded_key(led):
 
 
 def read_ledger_file(path):
-    """Read a ledger file from disk and apply the superseded-key migration. The single
-    read path every subcommand goes through, so the migration always applies regardless
-    of which subcommand touches the ledger first.
+    """
+    Read a ledger file from disk and apply the superseded-key migration.
+
+    The single read path every subcommand goes through, so the migration always applies
+    regardless of which subcommand touches the ledger first.
     """
     with open(path, encoding='utf-8') as fh:
         led = json.load(fh)
@@ -95,7 +103,8 @@ def read_ledger_file(path):
 
 
 def in_scope(item, scope):
-    """True if this registry item's origin is covered by `scope`.
+    """
+    Return True if this registry item's origin is covered by `scope`.
 
     `scope == ['*']` is the "every origin" sentinel -- the whole-ecosystem case is a
     STATED value of scope, not the absence of one. A real, narrower scope is always an
@@ -105,7 +114,10 @@ def in_scope(item, scope):
 
 
 def resolve_scope(reg, led, requested):
-    """Return the effective scope list. Precedence, in order:
+    """
+    Return the effective scope list.
+
+    Precedence, in order:
 
       1. `requested` -- an explicitly requested list (e.g. from a CLI --scope).
       2. `led['scope']` -- the ledger's own declared scope.
@@ -135,7 +147,8 @@ def resolve_scope(reg, led, requested):
 
 
 def load_ledger(reg, path):
-    """Load the ledger, refusing if the artifact under test has changed.
+    """
+    Load the ledger, refusing if the artifact under test has changed.
 
     Keyed on the deployed jar's SHA-256, NOT on the repository revision. The revision was the
     original key and it was wrong: it describes the checkout, and the checkout moves whenever a
@@ -298,7 +311,7 @@ def cmd_next(a):
         print("  b. NO THROW - after firing, scan the server log for a stack trace naming that class.")
         print("Record each handler its own row. Where a handler has a visible effect, quote it;")
         print("where it has none, say so and record what (a) and (b) showed.\n")
-        for ev, its in groups:
+        for _, its in groups:
             print(f"### TRIGGER: {its[0]['trigger']}   ({len(its)} handler"
                   f"{'s' if len(its) > 1 else ''} "
                   f"{'fire' if len(its) > 1 else 'fires'} on this one event)\n")
@@ -337,14 +350,17 @@ def cmd_record(a):
 
 
 def cmd_rebase(a):
-    """The only path past a hash change. Loads the on-disk ledger and the new registry,
-    refuses if their hashes already match (rebase performs a BUILD transition; using it on an
-    unchanged build would launder a same-build reset through the one command meant to make
-    resets deliberate), then builds a new ledger carrying forward only the results whose
-    registry item is in the requested scope. Every carried result is stamped `carried_from`
-    with the superseded hash, and the whole superseded ledger is appended -- with its own
-    prior history flattened in, per D-10-14 -- to `superseded_ledgers`; nothing dropped from
-    this build's denominator is destroyed.
+    """
+    Run the `rebase` subcommand, the only path past a hash change.
+
+    Loads the on-disk ledger and the new registry, refuses if their hashes already match
+    (rebase performs a BUILD transition; using it on an unchanged build would launder a
+    same-build reset through the one command meant to make resets deliberate), then builds a
+    new ledger carrying forward only the results whose registry item is in the requested
+    scope. Every carried result is stamped `carried_from` with the superseded hash, and the
+    whole superseded ledger is appended -- with its own prior history flattened in, per
+    D-10-14 -- to `superseded_ledgers`; nothing dropped from this build's denominator is
+    destroyed.
     """
     reg = load_reg(registry_path(a))
     ledger_file = ledger_path(a)
@@ -434,12 +450,15 @@ def cmd_rebase(a):
 
 
 def cmd_reset(a):
-    """Start a fresh cycle. Unlike the old behaviour, this is no longer a silent, unconditional
-    wipe: it is the one remaining destructive code path in this file, and `cmd_rebase` was built
-    this same phase specifically so a build transition never silently destroys recorded evidence.
-    `reset` now gets the same shape: refuse unless `--force` is passed when there is anything to
-    lose, and archive the discarded ledger under `superseded_ledgers` rather than dropping it --
-    nothing this tool clears is ever unrecoverable from the resulting file alone.
+    """
+    Run the `reset` subcommand, starting a fresh cycle.
+
+    Unlike the old behaviour, this is no longer a silent, unconditional wipe: it is the one
+    remaining destructive code path in this file, and `cmd_rebase` was built this same phase
+    specifically so a build transition never silently destroys recorded evidence. `reset` now
+    gets the same shape: refuse unless `--force` is passed when there is anything to lose, and
+    archive the discarded ledger under `superseded_ledgers` rather than dropping it -- nothing
+    this tool clears is ever unrecoverable from the resulting file alone.
     """
     reg = load_reg(registry_path(a))
     old_path = ledger_path(a)

@@ -13,6 +13,11 @@ import org.bukkit.command.CommandSender;
  *
  * @since 6.3.0
  */
+// This class is a namespace for the nested Dup class, not a utility class with static
+// helpers of its own -- the private constructor exists only to block a pointless
+// `new DuplicateHolder()`. PMD's rule assumes a non-instantiatable class with no static
+// members serves no purpose; the purpose here is holding the nested class.
+@SuppressWarnings("PMD.MissingStaticMethodInNonInstantiatableClass")
 public final class DuplicateHolder {
 
     private DuplicateHolder() {

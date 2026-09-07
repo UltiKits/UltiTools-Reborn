@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Import a Laojun verdicts file into the UAT ledger, through uat.py's own validation.
+"""
+Import a Laojun verdicts file into the UAT ledger, through uat.py's own validation.
 
 Usage:
     import_verdicts.py --verdicts uat-verdicts.json --registry <path> --ledger <path> [--dry-run]
@@ -50,9 +51,12 @@ def load_verdicts(path):
 
 
 def build_note(row):
-    """The note stored in the ledger: the actual observation, quoted, plus the evidence file
-    list if any -- matching this project's own "quote the server's own words" adjudication rule
-    rather than a bare status flip.
+    """
+    Build the note stored in the ledger for one row.
+
+    The actual observation, quoted, plus the evidence file list if any -- matching this
+    project's own "quote the server's own words" adjudication rule rather than a bare status
+    flip.
     """
     observed = row.get('observed', '')
     evidence = row.get('evidence') or []
@@ -62,8 +66,10 @@ def build_note(row):
 
 
 def validate_rows(rows, known_ids):
-    """Validate every row before any write. Returns a list of problem strings; empty means
-    every row is safe to write.
+    """
+    Validate every row before any write.
+
+    Returns a list of problem strings; empty means every row is safe to write.
     """
     problems = []
     for index, row in enumerate(rows):
@@ -85,10 +91,12 @@ def summarize(counter):
 
 
 def apply_rows(led, rows):
-    """Write every row into `led['results']`, skipping a row whose already-recorded status and
-    note are unchanged (idempotent re-import: the original `at` timestamp is preserved and the
-    ledger stays byte-identical on a repeat run). Returns (written_by_status, defects_to_file,
-    any_changed).
+    """
+    Write every row into `led['results']`.
+
+    Skips a row whose already-recorded status and note are unchanged (idempotent re-import:
+    the original `at` timestamp is preserved and the ledger stays byte-identical on a repeat
+    run). Returns (written_by_status, defects_to_file, any_changed).
     """
     written_by_status = Counter()
     defects_to_file = []

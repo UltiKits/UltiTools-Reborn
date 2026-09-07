@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check a module's UAT matrix for completeness (Phase 10, D-10-09/D-10-10).
+"""
+Check a module's UAT matrix for completeness (Phase 10, D-10-09/D-10-10).
 
 Given a generated `surface.json` and a hand-written `assertions.yaml`, this is the objective
 per-module gate every one of the seventeen module-side repositories runs before opening its
@@ -46,8 +47,11 @@ CONFIG_KIND = 'config'
 
 
 def load_surface(path):
-    """Load `surface.json`, returning (items, config_entities). Both default to empty lists
-    when the document omits them -- an empty-but-valid surface is legitimate, not an error.
+    """
+    Load `surface.json`, returning (items, config_entities).
+
+    Both default to empty lists when the document omits them -- an empty-but-valid surface is
+    legitimate, not an error.
     """
     with open(path, encoding='utf-8') as handle:
         document = json.load(handle)
@@ -57,9 +61,11 @@ def load_surface(path):
 
 
 def load_assertions(path):
-    """Load `assertions.yaml`, returning (assertions, gui_excluded_classes). An assertions
-    file with no `assertions` key, or an empty list, is a legitimate "nothing asserted yet"
-    state -- an empty list, not an error.
+    """
+    Load `assertions.yaml`, returning (assertions, gui_excluded_classes).
+
+    An assertions file with no `assertions` key, or an empty list, is a legitimate "nothing
+    asserted yet" state -- an empty list, not an error.
     """
     if yaml is None:
         raise SystemExit(
@@ -73,7 +79,8 @@ def load_assertions(path):
 
 
 def validate_assertions_schema(assertions):
-    """Return a list of schema-error strings for `assertions`; empty means well-formed.
+    """
+    Return a list of schema-error strings for `assertions`; empty means well-formed.
 
     `id`, `truth` and `layer` are required on every entry (missing or `None` is a violation;
     an empty string is not -- an empty truth is a *weak* truth, reported separately, never a
@@ -110,9 +117,11 @@ def validate_assertions_schema(assertions):
 
 
 def validate_surface_schema(items, config_entities):
-    """Return (errors, entities_by_class). A `config` row whose `config_entity` names an
-    entity absent from `config_entities` is a schema error naming the entity -- never a row
-    silently bucketed or dropped.
+    """
+    Return (errors, entities_by_class).
+
+    A `config` row whose `config_entity` names an entity absent from `config_entities` is a
+    schema error naming the entity -- never a row silently bucketed or dropped.
     """
     errors = []
     entities_by_class = {}
@@ -131,9 +140,12 @@ def validate_surface_schema(items, config_entities):
 
 
 def find_weak_truths(items, assertions_by_id):
-    """An assertion whose truth is empty, or which merely repeats the row's own `trigger`
-    string, names no observable outcome and makes the row untestable. Reported as a listed
-    finding -- never silently accepted, but never a reason to fail on its own.
+    """
+    Find assertions whose truth names no observable outcome.
+
+    An assertion whose truth is empty, or which merely repeats the row's own `trigger` string,
+    makes the row untestable. Reported as a listed finding -- never silently accepted, but
+    never a reason to fail on its own.
     """
     items_by_id = {item.get('id'): item for item in items}
     weak = []
@@ -149,7 +161,8 @@ def find_weak_truths(items, assertions_by_id):
 
 
 def compute_buckets(items, entities_by_class, assertions_by_id, config_entities):
-    """Sort every surface row and every config entity into the three named buckets.
+    """
+    Sort every surface row and every config entity into the three named buckets.
 
     Join is by the row's own `config_entity` field against `config_entities`, never by
     re-reading module source (D-10-04's own rationale for the compiled-class extractor).

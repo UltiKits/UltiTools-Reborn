@@ -158,8 +158,15 @@ public final class SurfaceAssembler {
         Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
         for (Map<String, Object> row : rows) {
             String id = String.valueOf(row.get("id"));
+            // Map.putIfAbsent returns non-null only when `id` was already claimed by a
+            // DIFFERENT prior row object -- each row in `rows` is a distinct instance
+            // created exactly once by its own scanner, so `existing` can never be the
+            // literal same reference as `row`. A reference-identity self-check here was
+            // therefore always vacuously true whenever `existing != null`; removed rather
+            // than rewritten to Map.equals(), which would incorrectly treat two distinct
+            // rows that happen to carry byte-identical field content as "not a collision".
             Map<String, Object> existing = byId.putIfAbsent(id, row);
-            if (existing != null && existing != row) {
+            if (existing != null) {
                 throw new ExtractorException("Row id collision " + id + " between "
                         + descriptorOf(existing) + " and " + descriptorOf(row));
             }

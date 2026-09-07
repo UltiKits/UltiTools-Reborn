@@ -17,6 +17,11 @@ import org.bukkit.event.player.PlayerQuitEvent;
  *
  * @since 6.3.0
  */
+// This class is a namespace for the nested @EventListener fixtures below, not a utility
+// class with static helpers of its own -- the private constructor exists only to block a
+// pointless `new FixtureListeners()`. PMD's rule assumes a non-instantiatable class with no
+// static members serves no purpose; the purpose here is holding the nested classes.
+@SuppressWarnings("PMD.MissingStaticMethodInNonInstantiatableClass")
 public final class FixtureListeners {
 
     private FixtureListeners() {
@@ -26,6 +31,7 @@ public final class FixtureListeners {
     public static class JoinListener implements Listener {
         @EventHandler(priority = EventPriority.HIGH)
         public void onJoin(PlayerJoinEvent event) {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
     }
 
@@ -33,10 +39,12 @@ public final class FixtureListeners {
     public static class MultiHandlerListener implements Listener {
         @EventHandler
         public void onJoin(PlayerJoinEvent event) {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
 
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuit(PlayerQuitEvent event) {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
     }
 

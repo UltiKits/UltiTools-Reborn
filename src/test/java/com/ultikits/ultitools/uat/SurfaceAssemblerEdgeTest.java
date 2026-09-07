@@ -45,6 +45,10 @@ class SurfaceAssemblerEdgeTest {
 
     @Test
     @DisplayName("two concurrent writers of the same output path leave a file byte-identical to a single-run file")
+    @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
+    // The RuntimeException wrapper below is the standard idiom for propagating a checked
+    // exception out of a Runnable submitted to an ExecutorService, so future.get() below
+    // surfaces it wrapped in an ExecutionException rather than swallowing it silently.
     void concurrentWritesNeverCorruptTheOutputFile(@TempDir Path scratchRoot) throws Exception {
         List<Map<String, Object>> items = new ArrayList<>();
         Map<String, Object> row = new java.util.LinkedHashMap<>();

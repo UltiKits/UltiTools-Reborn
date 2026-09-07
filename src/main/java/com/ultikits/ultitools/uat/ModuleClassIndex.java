@@ -70,6 +70,12 @@ public final class ModuleClassIndex {
         List<Class<?>> classes = new ArrayList<>(binaryNames.size());
         for (String binaryName : binaryNames) {
             try {
+                // binaryName is not attacker-controllable: it comes from enumerating the
+                // .class file names actually present under a CI-controlled classesRoot
+                // directory or jar (see enumerateBinaryNames above), never from network or
+                // user-supplied input. The suppression must sit on the line immediately
+                // above the finding to take effect.
+                // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                 classes.add(Class.forName(binaryName, false, loader));
             } catch (Throwable t) {
                 throw ExtractorException.classLoadFailure(binaryName, t);

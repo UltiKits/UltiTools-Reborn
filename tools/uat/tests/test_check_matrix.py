@@ -1,4 +1,5 @@
-"""Tests for tools/uat/check_matrix.py (Phase 10 plan 10-04, Task 1).
+"""
+Tests for tools/uat/check_matrix.py (Phase 10 plan 10-04, Task 1).
 
 check_matrix.py is the per-module completeness gate (D-10-09/D-10-10): it sorts every surface
 row into `unasserted`, `entity-covered` or `uncovered-entity`, reports orphan assertion ids and
@@ -163,9 +164,13 @@ class TestConfigGranularity:
 
 
 class TestRepeatabilityFixture:
-    """The two-sided repeatability guarantee D-10-10 requires: a config field added under an
-    asserted entity stays green through entity-covered; the same field under an unasserted
-    entity fails through uncovered-entity. Neither depends on assertion granularity changing."""
+    """
+    Exercise the two-sided repeatability guarantee D-10-10 requires.
+
+    A config field added under an asserted entity stays green through entity-covered; the
+    same field under an unasserted entity fails through uncovered-entity. Neither depends on
+    assertion granularity changing.
+    """
 
     def test_adding_a_field_under_an_asserted_entity_keeps_the_matrix_green(self, tmp_path):
         entity = {'id': 'CFE-33333333', 'class': 'com.example.Grown', 'file': 'config/grown.yml', 'entry_count': 1}
@@ -420,11 +425,12 @@ class TestJsonOutput:
         surface = write_surface(tmp_path, [])
         assertions = write_assertions(tmp_path, [])
 
-        import subprocess
+        import subprocess  # nosec B404 -- invokes this repo's own check_matrix.py with a
+                            # fixed argument list, never external or attacker-supplied input
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve().parents[1] / 'check_matrix.py'),
              '--surface', surface, '--assertions', assertions, '--json'],
-            capture_output=True, text=True)
+            capture_output=True, text=True)  # nosec B603 -- fixed args, never external input
         parsed = json.loads(proc.stdout)
         reserialized = json.dumps(parsed, sort_keys=True, indent=2)
         assert proc.stdout.strip() == reserialized.strip()

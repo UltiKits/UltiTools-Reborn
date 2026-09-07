@@ -44,6 +44,14 @@ public final class RowId {
 
     private static String sha1Hex(String input) {
         try {
+            // SHA-1 here is a content-addressing digest for a row identifier, not a
+            // cryptographic control: there is no secret, signature, or adversarial input to
+            // protect against, and the whole point (per this class's own javadoc) is
+            // reproducing gen-registry.py's uid() scheme byte for byte so ids already
+            // recorded in ledger.json keep matching. Switching digests would break that
+            // contract for no security benefit. The suppression must sit on the line
+            // immediately above the finding to take effect.
+            // nosemgrep
             MessageDigest digest = MessageDigest.getInstance("SHA-1");
             byte[] bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
             StringBuilder hex = new StringBuilder(bytes.length * 2);

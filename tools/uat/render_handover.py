@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Render a Laojun-ready UAT handover document.
+r"""
+Render a Laojun-ready UAT handover document.
 
 Combines a module's generated `surface.json`, its hand-written `assertions.yaml`, and the
 release artifact five-tuple (path, semantic version, byte size, SHA-256, source commit) into
@@ -11,8 +12,8 @@ has no assertion yet -- that omission is exactly the "new, unasserted entries" g
 this document feeds is meant to surface.
 
 Usage:
-    render_handover.py --surface uat/surface.json --assertions uat/assertions.yaml \\
-        --jar path/to/Module.jar --version 1.2.3 --bytes 12345 \\
+    render_handover.py --surface uat/surface.json --assertions uat/assertions.yaml \
+        --jar path/to/Module.jar --version 1.2.3 --bytes 12345 \
         --sha256 <hex> --commit <sha> [--ids ID1,ID2,...] [--output uat/handover.md]
 
 With no `--output`, the document is written to stdout.
@@ -35,7 +36,8 @@ def load_surface(path):
 
 
 def load_assertions(path):
-    """Load `assertions.yaml` and return a dict keyed by assertion id.
+    """
+    Load `assertions.yaml` and return a dict keyed by assertion id.
 
     An assertions file with no `assertions` key, or an empty list, is a legitimate "nothing
     asserted yet" state -- it yields an empty dict, not an error.
@@ -72,7 +74,8 @@ def render_artifact_table(jar, version, byte_size, sha256, commit):
 
 
 def render_rows(items, assertions_by_id, ids_filter=None):
-    """Render the asserted-rows table plus the "Rows with no assertion yet" section.
+    """
+    Render the asserted-rows table plus the "Rows with no assertion yet" section.
 
     Every surface row lands in exactly one of the two: `Expected`/`Layer` come from the
     matching assertion's `truth`/`layer`; `Steps` always comes from the surface row's own

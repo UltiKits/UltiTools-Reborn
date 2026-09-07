@@ -51,12 +51,14 @@ class ScheduledRowScannerTest {
     static class RepeatingTask {
         @Scheduled(delay = 20, period = 1200, async = true)
         public void run() {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
     }
 
     static class OneShotTask {
         @Scheduled(delay = 0)
         public void run() {
+            // no-op: the scanner reads the annotation, never invokes this method
         }
     }
 }

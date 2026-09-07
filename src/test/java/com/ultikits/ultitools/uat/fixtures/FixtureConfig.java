@@ -19,6 +19,11 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  *
  * @since 6.3.0
  */
+// This class is a namespace for the nested @ConfigEntity fixtures below, not a utility class
+// with static helpers of its own -- the private constructor exists only to block a pointless
+// `new FixtureConfig()`. PMD's rule assumes a non-instantiatable class with no static members
+// serves no purpose; the purpose here is holding the nested classes.
+@SuppressWarnings("PMD.MissingStaticMethodInNonInstantiatableClass")
 public final class FixtureConfig {
 
     private FixtureConfig() {
