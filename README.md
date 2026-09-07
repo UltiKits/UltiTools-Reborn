@@ -455,6 +455,7 @@ documentation site — it is the single source of truth and is kept in sync with
 | [Developer Docs](https://dev.ultikits.com/guide/introduction) | Full documentation site |
 | [External Plugin API](https://dev.ultikits.com/guide/advanced/external-plugin-api) | Integrate UltiTools into an existing Bukkit plugin |
 | [UltiKits CLI](https://dev.ultikits.com/guide/advanced/ultikits-cli) | Scaffold and publish modules from the terminal |
+| [UAT Matrix Schema](UAT-MATRIX-SCHEMA.md) | The per-module UAT matrix format, extraction, and real-machine handover protocol |
 
 <br>
 
