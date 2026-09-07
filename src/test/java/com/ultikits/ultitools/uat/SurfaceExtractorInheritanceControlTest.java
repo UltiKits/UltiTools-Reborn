@@ -37,11 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the two fixture classes and always executes for real.
  * <p>
  * The real-module half of Task 2 (one UltiEssentials sub-package, hand-audited against a real
- * {@code SurfaceExtractorMain} run) is recorded in
- * {@code /home/wisdomme/servers/evidence/phase-10/10-EXTRACTOR-CONTROL.md} and guarded by this
- * plan's own {@code <verify>} shell command (a floor-count assertion against the real
- * UltiEssentials module) rather than by a JUnit test here, since it requires building a separate
- * module checkout.
+ * {@code SurfaceExtractorMain} run) is recorded in this plan's local (non-committed) evidence
+ * tree, and guarded by this plan's own {@code <verify>} shell command (a floor-count assertion
+ * against the real UltiEssentials module) rather than by a JUnit test here, since it requires
+ * building a separate module checkout.
  *
  * @since 6.3.0
  */

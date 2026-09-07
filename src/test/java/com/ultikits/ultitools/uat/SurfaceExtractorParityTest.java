@@ -20,8 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The 28-tuple sample below was drawn from a real, one-time reconciliation (Phase 10 plan 10-03,
  * Task 3) between the 422-row registry and a real {@code SurfaceExtractorMain} run over all 16
  * module repositories (817 rows). Every tuple here is a row where BOTH sides independently
- * produced the identical id -- "bucket one" of that reconciliation, recorded in full at
- * {@code /home/wisdomme/servers/evidence/phase-10/10-EXTRACTOR-CONTROL.md}. This test turns that
+ * produced the identical id -- "bucket one" of that reconciliation, recorded in full in this
+ * plan's local (non-committed) evidence tree. This test turns that
  * one afternoon's reconciliation into a permanent regression guard: a future change to
  * {@link RowId#of} or to any scanner's call-site argument order that broke reproduction of even
  * one of these 28 real, already-recorded ids fails here immediately, rather than being discovered
