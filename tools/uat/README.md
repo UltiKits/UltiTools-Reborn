@@ -2,11 +2,12 @@
 
 The tracked, reviewable half of the UltiTools UAT workflow (Phase 10, D-10-13): the module
 surface extractor's Python-side counterpart -- a batch driver, a handover-document renderer, and
-a verdict importer. `~/servers/uat/` (or wherever `UAT_REGISTRY`/`UAT_LEDGER` point) holds data
-only from here on: `registry.json`, `ledger.json`, and any real-machine run artifacts. Neither
-this directory's scripts nor the workflow they drive live outside version control any more --
-862 lines of workflow-critical Python that used to sit unreviewed on one machine are now
-reviewable in git.
+a verdict importer -- plus the two per-module gates every one of the seventeen module-side
+repositories runs before opening its pull request. `~/servers/uat/` (or wherever
+`UAT_REGISTRY`/`UAT_LEDGER` point) holds data only from here on: `registry.json`, `ledger.json`,
+and any real-machine run artifacts. Neither this directory's scripts nor the workflow they drive
+live outside version control any more -- 862 lines of workflow-critical Python that used to sit
+unreviewed on one machine are now reviewable in git.
 
 ## What's here
 
@@ -15,7 +16,9 @@ reviewable in git.
 | `uat.py` | The batch driver: `status`, `next`, `record`, `rebase`, `reset` |
 | `render_handover.py` | Turns `surface.json` + `assertions.yaml` + the artifact five-tuple into a Laojun-ready Markdown document |
 | `import_verdicts.py` | Maps a Laojun verdicts file onto `uat.py`'s own `record` validation |
-| `tests/` | pytest suite for `import_verdicts.py`, `render_handover.py`, and the ledger migration helper |
+| `check_matrix.py` | The per-module completeness gate: names every surface row with no stated truth yet (D-10-09/D-10-10) |
+| `ci-drift-guard.sh` | The per-module byte-identity gate: regenerates `uat/surface.json` and proves it matches the committed one (D-10-07) |
+| `tests/` | pytest suite for `import_verdicts.py`, `render_handover.py`, `check_matrix.py`, `ci-drift-guard.sh`, and the ledger migration helper |
 
 ## No default names a developer's home directory
 
@@ -94,6 +97,72 @@ ledger's full lineage across several rebases is recoverable from the file alone,
 most recent transition. Loading an old-shape ledger migrates it in memory automatically (and any
 subcommand that writes the ledger persists the migrated shape); a ledger already carrying the
 list is left unchanged.
+
+## The two per-module gates (Phase 10 plan 10-04)
+
+Every one of the seventeen module-side repositories runs both of these before opening its pull
+request. Neither reads module source directly -- both operate on the two files a module's own
+`uat/` directory carries (`surface.json`, generated; `assertions.yaml`, hand-written).
+
+### `check_matrix.py` -- is this matrix complete?
+
+```bash
+python3 tools/uat/check_matrix.py --surface uat/surface.json --assertions uat/assertions.yaml \
+    --module MyModule                 # human-readable report
+python3 tools/uat/check_matrix.py --surface uat/surface.json --assertions uat/assertions.yaml \
+    --json                            # the same five findings as sorted JSON, for a machine caller
+```
+
+It sorts every surface row into one of three named buckets, per D-10-09/D-10-10's accepted
+config granularity (a config field never needs its own assertion; the entity it belongs to does):
+
+| Bucket | Meaning | Drives a non-zero exit? |
+|---|---|---|
+| `unasserted` | A command/help/listener/scheduled/gui/persistence/placeholder/behaviour/conditional row with no assertion. This IS criterion 5's "new, unasserted entries". | Yes |
+| `entity-covered` | A `config` row whose owning `@ConfigEntity` has at least one assertion. Informational only. | No, never |
+| `uncovered-entity` | A `@ConfigEntity` with no assertion at all -- a real gap. | Yes |
+
+It also reports **orphan assertions** (an assertion id matching neither a surface item nor a
+`config_entities` entry) and **uncovered GUI classes** (a `gui_excluded_classes` entry -- Phase
+9's coverage-gate carve-out, D-09 -- named by no assertion's `covers_classes`); both drive a
+non-zero exit when non-empty. Exit is zero only when `unasserted`, `uncovered-entity`, the orphan
+list, and the GUI list are all empty. Assertion ids are compared byte-wise -- a case or whitespace
+difference is reported as absent, never silently matched.
+
+### `ci-drift-guard.sh` -- is this matrix's surface still true?
+
+```bash
+bash tools/uat/ci-drift-guard.sh [MODULE_NAME] [CLASSES_PATH]
+```
+
+Run from inside a module checkout, after `mvn test-compile` or `mvn verify`. `MODULE_NAME`
+defaults to the checkout directory's base name; `CLASSES_PATH` defaults to `target/classes` --
+pass an explicit jar path for a module whose classes live in a shaded dist jar (UltiBot's
+`ultibot-dist`). It regenerates `uat/surface.json` from the module's own compiled classes and
+proves the result is byte-identical to the one already committed (D-10-07).
+
+**The CI step every module's `maven-ci.yml` adds, after its existing `Verify` step:**
+
+```yaml
+      - name: Regenerate uat/surface.json and check for drift
+        run: bash tools/uat/ci-drift-guard.sh
+```
+
+(A module vendoring this script locally instead of referencing the framework checkout should
+copy `ci-drift-guard.sh` verbatim -- the script is the single source of truth for all seventeen
+CI steps, so they never drift from each other.)
+
+The `maven-dependency-plugin` coordinate is pinned to `3.11.0` explicitly, rather than left to
+resolve a module's own default: UltiChat's own unpinned default resolves the old `2.8` goal
+implementation, while the framework's own build resolves `3.11.0` -- pinning makes all seventeen
+module repositories behave identically regardless of each repo's own unpinned-plugin default.
+
+The guard fails, naming the problem, in three cases: the resolved classpath does not carry the
+`UltiTools-API` framework jar (the extractor cannot run without it); `uat/surface.json` is not
+tracked by git (a completely untracked path is invisible to plain `git diff`, which reports zero
+differences for a file it has never seen -- exactly the false-clean this check exists to prevent,
+per T-10-14); or regeneration produced a file that differs from the one already committed (the
+diff is printed before the failure message).
 
 ## Three adjudication traps, carried over from the original tool
 

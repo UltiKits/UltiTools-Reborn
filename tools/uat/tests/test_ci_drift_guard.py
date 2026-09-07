@@ -93,7 +93,8 @@ class TestSyntax:
 
     def test_pins_the_dependency_plugin_coordinate_to_3_11_0(self):
         text = SCRIPT.read_text(encoding='utf-8')
-        assert 'maven-dependency-plugin:3.11.0:build-classpath' in text
+        assert 'maven-dependency-plugin:${DEPENDENCY_PLUGIN_VERSION}:build-classpath' in text
+        assert 'DEPENDENCY_PLUGIN_VERSION="3.11.0"' in text
 
 
 class TestFrameworkJarMissing:
