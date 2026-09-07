@@ -44,6 +44,14 @@ public final class FixtureConfig {
         private int count = 0;
     }
 
+    // Deliberately carries no @ConfigEntry field at all -- the specimen for the "still
+    // appears in config_entities with entry_count 0" behaviour (Codex review of PR #427):
+    // a class this shape is invisible to check_matrix.py's uncovered-entity gap detection
+    // unless it gets a config_entities entry regardless of having zero entries.
+    @ConfigEntity("config/empty.yml")
+    public static class EmptyEntity {
+    }
+
     public static class Orphan {
         @ConfigEntry(path = "orphan.value")
         private String value = "orphan";

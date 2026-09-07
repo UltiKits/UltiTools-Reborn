@@ -8,9 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import render_handover  # noqa: E402  (path must be adjusted before this import)
 
 
-def write_surface(tmp_path, items):
+def write_surface(tmp_path, items, config_entities=None):
     path = tmp_path / 'surface.json'
-    path.write_text(json.dumps({'schema_version': 1, 'items': items}), encoding='utf-8')
+    document = {'schema_version': 1, 'items': items}
+    if config_entities is not None:
+        document['config_entities'] = config_entities
+    path.write_text(json.dumps(document), encoding='utf-8')
     return str(path)
 
 
@@ -178,3 +181,68 @@ def test_duplicate_assertion_id_refuses_to_render_instead_of_silently_picking_on
     assert raised
     assert 'duplicate' in message.lower()
     assert 'COM-11111111' in message
+
+
+def test_config_row_is_asserted_through_its_owning_entity_not_its_own_id(tmp_path):
+    # D-10-10: a config row is never asserted by its own id -- the entity it belongs to is.
+    # A renderer that discards config_entities (or looks a config row up by its own id) can
+    # never resolve this join and would report every config field as unasserted, even when
+    # its entity has a real, matching assertion.
+    entity = {'id': 'CFE-11111111', 'class': 'com.example.Cfg', 'file': 'config/cfg.yml', 'entry_count': 1}
+    row = {'id': 'CFG-aaaaaaaa', 'kind': 'config', 'config_entity': 'com.example.Cfg',
+           'config_file': 'config/cfg.yml', 'path': 'enabled'}
+    surface = write_surface(tmp_path, [row], config_entities=[entity])
+    assertions = write_assertions(tmp_path, [
+        {'id': 'CFE-11111111', 'truth': 'config/cfg.yml loads with enabled=true', 'layer': 'protocol'},
+    ])
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'CFG-aaaaaaaa' in document
+    assert 'config/cfg.yml loads with enabled=true' in document
+    assert 'Every surface row has an assertion.' in document
+
+
+def test_non_command_kinds_get_a_descriptive_steps_column_not_an_empty_trigger(tmp_path):
+    # Only command/help rows carry `trigger`. Reading it unconditionally for every kind
+    # silently renders an empty Steps cell for a listener, scheduled task, or persistence
+    # row -- exactly the rows a real-machine executor needs the most explicit guidance for.
+    surface = write_surface(tmp_path, [
+        {'id': 'LIS-11111111', 'kind': 'listener', 'event': 'PlayerJoinEvent', 'handler_priority': 'HIGH'},
+        {'id': 'SCH-11111111', 'kind': 'scheduled', 'delay_seconds': 1, 'one_shot': False, 'period_seconds': 60},
+        {'id': 'PER-11111111', 'kind': 'persistence', 'table': 'accounts'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'event PlayerJoinEvent' in document
+    assert 'runs every 60s' in document
+    assert 'table accounts' in document
+
+
+def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},
+    ])
+    assertions_path = tmp_path / 'assertions.yaml'
+    assertions_path.write_text(
+        'schema_version: 1\nassertions:\n  - id: COM-11111111\n'
+        '    truth: "chat line reads enabled | disabled"\n    layer: protocol\n',
+        encoding='utf-8')
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', str(assertions_path),
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+    row_line = next(line for line in document.splitlines() if line.startswith('| COM-11111111'))
+    # Real column separators are ' | ' (space-pipe-space); the escaped pipe inside the
+    # truth text is '\|' with no bare pipe adjacent to a space on both sides, so splitting
+    # on the real separator must still yield exactly 5 columns, not 6.
+    columns = row_line.strip('|').split(' | ')
+
+    assert len(columns) == 5
+    assert 'enabled \\| disabled' in document

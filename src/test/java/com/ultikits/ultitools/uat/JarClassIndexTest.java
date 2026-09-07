@@ -86,6 +86,31 @@ class JarClassIndexTest {
     }
 
     @Test
+    @DisplayName("a multi-release jar's versioned overlay entry is skipped, not a fatal invalid binary name")
+    void multiReleaseOverlayEntryIsSkippedNotFatal(@TempDir Path scratchRoot) throws Exception {
+        byte[] classBytes = compileFixture(scratchRoot);
+        Path jarPath = scratchRoot.resolve("multi-release-fixture.jar");
+        try (OutputStream fileOut = Files.newOutputStream(jarPath);
+                JarOutputStream jarOut = new JarOutputStream(fileOut)) {
+            jarOut.putNextEntry(new JarEntry(FIXTURE_ENTRY_NAME));
+            jarOut.write(classBytes);
+            jarOut.closeEntry();
+
+            // A shaded multi-release jar carries a versioned overlay of the SAME class under
+            // META-INF/versions/<N>/... -- converting that path verbatim would produce the
+            // invalid binary name "META-INF.versions.11...", which used to fail extraction
+            // closed for the whole jar rather than merely skip this one overlay entry.
+            jarOut.putNextEntry(new JarEntry("META-INF/versions/11/" + FIXTURE_ENTRY_NAME));
+            jarOut.write(classBytes);
+            jarOut.closeEntry();
+        }
+
+        List<Class<?>> classes = new ModuleClassIndex(Thread.currentThread().getContextClassLoader()).load(jarPath);
+
+        assertThat(classes).extracting(Class::getName).containsExactly(FIXTURE_BINARY_NAME);
+    }
+
+    @Test
     @DisplayName("a --classes argument that is neither an existing directory nor an existing jar exits non-zero naming the argument")
     void rejectsArgumentThatIsNeitherDirectoryNorJar() {
         Path missing = Paths.get("this/path/does/not/exist/anywhere.jar");

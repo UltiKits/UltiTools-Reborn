@@ -55,6 +55,19 @@ class ConfigRowScannerTest {
     }
 
     @Test
+    @DisplayName("a @ConfigEntity class with zero @ConfigEntry fields still appears in config_entities with entry_count 0")
+    void emptyEntityStillAppearsInConfigEntities() throws ExtractorException {
+        ConfigRowScanner.Result result = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.EmptyEntity.class));
+
+        assertThat(result.getRows()).isEmpty();
+        assertThat(result.getEntities()).hasSize(1);
+        Map<String, Object> emptyEntity = entityFor(result.getEntities(), FixtureConfig.EmptyEntity.class.getName());
+        assertThat(emptyEntity.get("file")).isEqualTo("config/empty.yml");
+        assertThat(emptyEntity.get("entry_count")).isEqualTo(0);
+    }
+
+    @Test
     @DisplayName("a @ConfigEntry field whose enclosing class has no @ConfigEntity fails closed naming the class and field")
     void orphanedConfigEntryFailsClosed() {
         assertThatThrownBy(() -> new ConfigRowScanner().scan("Fixture", Arrays.asList(FixtureConfig.Orphan.class)))

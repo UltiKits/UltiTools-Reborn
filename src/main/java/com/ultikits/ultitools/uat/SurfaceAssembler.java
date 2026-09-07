@@ -101,12 +101,24 @@ public final class SurfaceAssembler {
     public AssembledSurface assemble(String origin, List<Class<?>> classes) throws ExtractorException {
         List<Map<String, Object>> rows = new ArrayList<>();
 
+        // Read switches before scanning persistence: @UltiToolsModule.additionalEntities()
+        // names @Table classes the module owns that live OUTSIDE classesRoot (a shared
+        // library jar, a multi-module build's common artifact) — the runtime scans those
+        // too (it is additive to, not a replacement for, the module's own JAR scan), so the
+        // persistence scanner needs the union to match what actually gets persisted.
+        ModuleSwitchReader.Switches switches = moduleSwitchReader.read(classes);
+        List<Class<?>> persistenceClasses = classes;
+        if (switches != null && !switches.getAdditionalEntities().isEmpty()) {
+            persistenceClasses = new ArrayList<>(classes);
+            persistenceClasses.addAll(switches.getAdditionalEntities());
+        }
+
         for (SurfaceRow row : commandRowScanner.scan(origin, classes)) {
             rows.add(row.toFieldMap());
         }
         rows.addAll(listenerRowScanner.scan(origin, classes));
         rows.addAll(scheduledRowScanner.scan(origin, classes));
-        rows.addAll(persistenceRowScanner.scan(origin, classes));
+        rows.addAll(persistenceRowScanner.scan(origin, persistenceClasses));
 
         ConfigRowScanner.Result configResult = configRowScanner.scan(origin, classes);
         rows.addAll(configResult.getRows());
@@ -120,7 +132,6 @@ public final class SurfaceAssembler {
         Map<String, Object> documentExtras = new LinkedHashMap<>();
         documentExtras.put("config_entities", configResult.getEntities());
 
-        ModuleSwitchReader.Switches switches = moduleSwitchReader.read(classes);
         if (switches != null) {
             documentExtras.put("registers_commands", switches.isRegistersCommands());
             documentExtras.put("registers_listeners", switches.isRegistersListeners());

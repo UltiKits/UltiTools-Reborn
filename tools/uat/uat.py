@@ -5,7 +5,10 @@ UAT batch driver. The ledger, not anyone's memory, is the source of truth.
   uat.py status                  what is done, pending, failed, for this framework build
   uat.py next --size 25 [--kind command] [--origin UltiEssentials]
                                  emit a self-contained brief for the next pending batch
-  uat.py record <id> <pass|fail|blocked> "<what actually happened>"
+  uat.py record <id> <pass|fail|blocked|human-uat-pending> "<what actually happened>"
+                                 human-uat-pending is D-10-16's named exit -- reserved for
+                                 a row that genuinely needs a human (pixel layer, personal
+                                 credentials), not a routine substitute for blocked
   uat.py rebase --scope <origin> [--scope <origin> ...] [--dry-run]
                                  the ONLY way past an artifact-hash change: archives the
                                  superseded ledger whole, carries forward only the results
@@ -214,14 +217,19 @@ def cmd_status(a):
     if led.get('superseded'):
         print(f"  (rebased from previous build {led['superseded'][:8]}; that build's full "
               f"result set is archived under superseded_ledgers, not discarded)")
-    print(f"{'kind':<14}{'pass':>7}{'fail':>7}{'blocked':>9}{'pending':>9}{'total':>7}")
-    tp = tf = tb = tpe = 0
+    print(f"{'kind':<14}{'pass':>7}{'fail':>7}{'blocked':>9}{'human':>7}{'pending':>9}{'total':>7}")
+    tp = tf = tb = th = tpe = 0
     for k in sorted(tally):
         d = tally[k]
-        p, f, b, pe = d.get('pass', 0), d.get('fail', 0), d.get('blocked', 0), d.get('pending', 0)
-        tp += p; tf += f; tb += b; tpe += pe
-        print(f"{k:<14}{p:>7}{f:>7}{b:>9}{pe:>9}{p+f+b+pe:>7}")
-    print(f"{'TOTAL':<14}{tp:>7}{tf:>7}{tb:>9}{tpe:>9}{tp+tf+tb+tpe:>7}")
+        # D-10-16's named exit, distinct from 'blocked': the row was carried as far as
+        # automation can take it and genuinely needs a human, not merely "not yet
+        # exercised". Counted in its own column so it is never silently missing from the
+        # total, the way it would be if this table only recognised pass/fail/blocked/pending.
+        p, f, b, h, pe = (d.get('pass', 0), d.get('fail', 0), d.get('blocked', 0),
+                           d.get('human-uat-pending', 0), d.get('pending', 0))
+        tp += p; tf += f; tb += b; th += h; tpe += pe
+        print(f"{k:<14}{p:>7}{f:>7}{b:>9}{h:>7}{pe:>9}{p+f+b+h+pe:>7}")
+    print(f"{'TOTAL':<14}{tp:>7}{tf:>7}{tb:>9}{th:>7}{tpe:>9}{tp+tf+tb+th+tpe:>7}")
     if tf:
         print(f"\n{tf} FAILED:")
         for it in reg['items']:
@@ -248,22 +256,31 @@ def cmd_next(a):
     # rows off a single observation with nothing telling it that is the right thing to do. So
     # for listeners the unit of a batch is the trigger, not the registry row: --size counts
     # events, and every handler that event reaches is listed under it.
-    group = a.group_by_event or (a.kind == 'listener')
-    if group:
-        seen, order = {}, []
-        for i in pend:
-            k = i.get('event') or i['trigger']
-            if k not in seen:
-                seen[k] = []; order.append(k)
-            seen[k].append(i)
-        chosen = order[:a.size]
-        batch = [i for k in chosen for i in seen[k]]
-        groups = [(k, seen[k]) for k in chosen]
-        remaining_units = len(order) - len(chosen)
-    else:
-        batch = pend[:a.size]
-        groups = None
-        remaining_units = len(pend) - len(batch)
+    #
+    # Grouping applies whenever `pend` contains ANY listener items -- not only when `a.kind`
+    # was explicitly narrowed to 'listener'. D-10-15's own batching plan dispatches whole
+    # modules (filtered by --origin, not --kind), so the common real batch is a MIX of kinds;
+    # gating grouping on an exact --kind='listener' filter silently ungroups listener rows in
+    # exactly that common case, letting handlers for one event be split across batches.
+    other_items = [i for i in pend if i['kind'] != 'listener']
+    listener_items = [i for i in pend if i['kind'] == 'listener']
+    seen, order = {}, []
+    for i in listener_items:
+        k = i.get('event') or i['trigger']
+        if k not in seen:
+            seen[k] = []; order.append(k)
+        seen[k].append(i)
+
+    # --size counts UNITS: one non-listener item, or one listener event (however many
+    # handlers it reaches) -- never a raw listener row. Non-listener items are filled first,
+    # then remaining budget goes to whole events, so an event is never split across the size
+    # boundary the way per-row slicing would risk.
+    chosen_other = other_items[:a.size]
+    remaining_size = max(0, a.size - len(chosen_other))
+    chosen_events = order[:remaining_size]
+    batch = chosen_other + [i for k in chosen_events for i in seen[k]]
+    groups = [(k, seen[k]) for k in chosen_events] if chosen_events else None
+    remaining_units = (len(other_items) - len(chosen_other)) + (len(order) - len(chosen_events))
     if not batch:
         print('nothing pending for that filter'); return
     # Scoped the same way cmd_status computes its TOTAL row -- an unscoped `reg['total']`
@@ -272,7 +289,11 @@ def cmd_next(a):
     scoped_items = [i for i in reg['items'] if in_scope(i, scope)]
     done = sum(1 for i in scoped_items if res.get(i['id'], {}).get('status', 'pending') != 'pending')
     print(f"# UAT batch - framework {reg['framework_version']} @ jar {reg['artifact_sha256'][:12]}")
-    if groups:
+    if groups and chosen_other:
+        print(f"\nProgress overall: {done}/{len(scoped_items)} recorded. This batch: {len(chosen_other)} "
+              f"item(s) plus {len(batch) - len(chosen_other)} handler(s) across {len(groups)} event(s); "
+              f"{remaining_units} unit(s) still pending for this filter.\n")
+    elif groups:
         print(f"\nProgress overall: {done}/{len(scoped_items)} recorded. This batch: {len(batch)} handlers "
               f"across {len(groups)} events; {remaining_units} events still pending after it.\n")
     else:
@@ -293,8 +314,10 @@ def cmd_next(a):
     print("Record each result with:")
     print("  python3 tools/uat/uat.py record <ID> <pass|fail|blocked> \"<what actually happened>\"\n")
     if groups:
-        print("THIS BATCH IS GROUPED BY EVENT. One trigger per section adjudicates every handler")
-        print("listed under it -- do NOT fire the same event once per row.\n")
+        print("THE LISTENER SECTION BELOW IS GROUPED BY EVENT" + (" (this batch also carries "
+              "non-listener items, printed first)" if chosen_other else "")
+              + ". One trigger per section adjudicates every handler listed under it -- do NOT "
+              "fire the same event once per row.\n")
         print("A handler you cannot see the effect of is still measurable. Two checks apply to")
         print("every handler, and both are observable from a single trigger:")
         print("  a. REGISTERED - the handler's class must appear in that event's registered-listener")
@@ -311,6 +334,22 @@ def cmd_next(a):
         print("  b. NO THROW - after firing, scan the server log for a stack trace naming that class.")
         print("Record each handler its own row. Where a handler has a visible effect, quote it;")
         print("where it has none, say so and record what (a) and (b) showed.\n")
+
+    # Non-listener items always render as flat entries, whether or not this batch also
+    # carries a grouped listener section -- a mixed per-module batch (the common real case,
+    # since D-10-15's own plan dispatches whole modules rather than filtering by --kind)
+    # must show both, not one at the silent expense of the other.
+    for it in chosen_other:
+        print(f"## {it['id']}  [{it['kind']}]  {it['origin']} / {it['cls']}" + (f".{it['member']}" if it.get('member') else ''))
+        print(f"  file    {it['file']}")
+        print(f"  trigger {it['trigger']}")
+        print(f"  who     {it['who']}")
+        print(f"  expect  {it['expect']}")
+        for b in it.get('branches', []):
+            print(f"  branch  {b}")
+        print()
+
+    if groups:
         for _, its in groups:
             print(f"### TRIGGER: {its[0]['trigger']}   ({len(its)} handler"
                   f"{'s' if len(its) > 1 else ''} "
@@ -321,17 +360,6 @@ def cmd_next(a):
                 for b in it.get('branches', []):
                     print(f"      branch {b}")
             print()
-        return
-
-    for it in batch:
-        print(f"## {it['id']}  [{it['kind']}]  {it['origin']} / {it['cls']}" + (f".{it['member']}" if it.get('member') else ''))
-        print(f"  file    {it['file']}")
-        print(f"  trigger {it['trigger']}")
-        print(f"  who     {it['who']}")
-        print(f"  expect  {it['expect']}")
-        for b in it.get('branches', []):
-            print(f"  branch  {b}")
-        print()
 
 
 def cmd_record(a):
@@ -497,7 +525,8 @@ def build_parser():
     sub.add_parser('status', parents=[common]).set_defaults(f=cmd_status)
     n = sub.add_parser('next', parents=[common]); n.add_argument('--size', type=int, default=25)
     n.add_argument('--kind'); n.add_argument('--origin', action='append'); n.add_argument('--group-by-event', action='store_true'); n.set_defaults(f=cmd_next)
-    r = sub.add_parser('record', parents=[common]); r.add_argument('id'); r.add_argument('status', choices=['pass', 'fail', 'blocked'])
+    r = sub.add_parser('record', parents=[common]); r.add_argument('id'); r.add_argument(
+        'status', choices=['pass', 'fail', 'blocked', 'human-uat-pending'])
     r.add_argument('note'); r.set_defaults(f=cmd_record)
     rb = sub.add_parser('rebase', parents=[common])
     rb.add_argument('--scope', action='append', required=True,

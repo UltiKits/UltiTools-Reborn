@@ -6,7 +6,8 @@ Usage:
     import_verdicts.py --verdicts uat-verdicts.json --registry <path> --ledger <path> [--dry-run]
 
 Every write goes through the same two checks `uat.py record` itself performs -- the row id
-must be a real registry id, and the status must be one of `pass`, `fail`, `blocked` -- and the
+must be a real registry id, and the status must be one of `pass`, `fail`, `blocked`,
+`human-uat-pending` (D-10-16's named exit) -- and the
 final write goes through `uat.py`'s own `load_ledger`/`save_ledger`, never a raw edit of the
 ledger file (Phase 10, D-10-14). All rows are validated BEFORE any write happens: an unknown
 id, a bad status, or malformed input JSON is reported and nothing is written.
@@ -33,7 +34,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import uat  # noqa: E402  (sys.path must be adjusted before this import)
 
-VALID_STATUSES = ('pass', 'fail', 'blocked')
+VALID_STATUSES = ('pass', 'fail', 'blocked', 'human-uat-pending')
 
 
 def load_verdicts(path):
@@ -69,19 +70,50 @@ def validate_rows(rows, known_ids):
     """
     Validate every row before any write.
 
-    Returns a list of problem strings; empty means every row is safe to write.
+    Returns a list of problem strings; empty means every row is safe to write. `known_ids`
+    must already be narrowed to the CURRENT ledger's own scope (see `resolve_known_ids`) --
+    a stale verdicts file naming a row this ledger no longer tracks is exactly the kind of
+    unknown id this check exists to catch, not something a broader "any registry id" check
+    would let through.
+
+    A repeated `id` within the same file is also a problem, not merely a duplicate key:
+    `apply_rows` writes rows in list order, so two rows sharing an id with different
+    status/observed content would silently let whichever comes LAST win -- reversing the
+    list would then change the recorded verdict, contradicting this importer's own stated
+    "import order never affects the result" guarantee.
     """
     problems = []
+    seen_ids = {}
     for index, row in enumerate(rows):
         row_id = row.get('id')
         status = row.get('status')
         if row_id not in known_ids:
-            problems.append(f'row {index} (id={row_id!r}): unknown id -- not present in the registry')
+            problems.append(f'row {index} (id={row_id!r}): unknown id -- not present in the registry, '
+                             f'or not in this ledger\'s current scope')
             continue
         if status not in VALID_STATUSES:
             problems.append(
                 f'row {index} (id={row_id!r}): status {status!r} is not one of {VALID_STATUSES}')
+            continue
+        if row_id in seen_ids:
+            problems.append(f'row {index} (id={row_id!r}): duplicate id, first declared at row {seen_ids[row_id]}')
+        else:
+            seen_ids[row_id] = index
     return problems
+
+
+def resolve_known_ids(reg, led):
+    """
+    Compute the set of ids a verdicts file may legitimately reference.
+
+    Scoped to the CURRENT ledger's own `scope` (via `uat.resolve_scope`/`uat.in_scope`), not
+    every id the registry happens to contain. After a narrowed `rebase --scope framework`,
+    a stale verdicts file for an excluded module must be rejected the same way an unknown id
+    is -- this ledger no longer tracks that module's rows, and writing one back in would
+    silently reintroduce a result the rebase deliberately dropped from this build's scope.
+    """
+    scope = uat.resolve_scope(reg, led, None)
+    return {item['id'] for item in reg['items'] if uat.in_scope(item, scope)}
 
 
 def summarize(counter):
@@ -134,7 +166,11 @@ def main(argv=None):
     rows = load_verdicts(args.verdicts)
     reg = uat.load_reg(args.registry)
     led = uat.load_ledger(reg, args.ledger)
-    known_ids = {item['id'] for item in reg['items']}
+    # Backfilled here, before resolve_known_ids, so a legacy pre-scope ledger's one-line
+    # backfill note (uat.resolve_scope's own stderr print) is emitted once, not twice.
+    if not led.get('scope'):
+        led['scope'] = uat.resolve_scope(reg, led, None)
+    known_ids = resolve_known_ids(reg, led)
 
     problems = validate_rows(rows, known_ids)
     if problems:
@@ -149,9 +185,6 @@ def main(argv=None):
     if not rows:
         print('wrote 0 result(s)')
         return 0
-
-    if not led.get('scope'):
-        led['scope'] = uat.resolve_scope(reg, led, None)
 
     written_by_status, defects_to_file, any_changed = apply_rows(led, rows)
 

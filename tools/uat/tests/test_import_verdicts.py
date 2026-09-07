@@ -90,6 +90,58 @@ class TestRowValidation:
 
         assert Path(ledger).read_bytes() == before
 
+    def test_rejects_duplicate_id_within_the_same_file_before_any_write(self, tmp_path):
+        # apply_rows writes in list order; two rows sharing an id with DIFFERENT content
+        # would let whichever comes last silently win, contradicting this importer's own
+        # "import order never affects the result" guarantee.
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        before = Path(ledger).read_bytes()
+        verdicts = write_verdicts(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'first observation'},
+            {'id': 'COM-aaaaaaaa', 'status': 'fail', 'observed': 'second observation, would win silently'},
+        ])
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_rejects_a_verdict_row_for_an_id_excluded_by_the_ledgers_own_scope(self, tmp_path):
+        # After a narrowed `rebase --scope framework`, a stale verdicts file for an
+        # excluded module's id must be rejected the same way an unknown id is -- this
+        # ledger no longer tracks that module, and writing it back in would silently
+        # reintroduce a result the rebase deliberately dropped from this build's scope.
+        registry = write_registry(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A', 'trigger': '/x a'},
+            {'id': 'COM-eeeeeeee', 'kind': 'command', 'origin': 'ExcludedModule', 'cls': 'E', 'trigger': '/e go'},
+        ])
+        ledger = write_ledger(tmp_path, extra={'scope': ['framework']})
+        before = Path(ledger).read_bytes()
+        verdicts = write_verdicts(tmp_path, [
+            {'id': 'COM-eeeeeeee', 'status': 'pass', 'observed': 'stale, out-of-scope result'},
+        ])
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_accepts_a_verdict_row_for_an_id_within_the_ledgers_own_scope(self, tmp_path):
+        registry = write_registry(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A', 'trigger': '/x a'},
+            {'id': 'COM-eeeeeeee', 'kind': 'command', 'origin': 'ExcludedModule', 'cls': 'E', 'trigger': '/e go'},
+        ])
+        ledger = write_ledger(tmp_path, extra={'scope': ['framework']})
+        verdicts = write_verdicts(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'in-scope result'},
+        ])
+
+        import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        led_after = json.loads(Path(ledger).read_text(encoding='utf-8'))
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
+
 
 class TestDryRun:
 
@@ -160,6 +212,23 @@ class TestWriteBehavior:
         assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
         assert 'saw pong' in led_after['results']['COM-aaaaaaaa']['note']
         assert 'machine-observations.json' in led_after['results']['COM-aaaaaaaa']['note']
+
+    def test_human_uat_pending_is_accepted_not_rejected_as_an_unknown_status(self, tmp_path):
+        # UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section (D-10-16) names
+        # human-uat-pending a legitimate terminal status for a row that genuinely needs a
+        # human -- a verdicts file exercising that documented status must import cleanly,
+        # not have its whole batch rejected over one row this importer doesn't recognise.
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        verdicts = write_verdicts(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'status': 'human-uat-pending',
+             'observed': 'requires the panel UltiCloud login, not enabled on this server'},
+        ])
+
+        import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        led_after = json.loads(Path(ledger).read_text(encoding='utf-8'))
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'human-uat-pending'
 
     def test_importing_twice_is_byte_identical(self, tmp_path):
         registry = write_registry(tmp_path, REG_ITEMS)

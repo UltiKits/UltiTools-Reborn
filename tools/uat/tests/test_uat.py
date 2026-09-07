@@ -1,0 +1,119 @@
+"""
+Tests for tools/uat/uat.py's `next` batching (Phase 10 plan 10-05, Codex review of PR #427).
+
+Covers the mixed-kind batch case a `--kind`-filtered test cannot reach: D-10-15's own batching
+plan dispatches whole modules (filtered by `--origin`, not `--kind`), so a real batch commonly
+mixes command/listener/other rows together, not just listener rows in isolation.
+"""
+import io
+import json
+import sys
+from contextlib import redirect_stdout
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import uat  # noqa: E402  (path must be adjusted before this import)
+
+
+def write_registry(tmp_path, items, artifact_sha256='deadbeef'):
+    path = tmp_path / 'registry.json'
+    path.write_text(json.dumps({
+        'framework_version': '1.0.0',
+        'artifact_sha256': artifact_sha256,
+        'items': items,
+    }), encoding='utf-8')
+    return str(path)
+
+
+def write_ledger(tmp_path, artifact_sha256='deadbeef', results=None):
+    path = tmp_path / 'ledger.json'
+    path.write_text(json.dumps({
+        'framework_version': '1.0.0',
+        'artifact_sha256': artifact_sha256,
+        'results': results or {},
+        'scope': ['*'],
+    }), encoding='utf-8')
+    return str(path)
+
+
+def run_next(registry, ledger, kind=None, origin=None, group_by_event=False, size=25):
+    args = type('Args', (), {
+        'registry': registry, 'ledger': ledger, 'kind': kind, 'origin': origin,
+        'group_by_event': group_by_event, 'size': size,
+    })()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        uat.cmd_next(args)
+    return buf.getvalue()
+
+
+COMMAND_ITEM = {
+    'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'X', 'cls': 'A', 'file': 'A.java',
+    'trigger': '/x a', 'who': 'op', 'expect': 'ok', 'branches': [],
+}
+
+
+def listener_item(item_id, cls, member):
+    return {
+        'id': item_id, 'kind': 'listener', 'origin': 'X', 'cls': cls, 'file': f'{cls}.java',
+        'event': 'PlayerJoinEvent', 'trigger': 'join', 'who': 'anyone', 'expect': 'ok',
+        'member': member, 'branches': [],
+    }
+
+
+def test_default_mixed_batch_still_groups_listener_handlers_by_event():
+    # The old behaviour only grouped when --kind was exactly 'listener'; a default, unfiltered
+    # batch (the common case per D-10-15's own module-dispatch plan) rendered listener rows
+    # flat instead, letting handlers for the same event be split across separate `next` calls.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [COMMAND_ITEM, listener_item('LIS-11111111', 'L1', 'onJoin'),
+                 listener_item('LIS-22222222', 'L2', 'onJoin')]
+        registry = write_registry(tmp_path, items)
+        ledger = write_ledger(tmp_path)
+
+        out = run_next(registry, ledger)
+
+        assert 'COM-aaaaaaaa' in out
+        assert 'TRIGGER: join' in out
+        assert 'LIS-11111111' in out
+        assert 'LIS-22222222' in out
+        # Both handlers for the one event appear under the SAME trigger header, not two.
+        assert out.count('TRIGGER: join') == 1
+
+
+def test_size_never_splits_one_event_across_the_boundary():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [COMMAND_ITEM, listener_item('LIS-11111111', 'L1', 'onJoin'),
+                 listener_item('LIS-22222222', 'L2', 'onJoin')]
+        registry = write_registry(tmp_path, items)
+        ledger = write_ledger(tmp_path)
+
+        # size=1 fills the one non-listener item first; no budget remains for the event, so
+        # neither handler should appear yet -- never one handler without the other.
+        out = run_next(registry, ledger, size=1)
+
+        assert 'COM-aaaaaaaa' in out
+        assert 'LIS-11111111' not in out
+        assert 'LIS-22222222' not in out
+
+
+def test_kind_filtered_to_listener_still_groups_exactly_as_before():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [COMMAND_ITEM, listener_item('LIS-11111111', 'L1', 'onJoin'),
+                 listener_item('LIS-22222222', 'L2', 'onJoin')]
+        registry = write_registry(tmp_path, items)
+        ledger = write_ledger(tmp_path)
+
+        out = run_next(registry, ledger, kind='listener')
+
+        assert 'COM-aaaaaaaa' not in out
+        assert 'TRIGGER: join' in out
+        assert 'LIS-11111111' in out
+        assert 'LIS-22222222' in out

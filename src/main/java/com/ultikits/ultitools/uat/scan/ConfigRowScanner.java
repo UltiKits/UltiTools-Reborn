@@ -50,6 +50,19 @@ public final class ConfigRowScanner {
         Map<String, String> idOwners = new LinkedHashMap<>();
         Map<String, EntityAccumulator> entitiesByClassName = new LinkedHashMap<>();
 
+        // Pre-seed every @ConfigEntity class BEFORE walking fields, so a class annotated
+        // @ConfigEntity but declaring zero @ConfigEntry fields still gets a config_entities
+        // entry (entry_count 0). Without this, such a class was silently absent from the
+        // surface entirely -- invisible to check_matrix.py's uncovered-entity gap detection,
+        // which can only flag an entity it can see in the first place.
+        for (Class<?> clazz : classes) {
+            ConfigEntity entityOnClass = MergedAnnotationResolver.find(clazz, ConfigEntity.class);
+            if (entityOnClass != null) {
+                entitiesByClassName.computeIfAbsent(clazz.getName(),
+                        k -> new EntityAccumulator(clazz, entityOnClass.value(), origin));
+            }
+        }
+
         for (Class<?> clazz : classes) {
             for (Field field : ReflectionUtil.getAllFields(clazz)) {
                 ConfigEntry entry = field.getAnnotation(ConfigEntry.class);

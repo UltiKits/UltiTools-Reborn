@@ -132,17 +132,32 @@ public final class ModuleClassIndex {
         return relative.substring(0, relative.length() - CLASS_SUFFIX.length());
     }
 
+    private static final String MULTI_RELEASE_PREFIX = "META-INF/versions/";
+
     private List<String> enumerateFromJar(Path jarPath) throws ExtractorException {
         List<String> names = new ArrayList<>();
         try (JarFile jarFile = new JarFile(jarPath.toFile())) {
             Enumeration<JarEntry> entries = jarFile.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
-                if (entry.isDirectory() || !entry.getName().endsWith(CLASS_SUFFIX)) {
+                String entryName = entry.getName();
+                if (entry.isDirectory() || !entryName.endsWith(CLASS_SUFFIX)) {
                     continue;
                 }
-                String binaryName = entry.getName()
-                        .substring(0, entry.getName().length() - CLASS_SUFFIX.length())
+                if (entryName.startsWith(MULTI_RELEASE_PREFIX)) {
+                    // A multi-release jar's versioned overlay (e.g.
+                    // META-INF/versions/11/com/acme/Foo.class, common for a shaded
+                    // artifact) is not a real class package path -- converting it
+                    // verbatim produces an invalid binary name ("META-INF.versions.11...")
+                    // that Class.forName can never resolve, which would otherwise fail
+                    // the whole extraction closed rather than merely skip this overlay.
+                    // The base (non-versioned) entry for the same class is enumerated
+                    // separately and is what supplies this row; skipping the overlay
+                    // loses no row a JVM below the override version would ever load.
+                    continue;
+                }
+                String binaryName = entryName
+                        .substring(0, entryName.length() - CLASS_SUFFIX.length())
                         .replace('/', '.');
                 addIfNotInfoClass(names, binaryName);
             }
