@@ -1,6 +1,18 @@
 package com.ultikits.ultitools.uat;
 
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
+import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
+import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
+import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.uat.scan.CommandRowScanner;
 import com.ultikits.ultitools.uat.scan.ConditionalGateReader;
 import com.ultikits.ultitools.uat.scan.ConfigRowScanner;
@@ -9,6 +21,7 @@ import com.ultikits.ultitools.uat.scan.ModuleSwitchReader;
 import com.ultikits.ultitools.uat.scan.PersistenceRowScanner;
 import com.ultikits.ultitools.uat.scan.ScheduledRowScanner;
 
+import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -21,13 +34,50 @@ import java.util.Set;
 /**
  * The single place every scanner's output converges (Phase 10, D-10-04/plan 10-02 Task 1): runs
  * every row-kind scanner over one module's loaded classes, attaches {@link ConditionalOnConfig}
- * gates to the command/help/listener/scheduled rows of a gated class, and collects the
- * document-level {@code config_entities} array and {@code registers_*} module switches before
- * handing the merged rows to {@link CanonicalJsonWriter}.
+ * gates to the command/help/listener/scheduled rows of a gated class, collects the document-level
+ * {@code config_entities} array and {@code registers_*} module switches, and — because a scanner
+ * emitting one more row than expected is exactly the defect class this package exists to catch —
+ * performs one final cross-scanner row-id collision check over the fully merged row list before
+ * handing it to {@link CanonicalJsonWriter} (Phase 10 plan 10-02, Task 2).
+ * <p>
+ * {@link #COVERED_ANNOTATION_TYPES} is the extractor's own declared scope (Phase 10, D-10-04):
+ * a hardcoded allowlist, not a directory listing, so that {@code AsyncCommand}, {@code RunAsync}
+ * and {@code CmdSuggest} — deliberately excluded, see the field javadoc — never make a
+ * directory-scan guard flap, and so a genuinely new criterion annotation without a scanner still
+ * fails the guard instead of silently shipping uncovered.
  *
  * @since 6.3.0
  */
 public final class SurfaceAssembler {
+
+    /**
+     * The extractor's complete, locked annotation scope (Phase 10, D-10-04, 13 types). Deliberately
+     * excluded from this set, each for a stated reason (D-10-04's own discretion note):
+     * <ul>
+     *     <li>{@code @AsyncCommand} — describes how a command runs (thread), not what the
+     *     surface is; the command row already exists independent of this attribute.</li>
+     *     <li>{@code @RunAsync} — same reasoning as {@code @AsyncCommand}, the older sibling
+     *     annotation with identical intent.</li>
+     *     <li>{@code @CmdSuggest} — its tab-completion contribution is already folded into the
+     *     command row's {@code params[].suggest} field via {@code @CmdParam}, so a dedicated
+     *     scanner would duplicate information already on the row rather than add new surface.</li>
+     * </ul>
+     */
+    public static final Set<Class<? extends Annotation>> COVERED_ANNOTATION_TYPES =
+            Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
+                    CmdExecutor.class,
+                    CmdMapping.class,
+                    CmdParam.class,
+                    CmdSender.class,
+                    CmdCD.class,
+                    CmdTarget.class,
+                    UsageLimit.class,
+                    ConfigEntity.class,
+                    ConfigEntry.class,
+                    EventListener.class,
+                    Scheduled.class,
+                    ConditionalOnConfig.class,
+                    UltiToolsModule.class)));
 
     private static final Set<String> GATE_ELIGIBLE_KINDS =
             Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList("command", "help", "listener", "scheduled")));
@@ -46,7 +96,7 @@ public final class SurfaceAssembler {
      * @param origin  the module (or {@code "framework"}) these classes belong to
      * @param classes the loaded (uninitialized) classes to scan
      * @return the merged rows plus document-level extras ({@code config_entities}, {@code registers_*})
-     * @throws ExtractorException on any scanner's own failure
+     * @throws ExtractorException on any scanner's own failure, or a row-id collision across scanners
      */
     public AssembledSurface assemble(String origin, List<Class<?>> classes) throws ExtractorException {
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -64,6 +114,8 @@ public final class SurfaceAssembler {
         rows.addAll(conditionalGateReader.scanConditionalRows(origin, classes));
 
         attachGates(rows, conditionalGateReader.collectGates(classes));
+
+        detectCrossScannerCollisions(rows);
 
         Map<String, Object> documentExtras = new LinkedHashMap<>();
         documentExtras.put("config_entities", configResult.getEntities());
@@ -93,6 +145,34 @@ public final class SurfaceAssembler {
                 row.put("gate", gate);
             }
         }
+    }
+
+    /**
+     * The final, whole-document collision check (Phase 10 plan 10-02, Task 2): no individual
+     * scanner can see another scanner's ids, so this is the only place a collision across two
+     * DIFFERENT row kinds — or a same-simple-name pair a single scanner's own internal check
+     * already caught, re-confirmed here — is guaranteed to surface, naming both fully qualified
+     * classes (and their members, when known) rather than silently keeping only one row.
+     */
+    private static void detectCrossScannerCollisions(List<Map<String, Object>> rows) throws ExtractorException {
+        Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String id = String.valueOf(row.get("id"));
+            Map<String, Object> existing = byId.putIfAbsent(id, row);
+            if (existing != null && existing != row) {
+                throw new ExtractorException("Row id collision " + id + " between "
+                        + descriptorOf(existing) + " and " + descriptorOf(row));
+            }
+        }
+    }
+
+    private static String descriptorOf(Map<String, Object> row) {
+        Object className = row.get("class");
+        Object member = row.get("member");
+        if (member != null) {
+            return className + "#" + member;
+        }
+        return String.valueOf(className);
     }
 
     /** The merged row set plus document-level extras, ready for {@link CanonicalJsonWriter}. */
