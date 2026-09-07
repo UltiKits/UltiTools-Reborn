@@ -42,10 +42,13 @@ def write_ledger(directory, artifact_sha256='deadbeef', results=None, extra=None
     return str(path)
 
 
-def write_verdicts(directory, rows, filename='verdicts.json'):
+def write_verdicts(directory, rows, filename='verdicts.json', artifact_sha256='deadbeef'):
+    # Defaults to the SAME 'deadbeef' write_registry/write_ledger default, so a verdicts file
+    # measured against the artifact under test matches the registry by default; a test
+    # specifically covering the mismatch (Codex review of PR #427) passes a different value.
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    path.write_text(json.dumps({'rows': rows}), encoding='utf-8')
+    path.write_text(json.dumps({'rows': rows, 'artifact_sha256': artifact_sha256}), encoding='utf-8')
     return str(path)
 
 
@@ -63,6 +66,61 @@ def make_row(**overrides):
     )
     row.update(overrides)
     return row
+
+
+class TestArtifactBinding:
+
+    def test_rejects_a_verdicts_file_measured_against_a_different_artifact_before_any_write(self, tmp_path):
+        # Row ids are stable across a rebase/reset -- without this check, a verdicts file
+        # produced for artifact A, imported after the ledger moved on to artifact B, would
+        # have every old pass silently accepted as a result for B (Codex review of PR #427).
+        registry = write_registry(tmp_path, REG_ITEMS, artifact_sha256='currentbuild')
+        ledger = write_ledger(tmp_path, artifact_sha256='currentbuild')
+        before = Path(ledger).read_bytes()
+        verdicts = write_verdicts(tmp_path, [make_row(id='COM-aaaaaaaa')],
+                                   artifact_sha256='staleoldbuild')
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_rejects_a_verdicts_file_with_no_artifact_sha256_at_all(self, tmp_path):
+        registry = write_registry(tmp_path, REG_ITEMS, artifact_sha256='currentbuild')
+        ledger = write_ledger(tmp_path, artifact_sha256='currentbuild')
+        before = Path(ledger).read_bytes()
+        verdicts_path = tmp_path / 'verdicts.json'
+        verdicts_path.write_text(json.dumps({'rows': [make_row(id='COM-aaaaaaaa')]}), encoding='utf-8')
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', str(verdicts_path), '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_accepts_a_verdicts_file_measured_against_the_current_artifact(self, tmp_path):
+        registry = write_registry(tmp_path, REG_ITEMS, artifact_sha256='currentbuild')
+        ledger = write_ledger(tmp_path, artifact_sha256='currentbuild')
+        verdicts = write_verdicts(tmp_path, [make_row(id='COM-aaaaaaaa')],
+                                   artifact_sha256='currentbuild')
+
+        rc = import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert rc == 0
+        written = json.loads(Path(ledger).read_text(encoding='utf-8'))
+        assert written['results']['COM-aaaaaaaa']['status'] == 'pass'
+
+    def test_the_artifact_mismatch_is_fatal_even_under_dry_run(self, tmp_path):
+        # A structurally-wrong document (the whole verdicts file belongs to a different
+        # build) is not a row-level problem --dry-run's "would fail" leniency applies to;
+        # there is nothing to preview.
+        registry = write_registry(tmp_path, REG_ITEMS, artifact_sha256='currentbuild')
+        ledger = write_ledger(tmp_path, artifact_sha256='currentbuild')
+        verdicts = write_verdicts(tmp_path, [make_row(id='COM-aaaaaaaa')],
+                                   artifact_sha256='staleoldbuild')
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry,
+                                   '--ledger', ledger, '--dry-run'])
 
 
 class TestRowValidation:

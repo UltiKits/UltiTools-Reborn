@@ -4,6 +4,7 @@ import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -129,8 +130,9 @@ public final class SurfaceAssembler {
         // own package when neither is declared. An annotated command or listener OUTSIDE
         // those packages is never actually registered as a bean (Codex review of PR #427),
         // so this scanner set is scoped the same way before command/listener extraction.
-        // Persistence/config/scheduled/conditional are deliberately left unscoped here: their
-        // own registration paths are not gated by this same package-scan mechanism.
+        // Config is scoped separately below, via its own DIFFERENT runtime derivation.
+        // Persistence/scheduled/conditional are deliberately left unscoped here: their own
+        // registration paths are not gated by this same package-scan mechanism.
         List<Class<?>> commandAndListenerClasses = filterByScanPackages(classes, deriveScanPackages(classes));
 
         for (SurfaceRow row : commandRowScanner.scan(origin, commandAndListenerClasses)) {
@@ -140,7 +142,18 @@ public final class SurfaceAssembler {
         rows.addAll(scheduledRowScanner.scan(origin, classes));
         rows.addAll(persistenceRowScanner.scan(origin, persistenceClasses));
 
-        ConfigRowScanner.Result configResult = configRowScanner.scan(origin, classes);
+        // UltiToolsPlugin.initConfig's package-scanned branch (config()/registersConfig true)
+        // calls ConfigManager.registerAll per DependencyUtils.getPluginPackages -- a DIFFERENT
+        // derivation from PluginManager.getPluginScanPackages: it additionally folds in
+        // EnableAutoRegister.scanPackage(), a legacy single-string attribute @UltiToolsModule
+        // does not alias onto anything (Codex review of PR #427). An @ConfigEntity outside
+        // that scope is never loaded at runtime. When registersConfig is false, initConfig
+        // takes its OTHER branch instead (getAllConfigs(), whatever the module's own override
+        // returns) -- not package-scanned at all, and not statically resolvable without
+        // initializing the class, so no restriction is applied in that case; scanning every
+        // @ConfigEntity in `classes` is the closest safe approximation.
+        List<Class<?>> configClasses = filterByScanPackages(classes, deriveConfigScanPackages(classes, switches));
+        ConfigRowScanner.Result configResult = configRowScanner.scan(origin, configClasses);
         rows.addAll(configResult.getRows());
 
         rows.addAll(conditionalGateReader.scanConditionalRows(origin, classes));
@@ -181,25 +194,41 @@ public final class SurfaceAssembler {
         if (entryClass == null) {
             return Collections.emptySet();
         }
-        LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
-        ComponentScan merged = MergedAnnotationResolver.find(entryClass, ComponentScan.class);
-        if (merged != null) {
-            Collections.addAll(scanPackages, merged.value());
-            Collections.addAll(scanPackages, merged.basePackages());
-            for (Class<?> markerClass : merged.basePackageClasses()) {
-                Package markerPackage = markerClass.getPackage();
-                if (markerPackage != null) {
-                    scanPackages.add(markerPackage.getName());
-                }
-            }
+        return finalizeScanPackages(collectComponentScanPackages(entryClass), entryClass);
+    }
+
+    /**
+     * Derives the module's runtime CONFIG scan packages, mirroring
+     * {@code DependencyUtils.getPluginPackages} exactly — a DIFFERENT derivation from
+     * {@link #deriveScanPackages}, since {@code UltiToolsPlugin.initConfig}'s package-scanned
+     * branch calls {@code ConfigManager.registerAll} per {@code DependencyUtils
+     * .getPluginPackages}, not {@code PluginManager.getPluginScanPackages}: the same merged
+     * {@code @ComponentScan} resolution, PLUS {@code EnableAutoRegister.scanPackage()} (a
+     * legacy single-string attribute {@code @UltiToolsModule} does not alias onto anything).
+     *
+     * @param classes  the loaded (uninitialized) classes to scan
+     * @param switches the module's registration switches (from {@link ModuleSwitchReader}),
+     *                 or {@code null} if no {@code @UltiToolsModule} entry class is present
+     * @return the derived scan packages, or an EMPTY set (no restriction) when
+     *         {@code switches} is {@code null} or declares {@code registersConfig = false} --
+     *         that branch calls the module's own {@code getAllConfigs()} instead, which is not
+     *         package-scanned at all and not statically resolvable without initializing the
+     *         class, so no restriction can be safely derived
+     */
+    private static Set<String> deriveConfigScanPackages(List<Class<?>> classes, ModuleSwitchReader.Switches switches) {
+        if (switches == null || !switches.isRegistersConfig()) {
+            return Collections.emptySet();
         }
-        if (scanPackages.isEmpty()) {
-            Package entryPackage = entryClass.getPackage();
-            if (entryPackage != null) {
-                scanPackages.add(entryPackage.getName());
-            }
+        Class<?> entryClass = findModuleEntryClass(classes);
+        if (entryClass == null) {
+            return Collections.emptySet();
         }
-        return scanPackages;
+        LinkedHashSet<String> scanPackages = collectComponentScanPackages(entryClass);
+        EnableAutoRegister enableAutoRegister = MergedAnnotationResolver.find(entryClass, EnableAutoRegister.class);
+        if (enableAutoRegister != null && !enableAutoRegister.scanPackage().isEmpty()) {
+            scanPackages.add(enableAutoRegister.scanPackage());
+        }
+        return finalizeScanPackages(scanPackages, entryClass);
     }
 
     /**
@@ -216,6 +245,42 @@ public final class SurfaceAssembler {
             }
         }
         return null;
+    }
+
+    /**
+     * Accumulates the packages a merged {@code @ComponentScan} on {@code entryClass}
+     * contributes: {@code value()}, {@code basePackages()}, and the packages of every
+     * {@code basePackageClasses()} marker, additively and in declaration order.
+     */
+    private static LinkedHashSet<String> collectComponentScanPackages(Class<?> entryClass) {
+        LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
+        ComponentScan merged = MergedAnnotationResolver.find(entryClass, ComponentScan.class);
+        if (merged != null) {
+            Collections.addAll(scanPackages, merged.value());
+            Collections.addAll(scanPackages, merged.basePackages());
+            for (Class<?> markerClass : merged.basePackageClasses()) {
+                Package markerPackage = markerClass.getPackage();
+                if (markerPackage != null) {
+                    scanPackages.add(markerPackage.getName());
+                }
+            }
+        }
+        return scanPackages;
+    }
+
+    /**
+     * Falls back to {@code entryClass}'s own package when {@code scanPackages} accumulated
+     * nothing, matching both {@code PluginManager.getPluginScanPackages} and
+     * {@code DependencyUtils.getPluginPackages}'s identical default-to-own-package behavior.
+     */
+    private static Set<String> finalizeScanPackages(LinkedHashSet<String> scanPackages, Class<?> entryClass) {
+        if (scanPackages.isEmpty()) {
+            Package entryPackage = entryClass.getPackage();
+            if (entryPackage != null) {
+                scanPackages.add(entryPackage.getName());
+            }
+        }
+        return scanPackages;
     }
 
     /**

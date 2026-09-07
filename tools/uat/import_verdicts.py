@@ -19,11 +19,17 @@ enum, not merely a non-empty string). The final write goes through `uat.py`'s ow
 are validated BEFORE any write happens: an unknown id, a bad status, a bad type, a missing
 field, or malformed input JSON is reported and nothing is written.
 
+The verdicts document itself must carry a top-level `artifact_sha256` matching the CURRENT
+registry's own hash -- checked before any row is even schema-validated, `--dry-run` included.
+Row ids are stable across a rebase/reset, so without this a verdicts file measured against a
+DIFFERENT build would have every one of its old passes silently accepted for the current one.
+
 `--dry-run` previews what would happen without writing anything and without failing the
 process on a row-level problem (an unknown id, a bad status) -- those are reported to stderr
 as "would fail" rather than raised, since nothing was ever going to be written either way. A
-structurally broken input (the verdicts file itself is missing or is not valid JSON) is still
-fatal in `--dry-run`: there is nothing to preview.
+structurally broken input (the verdicts file itself is missing or is not valid JSON, or its
+artifact_sha256 does not match the current registry) is still fatal in `--dry-run`: there is
+nothing to preview.
 
 Re-importing the same file is a no-op: a row whose already-recorded status and note exactly
 match what this run would write is left untouched (including its original timestamp), so the
@@ -62,6 +68,18 @@ REQUIRED_LIST_FIELDS = ('actions', 'evidence')
 
 
 def load_verdicts(path):
+    """
+    Load the verdicts document and return (rows, artifact_sha256).
+
+    `artifact_sha256` is the document-level identity of the artifact these verdicts were
+    actually measured against -- required, not merely checked when present, and compared
+    against the CURRENT registry's own hash by the caller before any row is applied. Row ids
+    are stable across a rebase/reset, so without this check a verdicts file produced for
+    artifact A, imported after the ledger has moved on to artifact B, would have every old
+    pass silently accepted as a result for B -- bypassing this project's own fail-closed
+    artifact-hash contract (`load_ledger`/`resolve_scope` enforce the identical contract on
+    the ledger side) and potentially certifying the wrong build (Codex review of PR #427).
+    """
     try:
         with open(path, encoding='utf-8') as handle:
             document = json.load(handle)
@@ -72,7 +90,7 @@ def load_verdicts(path):
     rows = document.get('rows')
     if rows is None:
         rows = []
-    return rows
+    return rows, document.get('artifact_sha256')
 
 
 def build_note(row):
@@ -209,8 +227,18 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
 
     ledger_path = uat.ledger_path(args)
-    rows = load_verdicts(args.verdicts)
+    rows, verdicts_artifact_sha256 = load_verdicts(args.verdicts)
     reg = uat.load_reg(uat.registry_path(args))
+    # Fail closed BEFORE any row is even schema-validated, dry-run included: stable row ids
+    # survive a rebase/reset, so a verdicts file measured against a DIFFERENT artifact would
+    # otherwise have every one of its old passes silently accepted for the current build.
+    if verdicts_artifact_sha256 != reg['artifact_sha256']:
+        sys.exit(
+            f'{args.verdicts} was measured against artifact_sha256 '
+            f'{verdicts_artifact_sha256!r}, but the current registry is built from '
+            f'{reg["artifact_sha256"]!r} -- refusing to import verdicts for a different '
+            f'artifact. Re-run the batch against the current build, or pass a verdicts file '
+            f'that carries the matching artifact_sha256.')
     led = uat.load_ledger(reg, ledger_path)
     # Backfilled here, before resolve_known_ids, so a legacy pre-scope ledger's one-line
     # backfill note (uat.resolve_scope's own stderr print) is emitted once, not twice.

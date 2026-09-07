@@ -1,7 +1,10 @@
 package com.ultikits.ultitools.uat;
 
 import com.ultikits.ultitools.uat.fixtures.OutsideScanScopeCommand;
+import com.ultikits.ultitools.uat.fixtures.OutsideScanScopeConfig;
 import com.ultikits.ultitools.uat.fixtures.scanscope.InScopeCommand;
+import com.ultikits.ultitools.uat.fixtures.scanscope.InScopeConfig;
+import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithConfigDisabled;
 import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithDefaultScanScope;
 import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithExplicitScanScope;
 import com.ultikits.ultitools.uat.fixtures.scanscope.declaredpackage.DeclaredPackageCommand;
@@ -22,11 +25,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * exactly as {@code PluginManager.getPluginScanPackages} resolves it, defaulting to the entry
  * class's own package when neither is declared -- since {@code ComponentScanner} never
  * registers a class outside those packages as a bean at all (Phase 10, Codex review of PR
- * #427).
+ * #427). Also proves config extraction is scoped by the SEPARATE, DIFFERENT derivation
+ * {@code DependencyUtils.getPluginPackages} uses (additionally folding in the legacy
+ * {@code EnableAutoRegister.scanPackage()} attribute), and that no restriction applies at all
+ * when the module declares {@code config = false} -- that branch calls the module's own
+ * {@code getAllConfigs()} instead, which this extractor cannot resolve statically.
  *
  * @since 6.3.0
  */
-@DisplayName("SurfaceAssembler command/listener scan-package scoping")
+@DisplayName("SurfaceAssembler command/listener/config scan-package scoping")
 class SurfaceAssemblerScanScopeTest {
 
     @Test
@@ -83,9 +90,48 @@ class SurfaceAssemblerScanScopeTest {
         assertThat(hasCommandRowFor(surface, OutsideScanScopeCommand.class)).isTrue();
     }
 
+    @Test
+    @DisplayName("a config entity in the module's own (default-scope) package is included")
+    void configInDefaultScopeIsIncluded() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithDefaultScanScope.class, InScopeConfig.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConfigRowFor(surface, InScopeConfig.class)).isTrue();
+    }
+
+    @Test
+    @DisplayName("a config entity outside the module's default (own-package) config scope is excluded -- ConfigManager.registerAll never registers it")
+    void configOutsideDefaultScopeIsExcluded() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithDefaultScanScope.class, OutsideScanScopeConfig.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConfigRowFor(surface, OutsideScanScopeConfig.class)).isFalse();
+    }
+
+    @Test
+    @DisplayName("with @UltiToolsModule(config = false), no config scan-package restriction applies -- that branch is not package-scanned at all")
+    void configDisabledMeansNoConfigRestriction() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithConfigDisabled.class, OutsideScanScopeConfig.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConfigRowFor(surface, OutsideScanScopeConfig.class)).isTrue();
+    }
+
     private static boolean hasCommandRowFor(SurfaceAssembler.AssembledSurface surface, Class<?> clazz) {
         for (Map<String, Object> row : surface.getRows()) {
             if ("command".equals(row.get("kind")) && clazz.getName().equals(row.get("class"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasConfigRowFor(SurfaceAssembler.AssembledSurface surface, Class<?> clazz) {
+        for (Map<String, Object> row : surface.getRows()) {
+            if ("config".equals(row.get("kind")) && clazz.getName().equals(row.get("class"))) {
                 return true;
             }
         }

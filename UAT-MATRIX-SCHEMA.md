@@ -234,7 +234,11 @@ that event reaches is listed under it.
 
 **The verdict row schema.** A completed batch is imported back via `tools/uat/import_verdicts.py
 --verdicts <verdicts-file>` (a separate script, not a `uat.py` subcommand — `uat.py` defines no
-`import-verdicts` command). Each row carries: `id`, `repository`, `issue` (when the row exists to reconfirm a
+`import-verdicts` command). The verdicts DOCUMENT itself must carry a top-level `artifact_sha256`
+matching the registry the import runs against — checked before any row is even schema-validated,
+since row ids are stable across a rebase/reset and a verdicts file measured against a different
+build would otherwise have every old pass silently accepted for the current one. Each row carries:
+`id`, `repository`, `issue` (when the row exists to reconfirm a
 specific defect), `type` (`repro`, `control`, or `deferred`), `steps`, `observed`, `status`,
 `reason`, `actions[]` (identifiers of the concrete actions taken), `evidence[]` (paths to retained
 evidence), and, when the row is a `fail` that also names a real product defect, `return_to[]`
