@@ -164,6 +164,57 @@ differences for a file it has never seen -- exactly the false-clean this check e
 per T-10-14); or regeneration produced a file that differs from the one already committed (the
 diff is printed before the failure message).
 
+## Reproducing the repeatability demonstration (Phase 10 success criterion 5)
+
+Criterion 5 has two halves. The first is mechanical: adding one function to a module and
+re-running the extractor must surface it in that module's matrix diff as a new entry carrying no
+assertion yet, and this must hold for a config field too, whichever side of D-10-10's
+per-entity-assertion granularity it lands on. The procedure below names the exact commands that
+prove it, against a real module checkout. The second half of criterion 5 asks whether this run is
+**reproducible by someone who did not build it** -- that is a human judgement this document
+cannot make on its own behalf; a reviewer following the numbered steps below, not the fact that
+the steps exist, is the actual test of that claim.
+
+1. **Build the framework and pick a module.** From the framework repository root:
+   ```bash
+   mvn -B -q clean install -DskipTests
+   cd <path-to-a-module-checkout>       # e.g. Modules/UltiChat
+   mvn -B -q clean test-compile
+   ```
+2. **Take a baseline.** Build the classpath, regenerate the surface, and hash it:
+   ```bash
+   mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
+       -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
+   java -cp "$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+       --module <ModuleName> --classes target/classes --output /tmp/baseline-surface.json
+   sha256sum /tmp/baseline-surface.json
+   ```
+3. **Add one throwaway `@CmdMapping` method** to any existing command-executor class in that
+   module. Repeat step 2's regeneration command against a new output path
+   (`/tmp/added-surface.json`). Diff the two documents' `items` by `id`: exactly one id should be
+   present in the new surface and absent from the baseline, none should be missing, and none of
+   the ids common to both should have changed.
+4. **Run the checker against both surfaces** (see above) with `--json`, and diff their
+   `unasserted` lists. The one new id from step 3 should be the only difference.
+5. **Revert the method from step 3**, regenerate a third time, and confirm the sha256 matches
+   step 2's baseline exactly -- the demonstration left nothing behind.
+6. **Add one throwaway `@ConfigEntry` field** to an existing `@ConfigEntity` class in the same
+   module. Regenerate, and confirm: exactly one new row in `items`; no new entry in
+   `config_entities`; the owning entity's `entry_count` incremented by exactly one. Assert that
+   entity (write a one-entry scratch `assertions.yaml`, or use the module's real one if it
+   already asserts that entity) and confirm the checker places the new row in `entity-covered`
+   and does not fail because of it.
+7. **Move the same field to a brand new `@ConfigEntity` class** in the module. Regenerate, and
+   confirm: exactly one new row in `items`; exactly one new entry in `config_entities`. Run the
+   checker with no assertion for the new entity and confirm it fails, naming the new entity (by
+   class and yml path) under `uncovered-entity`.
+8. **Revert both edits from steps 6-7**, regenerate a final time, and confirm the sha256 again
+   matches step 2's baseline. Confirm the module's source tree is clean
+   (`git status --porcelain -- src` empty).
+
+Steps 1-8, run in full against a real UltiChat checkout, are recorded with actual command output,
+row-level diffs, and every sha256, in this plan's local (non-committed) evidence file.
+
 ## Three adjudication traps, carried over from the original tool
 
 These cost real false failures before they were named as rules. They are restated inside every
