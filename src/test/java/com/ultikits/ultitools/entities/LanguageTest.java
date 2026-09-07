@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.entities;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.File;
 import java.io.IOException;
@@ -103,6 +104,87 @@ class LanguageTest {
 
             assertEquals("ok", language.getLocalizedText("name"));
             assertEquals("count", language.getLocalizedText("count"));
+        }
+    }
+
+    @org.junit.jupiter.api.Nested
+    @org.junit.jupiter.api.DisplayName("withFallback — per-key fallback (#418 real-machine finding)")
+    class WithFallback {
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present only in the fallback is answered from the fallback")
+        void keyOnlyInFallbackIsAnsweredFromFallback() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Map<String, String> jarOnly = new HashMap<>();
+            jarOnly.put("known", "jar-value");
+            jarOnly.put("onlyInJar", "jar-only-value");
+            Language jar = new Language(jarOnly);
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("jar-only-value", merged.getLocalizedText("onlyInJar"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present in both keeps the primary (disk) value")
+        void keyInBothKeepsThePrimaryValue() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Map<String, String> jarOnly = new HashMap<>();
+            jarOnly.put("known", "jar-value");
+            Language jar = new Language(jarOnly);
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("disk-value", merged.getLocalizedText("known"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("a key present in neither still falls back to itself")
+        void keyInNeitherFallsBackToTheKeyItself() {
+            Language disk = new Language(new HashMap<>());
+            Language jar = new Language(new HashMap<>());
+
+            Language merged = disk.withFallback(jar);
+
+            assertEquals("neither", merged.getLocalizedText("neither"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("withFallback(null) returns this language unchanged")
+        void withFallbackOfNullReturnsThisLanguageUnchanged() {
+            Map<String, String> diskOnly = new HashMap<>();
+            diskOnly.put("known", "disk-value");
+            Language disk = new Language(diskOnly);
+
+            Language merged = disk.withFallback(null);
+
+            assertEquals("disk-value", merged.getLocalizedText("known"));
+            assertEquals("missing", merged.getLocalizedText("missing"));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("withFallback(this) refuses to create a self-referential cycle")
+        void withFallbackOfSelfThrows() {
+            Language disk = new Language(new HashMap<>());
+
+            assertThrows(IllegalArgumentException.class, () -> disk.withFallback(disk));
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName(
+                "withFallback refuses a fallback whose own chain already contains this language")
+        void withFallbackCreatingATwoLinkCycleThrows() {
+            Language a = new Language(new HashMap<>());
+            // b's chain is b -> a. Asking `a` to fall back to `b` would close the loop a -> b -> a.
+            Language b = new Language(new HashMap<>()).withFallback(a);
+
+            assertThrows(IllegalArgumentException.class, () -> a.withFallback(b));
         }
     }
 }
