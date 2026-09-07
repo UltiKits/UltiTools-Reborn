@@ -25,6 +25,12 @@
   },
   {
     "cls": "DerivedAdminCommands",
+    "format": "identify <value>",
+    "kind": "command",
+    "member": "identify"
+  },
+  {
+    "cls": "DerivedAdminCommands",
     "format": "reload",
     "kind": "command",
     "member": "reload"
