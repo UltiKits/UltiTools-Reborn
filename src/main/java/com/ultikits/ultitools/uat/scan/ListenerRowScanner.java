@@ -161,6 +161,14 @@ public final class ListenerRowScanner {
             row.put("event", eventFqcn);
         }
         row.put("handler_priority", handler.priority().name());
+        // Bukkit's own dispatch (HandlerList.bake/EventExecutor invocation) skips a handler
+        // declaring @EventHandler(ignoreCancelled = true) entirely for an already-cancelled
+        // event, before the handler method is ever called -- omitting this from the row makes
+        // such a handler indistinguishable from a default one that fires unconditionally, so
+        // an executor triggering a cancelled event and expecting this handler to run would
+        // record a false failure for behavior Bukkit itself guarantees (Codex review of PR
+        // #427).
+        row.put("ignore_cancelled", handler.ignoreCancelled());
         // ListenerManager.registerAll (both the plugin-module and external-plugin entry
         // points) deliberately skips automatic registration when @EventListener declares
         // manualRegister = true -- without recording that here, the surface and handover

@@ -152,6 +152,12 @@ def describe_steps(item, switches=None):
         event = item.get('event', '')
         priority = item.get('handler_priority')
         steps = 'event {} (priority {})'.format(event, priority) if priority else 'event {}'.format(event)
+        if item.get('ignore_cancelled'):
+            # Bukkit's own dispatch skips this handler entirely for an already-cancelled
+            # event, before the method is ever called -- without this note, triggering a
+            # cancelled event and observing no effect looks identical to a broken handler
+            # (Codex review of PR #427).
+            steps += ' [ignoreCancelled=true -- does NOT fire for an already-cancelled event]'
         if item.get('manual_register'):
             steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
         if switches and switches.get('registers_listeners') is False:
@@ -330,7 +336,9 @@ def build_parser():
     parser.add_argument('--bytes', dest='byte_size', required=True, help='the artifact\'s byte size')
     parser.add_argument('--sha256', required=True, help='the artifact\'s SHA-256, from a clean build')
     parser.add_argument('--commit', required=True, help='the source commit the artifact was built from')
-    parser.add_argument('--ids', default=None, help='comma-separated row ids to include; default is all')
+    parser.add_argument('--ids', default=None,
+                         help='comma-separated row ids to include; default is all. Every id must '
+                              'exist in the surface -- an unknown id is rejected, not dropped')
     parser.add_argument('--output', default=None, help='write the document here instead of stdout')
     return parser
 
@@ -340,6 +348,18 @@ def main(argv=None):
     items, config_entities, switches = load_surface(args.surface)
     assertions_by_id = load_assertions(args.assertions)
     ids_filter = set(args.ids.split(',')) if args.ids else None
+
+    if ids_filter is not None:
+        # --ids selects the exact batch being dispatched -- a typo or a stale row id used to
+        # be silently dropped, still producing a "successful" document that could end up with
+        # NO execution rows at all, quietly losing whatever the dispatcher meant to send
+        # (Codex review of PR #427). Fail closed instead: validate every requested id against
+        # both items and config_entities before rendering anything.
+        known_ids = {item.get('id') for item in items} | {entity.get('id') for entity in (config_entities or [])}
+        unknown = sorted(ids_filter - known_ids)
+        if unknown:
+            sys.exit(f'--ids named {len(unknown)} id(s) not present in this surface: {unknown}. '
+                      f'Check for a typo or a stale id from a previous build.')
 
     document = build_document(
         items, assertions_by_id, args.jar, args.version, args.byte_size, args.sha256, args.commit,

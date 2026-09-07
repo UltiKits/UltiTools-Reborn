@@ -42,7 +42,7 @@ public final class FixtureListeners {
             // no-op: the scanner reads the annotation, never invokes this method
         }
 
-        @EventHandler(priority = EventPriority.MONITOR)
+        @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
         public void onQuit(PlayerQuitEvent event) {
             // no-op: the scanner reads the annotation, never invokes this method
         }

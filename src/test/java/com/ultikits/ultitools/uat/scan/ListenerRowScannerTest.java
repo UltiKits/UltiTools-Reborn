@@ -39,6 +39,7 @@ class ListenerRowScannerTest {
         // tools/uat/uat.py next's listener-batch grouping, which keys off this exact field.
         assertThat(joinRow.get("event")).isEqualTo("org.bukkit.event.player.PlayerJoinEvent");
         assertThat(joinRow.get("handler_priority")).isEqualTo("HIGH");
+        assertThat(joinRow.get("ignore_cancelled")).isEqualTo(false);
 
         Map<String, Object> multiJoinRow = rowFor(rows, FixtureListeners.MultiHandlerListener.class.getSimpleName(), "onJoin");
         assertThat(multiJoinRow.get("handler_priority")).isEqualTo("NORMAL");
@@ -46,6 +47,11 @@ class ListenerRowScannerTest {
         Map<String, Object> multiQuitRow = rowFor(rows, FixtureListeners.MultiHandlerListener.class.getSimpleName(), "onQuit");
         assertThat(multiQuitRow.get("event")).isEqualTo("org.bukkit.event.player.PlayerQuitEvent");
         assertThat(multiQuitRow.get("handler_priority")).isEqualTo("MONITOR");
+        // Bukkit skips this handler entirely for an already-cancelled event, before it is
+        // ever called -- omitting this made it indistinguishable from a default handler in
+        // the surface, with no drift even when the attribute is toggled (Codex review of PR
+        // #427).
+        assertThat(multiQuitRow.get("ignore_cancelled")).isEqualTo(true);
     }
 
     @Test

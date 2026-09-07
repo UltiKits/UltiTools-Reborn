@@ -125,6 +125,58 @@ def test_ids_filter_restricts_rendered_rows(tmp_path):
     assert 'COM-22222222' not in document
 
 
+def test_ids_filter_rejects_an_unknown_id_instead_of_silently_dropping_it(tmp_path):
+    # --ids selects the exact batch being dispatched; a typo or a stale row id used to be
+    # silently dropped, still producing a "successful" document -- one with NO execution rows
+    # at all if every requested id was unknown (Codex review of PR #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+
+    try:
+        render_handover.main(['--surface', surface, '--assertions', assertions,
+                               '--ids', 'COM-99999999', '--output', str(output)] + ARTIFACT_ARGS)
+        raised = False
+    except SystemExit:
+        raised = True
+
+    assert raised
+    assert not output.exists()
+
+
+def test_ids_filter_rejects_an_unknown_id_even_when_other_requested_ids_are_valid(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+
+    try:
+        render_handover.main(['--surface', surface, '--assertions', assertions,
+                               '--ids', 'COM-11111111,COM-99999999', '--output', str(output)]
+                              + ARTIFACT_ARGS)
+        raised = False
+    except SystemExit:
+        raised = True
+
+    assert raised
+
+
+def test_ids_filter_accepts_a_config_entity_id_not_just_an_item_id(tmp_path):
+    surface = write_surface(tmp_path, [], config_entities=[
+        {'id': 'CFG-11111111', 'class': 'my.Config', 'file': 'config/my.yml', 'entry_count': 1},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--ids', 'CFG-11111111', '--output', str(output)] + ARTIFACT_ARGS)
+
+    assert output.exists()
+
+
 def test_empty_surface_renders_valid_document_not_a_crash(tmp_path):
     surface = write_surface(tmp_path, [])
     assertions = write_empty_assertions(tmp_path)
@@ -327,6 +379,39 @@ def test_a_manually_registered_listener_row_states_that_in_its_steps(tmp_path):
 
     assert 'event PlayerJoinEvent' in document
     assert 'manually registered' in document
+
+
+def test_a_listener_row_with_ignore_cancelled_states_that_in_its_steps(tmp_path):
+    # Bukkit skips this handler entirely for an already-cancelled event, before the method is
+    # ever called -- omitting this from the rendered steps makes it indistinguishable from a
+    # default handler, so triggering a cancelled event and observing no effect looks like a
+    # broken handler rather than Bukkit's own documented behavior (Codex review of PR #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'LIS-11111111', 'kind': 'listener', 'event': 'PlayerJoinEvent',
+         'handler_priority': 'HIGH', 'ignore_cancelled': True},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'event PlayerJoinEvent' in document
+    assert 'ignoreCancelled=true' in document
+
+
+def test_a_listener_row_without_ignore_cancelled_has_no_such_note(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'LIS-11111111', 'kind': 'listener', 'event': 'PlayerJoinEvent',
+         'handler_priority': 'HIGH', 'ignore_cancelled': False},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'ignoreCancelled' not in document
 
 
 def test_a_manually_registered_command_row_states_that_in_its_steps(tmp_path):
