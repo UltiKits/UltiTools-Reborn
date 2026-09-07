@@ -144,3 +144,37 @@ def test_output_ends_with_single_trailing_newline_no_cr(tmp_path):
     assert raw.endswith(b'\n')
     assert not raw.endswith(b'\n\n')
     assert b'\r' not in raw
+
+
+def test_duplicate_assertion_id_refuses_to_render_instead_of_silently_picking_one(tmp_path):
+    # A copy-paste error in assertions.yaml repeating an id must not silently render
+    # whichever entry happens to come last while the other vanishes with no diagnostic --
+    # a real-machine session reading this document would act on the wrong (or missing) truth.
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},
+    ])
+    lines = [
+        'schema_version: 1',
+        'assertions:',
+        '  - id: COM-11111111',
+        '    truth: "first truth"',
+        '    layer: protocol',
+        '  - id: COM-11111111',
+        '    truth: "second truth, would silently overwrite the first"',
+        '    layer: server',
+    ]
+    assertions_path = tmp_path / 'assertions.yaml'
+    assertions_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    try:
+        render_handover.main(['--surface', surface, '--assertions', str(assertions_path)]
+                              + ARTIFACT_ARGS)
+        raised = False
+        message = ''
+    except SystemExit as exc:
+        raised = True
+        message = str(exc)
+
+    assert raised
+    assert 'duplicate' in message.lower()
+    assert 'COM-11111111' in message

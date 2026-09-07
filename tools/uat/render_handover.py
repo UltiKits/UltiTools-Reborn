@@ -39,6 +39,11 @@ def load_assertions(path):
 
     An assertions file with no `assertions` key, or an empty list, is a legitimate "nothing
     asserted yet" state -- it yields an empty dict, not an error.
+
+    A repeated `id` is a fatal error, not a silent last-write-wins collapse: this document is
+    what a real-machine session reads to decide what to do for a given row, and rendering the
+    wrong one of two differently-worded assertions under the same id -- with the other simply
+    vanishing -- is worse than refusing to render at all.
     """
     if yaml is None:
         raise SystemExit(
@@ -47,7 +52,15 @@ def load_assertions(path):
     with open(path, encoding='utf-8') as handle:
         document = yaml.safe_load(handle) or {}
     assertions = document.get('assertions') or []
-    return {assertion['id']: assertion for assertion in assertions}
+    by_id = {}
+    for assertion in assertions:
+        assertion_id = assertion['id']
+        if assertion_id in by_id:
+            raise SystemExit(
+                'render_handover.py: duplicate assertion id {!r} in {} -- refusing to render, '
+                'since one of the two entries would silently vanish.'.format(assertion_id, path))
+        by_id[assertion_id] = assertion
+    return by_id
 
 
 def render_artifact_table(jar, version, byte_size, sha256, commit):

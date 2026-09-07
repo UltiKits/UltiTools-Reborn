@@ -341,6 +341,25 @@ class TestSchemaValidation:
         assert 'unasserted' not in out
         assert 'entity-covered' not in out
 
+    def test_duplicate_assertion_id_is_a_schema_error_not_a_silent_last_write_wins(self, tmp_path, capsys):
+        # A copy-paste error in assertions.yaml repeating an id must never be silently
+        # collapsed to whichever entry happens to come last -- that would discard real
+        # coverage with no diagnostic, which is exactly the gap this checker exists to catch.
+        surface = write_surface(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'trigger': '/x reload'},
+        ])
+        assertions = write_assertions(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'truth': 'first truth', 'layer': 'protocol'},
+            {'id': 'COM-aaaaaaaa', 'truth': 'second truth, overwrote the first', 'layer': 'server'},
+        ])
+
+        result = run(surface, assertions)
+        err = capsys.readouterr().err
+
+        assert result != 0
+        assert 'duplicate' in err.lower()
+        assert 'COM-aaaaaaaa' in err
+
 
 class TestByteWiseIdComparison:
 

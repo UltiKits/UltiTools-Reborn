@@ -78,8 +78,16 @@ def validate_assertions_schema(assertions):
     `id`, `truth` and `layer` are required on every entry (missing or `None` is a violation;
     an empty string is not -- an empty truth is a *weak* truth, reported separately, never a
     schema error). `layer` must be one of the five known values.
+
+    A repeated `id` is also a schema error, not merely a duplicate key. `assertions.yaml` is
+    hand-written, and every downstream consumer (this checker's own bucket computation, plus
+    `render_handover.py`) builds a `{id: assertion}` dict from the list -- a copy-paste error
+    that repeats an id would otherwise be silently collapsed to whichever entry happens to
+    come last, with the discarded entry's coverage vanishing with no diagnostic. That is
+    exactly the silent-gap failure mode this checker exists to catch, one layer up.
     """
     errors = []
+    seen_ids = {}
     for index, assertion in enumerate(assertions):
         if not isinstance(assertion, dict):
             errors.append('assertion[{}]: not a mapping'.format(index))
@@ -92,6 +100,12 @@ def validate_assertions_schema(assertions):
         layer = assertion.get('layer')
         if layer not in VALID_LAYERS:
             errors.append('{}: layer {!r} is not one of {}'.format(label, layer, VALID_LAYERS))
+        assertion_id = assertion['id']
+        if assertion_id in seen_ids:
+            errors.append('{}: duplicate id, first declared at assertion[{}]'.format(
+                label, seen_ids[assertion_id]))
+        else:
+            seen_ids[assertion_id] = index
     return errors
 
 
