@@ -1,13 +1,16 @@
 package com.ultikits.ultitools.uat;
 
 import com.ultikits.ultitools.uat.fixtures.OutsideScanScopeCommand;
+import com.ultikits.ultitools.uat.fixtures.OutsideScanScopeConditionalService;
 import com.ultikits.ultitools.uat.fixtures.OutsideScanScopeConfig;
 import com.ultikits.ultitools.uat.fixtures.scanscope.InScopeCommand;
+import com.ultikits.ultitools.uat.fixtures.scanscope.InScopeConditionalService;
 import com.ultikits.ultitools.uat.fixtures.scanscope.InScopeConfig;
 import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithConfigDisabled;
 import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithDefaultScanScope;
 import com.ultikits.ultitools.uat.fixtures.scanscope.ModuleWithExplicitScanScope;
 import com.ultikits.ultitools.uat.fixtures.scanscope.declaredpackage.DeclaredPackageCommand;
+import com.ultikits.ultitools.uat.fixtures.scanscopesibling.SiblingPackageConfig;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -118,6 +121,45 @@ class SurfaceAssemblerScanScopeTest {
         SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
 
         assertThat(hasConfigRowFor(surface, OutsideScanScopeConfig.class)).isTrue();
+    }
+
+    @Test
+    @DisplayName("a conditional row for a class in the module's own (default-scope) package is included")
+    void conditionalRowInDefaultScopeIsIncluded() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithDefaultScanScope.class, InScopeConditionalService.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConditionalRowFor(surface, InScopeConditionalService.class)).isTrue();
+    }
+
+    @Test
+    @DisplayName("a conditional row for a class outside the module's default (own-package) scope is excluded -- ComponentScanner never visits it, so shouldRegister never runs")
+    void conditionalRowOutsideDefaultScopeIsExcluded() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithDefaultScanScope.class, OutsideScanScopeConditionalService.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConditionalRowFor(surface, OutsideScanScopeConditionalService.class)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a config entity in a SIBLING package sharing a raw string prefix (not a real subpackage) is excluded -- segment-aware matching, not filterByScanPackages' jar-parity prefix test")
+    void configInSiblingPackageSharingAStringPrefixIsExcluded() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithDefaultScanScope.class, SiblingPackageConfig.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        assertThat(hasConfigRowFor(surface, SiblingPackageConfig.class)).isFalse();
+    }
+
+    private static boolean hasConditionalRowFor(SurfaceAssembler.AssembledSurface surface, Class<?> clazz) {
+        for (Map<String, Object> row : surface.getRows()) {
+            if ("conditional".equals(row.get("kind")) && clazz.getName().equals(row.get("class"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasCommandRowFor(SurfaceAssembler.AssembledSurface surface, Class<?> clazz) {

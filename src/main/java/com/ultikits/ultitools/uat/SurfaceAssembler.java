@@ -127,18 +127,20 @@ public final class SurfaceAssembler {
         // module's own configured scan packages -- @UltiToolsModule's scanBasePackages()/
         // scanBasePackageClasses(), merged through its @ComponentScan meta-annotation exactly
         // as PluginManager.getPluginScanPackages resolves it, defaulting to the entry class's
-        // own package when neither is declared. An annotated command or listener OUTSIDE
-        // those packages is never actually registered as a bean (Codex review of PR #427),
-        // so this scanner set is scoped the same way before command/listener extraction.
+        // own package when neither is declared. An annotated command, listener, or
+        // @ConditionalOnConfig class OUTSIDE those packages is never actually visited by
+        // ComponentScanner.scanPackage at all -- its shouldRegister call (the runtime's sole
+        // evaluator for the annotation) never runs for it (Codex review of PR #427) -- so
+        // this SAME scoped class set backs command/listener extraction AND the standalone
+        // conditional row / gate attachment below. Persistence/scheduled are deliberately
+        // left unscoped: their own registration paths are not gated by this mechanism.
         // Config is scoped separately below, via its own DIFFERENT runtime derivation.
-        // Persistence/scheduled/conditional are deliberately left unscoped here: their own
-        // registration paths are not gated by this same package-scan mechanism.
-        List<Class<?>> commandAndListenerClasses = filterByScanPackages(classes, deriveScanPackages(classes));
+        List<Class<?>> componentScanClasses = filterByScanPackages(classes, deriveScanPackages(classes));
 
-        for (SurfaceRow row : commandRowScanner.scan(origin, commandAndListenerClasses)) {
+        for (SurfaceRow row : commandRowScanner.scan(origin, componentScanClasses)) {
             rows.add(row.toFieldMap());
         }
-        rows.addAll(listenerRowScanner.scan(origin, commandAndListenerClasses));
+        rows.addAll(listenerRowScanner.scan(origin, componentScanClasses));
         rows.addAll(scheduledRowScanner.scan(origin, classes));
         rows.addAll(persistenceRowScanner.scan(origin, persistenceClasses));
 
@@ -152,13 +154,19 @@ public final class SurfaceAssembler {
         // returns) -- not package-scanned at all, and not statically resolvable without
         // initializing the class, so no restriction is applied in that case; scanning every
         // @ConfigEntity in `classes` is the closest safe approximation.
-        List<Class<?>> configClasses = filterByScanPackages(classes, deriveConfigScanPackages(classes, switches));
+        //
+        // Filtered with SEGMENT-AWARE matching, not filterByScanPackages' jar-parity prefix
+        // test: PackageScanUtils.scanAnnotatedClasses (config's real runtime scan) delegates to
+        // Guava's ClassPath#getTopLevelClassesRecursive, whose own contract is package-segment
+        // precise -- "com.foo" matches "com.foo" and "com.foo.bar", never the sibling
+        // "com.foobar" a raw string prefix would wrongly include (Codex review of PR #427).
+        List<Class<?>> configClasses = filterByScanPackagesSegmentAware(classes, deriveConfigScanPackages(classes, switches));
         ConfigRowScanner.Result configResult = configRowScanner.scan(origin, configClasses);
         rows.addAll(configResult.getRows());
 
-        rows.addAll(conditionalGateReader.scanConditionalRows(origin, classes));
+        rows.addAll(conditionalGateReader.scanConditionalRows(origin, componentScanClasses));
 
-        attachGates(rows, conditionalGateReader.collectGates(classes));
+        attachGates(rows, conditionalGateReader.collectGates(componentScanClasses));
 
         detectCrossScannerCollisions(rows);
 
@@ -305,6 +313,39 @@ public final class SurfaceAssembler {
             String className = clazz.getName();
             for (String scanPackage : scanPackages) {
                 if (className.startsWith(scanPackage)) {
+                    filtered.add(clazz);
+                    break;
+                }
+            }
+        }
+        return filtered;
+    }
+
+    /**
+     * Restricts {@code classes} to those whose fully qualified name falls under one of
+     * {@code scanPackages}, using PACKAGE-SEGMENT-aware matching: a class's name must equal a
+     * scan package exactly, or start with it followed by a {@code '.'} — never merely share a
+     * string prefix. Matches {@code PackageScanUtils.scanAnnotatedClasses}'s own delegation to
+     * Guava's {@code ClassPath#getTopLevelClassesRecursive}, whose documented contract is
+     * segment-precise: querying {@code "com.foo"} never matches the sibling package
+     * {@code "com.foobar"}, unlike {@link #filterByScanPackages}'s deliberately jar-scan-shaped
+     * raw prefix test.
+     *
+     * @param classes      the loaded (uninitialized) classes to scan
+     * @param scanPackages the packages to restrict to; an EMPTY set means no restriction applies
+     * @return {@code classes} unchanged when {@code scanPackages} is empty, otherwise only the
+     *         classes whose name falls under one of {@code scanPackages} by package segment
+     */
+    private static List<Class<?>> filterByScanPackagesSegmentAware(List<Class<?>> classes, Set<String> scanPackages) {
+        if (scanPackages.isEmpty()) {
+            return classes;
+        }
+        List<Class<?>> filtered = new ArrayList<>();
+        for (Class<?> clazz : classes) {
+            Package classPackage = clazz.getPackage();
+            String packageName = classPackage != null ? classPackage.getName() : "";
+            for (String scanPackage : scanPackages) {
+                if (packageName.equals(scanPackage) || packageName.startsWith(scanPackage + ".")) {
                     filtered.add(clazz);
                     break;
                 }

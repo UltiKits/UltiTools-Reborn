@@ -21,6 +21,16 @@ import java.util.List;
  * back a real {@link Class} object) but does not initialize it — resolution and initialization
  * are distinct per the JVM specification, so this stays within D-10-01's no-initialization
  * contract without any extra classloading of its own.
+ * <p>
+ * The three switches and {@code additionalEntities()} are read differently, matching two
+ * DIFFERENT runtime lookups (Codex review of PR #427): {@code UltiToolsPlugin.initConfig}
+ * reads its switch via {@code MergedAnnotationResolver.find(this.getClass(), ...)} (a merged,
+ * hierarchy-walking lookup, so an unannotated subclass of an annotated abstract module base
+ * still inherits it), but {@code PluginManager.scanPluginEntities} reads
+ * {@code pluginClass.getAnnotation(UltiToolsModule.class)} DIRECTLY — {@code @UltiToolsModule}
+ * is not {@code @Inherited}, so such a subclass gets NONE of the base's
+ * {@code additionalEntities()}. Using merged resolution for both would falsely attribute the
+ * base's additional entities to a concrete module class that never actually receives them.
  *
  * @since 6.3.0
  */
@@ -28,7 +38,8 @@ public final class ModuleSwitchReader {
 
     /**
      * Finds the {@code @UltiToolsModule} entry class among {@code classes} and reads its
-     * registration switches and {@code additionalEntities()}.
+     * registration switches (merged resolution) and {@code additionalEntities()} (direct
+     * lookup on the same concrete class only).
      *
      * @param classes the loaded (uninitialized) classes to scan
      * @return the module's switches, or {@code null} if no {@code @UltiToolsModule} class is present
@@ -37,8 +48,12 @@ public final class ModuleSwitchReader {
         for (Class<?> clazz : classes) {
             UltiToolsModule module = MergedAnnotationResolver.find(clazz, UltiToolsModule.class);
             if (module != null) {
+                UltiToolsModule directlyDeclared = clazz.getAnnotation(UltiToolsModule.class);
+                Class<?>[] additionalEntities = directlyDeclared != null
+                        ? directlyDeclared.additionalEntities()
+                        : new Class<?>[0];
                 return new Switches(module.cmdExecutor(), module.eventListener(), module.config(),
-                        Arrays.asList(module.additionalEntities()));
+                        Arrays.asList(additionalEntities));
             }
         }
         return null;
