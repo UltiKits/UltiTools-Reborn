@@ -1,0 +1,38 @@
+[
+  {
+    "cls": "BaseAdminCommands",
+    "format": "help",
+    "kind": "help",
+    "member": "handleHelp"
+  },
+  {
+    "cls": "BaseAdminCommands",
+    "format": "reload",
+    "kind": "command",
+    "member": "reload"
+  },
+  {
+    "cls": "BaseAdminCommands",
+    "format": "status",
+    "kind": "command",
+    "member": "status"
+  },
+  {
+    "cls": "DerivedAdminCommands",
+    "format": "help",
+    "kind": "help",
+    "member": "handleHelp"
+  },
+  {
+    "cls": "DerivedAdminCommands",
+    "format": "reload",
+    "kind": "command",
+    "member": "reload"
+  },
+  {
+    "cls": "DerivedAdminCommands",
+    "format": "status",
+    "kind": "command",
+    "member": "status"
+  }
+]
