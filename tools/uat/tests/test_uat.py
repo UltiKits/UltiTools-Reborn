@@ -133,7 +133,6 @@ def test_record_rejects_an_id_excluded_by_the_ledgers_own_scope():
         ]
         registry = write_registry(tmp_path, items)
         ledger_path_str = write_ledger(tmp_path)
-        import json
         with open(ledger_path_str) as f:
             doc = json.load(f)
         doc['scope'] = ['framework']
@@ -166,7 +165,6 @@ def test_record_accepts_an_id_within_the_ledgers_own_scope():
         ]
         registry = write_registry(tmp_path, items)
         ledger_path_str = write_ledger(tmp_path)
-        import json
         with open(ledger_path_str) as f:
             doc = json.load(f)
         doc['scope'] = ['framework']
