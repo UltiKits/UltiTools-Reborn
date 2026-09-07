@@ -177,31 +177,45 @@ public final class SurfaceAssembler {
      *         reads, since there is no per-module scan-package concept to apply at all
      */
     private static Set<String> deriveScanPackages(List<Class<?>> classes) {
-        for (Class<?> clazz : classes) {
-            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) == null) {
-                continue;
-            }
-            LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
-            ComponentScan merged = MergedAnnotationResolver.find(clazz, ComponentScan.class);
-            if (merged != null) {
-                Collections.addAll(scanPackages, merged.value());
-                Collections.addAll(scanPackages, merged.basePackages());
-                for (Class<?> markerClass : merged.basePackageClasses()) {
-                    Package markerPackage = markerClass.getPackage();
-                    if (markerPackage != null) {
-                        scanPackages.add(markerPackage.getName());
-                    }
-                }
-            }
-            if (scanPackages.isEmpty()) {
-                Package entryPackage = clazz.getPackage();
-                if (entryPackage != null) {
-                    scanPackages.add(entryPackage.getName());
-                }
-            }
-            return scanPackages;
+        Class<?> entryClass = findModuleEntryClass(classes);
+        if (entryClass == null) {
+            return Collections.emptySet();
         }
-        return Collections.emptySet();
+        LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
+        ComponentScan merged = MergedAnnotationResolver.find(entryClass, ComponentScan.class);
+        if (merged != null) {
+            Collections.addAll(scanPackages, merged.value());
+            Collections.addAll(scanPackages, merged.basePackages());
+            for (Class<?> markerClass : merged.basePackageClasses()) {
+                Package markerPackage = markerClass.getPackage();
+                if (markerPackage != null) {
+                    scanPackages.add(markerPackage.getName());
+                }
+            }
+        }
+        if (scanPackages.isEmpty()) {
+            Package entryPackage = entryClass.getPackage();
+            if (entryPackage != null) {
+                scanPackages.add(entryPackage.getName());
+            }
+        }
+        return scanPackages;
+    }
+
+    /**
+     * Finds the {@code @UltiToolsModule} entry class among {@code classes}, the same way
+     * {@code ModuleSwitchReader.read} does.
+     *
+     * @param classes the loaded (uninitialized) classes to scan
+     * @return the entry class, or {@code null} if none carries {@code @UltiToolsModule}
+     */
+    private static Class<?> findModuleEntryClass(List<Class<?>> classes) {
+        for (Class<?> clazz : classes) {
+            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) != null) {
+                return clazz;
+            }
+        }
+        return null;
     }
 
     /**

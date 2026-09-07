@@ -144,7 +144,10 @@ def describe_steps(item, switches=None):
             # (Codex review of PR #427).
             steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
         if switches and switches.get('registers_commands') is False:
-            steps += ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic command registration is disabled for the whole module; verify its own registration path]'
+            steps += (
+                ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic '
+                'command registration is disabled for the whole module; verify its own '
+                'registration path]')
     elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')
@@ -152,7 +155,10 @@ def describe_steps(item, switches=None):
         if item.get('manual_register'):
             steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
         if switches and switches.get('registers_listeners') is False:
-            steps += ' [this module declares @UltiToolsModule(eventListener=false) -- automatic listener registration is disabled for the whole module; verify its own registration path]'
+            steps += (
+                ' [this module declares @UltiToolsModule(eventListener=false) -- automatic '
+                'listener registration is disabled for the whole module; verify its own '
+                'registration path]')
     elif kind == 'scheduled':
         if item.get('one_shot'):
             steps = 'runs once, {}s after enable'.format(item.get('delay_seconds', 0))
@@ -202,7 +208,9 @@ def describe_entity_steps(entity, switches=None):
     steps = 'config entity {} in {} ({} field(s))'.format(
         entity.get('class', ''), entity.get('file', ''), entity.get('entry_count', 0))
     if switches and switches.get('registers_config') is False:
-        steps += ' [this module declares @UltiToolsModule(config=false) -- automatic config registration is disabled for the whole module; verify its own registration path]'
+        steps += (
+            ' [this module declares @UltiToolsModule(config=false) -- automatic config '
+            'registration is disabled for the whole module; verify its own registration path]')
     return steps
 
 
