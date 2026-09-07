@@ -135,6 +135,20 @@ public final class SurfaceAssembler {
         // conditional row / gate attachment below. Persistence/scheduled are deliberately
         // left unscoped: their own registration paths are not gated by this mechanism.
         // Config is scoped separately below, via its own DIFFERENT runtime derivation.
+        //
+        // KNOWN, STRUCTURAL LIMIT (Codex review of PR #427, fresh evidence after this fix):
+        // this can only ever NARROW `classes` -- it cannot discover a class absent from that
+        // list. If scanBasePackages()/scanBasePackageClasses() names a package supplied by a
+        // DEPENDENCY jar rather than the module's own artifact, ComponentScanner.scanPackage
+        // reaches it at runtime through the module's classloader, but ModuleClassIndex (the
+        // extractor's own class enumeration, per D-10-01) loads only the supplied artifact's
+        // own classes. No code change inside this class can close that gap -- there is no
+        // analogue of additionalEntities() for arbitrary command/listener/conditional classes
+        // in a dependency package, so the extractor has no way to enumerate "every class under
+        // package X of some other jar" without that jar's classes already being part of
+        // `classes`. Whoever builds the --classes input for such a module must include the
+        // dependency's classes explicitly, or those components go missing from the surface;
+        // this is a constraint on the INPUT this method receives, not a bug in how it filters.
         List<Class<?>> componentScanClasses = filterByScanPackages(classes, deriveScanPackages(classes));
 
         for (SurfaceRow row : commandRowScanner.scan(origin, componentScanClasses)) {
@@ -198,7 +212,7 @@ public final class SurfaceAssembler {
      *         reads, since there is no per-module scan-package concept to apply at all
      */
     private static Set<String> deriveScanPackages(List<Class<?>> classes) {
-        Class<?> entryClass = findModuleEntryClass(classes);
+        Class<?> entryClass = ModuleSwitchReader.findModuleEntryClass(classes);
         if (entryClass == null) {
             return Collections.emptySet();
         }
@@ -227,7 +241,7 @@ public final class SurfaceAssembler {
         if (switches == null || !switches.isRegistersConfig()) {
             return Collections.emptySet();
         }
-        Class<?> entryClass = findModuleEntryClass(classes);
+        Class<?> entryClass = ModuleSwitchReader.findModuleEntryClass(classes);
         if (entryClass == null) {
             return Collections.emptySet();
         }
@@ -237,22 +251,6 @@ public final class SurfaceAssembler {
             scanPackages.add(enableAutoRegister.scanPackage());
         }
         return finalizeScanPackages(scanPackages, entryClass);
-    }
-
-    /**
-     * Finds the {@code @UltiToolsModule} entry class among {@code classes}, the same way
-     * {@code ModuleSwitchReader.read} does.
-     *
-     * @param classes the loaded (uninitialized) classes to scan
-     * @return the entry class, or {@code null} if none carries {@code @UltiToolsModule}
-     */
-    private static Class<?> findModuleEntryClass(List<Class<?>> classes) {
-        for (Class<?> clazz : classes) {
-            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) != null) {
-                return clazz;
-            }
-        }
-        return null;
     }
 
     /**

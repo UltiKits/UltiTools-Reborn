@@ -127,6 +127,15 @@ exhausted — that is the whole reason this granularity split exists.
 
 ## Regenerating a surface
 
+**A module's `scanBasePackages()`/`scanBasePackageClasses()` must name a package inside its own
+`--classes` input, not a dependency's.** `ComponentScanner.scanPackage` resolves a scan package
+through the module's classloader at runtime, which does reach into dependency jars on that
+module's classpath — but `--classes` below points only at the module's own compiled output, never
+its dependencies, so a scan package supplied by a dependency jar makes its commands, listeners,
+and conditional gates invisible to the extractor no matter how the surface is regenerated. There
+is no `additionalEntities()`-style attribute for this (that attribute exists for persistence
+entities only); if a module genuinely needs this, its own classes must own the scanned package.
+
 Run from inside a module checkout, after `mvn test-compile` or `mvn verify`:
 
 ```bash

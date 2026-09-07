@@ -3,6 +3,7 @@ package com.ultikits.ultitools.uat.scan;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 
+import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -31,6 +32,16 @@ import java.util.List;
  * is not {@code @Inherited}, so such a subclass gets NONE of the base's
  * {@code additionalEntities()}. Using merged resolution for both would falsely attribute the
  * base's additional entities to a concrete module class that never actually receives them.
+ * <p>
+ * {@link #findModuleEntryClass} additionally requires the candidate be neither an interface
+ * nor {@code abstract} (Codex review of PR #427): {@code PluginManager.loadPluginMainClass}
+ * requires the same of the class it selects as a module's real entry point
+ * ({@code UltiToolsPlugin.class.isAssignableFrom(aClass) && !aClass.isInterface() &&
+ * !Modifier.isAbstract(...)}), and {@code ModuleClassIndex} supplies classes in an arbitrary
+ * (typically lexicographic) order — an abstract module base sorting before its concrete
+ * subclass would otherwise be picked here first, wrongly attributing the base's own directly
+ * declared {@code additionalEntities()} to a class the runtime never treats as the entry point
+ * at all.
  *
  * @since 6.3.0
  */
@@ -45,15 +56,35 @@ public final class ModuleSwitchReader {
      * @return the module's switches, or {@code null} if no {@code @UltiToolsModule} class is present
      */
     public Switches read(List<Class<?>> classes) {
+        Class<?> entryClass = findModuleEntryClass(classes);
+        if (entryClass == null) {
+            return null;
+        }
+        UltiToolsModule module = MergedAnnotationResolver.find(entryClass, UltiToolsModule.class);
+        UltiToolsModule directlyDeclared = entryClass.getAnnotation(UltiToolsModule.class);
+        Class<?>[] additionalEntities = directlyDeclared != null
+                ? directlyDeclared.additionalEntities()
+                : new Class<?>[0];
+        return new Switches(module.cmdExecutor(), module.eventListener(), module.config(),
+                Arrays.asList(additionalEntities));
+    }
+
+    /**
+     * Finds the {@code @UltiToolsModule} entry class among {@code classes}, the same way
+     * {@code PluginManager.loadPluginMainClass} selects a module's real entry point: carries
+     * {@code @UltiToolsModule} (merged resolution, so an inherited declaration still counts),
+     * and is neither an interface nor {@code abstract}.
+     *
+     * @param classes the loaded (uninitialized) classes to scan
+     * @return the entry class, or {@code null} if none qualifies
+     */
+    public static Class<?> findModuleEntryClass(List<Class<?>> classes) {
         for (Class<?> clazz : classes) {
-            UltiToolsModule module = MergedAnnotationResolver.find(clazz, UltiToolsModule.class);
-            if (module != null) {
-                UltiToolsModule directlyDeclared = clazz.getAnnotation(UltiToolsModule.class);
-                Class<?>[] additionalEntities = directlyDeclared != null
-                        ? directlyDeclared.additionalEntities()
-                        : new Class<?>[0];
-                return new Switches(module.cmdExecutor(), module.eventListener(), module.config(),
-                        Arrays.asList(additionalEntities));
+            if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) {
+                continue;
+            }
+            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) != null) {
+                return clazz;
             }
         }
         return null;

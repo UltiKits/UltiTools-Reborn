@@ -8,7 +8,9 @@ import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithAddition
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,7 +18,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Proves {@link ModuleSwitchReader} reads {@code additionalEntities()} from the CONCRETE
  * runtime entry class directly, not through the same merged (hierarchy-walking) resolution
  * used for the registration switches -- matching {@code PluginManager.scanPluginEntities}'s
- * own direct, non-{@code @Inherited} lookup exactly (Phase 10, Codex review of PR #427).
+ * own direct, non-{@code @Inherited} lookup exactly. Also proves the entry-class search itself
+ * skips interfaces and {@code abstract} classes, matching
+ * {@code PluginManager.loadPluginMainClass}'s own selection criteria -- otherwise an abstract
+ * module base sorting before its concrete subclass in {@code ModuleClassIndex}'s (typically
+ * lexicographic) class order would be picked first (Phase 10, Codex review of PR #427).
  *
  * @since 6.3.0
  */
@@ -63,12 +69,32 @@ class ModuleSwitchReaderTest {
     }
 
     @Test
-    @DisplayName("the abstract base class itself (if ever scanned directly) still reports its own directly-declared additionalEntities")
-    void theAbstractBaseItselfStillReportsItsOwnAdditionalEntities() {
+    @DisplayName("an abstract module base alone (no concrete subclass present) resolves no switches at all -- PluginManager.loadPluginMainClass never selects an abstract class as a module's entry point")
+    void abstractBaseAloneResolvesNoSwitches() {
         ModuleSwitchReader.Switches switches = new ModuleSwitchReader()
                 .read(Collections.singletonList(AbstractModuleBaseWithAdditionalEntities.class));
 
+        assertThat(switches).isNull();
+    }
+
+    @Test
+    @DisplayName("when the abstract base sorts BEFORE its concrete subclass in the input list, the concrete subclass is still selected as the entry class -- not the abstract base")
+    void abstractBaseSortingFirstDoesNotShadowTheConcreteSubclass() {
+        // ModuleClassIndex supplies classes in an arbitrary (typically lexicographic) order;
+        // "AbstractModuleBaseWithAdditionalEntities" sorts before
+        // "ConcreteModuleNotRedeclaringAdditionalEntities" alphabetically, so this list order
+        // is deliberately the one that would have picked the wrong class before this fix
+        // (Codex review of PR #427).
+        List<Class<?>> classes = Arrays.asList(
+                AbstractModuleBaseWithAdditionalEntities.class,
+                ConcreteModuleNotRedeclaringAdditionalEntities.class);
+
+        Class<?> entryClass = ModuleSwitchReader.findModuleEntryClass(classes);
+
+        assertThat(entryClass).isEqualTo(ConcreteModuleNotRedeclaringAdditionalEntities.class);
+
+        ModuleSwitchReader.Switches switches = new ModuleSwitchReader().read(classes);
         assertThat(switches).isNotNull();
-        assertThat(switches.getAdditionalEntities()).containsExactly(ExternalEntity.class);
+        assertThat(switches.getAdditionalEntities()).isEmpty();
     }
 }
