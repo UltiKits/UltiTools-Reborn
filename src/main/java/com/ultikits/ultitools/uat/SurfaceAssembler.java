@@ -109,8 +109,15 @@ public final class SurfaceAssembler {
         ModuleSwitchReader.Switches switches = moduleSwitchReader.read(classes);
         List<Class<?>> persistenceClasses = classes;
         if (switches != null && !switches.getAdditionalEntities().isEmpty()) {
-            persistenceClasses = new ArrayList<>(classes);
-            persistenceClasses.addAll(switches.getAdditionalEntities());
+            // De-duplicated, not a plain concatenation: additionalEntities() naming a class
+            // already present in classesRoot (or repeating the same class within its own
+            // array) is accepted and de-duplicated at runtime (PluginManager
+            // .scanPluginEntities's own HashSet), so passing the same Class<?> to
+            // PersistenceRowScanner twice would trip its id-collision guard and abort
+            // extraction for a module configuration the runtime accepts without complaint.
+            Set<Class<?>> union = new LinkedHashSet<>(classes);
+            union.addAll(switches.getAdditionalEntities());
+            persistenceClasses = new ArrayList<>(union);
         }
 
         for (SurfaceRow row : commandRowScanner.scan(origin, classes)) {

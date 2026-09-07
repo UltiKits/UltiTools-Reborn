@@ -288,6 +288,45 @@ def test_conditional_gate_steps_name_the_file_and_key_separately_with_the_requir
     assert 'gate enableWarp=config/config.yml' not in document
 
 
+def test_a_gated_commands_row_carries_the_gate_in_its_own_steps_not_only_on_the_separate_conditional_row(tmp_path):
+    # Batches are meant to be self-contained and may include the functional row without its
+    # separate standalone conditional row -- an executor working from this row alone could
+    # otherwise test while the class is disabled and record a false failure (Codex review of
+    # PR #427).
+    gate = {'value': 'config/config.yml', 'path': 'enableWarp', 'negate': False}
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'gate': gate},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'config key enableWarp in config/config.yml must be true' in document
+
+
+def test_a_manually_registered_listener_row_states_that_in_its_steps(tmp_path):
+    # ListenerManager.registerAll deliberately skips automatic registration for a
+    # manualRegister = true class; the surface preserves that flag, but rendering exactly
+    # the same event step as an automatically-registered listener leaves an executor unable
+    # to tell it must inspect the module-specific registration path (Codex review of PR
+    # #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'LIS-11111111', 'kind': 'listener', 'event': 'PlayerJoinEvent',
+         'handler_priority': 'HIGH', 'manual_register': True},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'event PlayerJoinEvent' in document
+    assert 'manually registered' in document
+
+
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
     surface = write_surface(tmp_path, [
         {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},

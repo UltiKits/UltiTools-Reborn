@@ -233,6 +233,41 @@ class TestDryRun:
         assert Path(ledger).read_bytes() == before
 
 
+class TestEnvironmentFallback:
+
+    def test_registry_and_ledger_resolve_from_environment_variables_when_flags_are_omitted(self, tmp_path, monkeypatch):
+        # The documented workflow exports UAT_REGISTRY/UAT_LEDGER once and invokes every
+        # subcommand -- uat.py's own -- with only the flags that vary per call. Requiring
+        # --registry/--ledger unconditionally made every documented example invocation fail
+        # argparse before this importer ever ran (Codex review of PR #427).
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        monkeypatch.setenv('UAT_REGISTRY', registry)
+        monkeypatch.setenv('UAT_LEDGER', ledger)
+        verdicts = write_verdicts(tmp_path, [make_row(id='COM-aaaaaaaa')])
+
+        result = import_verdicts.main(['--verdicts', verdicts])
+
+        assert result == 0
+        led_after = json.loads(Path(ledger).read_text(encoding='utf-8'))
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
+
+    def test_explicit_flags_still_take_precedence_over_the_environment(self, tmp_path, monkeypatch):
+        registry = write_registry(tmp_path, REG_ITEMS)
+        wrong_ledger = write_ledger(tmp_path / 'wrong')
+        real_ledger = write_ledger(tmp_path / 'real')
+        monkeypatch.setenv('UAT_REGISTRY', registry)
+        monkeypatch.setenv('UAT_LEDGER', wrong_ledger)
+        verdicts = write_verdicts(tmp_path, [make_row(id='COM-aaaaaaaa')])
+
+        import_verdicts.main(['--verdicts', verdicts, '--ledger', real_ledger])
+
+        led_after = json.loads(Path(real_ledger).read_text(encoding='utf-8'))
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
+        wrong_after = json.loads(Path(wrong_ledger).read_text(encoding='utf-8'))
+        assert wrong_after['results'] == {}
+
+
 class TestWriteBehavior:
 
     def test_empty_rows_writes_nothing_and_exits_zero(self, tmp_path, capsys):

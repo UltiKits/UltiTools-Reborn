@@ -2,10 +2,12 @@ package com.ultikits.ultitools.uat;
 
 import com.ultikits.ultitools.uat.fixtures.additionalentities.ExternalEntity;
 import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithAdditionalEntities;
+import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithOverlappingAdditionalEntity;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,20 @@ class SurfaceAssemblerAdditionalEntitiesTest {
     @DisplayName("with no additionalEntities() declared, persistence scanning is unaffected")
     void noAdditionalEntitiesLeavesPersistenceScanningUnchanged() throws ExtractorException {
         List<Class<?>> classes = Collections.singletonList(ExternalEntity.class);
+
+        SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
+
+        List<Map<String, Object>> persistenceRows = surface.getRows().stream()
+                .filter(row -> "persistence".equals(row.get("kind")))
+                .collect(java.util.stream.Collectors.toList());
+        assertThat(persistenceRows).hasSize(1);
+        assertThat(persistenceRows.get(0).get("class")).isEqualTo(ExternalEntity.class.getName());
+    }
+
+    @Test
+    @DisplayName("a class named by additionalEntities() that is also already present in classesRoot is de-duplicated, not a collision")
+    void overlappingAdditionalEntityIsDeduplicatedNotACollision() throws ExtractorException {
+        List<Class<?>> classes = Arrays.asList(ModuleWithOverlappingAdditionalEntity.class, ExternalEntity.class);
 
         SurfaceAssembler.AssembledSurface surface = new SurfaceAssembler().assemble("Fixture", classes);
 

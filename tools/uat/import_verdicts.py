@@ -3,7 +3,11 @@
 Import a Laojun verdicts file into the UAT ledger, through uat.py's own validation.
 
 Usage:
-    import_verdicts.py --verdicts uat-verdicts.json --registry <path> --ledger <path> [--dry-run]
+    export UAT_REGISTRY=/path/to/registry.json UAT_LEDGER=/path/to/ledger.json
+    import_verdicts.py --verdicts uat-verdicts.json [--dry-run]
+
+`--registry`/`--ledger` are also accepted explicitly and take precedence over the environment
+variables, the same fallback order `uat.py` itself uses -- see `uat.resolve_path`.
 
 Every write goes through the same two checks `uat.py record` itself performs -- the row id
 must be a real registry id, and the status must be one of `pass`, `fail`, `blocked`,
@@ -173,8 +177,16 @@ def apply_rows(led, rows):
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--verdicts', required=True, help='path to the Laojun verdicts JSON file')
-    parser.add_argument('--registry', required=True, help='path to registry.json')
-    parser.add_argument('--ledger', required=True, help='path to ledger.json')
+    # Not required=True: the documented workflow (tools/uat/README.md, this module's own
+    # docstring) exports UAT_REGISTRY/UAT_LEDGER once and invokes every subcommand -- uat.py's
+    # own -- with only the flags that vary per call. Requiring both here unconditionally made
+    # every documented example invocation fail argparse before this importer ever ran (Codex
+    # review of PR #427); uat.resolve_path (via registry_path/ledger_path) is the same
+    # fallback uat.py itself uses, so the two tools honor the environment identically.
+    parser.add_argument('--registry', default=None,
+                         help=f'registry.json path; falls back to ${uat.REGISTRY_ENV}')
+    parser.add_argument('--ledger', default=None,
+                         help=f'ledger.json path; falls back to ${uat.LEDGER_ENV}')
     parser.add_argument('--dry-run', action='store_true', dest='dry_run',
                          help='preview without writing; row-level problems are reported, not fatal')
     return parser
@@ -183,9 +195,10 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
+    ledger_path = uat.ledger_path(args)
     rows = load_verdicts(args.verdicts)
-    reg = uat.load_reg(args.registry)
-    led = uat.load_ledger(reg, args.ledger)
+    reg = uat.load_reg(uat.registry_path(args))
+    led = uat.load_ledger(reg, ledger_path)
     # Backfilled here, before resolve_known_ids, so a legacy pre-scope ledger's one-line
     # backfill note (uat.resolve_scope's own stderr print) is emitted once, not twice.
     if not led.get('scope'):
@@ -214,7 +227,7 @@ def main(argv=None):
         return 0
 
     if any_changed:
-        uat.save_ledger(led, args.ledger)
+        uat.save_ledger(led, ledger_path)
     print(f'wrote {sum(written_by_status.values())} result(s): {summarize(written_by_status)}')
     if defects_to_file:
         print('\nDefects to file (not to fix) -- rows carrying return_to:')

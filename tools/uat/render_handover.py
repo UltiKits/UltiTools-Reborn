@@ -99,24 +99,41 @@ def describe_steps(item):
     most explicit guidance for, since there is no command to simply retype. `config` items
     are never passed here directly -- see `describe_entity_steps` for the entity-level row
     D-10-10's granularity actually executes.
+
+    A command/help/listener/scheduled row belonging to a gated class carries its own `gate`
+    (attached by `SurfaceAssembler`); that gate is appended here rather than only rendered on
+    the row's separate standalone `conditional` entry. Batches are meant to be self-contained
+    and may not include that separate row alongside this one, so an executor working from
+    this row alone could otherwise test while the class is disabled and record a false
+    failure. A `listener` row additionally states when it is `manual_register`, since Bukkit
+    never fires that handler through the normal automatic registration path an executor would
+    otherwise expect to observe.
     """
     kind = item.get('kind')
     if kind in ('command', 'help'):
-        return item.get('trigger', '')
-    if kind == 'listener':
+        steps = item.get('trigger', '')
+    elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')
-        return 'event {} (priority {})'.format(event, priority) if priority else 'event {}'.format(event)
-    if kind == 'scheduled':
+        steps = 'event {} (priority {})'.format(event, priority) if priority else 'event {}'.format(event)
+        if item.get('manual_register'):
+            steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
+    elif kind == 'scheduled':
         if item.get('one_shot'):
-            return 'runs once, {}s after enable'.format(item.get('delay_seconds', 0))
-        return 'runs every {}s (first fire after {}s)'.format(
-            item.get('period_seconds', 0), item.get('delay_seconds', 0))
-    if kind == 'persistence':
-        return 'table {}'.format(item.get('table', ''))
-    if kind == 'conditional':
+            steps = 'runs once, {}s after enable'.format(item.get('delay_seconds', 0))
+        else:
+            steps = 'runs every {}s (first fire after {}s)'.format(
+                item.get('period_seconds', 0), item.get('delay_seconds', 0))
+    elif kind == 'persistence':
+        steps = 'table {}'.format(item.get('table', ''))
+    elif kind == 'conditional':
         return describe_gate(item.get('gate') or {})
-    return item.get('trigger', '')
+    else:
+        steps = item.get('trigger', '')
+
+    if kind in ('command', 'help', 'listener', 'scheduled') and item.get('gate'):
+        steps = '{} [{}]'.format(steps, describe_gate(item['gate']))
+    return steps
 
 
 def describe_gate(gate):
