@@ -11,10 +11,13 @@ variables, the same fallback order `uat.py` itself uses -- see `uat.resolve_path
 
 Every write goes through the same two checks `uat.py record` itself performs -- the row id
 must be a real registry id, and the status must be one of `pass`, `fail`, `blocked`,
-`human-uat-pending` (D-10-16's named exit) -- and the
-final write goes through `uat.py`'s own `load_ledger`/`save_ledger`, never a raw edit of the
-ledger file (Phase 10, D-10-14). All rows are validated BEFORE any write happens: an unknown
-id, a bad status, or malformed input JSON is reported and nothing is written.
+`human-uat-pending` (D-10-16's named exit) -- plus this importer's own additional schema
+checks: every required string/list field from UAT-MATRIX-SCHEMA.md's verdict protocol must be
+present, and `type` must be one of `repro`, `control`, `deferred` (the schema's own fixed
+enum, not merely a non-empty string). The final write goes through `uat.py`'s own
+`load_ledger`/`save_ledger`, never a raw edit of the ledger file (Phase 10, D-10-14). All rows
+are validated BEFORE any write happens: an unknown id, a bad status, a bad type, a missing
+field, or malformed input JSON is reported and nothing is written.
 
 `--dry-run` previews what would happen without writing anything and without failing the
 process on a row-level problem (an unknown id, a bad status) -- those are reported to stderr
@@ -39,6 +42,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import uat  # noqa: E402  (sys.path must be adjusted before this import)
 
 VALID_STATUSES = ('pass', 'fail', 'blocked', 'human-uat-pending')
+# UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section fixes `type` to exactly these
+# three values. `type` was previously validated only as a non-empty string (part of
+# REQUIRED_STRING_FIELDS below), which let a typo like "verify" pass this importer's own
+# stated all-before-write schema validation and land in the ledger uncaught.
+VALID_TYPES = ('repro', 'control', 'deferred')
 
 # UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section fixes these as always
 # present on a real verdict row (confirmed against the real Phase 13 uat-verdicts.json: all
@@ -118,6 +126,11 @@ def validate_rows(rows, known_ids):
             missing = missing_strings + missing_lists
             problems.append(
                 f'row {index} (id={row_id!r}): missing or empty required field(s): {", ".join(missing)}')
+            continue
+        row_type = row.get('type')
+        if row_type not in VALID_TYPES:
+            problems.append(
+                f'row {index} (id={row_id!r}): type {row_type!r} is not one of {VALID_TYPES}')
             continue
         if row_id in seen_ids:
             problems.append(f'row {index} (id={row_id!r}): duplicate id, first declared at row {seen_ids[row_id]}')

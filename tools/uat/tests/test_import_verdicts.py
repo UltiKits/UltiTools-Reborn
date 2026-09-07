@@ -94,6 +94,36 @@ class TestRowValidation:
 
         assert Path(ledger).read_bytes() == before
 
+    def test_rejects_a_type_outside_the_documented_enum_before_any_write(self, tmp_path):
+        # UAT-MATRIX-SCHEMA.md fixes `type` to exactly repro/control/deferred (Codex review of
+        # PR #427). `type` was previously validated only as a non-empty string, so a typo like
+        # "verify" passed this importer's own stated all-before-write schema validation.
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        before = Path(ledger).read_bytes()
+        verdicts = write_verdicts(tmp_path, [
+            make_row(id='COM-aaaaaaaa', type='verify'),
+        ])
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_accepts_every_documented_type_value(self, tmp_path):
+        for type_value in ('repro', 'control', 'deferred'):
+            registry = write_registry(tmp_path, REG_ITEMS)
+            ledger = write_ledger(tmp_path)
+            verdicts = write_verdicts(tmp_path, [
+                make_row(id='COM-aaaaaaaa', type=type_value),
+            ])
+
+            rc = import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+            assert rc == 0
+            written = json.loads(Path(ledger).read_text(encoding='utf-8'))
+            assert written['results']['COM-aaaaaaaa']['status'] == 'pass'
+
     def test_rejects_malformed_json_before_any_write(self, tmp_path):
         registry = write_registry(tmp_path, REG_ITEMS)
         ledger = write_ledger(tmp_path)

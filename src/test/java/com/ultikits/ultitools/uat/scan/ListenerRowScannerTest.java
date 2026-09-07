@@ -2,6 +2,8 @@ package com.ultikits.ultitools.uat.scan;
 
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.fixtures.FixtureListeners;
+import com.ultikits.ultitools.uat.fixtures.listeneredgecases.ListenerEdgeCaseFixtures;
+import com.ultikits.ultitools.uat.fixtures.listeneredgecases.eventsa.ReloadEvent;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,15 +34,66 @@ class ListenerRowScannerTest {
         assertThat(rows).allSatisfy(row -> assertThat(row.get("kind")).isEqualTo("listener"));
 
         Map<String, Object> joinRow = rowFor(rows, FixtureListeners.JoinListener.class.getSimpleName(), "onJoin");
-        assertThat(joinRow.get("event")).isEqualTo("PlayerJoinEvent");
+        // Fully qualified, not the simple name (Codex review of PR #427): two distinct event
+        // classes in different packages sharing a simple name must remain distinguishable to
+        // tools/uat/uat.py next's listener-batch grouping, which keys off this exact field.
+        assertThat(joinRow.get("event")).isEqualTo("org.bukkit.event.player.PlayerJoinEvent");
         assertThat(joinRow.get("handler_priority")).isEqualTo("HIGH");
 
         Map<String, Object> multiJoinRow = rowFor(rows, FixtureListeners.MultiHandlerListener.class.getSimpleName(), "onJoin");
         assertThat(multiJoinRow.get("handler_priority")).isEqualTo("NORMAL");
 
         Map<String, Object> multiQuitRow = rowFor(rows, FixtureListeners.MultiHandlerListener.class.getSimpleName(), "onQuit");
-        assertThat(multiQuitRow.get("event")).isEqualTo("PlayerQuitEvent");
+        assertThat(multiQuitRow.get("event")).isEqualTo("org.bukkit.event.player.PlayerQuitEvent");
         assertThat(multiQuitRow.get("handler_priority")).isEqualTo("MONITOR");
+    }
+
+    @Test
+    @DisplayName("a legitimately overloaded handler method name (different event types) produces distinct rows, not a collision")
+    void overloadedHandlerMethodNameProducesDistinctRows() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(ListenerEdgeCaseFixtures.OverloadedHandlerListener.class));
+
+        assertThat(rows).hasSize(2);
+        assertThat(rows).extracting(row -> row.get("id")).doesNotHaveDuplicates();
+        assertThat(rows).extracting(row -> row.get("event"))
+                .containsExactlyInAnyOrder(
+                        "org.bukkit.event.player.PlayerJoinEvent",
+                        "org.bukkit.event.player.PlayerQuitEvent");
+    }
+
+    @Test
+    @DisplayName("a non-public @EventHandler inherited unchanged from a superclass produces no row -- Bukkit never registers it for the subclass")
+    void inheritedNonPublicHandlerProducesNoRow() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(ListenerEdgeCaseFixtures.SubclassNotOverridingHandler.class));
+
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a non-public @EventHandler declared directly on the concrete class still produces a row -- Bukkit's declared-methods half of discovery ignores visibility")
+    void directlyDeclaredNonPublicHandlerStillProducesARow() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(ListenerEdgeCaseFixtures.SubclassWithOwnNonPublicHandler.class));
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("member")).isEqualTo("onDirectlyDeclaredNonPublicHandler");
+    }
+
+    @Test
+    @DisplayName("two different-package events sharing a simple name are distinguished by the fully qualified event field")
+    void crossPackageSameSimpleNameEventsAreDistinguished() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(ListenerEdgeCaseFixtures.CrossPackageSameSimpleNameListener.class));
+
+        assertThat(rows).hasSize(2);
+        Map<String, Object> rowA = rowFor(rows, ListenerEdgeCaseFixtures.CrossPackageSameSimpleNameListener.class.getSimpleName(), "onReloadA");
+        Map<String, Object> rowB = rowFor(rows, ListenerEdgeCaseFixtures.CrossPackageSameSimpleNameListener.class.getSimpleName(), "onReloadB");
+        assertThat(rowA.get("event")).isEqualTo(ReloadEvent.class.getName());
+        assertThat(rowB.get("event"))
+                .isEqualTo("com.ultikits.ultitools.uat.fixtures.listeneredgecases.eventsb.ReloadEvent")
+                .isNotEqualTo(rowA.get("event"));
     }
 
     @Test

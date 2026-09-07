@@ -41,6 +41,27 @@ REGISTRY_ENV = 'UAT_REGISTRY'
 LEDGER_ENV = 'UAT_LEDGER'
 RUNS_ENV = 'UAT_RUNS'
 
+# UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section fixes this as an absolute
+# per-dispatch ceiling on execution rows. `--size` counts units (an item or a whole listener
+# event), not raw rows, but the ceiling is still binding at the unit level: a value above it
+# lets a single call emit more non-listener items than any one real-machine session is meant
+# to receive, and a value at or below zero slices from the wrong end of the pending list
+# (Python's negative-index slicing), silently returning nearly the entire backlog for a
+# simple typo like `--size -1`.
+MAX_BATCH_SIZE = 60
+
+
+def positive_capped_int(raw):
+    """argparse `type=` for `--size`: an integer in [1, MAX_BATCH_SIZE], nothing else."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'{raw!r} is not an integer')
+    if not 1 <= value <= MAX_BATCH_SIZE:
+        raise argparse.ArgumentTypeError(
+            f'{raw!r} is out of range -- must be between 1 and {MAX_BATCH_SIZE} inclusive')
+    return value
+
 
 def resolve_path(cli_value, env_var, what):
     """
@@ -528,7 +549,7 @@ def build_parser():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest='c', required=True)
     sub.add_parser('status', parents=[common]).set_defaults(f=cmd_status)
-    n = sub.add_parser('next', parents=[common]); n.add_argument('--size', type=int, default=25)
+    n = sub.add_parser('next', parents=[common]); n.add_argument('--size', type=positive_capped_int, default=25)
     n.add_argument('--kind'); n.add_argument('--origin', action='append'); n.add_argument('--group-by-event', action='store_true'); n.set_defaults(f=cmd_next)
     r = sub.add_parser('record', parents=[common]); r.add_argument('id'); r.add_argument(
         'status', choices=['pass', 'fail', 'blocked', 'human-uat-pending'])

@@ -180,3 +180,42 @@ def test_record_accepts_an_id_within_the_ledgers_own_scope():
         with open(ledger_path_str) as f:
             led_after = json.load(f)
         assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
+
+
+def test_size_argument_rejects_a_value_above_the_60_unit_ceiling():
+    # UAT-MATRIX-SCHEMA.md fixes 60 execution rows as an absolute per-dispatch ceiling (Codex
+    # review of PR #427). --size was an unrestricted `type=int` before this test, so a value
+    # above the ceiling emitted more units than any one real-machine session is meant to receive.
+    try:
+        uat.build_parser().parse_args(['next', '--size', '61'])
+        assert False, 'expected argparse to reject --size 61'
+    except SystemExit:
+        pass
+
+
+def test_size_argument_rejects_a_negative_value():
+    # A negative --size sliced from the wrong end of the pending list (Python's negative-index
+    # slicing), silently returning nearly the entire backlog for a typo like --size -1.
+    try:
+        uat.build_parser().parse_args(['next', '--size', '-1'])
+        assert False, 'expected argparse to reject --size -1'
+    except SystemExit:
+        pass
+
+
+def test_size_argument_rejects_zero():
+    try:
+        uat.build_parser().parse_args(['next', '--size', '0'])
+        assert False, 'expected argparse to reject --size 0'
+    except SystemExit:
+        pass
+
+
+def test_size_argument_accepts_the_ceiling_value_itself():
+    args = uat.build_parser().parse_args(['next', '--size', '60'])
+    assert args.size == 60
+
+
+def test_size_argument_accepts_the_default_when_omitted():
+    args = uat.build_parser().parse_args(['next'])
+    assert args.size == 25
