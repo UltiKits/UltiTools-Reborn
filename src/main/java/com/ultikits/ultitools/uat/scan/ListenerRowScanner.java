@@ -60,7 +60,7 @@ public final class ListenerRowScanner {
                 if (handler == null || !isValidHandlerSignature(method)) {
                     continue;
                 }
-                Map<String, Object> row = buildRow(origin, clazz, method, handler);
+                Map<String, Object> row = buildRow(origin, clazz, method, handler, annotation.manualRegister());
                 claim(idOwners, String.valueOf(row.get("id")), clazz.getName(), method.getName());
                 rows.add(row);
             }
@@ -79,7 +79,8 @@ public final class ListenerRowScanner {
         return paramTypes.length == 1 && Event.class.isAssignableFrom(paramTypes[0]);
     }
 
-    private static Map<String, Object> buildRow(String origin, Class<?> clazz, Method method, EventHandler handler) {
+    private static Map<String, Object> buildRow(String origin, Class<?> clazz, Method method, EventHandler handler,
+            boolean manualRegister) {
         String cls = clazz.getSimpleName();
         String member = method.getName();
         String id = RowId.of(KIND_LISTENER, origin, cls, member);
@@ -96,6 +97,13 @@ public final class ListenerRowScanner {
             row.put("event", paramTypes[0].getSimpleName());
         }
         row.put("handler_priority", handler.priority().name());
+        // ListenerManager.registerAll (both the plugin-module and external-plugin entry
+        // points) deliberately skips automatic registration when @EventListener declares
+        // manualRegister = true -- without recording that here, the surface and handover
+        // make a manually-managed handler indistinguishable from an automatically
+        // registered one, so an executor could fail it for never firing when its absence
+        // from a listener dump is actually the expected, documented shape.
+        row.put("manual_register", manualRegister);
         return row;
     }
 

@@ -51,6 +51,22 @@ class ListenerRowScannerTest {
 
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).get("member")).isEqualTo("onQuit");
+        // ListenerManager.registerAll deliberately skips automatic registration for a
+        // manualRegister = true class; without recording that fact here, this row would be
+        // indistinguishable from an automatically-registered handler (Codex review of PR
+        // #427), and an executor could fail it for never firing when its absence from a
+        // listener dump is the expected, documented shape.
+        assertThat(rows.get(0).get("manual_register")).isEqualTo(true);
+    }
+
+    @Test
+    @DisplayName("an automatically-registered class's rows carry manual_register=false")
+    void automaticallyRegisteredClassCarriesManualRegisterFalse() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(FixtureListeners.JoinListener.class));
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("manual_register")).isEqualTo(false);
     }
 
     @Test

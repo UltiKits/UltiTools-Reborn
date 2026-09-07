@@ -265,6 +265,29 @@ def test_non_command_kinds_get_a_descriptive_steps_column_not_an_empty_trigger(t
     assert 'table accounts' in document
 
 
+def test_conditional_gate_steps_name_the_file_and_key_separately_with_the_required_boolean(tmp_path):
+    # @ConditionalOnConfig(value=<file>, path=<key>) -- the annotation's own attribute names
+    # are file-oriented, the reverse of what they suggest side by side. The old rendering
+    # ("gate {path}={value}") treated the file path as the value to assign and the key as the
+    # setting name, which would tell an executor to configure the wrong thing entirely.
+    surface = write_surface(tmp_path, [
+        {'id': 'CON-11111111', 'kind': 'conditional',
+         'gate': {'value': 'config/config.yml', 'path': 'enableWarp', 'negate': False}},
+        {'id': 'CON-22222222', 'kind': 'conditional',
+         'gate': {'value': 'config/config.yml', 'path': 'disableWarp', 'negate': True}},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'config key enableWarp in config/config.yml must be true' in document
+    assert 'config key disableWarp in config/config.yml must be false' in document
+    # The old (wrong) rendering is not present anywhere in the document.
+    assert 'gate enableWarp=config/config.yml' not in document
+
+
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
     surface = write_surface(tmp_path, [
         {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},

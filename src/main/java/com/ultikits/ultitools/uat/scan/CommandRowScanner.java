@@ -103,8 +103,16 @@ public final class CommandRowScanner {
         CmdTarget methodTarget = method.getAnnotation(CmdTarget.class);
         CmdTarget effectiveTarget = methodTarget != null ? methodTarget : classTarget;
 
-        CmdCD cooldown = method.getAnnotation(CmdCD.class);
-        UsageLimit usageLimit = method.getAnnotation(UsageLimit.class);
+        // ReflectionUtil.resolveMethodOrClassAnnotation, not a plain method.getAnnotation:
+        // CooldownValidator/UsageLockValidator resolve @CmdCD/@UsageLimit in three steps
+        // (method, then the concrete executor class directly, then the mapping method's own
+        // declaring class directly) precisely because neither annotation is @Inherited --
+        // an inherited, unoverridden @CmdMapping method's declaring class is whatever
+        // ancestor first declared it, never the concrete subclass a class-level annotation
+        // might sit on. Reading only the method here silently dropped a real, enforced
+        // class-level limit from the generated row.
+        CmdCD cooldown = ReflectionUtil.resolveMethodOrClassAnnotation(method, clazz, CmdCD.class);
+        UsageLimit usageLimit = ReflectionUtil.resolveMethodOrClassAnnotation(method, clazz, UsageLimit.class);
 
         boolean requireOp = executor.requireOp() || mapping.requireOp();
         String permission = !mapping.permission().isEmpty() ? mapping.permission() : executor.permission();

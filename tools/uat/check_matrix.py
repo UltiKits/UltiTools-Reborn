@@ -82,9 +82,18 @@ def validate_assertions_schema(assertions):
     """
     Return a list of schema-error strings for `assertions`; empty means well-formed.
 
-    `id`, `truth` and `layer` are required on every entry (missing or `None` is a violation;
-    an empty string is not -- an empty truth is a *weak* truth, reported separately, never a
-    schema error). `layer` must be one of the five known values.
+    `id`, `truth` and `layer` are required on every entry. `truth` counts as missing when it
+    is `None` OR an empty/whitespace-only string -- `truth: ""` states nothing an observer
+    could check, which is exactly UAT-MATRIX-SCHEMA.md's own definition of what a truth must
+    NOT be, so it is treated the same as omitting the field entirely rather than passing this
+    check and only ever being reported as a non-blocking "weak truth" (Codex review of PR
+    #427: a module could otherwise pass this completeness gate with every row asserted by an
+    empty string). `id` and `layer` still count as missing only when they are literally
+    `None`, unaffected by this. A NON-empty but weak truth (e.g. one that merely repeats the
+    row's own trigger) remains a `find_weak_truths` finding only, per this checker's own
+    established, deliberate exit-code contract -- this fix narrows to the one case
+    (`truth: ""`) that is indistinguishable from omission, not to every weak truth. `layer`
+    must be one of the five known values.
 
     A repeated `id` is also a schema error, not merely a duplicate key. `assertions.yaml` is
     hand-written, and every downstream consumer (this checker's own bucket computation, plus
@@ -100,7 +109,9 @@ def validate_assertions_schema(assertions):
             errors.append('assertion[{}]: not a mapping'.format(index))
             continue
         label = 'assertion {}'.format(assertion['id']) if assertion.get('id') else 'assertion[{}]'.format(index)
-        missing = [key for key in ('id', 'truth', 'layer') if assertion.get(key) is None]
+        missing = [key for key in ('id', 'truth', 'layer')
+                   if assertion.get(key) is None
+                   or (key == 'truth' and isinstance(assertion.get(key), str) and not assertion.get(key).strip())]
         if missing:
             errors.append('{}: missing required field(s): {}'.format(label, ', '.join(missing)))
             continue
@@ -143,9 +154,11 @@ def find_weak_truths(items, assertions_by_id):
     """
     Find assertions whose truth names no observable outcome.
 
-    An assertion whose truth is empty, or which merely repeats the row's own `trigger` string,
-    makes the row untestable. Reported as a listed finding -- never silently accepted, but
-    never a reason to fail on its own.
+    An assertion whose truth merely repeats the row's own `trigger` string makes the row
+    untestable in a subtler way than an empty truth (now caught upstream as a schema error
+    by `validate_assertions_schema`, so this function's own empty-truth branch is a
+    defensive no-op reached only when called directly, bypassing that gate). Reported as a
+    listed finding -- never silently accepted, but never a reason to fail on its own.
     """
     items_by_id = {item.get('id'): item for item in items}
     weak = []

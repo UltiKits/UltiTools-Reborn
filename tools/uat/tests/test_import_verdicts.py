@@ -49,6 +49,22 @@ def write_verdicts(directory, rows, filename='verdicts.json'):
     return str(path)
 
 
+def make_row(**overrides):
+    """
+    Build a verdict row carrying every field the real protocol requires.
+
+    Sensible defaults mean a test exercising one specific field (an id, a status, a
+    duplicate) does not also have to restate every other required field just to get past
+    schema validation.
+    """
+    row = dict(
+        id='COM-aaaaaaaa', repository='X', type='repro', steps='run it', observed='ok',
+        status='pass', reason='matches expectation', actions=['probe'], evidence=[],
+    )
+    row.update(overrides)
+    return row
+
+
 class TestRowValidation:
 
     def test_rejects_unknown_id_before_any_write(self, tmp_path):
@@ -56,8 +72,8 @@ class TestRowValidation:
         ledger = write_ledger(tmp_path)
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'ok'},
-            {'id': 'COM-nonexistent', 'status': 'pass', 'observed': 'ok'},
+            make_row(id='COM-aaaaaaaa'),
+            make_row(id='COM-nonexistent'),
         ])
 
         with pytest.raises(SystemExit):
@@ -70,7 +86,7 @@ class TestRowValidation:
         ledger = write_ledger(tmp_path)
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'maybe', 'observed': 'ok'},
+            make_row(id='COM-aaaaaaaa', status='maybe'),
         ])
 
         with pytest.raises(SystemExit):
@@ -98,8 +114,8 @@ class TestRowValidation:
         ledger = write_ledger(tmp_path)
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'first observation'},
-            {'id': 'COM-aaaaaaaa', 'status': 'fail', 'observed': 'second observation, would win silently'},
+            make_row(id='COM-aaaaaaaa', status='pass', observed='first observation'),
+            make_row(id='COM-aaaaaaaa', status='fail', observed='second observation, would win silently'),
         ])
 
         with pytest.raises(SystemExit):
@@ -119,7 +135,7 @@ class TestRowValidation:
         ledger = write_ledger(tmp_path, extra={'scope': ['framework']})
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-eeeeeeee', 'status': 'pass', 'observed': 'stale, out-of-scope result'},
+            make_row(id='COM-eeeeeeee', observed='stale, out-of-scope result'),
         ])
 
         with pytest.raises(SystemExit):
@@ -134,7 +150,40 @@ class TestRowValidation:
         ])
         ledger = write_ledger(tmp_path, extra={'scope': ['framework']})
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'in-scope result'},
+            make_row(id='COM-aaaaaaaa', observed='in-scope result'),
+        ])
+
+        import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        led_after = json.loads(Path(ledger).read_text(encoding='utf-8'))
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
+
+    def test_rejects_a_row_missing_a_required_protocol_field_before_any_write(self, tmp_path):
+        # A row carrying only id/status/observed used to pass validation, converting the
+        # missing repository/type/steps/reason into an empty ledger note -- a malformed
+        # "pass" committed as a completed measurement with no record of what was actually
+        # exercised (Codex review of PR #427).
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        before = Path(ledger).read_bytes()
+        verdicts = write_verdicts(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'ok'},
+        ])
+
+        with pytest.raises(SystemExit):
+            import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
+
+        assert Path(ledger).read_bytes() == before
+
+    def test_accepts_an_empty_actions_or_evidence_list_a_static_review_row_can_legitimately_have(self, tmp_path):
+        # Confirmed against the real Phase 13 uat-verdicts.json: rows exist with an empty
+        # `actions` (a pure source/static-review row with no dispatched action identifier)
+        # and rows with an empty `evidence` (an observation made live with nothing
+        # separately saved). Requiring non-empty here would reject real, legitimate data.
+        registry = write_registry(tmp_path, REG_ITEMS)
+        ledger = write_ledger(tmp_path)
+        verdicts = write_verdicts(tmp_path, [
+            make_row(id='COM-aaaaaaaa', actions=[], evidence=[]),
         ])
 
         import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
@@ -150,7 +199,7 @@ class TestDryRun:
         ledger = write_ledger(tmp_path)
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'NOT-A-REAL-ID', 'status': 'pass', 'observed': 'n/a'},
+            make_row(id='NOT-A-REAL-ID', observed='n/a'),
         ])
 
         result = import_verdicts.main(
@@ -174,7 +223,7 @@ class TestDryRun:
         ledger = write_ledger(tmp_path)
         before = Path(ledger).read_bytes()
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'saw pong'},
+            make_row(id='COM-aaaaaaaa', observed='saw pong'),
         ])
 
         result = import_verdicts.main(
@@ -202,8 +251,8 @@ class TestWriteBehavior:
         registry = write_registry(tmp_path, REG_ITEMS)
         ledger = write_ledger(tmp_path)
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'saw pong',
-             'evidence': ['machine-observations.json']},
+            make_row(id='COM-aaaaaaaa', observed='saw pong',
+                     evidence=['machine-observations.json']),
         ])
 
         import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
@@ -221,8 +270,8 @@ class TestWriteBehavior:
         registry = write_registry(tmp_path, REG_ITEMS)
         ledger = write_ledger(tmp_path)
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'human-uat-pending',
-             'observed': 'requires the panel UltiCloud login, not enabled on this server'},
+            make_row(id='COM-aaaaaaaa', status='human-uat-pending',
+                     observed='requires the panel UltiCloud login, not enabled on this server'),
         ])
 
         import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
@@ -234,8 +283,8 @@ class TestWriteBehavior:
         registry = write_registry(tmp_path, REG_ITEMS)
         ledger = write_ledger(tmp_path)
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'saw pong'},
-            {'id': 'COM-bbbbbbbb', 'status': 'fail', 'observed': 'saw nothing'},
+            make_row(id='COM-aaaaaaaa', observed='saw pong'),
+            make_row(id='COM-bbbbbbbb', status='fail', observed='saw nothing'),
         ])
 
         import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])
@@ -248,8 +297,8 @@ class TestWriteBehavior:
     def test_import_order_does_not_affect_result(self, tmp_path):
         registry = write_registry(tmp_path, REG_ITEMS)
         rows = [
-            {'id': 'COM-aaaaaaaa', 'status': 'pass', 'observed': 'saw pong'},
-            {'id': 'COM-bbbbbbbb', 'status': 'fail', 'observed': 'saw nothing'},
+            make_row(id='COM-aaaaaaaa', observed='saw pong'),
+            make_row(id='COM-bbbbbbbb', status='fail', observed='saw nothing'),
         ]
 
         ledger_a = write_ledger(tmp_path / 'a')
@@ -267,8 +316,8 @@ class TestWriteBehavior:
         registry = write_registry(tmp_path, REG_ITEMS)
         ledger = write_ledger(tmp_path)
         verdicts = write_verdicts(tmp_path, [
-            {'id': 'COM-aaaaaaaa', 'status': 'fail', 'observed': 'broken',
-             'return_to': ['SomeModule#16 -> master']},
+            make_row(id='COM-aaaaaaaa', status='fail', observed='broken',
+                     return_to=['SomeModule#16 -> master']),
         ])
 
         import_verdicts.main(['--verdicts', verdicts, '--registry', registry, '--ledger', ledger])

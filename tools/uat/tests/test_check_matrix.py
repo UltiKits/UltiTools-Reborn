@@ -296,6 +296,37 @@ class TestSchemaValidation:
         assert result != 0
         assert 'truth' in err.lower()
 
+    def test_assertion_with_empty_string_truth_is_also_a_schema_error(self, tmp_path, capsys):
+        # truth: "" used to pass the required-field check (only None counted as missing),
+        # then removed the row from `unasserted` entirely -- a module could pass this
+        # completeness gate with every row asserted by a truth that states nothing an
+        # observer could check (Codex review of PR #427).
+        row = {'id': 'COM-aaaaaaaa', 'kind': 'command', 'trigger': '/x reload'}
+        surface = write_surface(tmp_path, [row])
+        assertions = write_assertions(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'truth': '', 'layer': 'protocol'},
+        ])
+
+        result = run(surface, assertions)
+        err = capsys.readouterr().err
+
+        assert result != 0
+        assert 'truth' in err.lower()
+
+    def test_assertion_with_whitespace_only_truth_is_also_a_schema_error(self, tmp_path, capsys):
+        surface = write_surface(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'trigger': '/x reload'},
+        ])
+        assertions = write_assertions(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'truth': '   ', 'layer': 'protocol'},
+        ])
+
+        result = run(surface, assertions)
+        err = capsys.readouterr().err
+
+        assert result != 0
+        assert 'truth' in err.lower()
+
     def test_assertion_missing_layer_is_a_schema_error(self, tmp_path, capsys):
         surface = write_surface(tmp_path, [])
         assertions = write_assertions(tmp_path, [

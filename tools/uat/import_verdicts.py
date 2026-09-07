@@ -36,6 +36,18 @@ import uat  # noqa: E402  (sys.path must be adjusted before this import)
 
 VALID_STATUSES = ('pass', 'fail', 'blocked', 'human-uat-pending')
 
+# UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section fixes these as always
+# present on a real verdict row (confirmed against the real Phase 13 uat-verdicts.json: all
+# 26 rows, including every human-uat-pending one, carry every one of these as a non-empty
+# string). `id` and `status` are validated separately above/below this list; `issue` and
+# `return_to` are conditional per the schema and deliberately not required here.
+REQUIRED_STRING_FIELDS = ('repository', 'type', 'steps', 'observed', 'reason')
+# `actions`/`evidence` must be present and be lists, but MAY legitimately be empty -- the
+# real Phase 13 file has rows with an empty `actions` (a pure source/static-review row with
+# no dispatched action identifier) and rows with an empty `evidence` (an observation made
+# live, with nothing separately saved). Requiring non-empty here would reject real data.
+REQUIRED_LIST_FIELDS = ('actions', 'evidence')
+
 
 def load_verdicts(path):
     try:
@@ -94,6 +106,14 @@ def validate_rows(rows, known_ids):
         if status not in VALID_STATUSES:
             problems.append(
                 f'row {index} (id={row_id!r}): status {status!r} is not one of {VALID_STATUSES}')
+            continue
+        missing_strings = [key for key in REQUIRED_STRING_FIELDS
+                            if not isinstance(row.get(key), str) or not row.get(key).strip()]
+        missing_lists = [key for key in REQUIRED_LIST_FIELDS if not isinstance(row.get(key), list)]
+        if missing_strings or missing_lists:
+            missing = missing_strings + missing_lists
+            problems.append(
+                f'row {index} (id={row_id!r}): missing or empty required field(s): {", ".join(missing)}')
             continue
         if row_id in seen_ids:
             problems.append(f'row {index} (id={row_id!r}): duplicate id, first declared at row {seen_ids[row_id]}')

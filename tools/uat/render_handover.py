@@ -115,9 +115,25 @@ def describe_steps(item):
     if kind == 'persistence':
         return 'table {}'.format(item.get('table', ''))
     if kind == 'conditional':
-        gate = item.get('gate') or {}
-        return 'gate {}={} (negate={})'.format(gate.get('path', ''), gate.get('value', ''), gate.get('negate', False))
+        return describe_gate(item.get('gate') or {})
     return item.get('trigger', '')
+
+
+def describe_gate(gate):
+    """
+    Describe a `@ConditionalOnConfig` gate: which file, which key, and the required value.
+
+    The annotation's own attribute names are file-oriented -- `value()` is the config FILE
+    path, `path()` is the dot/slash-separated KEY inside it -- the reverse of what their
+    names suggest next to each other. Swapping them (`gate {path}={value}`) rendered the
+    file path as if it were the value to assign and the key as if it named the setting,
+    which would tell an executor to configure the wrong thing entirely. `negate` also needs
+    stating explicitly: the class registers when the key equals `not negate`, not always
+    `true`.
+    """
+    required_value = 'false' if gate.get('negate') else 'true'
+    return 'config key {} in {} must be {}'.format(
+        gate.get('path', ''), gate.get('value', ''), required_value)
 
 
 def describe_entity_steps(entity):

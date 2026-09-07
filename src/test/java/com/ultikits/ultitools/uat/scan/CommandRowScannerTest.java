@@ -5,6 +5,7 @@ import com.ultikits.ultitools.uat.SurfaceRow;
 import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
+import com.ultikits.ultitools.uat.fixtures.classlevellimits.SubclassWithClassLevelLimits;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,17 @@ class CommandRowScannerTest {
         Map<String, Object> helpRow = fieldMapOf(rows, "handleHelp");
         assertThat(helpRow.get("kind")).isEqualTo("help");
         assertThat(helpRow.get("trigger")).isEqualTo("/tracer help");
+    }
+
+    @Test
+    @DisplayName("@CmdCD/@UsageLimit declared at the class level on an inherited mapping are resolved onto the row, matching CooldownValidator/UsageLockValidator's own three-step resolution")
+    void classLevelLimitsAreResolvedOntoInheritedMappingRows() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(SubclassWithClassLevelLimits.class));
+
+        Map<String, Object> goRow = fieldMapOf(rows, "go");
+        assertThat(goRow.get("cooldown_seconds")).isEqualTo(30);
+        assertThat(goRow.get("usage_limit")).isEqualTo("SENDER");
     }
 
     @Test
