@@ -1,11 +1,8 @@
 package com.ultikits.ultitools.uat;
 
-import com.ultikits.ultitools.uat.scan.CommandRowScanner;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,18 +57,13 @@ public final class SurfaceExtractorMain {
         ModuleClassIndex index = new ModuleClassIndex(Thread.currentThread().getContextClassLoader());
         List<Class<?>> classes = index.load(classesRoot);
 
-        CommandRowScanner scanner = new CommandRowScanner();
-        List<SurfaceRow> rows = scanner.scan(module, classes);
-
-        List<Map<String, Object>> fieldMaps = new ArrayList<>(rows.size());
-        for (SurfaceRow row : rows) {
-            fieldMaps.add(row.toFieldMap());
-        }
+        SurfaceAssembler assembler = new SurfaceAssembler();
+        SurfaceAssembler.AssembledSurface surface = assembler.assemble(module, classes);
 
         if (outputArg != null) {
-            CanonicalJsonWriter.write(Paths.get(outputArg), SCHEMA_VERSION, fieldMaps);
+            CanonicalJsonWriter.write(Paths.get(outputArg), SCHEMA_VERSION, surface.getRows(), surface.getDocumentExtras());
         } else {
-            System.out.print(CanonicalJsonWriter.toJsonString(SCHEMA_VERSION, fieldMaps));
+            System.out.print(CanonicalJsonWriter.toJsonString(SCHEMA_VERSION, surface.getRows(), surface.getDocumentExtras()));
         }
     }
 

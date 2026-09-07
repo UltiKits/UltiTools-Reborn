@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -44,9 +45,28 @@ public final class CanonicalJsonWriter {
      * @return the canonical JSON document text, including its trailing newline
      */
     public static String toJsonString(int schemaVersion, List<Map<String, Object>> items) {
+        return toJsonString(schemaVersion, items, Collections.emptyMap());
+    }
+
+    /**
+     * As {@link #toJsonString(int, List)}, plus additional document-level entries (Phase 10 plan
+     * 10-02: {@code config_entities}, {@code registers_commands}, {@code registers_listeners},
+     * {@code registers_config}) merged alongside {@code items} and {@code schema_version} —
+     * sorted, canonicalized and never escaped exactly like every other field.
+     *
+     * @param schemaVersion  the integer {@code schema_version} to stamp
+     * @param items          each row's field map, in any order
+     * @param documentExtras additional top-level document entries; may be empty, never {@code null}
+     * @return the canonical JSON document text, including its trailing newline
+     */
+    public static String toJsonString(int schemaVersion, List<Map<String, Object>> items,
+            Map<String, Object> documentExtras) {
         Map<String, Object> document = new TreeMap<>();
         document.put("schema_version", schemaVersion);
         document.put("items", canonicalItems(items));
+        for (Map.Entry<String, Object> entry : documentExtras.entrySet()) {
+            document.put(entry.getKey(), canonicalize(entry.getValue()));
+        }
 
         Gson gson = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
         return gson.toJson(document) + "\n";
@@ -62,7 +82,22 @@ public final class CanonicalJsonWriter {
      * @throws IOException if the temp file cannot be written or the rename fails
      */
     public static void write(Path output, int schemaVersion, List<Map<String, Object>> items) throws IOException {
-        String json = toJsonString(schemaVersion, items);
+        write(output, schemaVersion, items, Collections.emptyMap());
+    }
+
+    /**
+     * As {@link #write(Path, int, List)}, plus additional document-level entries — see
+     * {@link #toJsonString(int, List, Map)}.
+     *
+     * @param output         the destination path
+     * @param schemaVersion  the integer {@code schema_version} to stamp
+     * @param items          each row's field map, in any order
+     * @param documentExtras additional top-level document entries; may be empty, never {@code null}
+     * @throws IOException if the temp file cannot be written or the rename fails
+     */
+    public static void write(Path output, int schemaVersion, List<Map<String, Object>> items,
+            Map<String, Object> documentExtras) throws IOException {
+        String json = toJsonString(schemaVersion, items, documentExtras);
         Path absoluteOutput = output.toAbsolutePath();
         Path parent = absoluteOutput.getParent();
         if (parent == null) {
