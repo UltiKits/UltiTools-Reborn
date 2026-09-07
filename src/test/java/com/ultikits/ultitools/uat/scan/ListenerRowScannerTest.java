@@ -82,6 +82,15 @@ class ListenerRowScannerTest {
     }
 
     @Test
+    @DisplayName("an @EventListener class that does not implement Listener produces no rows -- Bukkit's getBeanNamesForType(Listener.class) never returns it")
+    void eventListenerClassNotImplementingListenerProducesNoRows() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(ListenerEdgeCaseFixtures.AnnotatedButNotAListener.class));
+
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
     @DisplayName("two different-package events sharing a simple name are distinguished by the fully qualified event field")
     void crossPackageSameSimpleNameEventsAreDistinguished() throws ExtractorException {
         List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",

@@ -90,4 +90,18 @@ public final class ListenerEdgeCaseFixtures {
             // no-op: the scanner reads the annotation, never invokes this method
         }
     }
+
+    /**
+     * Carries {@code @EventListener} and a structurally valid {@code @EventHandler} method, but
+     * deliberately does NOT implement {@link Listener} -- {@code ListenerManager.registerAll}
+     * discovers handlers only through {@code getBeanNamesForType(Listener.class)}, so this bean
+     * is never returned by that lookup and its handler can never fire (Codex review of PR #427).
+     */
+    @EventListener
+    public static class AnnotatedButNotAListener {
+        @EventHandler
+        public void onJoin(PlayerJoinEvent event) {
+            // no-op: the scanner reads the annotation, never invokes this method
+        }
+    }
 }

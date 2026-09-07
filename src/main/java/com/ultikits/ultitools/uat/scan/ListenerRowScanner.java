@@ -8,6 +8,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -26,6 +27,13 @@ import java.util.Map;
  * A class carrying {@code @EventListener} is scanned regardless of its {@code manualRegister}
  * value — a suppressed registration is still a fact to verify, per D-10-04's discretion note on
  * {@code manualRegister}-true executors, applied the same way here.
+ * <p>
+ * A class carrying {@code @EventListener} but NOT implementing {@link Listener} is skipped
+ * entirely, producing no rows at all: {@code ListenerManager.registerAll}/
+ * {@code registerAllExternal} both discover handlers by iterating
+ * {@code getBeanNamesForType(Listener.class)}, so a non-{@code Listener} bean is never returned
+ * by that lookup and Bukkit's {@code registerEvents} is never called for it, no matter how many
+ * valid {@code @EventHandler} methods it declares.
  * <p>
  * Excludes two kinds of method Bukkit's own event registration will never actually invoke:
  * <ul>
@@ -79,7 +87,12 @@ public final class ListenerRowScanner {
         Map<String, String> idOwners = new LinkedHashMap<>();
         for (Class<?> clazz : classes) {
             EventListener annotation = MergedAnnotationResolver.find(clazz, EventListener.class);
-            if (annotation == null) {
+            // ListenerManager.registerAll/registerAllExternal both iterate ONLY
+            // getBeanNamesForType(Listener.class) -- a class carrying @EventListener (and thus
+            // eligible as a container component) but not implementing org.bukkit.event.Listener
+            // is never returned by that lookup, so Bukkit's own registerEvents is never called
+            // for it and none of its @EventHandler methods can ever fire.
+            if (annotation == null || !Listener.class.isAssignableFrom(clazz)) {
                 continue;
             }
             List<Method> handlerMethods = new ArrayList<>();

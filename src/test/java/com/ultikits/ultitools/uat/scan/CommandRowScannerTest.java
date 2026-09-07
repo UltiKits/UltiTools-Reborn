@@ -1,15 +1,19 @@
 package com.ultikits.ultitools.uat.scan;
 
+import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.SurfaceRow;
 import com.ultikits.ultitools.uat.fixtures.Dup;
+import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.SubclassWithClassLevelLimits;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +68,34 @@ class CommandRowScannerTest {
         Map<String, Object> goRow = fieldMapOf(rows, "go");
         assertThat(goRow.get("cooldown_seconds")).isEqualTo(30);
         assertThat(goRow.get("usage_limit")).isEqualTo("SENDER");
+    }
+
+    @Test
+    @DisplayName("two @CmdMapping methods on the same class sharing an identical format collapse to one row -- matching BaseCommandExecutor.scanCommandMappings' own putIfAbsent, under which the second method can never dispatch")
+    void duplicateFormatOnTheSameClassCollapsesToOneRow() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(DuplicateFormatCommands.class));
+
+        List<Map<String, Object>> reloadRows = rows.stream()
+                .map(SurfaceRow::toFieldMap)
+                .filter(row -> "reload".equals(row.get("format")))
+                .collect(java.util.stream.Collectors.toList());
+        assertThat(reloadRows).hasSize(1);
+
+        // Independently re-derive which method BaseCommandExecutor's own
+        // scanCommandMappings would actually keep -- the first one
+        // ReflectionUtil.getAllMethods visits for this format -- so this assertion holds
+        // regardless of what order the JVM's own reflection happens to return, since both
+        // the scanner under test and this re-derivation call the identical utility.
+        String expectedWinner = null;
+        for (Method method : ReflectionUtil.getAllMethods(DuplicateFormatCommands.class)) {
+            CmdMapping mapping = method.getAnnotation(CmdMapping.class);
+            if (mapping != null && "reload".equals(mapping.format())) {
+                expectedWinner = method.getName();
+                break;
+            }
+        }
+        assertThat(reloadRows.get(0).get("member")).isEqualTo(expectedWinner);
     }
 
     @Test

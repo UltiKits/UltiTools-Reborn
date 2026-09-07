@@ -19,8 +19,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Extracts {@code command} and {@code help} surface rows from loaded {@code @CmdExecutor}
@@ -35,6 +37,12 @@ import java.util.Map;
  * so {@code @AliasFor} resolves exactly as it does at runtime; method/parameter annotations are
  * read directly since none of {@code @CmdMapping}/{@code @CmdParam}/{@code @CmdSender}/
  * {@code @CmdCD}/{@code @UsageLimit} declare an alias.
+ * <p>
+ * When two methods on the same class declare {@code @CmdMapping} with the identical
+ * {@code format()}, only the FIRST one (in {@link ReflectionUtil#getAllMethods(Class)}'s own
+ * order) produces a row — matching {@code BaseCommandExecutor.scanCommandMappings}'s own
+ * {@code mappings.putIfAbsent(mapping.format(), method)}, under which the second method is
+ * never reachable at runtime no matter how it is invoked.
  * <p>
  * Collision detection lives here, not in {@link RowId}: two rows computing the same id raise
  * {@link ExtractorException} naming both fully qualified classes — nothing is ever merged.
@@ -65,9 +73,16 @@ public final class CommandRowScanner {
                 continue;
             }
             CmdTarget classTarget = MergedAnnotationResolver.find(clazz, CmdTarget.class);
+            // BaseCommandExecutor.scanCommandMappings keys its own mappings map by
+            // mapping.format() via putIfAbsent -- so if two methods on this same class declare
+            // the identical format string, only the first one (in this same getAllMethods()
+            // order) is ever reachable at runtime; the second occupies a format string that
+            // already resolved to a different method. Emitting a row for it would ask a
+            // real-machine session to exercise a subcommand that can never actually dispatch.
+            Set<String> claimedFormats = new LinkedHashSet<>();
             for (Method method : ReflectionUtil.getAllMethods(clazz)) {
                 CmdMapping mapping = method.getAnnotation(CmdMapping.class);
-                if (mapping == null) {
+                if (mapping == null || !claimedFormats.add(mapping.format())) {
                     continue;
                 }
                 SurfaceRow row = buildCommandRow(origin, clazz, executor, classTarget, method, mapping);
