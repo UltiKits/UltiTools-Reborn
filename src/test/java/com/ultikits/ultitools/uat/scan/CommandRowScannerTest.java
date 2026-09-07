@@ -3,6 +3,7 @@ package com.ultikits.ultitools.uat.scan;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.SurfaceRow;
+import com.ultikits.ultitools.uat.fixtures.AnnotatedButNotACommandExecutor;
 import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
@@ -117,6 +118,15 @@ class CommandRowScannerTest {
 
         Map<String, Object> goRow = fieldMapOf(rows, "go");
         assertThat(goRow).doesNotContainKey("cmd_target");
+    }
+
+    @Test
+    @DisplayName("a class annotated @CmdExecutor but not implementing org.bukkit.command.CommandExecutor produces no rows -- CommandManager.registerAll never discovers it")
+    void annotatedButNotACommandExecutorProducesNoRows() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(AnnotatedButNotACommandExecutor.class));
+
+        assertThat(rows).isEmpty();
     }
 
     @Test

@@ -327,6 +327,26 @@ class TestSchemaValidation:
         assert result != 0
         assert 'truth' in err.lower()
 
+    def test_assertion_with_a_non_string_truth_is_also_a_schema_error(self, tmp_path, capsys):
+        # YAML parses an unquoted `truth: yes`/`truth: true` as a Python bool. The prior fix
+        # only rejected a blank/whitespace-only truth when it was ALREADY a string
+        # (isinstance(..., str) gated the whitespace check), so a bool sailed straight
+        # through as "present" with a valid id/layer -- removing the row from `unasserted`
+        # and never tripping the exit-triggering weak-truth check either, despite carrying no
+        # observable statement an executor could act on (Codex review of PR #427).
+        surface = write_surface(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'trigger': '/x reload'},
+        ])
+        assertions = write_assertions(tmp_path, [
+            {'id': 'COM-aaaaaaaa', 'truth': True, 'layer': 'protocol'},
+        ])
+
+        result = run(surface, assertions)
+        err = capsys.readouterr().err
+
+        assert result != 0
+        assert 'truth' in err.lower()
+
     def test_assertion_missing_layer_is_a_schema_error(self, tmp_path, capsys):
         surface = write_surface(tmp_path, [])
         assertions = write_assertions(tmp_path, [

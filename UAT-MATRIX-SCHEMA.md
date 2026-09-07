@@ -238,8 +238,12 @@ that event reaches is listed under it.
 specific defect), `type` (`repro`, `control`, or `deferred`), `steps`, `observed`, `status`,
 `reason`, `actions[]` (identifiers of the concrete actions taken), `evidence[]` (paths to retained
 evidence), and, when the row is a `fail` that also names a real product defect, `return_to[]`
-(where that defect should be filed). `status` is one of `pass`, `fail`, or `human-uat-pending` —
-the last is a legitimate terminal state for a row, not a placeholder for one that was skipped.
+(where that defect should be filed). `status` is one of `pass`, `fail`, `blocked`, or
+`human-uat-pending` — both `uat.py record` and `import_verdicts.py` accept exactly this set.
+`blocked` is what an executor must return when a prerequisite is unavailable (see rule 2 below);
+`human-uat-pending` is a separate, legitimate terminal state for a row that genuinely needs a
+human rather than automation — not a placeholder for one that was merely skipped, and not a
+substitute for `blocked`.
 
 **Three adjudication traps, carried from the original tooling.** These produced real false
 failures before they were written down as rules, and are restated inside every batch brief because

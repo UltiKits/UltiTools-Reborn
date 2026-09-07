@@ -12,6 +12,8 @@ import com.ultikits.ultitools.uat.RowId;
 import com.ultikits.ultitools.uat.SurfaceRow;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import org.bukkit.command.CommandExecutor;
+
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
@@ -78,7 +80,12 @@ public final class CommandRowScanner {
         Map<String, String> idOwners = new LinkedHashMap<>();
         for (Class<?> clazz : classes) {
             CmdExecutor executor = clazz.getAnnotation(CmdExecutor.class);
-            if (executor == null) {
+            // CommandManager.registerAll/registerAllExternal both discover commands
+            // exclusively through getBeanNamesForType(CommandExecutor.class) (Bukkit's own
+            // interface) -- @CmdExecutor itself enforces no such supertype, so a class
+            // carrying the annotation but not implementing it is never returned by that
+            // lookup and none of its rows could ever actually be exercised.
+            if (executor == null || !CommandExecutor.class.isAssignableFrom(clazz)) {
                 continue;
             }
             CmdTarget classTarget = clazz.getAnnotation(CmdTarget.class);

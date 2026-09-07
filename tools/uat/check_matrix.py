@@ -109,9 +109,16 @@ def validate_assertions_schema(assertions):
             errors.append('assertion[{}]: not a mapping'.format(index))
             continue
         label = 'assertion {}'.format(assertion['id']) if assertion.get('id') else 'assertion[{}]'.format(index)
-        missing = [key for key in ('id', 'truth', 'layer')
-                   if assertion.get(key) is None
-                   or (key == 'truth' and isinstance(assertion.get(key), str) and not assertion.get(key).strip())]
+        missing = [key for key in ('id', 'layer') if assertion.get(key) is None]
+        # `truth` must be a nonempty STRING, not merely non-None (Codex review of PR #427):
+        # YAML parses an unquoted `truth: yes`/`truth: true` as a Python bool, which the
+        # previous `isinstance(..., str)`-gated whitespace check never even inspected --
+        # `True` sailed through as "present" with a valid id/layer, removing the row from
+        # `unasserted` and never tripping the exit-triggering weak-truth check either, despite
+        # carrying no observable statement an executor could act on.
+        truth = assertion.get('truth')
+        if not isinstance(truth, str) or not truth.strip():
+            missing.append('truth')
         if missing:
             errors.append('{}: missing required field(s): {}'.format(label, ', '.join(missing)))
             continue
