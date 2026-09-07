@@ -6,6 +6,7 @@ import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.RowId;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 
 import java.lang.reflect.Method;
@@ -24,6 +25,12 @@ import java.util.Map;
  * A class carrying {@code @EventListener} is scanned regardless of its {@code manualRegister}
  * value — a suppressed registration is still a fact to verify, per D-10-04's discretion note on
  * {@code manualRegister}-true executors, applied the same way here.
+ * <p>
+ * Excludes a method Bukkit's own {@code PluginManager.registerEvents} rejects or skips at
+ * registration time: one that does not take exactly one parameter, or whose parameter type is
+ * not assignable to {@link Event}. Such a method can never actually be registered as a handler,
+ * so emitting a normal row for it would require a real-machine session to exercise a handler
+ * that does not exist at runtime.
  *
  * @since 6.3.0
  */
@@ -50,7 +57,7 @@ public final class ListenerRowScanner {
             }
             for (Method method : ReflectionUtil.getAllMethods(clazz)) {
                 EventHandler handler = method.getAnnotation(EventHandler.class);
-                if (handler == null) {
+                if (handler == null || !isValidHandlerSignature(method)) {
                     continue;
                 }
                 Map<String, Object> row = buildRow(origin, clazz, method, handler);
@@ -59,6 +66,17 @@ public final class ListenerRowScanner {
             }
         }
         return rows;
+    }
+
+    /**
+     * True when Bukkit's own {@code PluginManager.registerEvents} would actually register
+     * {@code method} as a handler: exactly one parameter, whose type is assignable to
+     * {@link Event}. A method failing either check is rejected or skipped by Bukkit itself,
+     * never invoked no matter how the class is registered.
+     */
+    private static boolean isValidHandlerSignature(Method method) {
+        Class<?>[] paramTypes = method.getParameterTypes();
+        return paramTypes.length == 1 && Event.class.isAssignableFrom(paramTypes[0]);
     }
 
     private static Map<String, Object> buildRow(String origin, Class<?> clazz, Method method, EventHandler handler) {

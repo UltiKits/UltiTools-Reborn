@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.uat.scan;
 
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
-import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.uat.RowId;
 
 import java.util.ArrayList;
@@ -24,6 +23,15 @@ import java.util.Map;
  * text to capture. The result is deterministic and whitespace-free by construction, satisfying
  * D-10-08's "whitespace-stripped condition text" requirement without reproducing the old
  * registry's exact conditional-row ids (a recorded, accepted miss for this new-to-Java row kind).
+ * <p>
+ * Reads {@code @ConditionalOnConfig} via plain {@link Class#getAnnotation(Class)}, deliberately
+ * NOT {@code MergedAnnotationResolver.find} — that resolver also walks the superclass hierarchy,
+ * which diverges from runtime discovery: {@code ConditionalRegistrationEvaluator.shouldRegister}
+ * calls {@code clazz.getAnnotation(ConditionalOnConfig.class)} directly, and this annotation
+ * carries no {@code @Inherited} meta-annotation, so a subclass that does not redeclare the gate
+ * is actually registered UNCONDITIONALLY at runtime regardless of what its superclass declares.
+ * Using the resolver here would attach a gate — and emit a standalone conditional row — for a
+ * class the runtime never gates at all.
  *
  * @since 6.3.0
  */
@@ -42,7 +50,7 @@ public final class ConditionalGateReader {
     public Map<String, Map<String, Object>> collectGates(List<Class<?>> classes) {
         Map<String, Map<String, Object>> gates = new LinkedHashMap<>();
         for (Class<?> clazz : classes) {
-            ConditionalOnConfig annotation = MergedAnnotationResolver.find(clazz, ConditionalOnConfig.class);
+            ConditionalOnConfig annotation = clazz.getAnnotation(ConditionalOnConfig.class);
             if (annotation != null) {
                 gates.put(clazz.getName(), buildGate(annotation));
             }
@@ -60,7 +68,7 @@ public final class ConditionalGateReader {
     public List<Map<String, Object>> scanConditionalRows(String origin, List<Class<?>> classes) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Class<?> clazz : classes) {
-            ConditionalOnConfig annotation = MergedAnnotationResolver.find(clazz, ConditionalOnConfig.class);
+            ConditionalOnConfig annotation = clazz.getAnnotation(ConditionalOnConfig.class);
             if (annotation == null) {
                 continue;
             }

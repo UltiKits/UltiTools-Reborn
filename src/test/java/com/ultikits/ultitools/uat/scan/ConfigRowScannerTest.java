@@ -76,6 +76,37 @@ class ConfigRowScannerTest {
                 .hasMessageContaining("value");
     }
 
+    @Test
+    @DisplayName("a @ConfigEntry with no explicit path resolves to the field's own name, matching AbstractConfigEntity's shorthand")
+    void emptyPathResolvesToFieldName() throws ExtractorException {
+        ConfigRowScanner.Result result = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.ShorthandPathEntity.class));
+
+        assertThat(result.getRows()).hasSize(1);
+        assertThat(result.getRows().get(0).get("path")).isEqualTo("flag");
+    }
+
+    @Test
+    @DisplayName("a subclass not redeclaring its own @ConfigEntity produces no row and no phantom entity for its inherited fields")
+    void subclassNotRedeclaringConfigEntityProducesNothing() throws ExtractorException {
+        ConfigRowScanner.Result result = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.SubclassWithoutOwnConfigEntity.class));
+
+        assertThat(result.getRows()).isEmpty();
+        assertThat(result.getEntities()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("when the real entity is also present, a subclass not redeclaring @ConfigEntity does not duplicate or collide with it")
+    void subclassAlongsideRealEntityDoesNotDuplicateRows() throws ExtractorException {
+        ConfigRowScanner.Result result = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.Entity.class, FixtureConfig.SubclassWithoutOwnConfigEntity.class));
+
+        assertThat(result.getRows()).hasSize(2);
+        assertThat(result.getEntities()).hasSize(1);
+        assertThat(result.getEntities().get(0).get("class")).isEqualTo(FixtureConfig.Entity.class.getName());
+    }
+
     private static Map<String, Object> rowFor(List<Map<String, Object>> rows, String member) {
         Optional<Map<String, Object>> match = rows.stream()
                 .filter(row -> member.equals(row.get("member")))

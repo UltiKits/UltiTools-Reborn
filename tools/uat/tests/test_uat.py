@@ -117,3 +117,68 @@ def test_kind_filtered_to_listener_still_groups_exactly_as_before():
         assert 'TRIGGER: join' in out
         assert 'LIS-11111111' in out
         assert 'LIS-22222222' in out
+
+
+def test_record_rejects_an_id_excluded_by_the_ledgers_own_scope():
+    # After a narrowed `rebase --scope framework`, the manual record path must reject an
+    # excluded module's id the same way import_verdicts.py's own scope check does (Codex
+    # review of PR #427) -- otherwise a hidden stale result gets written in, counting
+    # against a later, wider scope even though this ledger was never meant to track it.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A'},
+            {'id': 'COM-eeeeeeee', 'kind': 'command', 'origin': 'ExcludedModule', 'cls': 'E'},
+        ]
+        registry = write_registry(tmp_path, items)
+        ledger_path_str = write_ledger(tmp_path)
+        import json
+        with open(ledger_path_str) as f:
+            doc = json.load(f)
+        doc['scope'] = ['framework']
+        with open(ledger_path_str, 'w') as f:
+            json.dump(doc, f)
+        before = Path(ledger_path_str).read_bytes()
+
+        args = type('Args', (), {
+            'registry': registry, 'ledger': ledger_path_str, 'id': 'COM-eeeeeeee',
+            'status': 'pass', 'note': 'stale, out of scope',
+        })()
+
+        raised = False
+        try:
+            uat.cmd_record(args)
+        except SystemExit:
+            raised = True
+
+        assert raised
+        assert Path(ledger_path_str).read_bytes() == before
+
+
+def test_record_accepts_an_id_within_the_ledgers_own_scope():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [
+            {'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A'},
+            {'id': 'COM-eeeeeeee', 'kind': 'command', 'origin': 'ExcludedModule', 'cls': 'E'},
+        ]
+        registry = write_registry(tmp_path, items)
+        ledger_path_str = write_ledger(tmp_path)
+        import json
+        with open(ledger_path_str) as f:
+            doc = json.load(f)
+        doc['scope'] = ['framework']
+        with open(ledger_path_str, 'w') as f:
+            json.dump(doc, f)
+
+        args = type('Args', (), {
+            'registry': registry, 'ledger': ledger_path_str, 'id': 'COM-aaaaaaaa',
+            'status': 'pass', 'note': 'in scope',
+        })()
+        uat.cmd_record(args)
+
+        with open(ledger_path_str) as f:
+            led_after = json.load(f)
+        assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'

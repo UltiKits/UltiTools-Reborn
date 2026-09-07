@@ -53,6 +53,15 @@ class ListenerRowScannerTest {
         assertThat(rows.get(0).get("member")).isEqualTo("onQuit");
     }
 
+    @Test
+    @DisplayName("a handler signature Bukkit's own registerEvents would reject or skip produces no row -- zero parameters, too many parameters, or a non-Event parameter")
+    void invalidHandlerSignaturesProduceNoRows() throws ExtractorException {
+        List<Map<String, Object>> rows = new ListenerRowScanner().scan("Fixture",
+                Arrays.asList(FixtureListeners.InvalidSignatureListener.class));
+
+        assertThat(rows).isEmpty();
+    }
+
     private static Map<String, Object> rowFor(List<Map<String, Object>> rows, String cls, String member) {
         Optional<Map<String, Object>> match = rows.stream()
                 .filter(row -> cls.equals(row.get("cls")) && member.equals(row.get("member")))

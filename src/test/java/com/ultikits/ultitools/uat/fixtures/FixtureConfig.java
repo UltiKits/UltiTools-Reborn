@@ -56,4 +56,18 @@ public final class FixtureConfig {
         @ConfigEntry(path = "orphan.value")
         private String value = "orphan";
     }
+
+    // A @ConfigEntry with no explicit path -- AbstractConfigEntity resolves this shorthand to
+    // the field's own name at runtime (Codex review of PR #427).
+    @ConfigEntity("config/shorthand.yml")
+    public static class ShorthandPathEntity {
+        @ConfigEntry
+        private boolean flag = true;
+    }
+
+    // A subclass that does NOT redeclare @ConfigEntity of its own -- the runtime's direct
+    // getAnnotation check never treats this as a config entity, so neither should the
+    // extractor (Codex review of PR #427: @ConfigEntity is not @Inherited).
+    public static class SubclassWithoutOwnConfigEntity extends Entity {
+    }
 }

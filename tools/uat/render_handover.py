@@ -94,9 +94,11 @@ def describe_steps(item):
 
     Only `command`/`help` rows carry a `trigger` string. Every other kind's own fields
     describe what to exercise instead -- reading `trigger` unconditionally would silently
-    render an empty Steps cell for a listener, scheduled task, persistence entity, config
-    field, or conditional gate, which is exactly the kind of row a real-machine executor
-    needs the most explicit guidance for, since there is no command to simply retype.
+    render an empty Steps cell for a listener, scheduled task, persistence entity, or
+    conditional gate, which is exactly the kind of row a real-machine executor needs the
+    most explicit guidance for, since there is no command to simply retype. `config` items
+    are never passed here directly -- see `describe_entity_steps` for the entity-level row
+    D-10-10's granularity actually executes.
     """
     kind = item.get('kind')
     if kind in ('command', 'help'):
@@ -112,30 +114,37 @@ def describe_steps(item):
             item.get('period_seconds', 0), item.get('delay_seconds', 0))
     if kind == 'persistence':
         return 'table {}'.format(item.get('table', ''))
-    if kind == 'config':
-        return 'config key {} in {}'.format(item.get('path', ''), item.get('config_file', ''))
     if kind == 'conditional':
         gate = item.get('gate') or {}
         return 'gate {}={} (negate={})'.format(gate.get('path', ''), gate.get('value', ''), gate.get('negate', False))
     return item.get('trigger', '')
 
 
-def resolve_assertion(item, assertions_by_id, entity_by_class):
+def describe_entity_steps(entity):
     """
-    Resolve the assertion covering one surface row.
+    Describe the "Steps" for one config-entity execution row (D-10-10's granularity).
 
-    Every kind but `config` is asserted by its own id. A `config` row is asserted through
-    its owning `@ConfigEntity`'s id instead (D-10-10's accepted granularity -- a config
-    field never carries its own assertion), so looking the field's own id up directly, as
-    every other kind does, would always report it unasserted even when its entity has a
-    real, matching assertion.
+    A config entity is exercised as a whole -- load the file, confirm every documented
+    default, flip a representative key -- never per field, so the row names the file and
+    field count rather than any single key.
     """
-    if item.get('kind') == 'config':
-        entity = entity_by_class.get(item.get('config_entity'))
-        lookup_id = entity.get('id') if entity else item.get('id')
-    else:
-        lookup_id = item.get('id')
-    return assertions_by_id.get(lookup_id)
+    return 'config entity {} in {} ({} field(s))'.format(
+        entity.get('class', ''), entity.get('file', ''), entity.get('entry_count', 0))
+
+
+def with_preconditions(steps, assertion):
+    """
+    Append an assertion's `preconditions` to its rendered Steps text.
+
+    Without this, a config key, permission, credential, or second-player requirement the
+    assertion documents is silently dropped from this supposedly self-contained handover,
+    and an executor exercising the row under the wrong setup can record a false failure it
+    has no way to know was avoidable.
+    """
+    preconditions = assertion.get('preconditions') or []
+    if not preconditions:
+        return steps
+    return '{} [preconditions: {}]'.format(steps, ', '.join(str(p) for p in preconditions))
 
 
 def render_artifact_table(jar, version, byte_size, sha256, commit):
@@ -152,33 +161,50 @@ def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
     """
     Render the asserted-rows table plus the "Rows with no assertion yet" section.
 
-    Every surface row lands in exactly one of the two: `Expected`/`Layer` come from the
-    matching assertion's `truth`/`layer` (resolved via `resolve_assertion`, which joins a
-    `config` row through its owning entity rather than its own id); `Steps` is derived per
-    kind by `describe_steps`, since only `command`/`help` rows carry a `trigger` string.
-    """
-    entity_by_class = {entity.get('class'): entity for entity in (config_entities or [])}
+    Renders one execution row per `config_entities` entry, not per `config` surface item
+    (D-10-10: a config entity is asserted and executed as a whole, keyed by its own id --
+    never per field). A `config`-kind item never produces a row of its own here; it exists
+    in `surface.json` purely so `check_matrix.py` can prove completeness field by field.
+    An entity with zero fields (a legitimate shape `ConfigRowScanner` now supports) still
+    gets its row, since it has no `config` item to have been rendered from at all otherwise.
 
+    Every other kind's row is asserted by its own id, with `Steps` derived per kind by
+    `describe_steps` (only `command`/`help` rows carry a `trigger` string). Every rendered
+    Expected cell also carries the assertion's `preconditions`, when declared, so this
+    document stays genuinely self-contained rather than silently dropping a documented
+    setup requirement (a config key, permission, credential, or second player).
+    """
     if ids_filter is not None:
         items = [item for item in items if item.get('id') in ids_filter]
+        config_entities = [entity for entity in (config_entities or []) if entity.get('id') in ids_filter]
 
     asserted = []
     unasserted = []
     for item in items:
-        assertion = resolve_assertion(item, assertions_by_id, entity_by_class)
+        if item.get('kind') == 'config':
+            continue  # rendered once per entity below, never once per field
+        assertion = assertions_by_id.get(item.get('id'))
+        row_id, row_kind, steps = item.get('id', ''), item.get('kind', ''), describe_steps(item)
         if assertion is None:
-            unasserted.append(item)
+            unasserted.append((row_id, row_kind, steps))
         else:
-            asserted.append((item, assertion))
+            asserted.append((row_id, row_kind, with_preconditions(steps, assertion), assertion))
+
+    for entity in (config_entities or []):
+        assertion = assertions_by_id.get(entity.get('id'))
+        row_id, row_kind, steps = entity.get('id', ''), 'config_entity', describe_entity_steps(entity)
+        if assertion is None:
+            unasserted.append((row_id, row_kind, steps))
+        else:
+            asserted.append((row_id, row_kind, with_preconditions(steps, assertion), assertion))
 
     lines = []
     if asserted:
         lines.append('| ID | Type | Steps | Expected | Layer |')
         lines.append('|---|---|---|---|---|')
-        for item, assertion in sorted(asserted, key=lambda pair: pair[0]['id']):
+        for row_id, row_kind, steps, assertion in sorted(asserted, key=lambda row: row[0]):
             lines.append('| {} | {} | {} | {} | {} |'.format(
-                escape_cell(item.get('id', '')), escape_cell(item.get('kind', '')),
-                escape_cell(describe_steps(item)),
+                escape_cell(row_id), escape_cell(row_kind), escape_cell(steps),
                 escape_cell(assertion.get('truth', '')), escape_cell(assertion.get('layer', ''))))
     else:
         lines.append('No assertions are defined for this surface yet.')
@@ -189,10 +215,9 @@ def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
     if unasserted:
         lines.append('| ID | Type | Steps |')
         lines.append('|---|---|---|')
-        for item in sorted(unasserted, key=lambda row: row['id']):
+        for row_id, row_kind, steps in sorted(unasserted, key=lambda row: row[0]):
             lines.append('| {} | {} | {} |'.format(
-                escape_cell(item.get('id', '')), escape_cell(item.get('kind', '')),
-                escape_cell(describe_steps(item))))
+                escape_cell(row_id), escape_cell(row_kind), escape_cell(steps)))
     else:
         lines.append('Every surface row has an assertion.')
 

@@ -183,15 +183,17 @@ def test_duplicate_assertion_id_refuses_to_render_instead_of_silently_picking_on
     assert 'COM-11111111' in message
 
 
-def test_config_row_is_asserted_through_its_owning_entity_not_its_own_id(tmp_path):
-    # D-10-10: a config row is never asserted by its own id -- the entity it belongs to is.
-    # A renderer that discards config_entities (or looks a config row up by its own id) can
-    # never resolve this join and would report every config field as unasserted, even when
-    # its entity has a real, matching assertion.
-    entity = {'id': 'CFE-11111111', 'class': 'com.example.Cfg', 'file': 'config/cfg.yml', 'entry_count': 1}
-    row = {'id': 'CFG-aaaaaaaa', 'kind': 'config', 'config_entity': 'com.example.Cfg',
-           'config_file': 'config/cfg.yml', 'path': 'enabled'}
-    surface = write_surface(tmp_path, [row], config_entities=[entity])
+def test_config_entity_renders_one_execution_row_keyed_by_the_entity_id_not_per_field(tmp_path):
+    # D-10-10: a config entity is executed as a whole, keyed by its own id -- never once per
+    # field. A renderer that iterates `config` surface items directly (instead of rendering
+    # config_entities once each) would either report every field as unasserted despite a
+    # real entity assertion, or -- worse -- render one duplicate execution row per field.
+    entity = {'id': 'CFE-11111111', 'class': 'com.example.Cfg', 'file': 'config/cfg.yml', 'entry_count': 2}
+    row_a = {'id': 'CFG-aaaaaaaa', 'kind': 'config', 'config_entity': 'com.example.Cfg',
+             'config_file': 'config/cfg.yml', 'path': 'enabled'}
+    row_b = {'id': 'CFG-bbbbbbbb', 'kind': 'config', 'config_entity': 'com.example.Cfg',
+             'config_file': 'config/cfg.yml', 'path': 'timeout'}
+    surface = write_surface(tmp_path, [row_a, row_b], config_entities=[entity])
     assertions = write_assertions(tmp_path, [
         {'id': 'CFE-11111111', 'truth': 'config/cfg.yml loads with enabled=true', 'layer': 'protocol'},
     ])
@@ -200,9 +202,47 @@ def test_config_row_is_asserted_through_its_owning_entity_not_its_own_id(tmp_pat
                            '--output', str(output)] + ARTIFACT_ARGS)
     document = output.read_text(encoding='utf-8')
 
-    assert 'CFG-aaaaaaaa' in document
+    assert 'CFE-11111111' in document
     assert 'config/cfg.yml loads with enabled=true' in document
+    assert 'config entity com.example.Cfg in config/cfg.yml (2 field(s))' in document
+    assert document.count('CFE-11111111') == 1  # rendered once, not once per field
+    assert 'CFG-aaaaaaaa' not in document
+    assert 'CFG-bbbbbbbb' not in document
     assert 'Every surface row has an assertion.' in document
+
+
+def test_config_entity_with_no_assertion_appears_in_the_unasserted_section(tmp_path):
+    entity = {'id': 'CFE-22222222', 'class': 'com.example.Other', 'file': 'config/other.yml', 'entry_count': 0}
+    surface = write_surface(tmp_path, [], config_entities=[entity])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    unasserted_section = document.split('## Rows with no assertion yet')[1]
+    assert 'CFE-22222222' in unasserted_section
+    assert 'config entity com.example.Other in config/other.yml (0 field(s))' in unasserted_section
+
+
+def test_assertion_preconditions_are_rendered_not_silently_dropped(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},
+    ])
+    assertions_path = tmp_path / 'assertions.yaml'
+    assertions_path.write_text(
+        'schema_version: 1\nassertions:\n  - id: COM-11111111\n'
+        '    truth: "chat line X"\n    layer: protocol\n'
+        '    preconditions:\n      - permission: ultikits.tools.reload\n'
+        '      - "a second player online"\n',
+        encoding='utf-8')
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', str(assertions_path),
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'preconditions:' in document
+    assert 'a second player online' in document
 
 
 def test_non_command_kinds_get_a_descriptive_steps_column_not_an_empty_trigger(tmp_path):

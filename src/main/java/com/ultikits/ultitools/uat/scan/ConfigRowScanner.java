@@ -2,7 +2,6 @@ package com.ultikits.ultitools.uat.scan;
 
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
-import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.RowId;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -24,6 +23,15 @@ import java.util.Map;
  * later per-entity assertion file) uses to group fields into entities without re-reading module
  * source. A {@code @ConfigEntry} field whose enclosing class carries no {@code @ConfigEntity} is
  * an {@link ExtractorException} naming the class and field, never a row with a null path.
+ * <p>
+ * Reads {@code @ConfigEntity} via plain {@link Class#getAnnotation(Class)}, deliberately NOT
+ * {@code MergedAnnotationResolver.find} — that resolver also walks the superclass hierarchy,
+ * which diverges from runtime discovery: {@code ConfigManager}/{@code ReflectionUtil.getAnnotation}
+ * both resolve to {@code Class#getAnnotation}, and {@code @ConfigEntity} carries no
+ * {@code @Inherited} meta-annotation, so an unannotated subclass of an entity class is never
+ * itself registered as an entity at runtime. Using the resolver here would fabricate a phantom
+ * {@code config_entities} entry (with inherited fields double-counted under it) for a class the
+ * runtime never treats as a config entity at all.
  * <p>
  * {@code config_entities} is keyed by the entity class's fully qualified name, not by its yml
  * path: two {@code @ConfigEntity} classes can legitimately name the same file, and the class is
@@ -56,7 +64,7 @@ public final class ConfigRowScanner {
         // surface entirely -- invisible to check_matrix.py's uncovered-entity gap detection,
         // which can only flag an entity it can see in the first place.
         for (Class<?> clazz : classes) {
-            ConfigEntity entityOnClass = MergedAnnotationResolver.find(clazz, ConfigEntity.class);
+            ConfigEntity entityOnClass = clazz.getAnnotation(ConfigEntity.class);
             if (entityOnClass != null) {
                 entitiesByClassName.computeIfAbsent(clazz.getName(),
                         k -> new EntityAccumulator(clazz, entityOnClass.value(), origin));
@@ -64,15 +72,29 @@ public final class ConfigRowScanner {
         }
 
         for (Class<?> clazz : classes) {
+            ConfigEntity entity = clazz.getAnnotation(ConfigEntity.class);
             for (Field field : ReflectionUtil.getAllFields(clazz)) {
                 ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
                 if (entry == null) {
                     continue;
                 }
-                ConfigEntity entity = MergedAnnotationResolver.find(clazz, ConfigEntity.class);
                 if (entity == null) {
-                    throw new ExtractorException("@ConfigEntry on " + clazz.getName() + "#" + field.getName()
-                            + " has no enclosing @ConfigEntity");
+                    // `clazz` itself carries no @ConfigEntity. A field declared DIRECTLY on
+                    // clazz with nowhere to attach is a genuine developer mistake (an orphan
+                    // @ConfigEntry) and fails closed. A field merely INHERITED from an
+                    // ancestor is a different situation: getAllFields walks the whole
+                    // hierarchy the same way AbstractConfigEntity's own runtime field scan
+                    // does, so this field is a normal, correctly-attributed field of
+                    // whichever ancestor DOES carry @ConfigEntity (scanned in that ancestor's
+                    // own pass over `classes`, if present there) -- not an orphan of `clazz`,
+                    // which the runtime never registers as an entity at all (@ConfigEntity is
+                    // not @Inherited). Silently skip it here rather than fabricate a phantom
+                    // entity keyed by a class the runtime never treats as one.
+                    if (field.getDeclaringClass().equals(clazz)) {
+                        throw new ExtractorException("@ConfigEntry on " + clazz.getName() + "#" + field.getName()
+                                + " has no enclosing @ConfigEntity");
+                    }
+                    continue;
                 }
 
                 Map<String, Object> row = buildRow(origin, clazz, field, entry, entity);
@@ -115,7 +137,12 @@ public final class ConfigRowScanner {
         row.put("member", member);
         row.put("config_file", entity.value());
         row.put("config_entity", clazz.getName());
-        row.put("path", entry.path());
+        // AbstractConfigEntity resolves an empty @ConfigEntry.path() to the field's own name
+        // at runtime (five call sites there all do this identically) -- reporting the raw
+        // empty string here would point a real-machine session at a key that does not exist,
+        // instead of the one the application actually loads and saves under this shorthand.
+        String path = entry.path().isEmpty() ? field.getName() : entry.path();
+        row.put("path", path);
         if (!entry.comment().isEmpty()) {
             row.put("comment", entry.comment());
         }

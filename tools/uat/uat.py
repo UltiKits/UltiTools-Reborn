@@ -364,13 +364,18 @@ def cmd_next(a):
 
 def cmd_record(a):
     reg = load_reg(registry_path(a)); ledger_file = ledger_path(a); led = load_ledger(reg, ledger_file)
-    ids = {i['id'] for i in reg['items']}
-    if a.id not in ids:
-        sys.exit(f'unknown id {a.id}')
     if not led.get('scope'):
         # Backfill and persist, so a ledger written from here on always carries a scope --
         # resolve_scope prints the same one-line note load_ledger's callers already rely on.
         led['scope'] = resolve_scope(reg, led, None)
+    # Scoped the same way import_verdicts.py's own known-ids check is (Codex review of PR
+    # #427): after a narrowed `rebase --scope framework`, recording a result for an excluded
+    # module's id would write a hidden stale result into the ledger, one that silently counts
+    # against a later, wider scope even though this ledger was never meant to track it.
+    items_by_id = {i['id']: i for i in reg['items']}
+    item = items_by_id.get(a.id)
+    if item is None or not in_scope(item, led['scope']):
+        sys.exit(f'unknown id {a.id} -- not present in the registry, or not in this ledger\'s current scope')
     led['results'][a.id] = dict(status=a.status, note=a.note,
                                 at=datetime.datetime.now().astimezone().isoformat(timespec='seconds'))
     save_ledger(led, ledger_file)

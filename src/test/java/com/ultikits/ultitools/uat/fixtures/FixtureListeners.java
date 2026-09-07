@@ -55,4 +55,24 @@ public final class FixtureListeners {
             // no-op: the scanner reads the annotation, never invokes this method
         }
     }
+
+    // Invalid Bukkit handler signatures -- Bukkit's own registerEvents rejects or skips these,
+    // so the scanner must never emit a row for them (Codex review of PR #427).
+    @EventListener
+    public static class InvalidSignatureListener implements Listener {
+        @EventHandler
+        public void noParameters() {
+            // no-op: an @EventHandler method must take exactly one Event parameter
+        }
+
+        @EventHandler
+        public void tooManyParameters(PlayerJoinEvent event, String extra) {
+            // no-op: an @EventHandler method must take exactly one parameter
+        }
+
+        @EventHandler
+        public void wrongParameterType(String notAnEvent) {
+            // no-op: the parameter must be assignable to org.bukkit.event.Event
+        }
+    }
 }
