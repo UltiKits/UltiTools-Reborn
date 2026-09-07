@@ -31,6 +31,12 @@
   },
   {
     "cls": "ChatAdminCommands",
+    "format": "autoreply setkeyword <name> <keyword>",
+    "kind": "command",
+    "member": "onAutoReplySetKeyword"
+  },
+  {
+    "cls": "ChatAdminCommands",
     "format": "reload",
     "kind": "command",
     "member": "onReload"
