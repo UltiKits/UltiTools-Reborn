@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.uat;
 
+import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
@@ -13,6 +14,7 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.uat.scan.CommandRowScanner;
 import com.ultikits.ultitools.uat.scan.ConditionalGateReader;
 import com.ultikits.ultitools.uat.scan.ConfigRowScanner;
@@ -120,10 +122,21 @@ public final class SurfaceAssembler {
             persistenceClasses = new ArrayList<>(union);
         }
 
-        for (SurfaceRow row : commandRowScanner.scan(origin, classes)) {
+        // ComponentScanner (both scanJar and scanDirectory) restricts registration to the
+        // module's own configured scan packages -- @UltiToolsModule's scanBasePackages()/
+        // scanBasePackageClasses(), merged through its @ComponentScan meta-annotation exactly
+        // as PluginManager.getPluginScanPackages resolves it, defaulting to the entry class's
+        // own package when neither is declared. An annotated command or listener OUTSIDE
+        // those packages is never actually registered as a bean (Codex review of PR #427),
+        // so this scanner set is scoped the same way before command/listener extraction.
+        // Persistence/config/scheduled/conditional are deliberately left unscoped here: their
+        // own registration paths are not gated by this same package-scan mechanism.
+        List<Class<?>> commandAndListenerClasses = filterByScanPackages(classes, deriveScanPackages(classes));
+
+        for (SurfaceRow row : commandRowScanner.scan(origin, commandAndListenerClasses)) {
             rows.add(row.toFieldMap());
         }
-        rows.addAll(listenerRowScanner.scan(origin, classes));
+        rows.addAll(listenerRowScanner.scan(origin, commandAndListenerClasses));
         rows.addAll(scheduledRowScanner.scan(origin, classes));
         rows.addAll(persistenceRowScanner.scan(origin, persistenceClasses));
 
@@ -146,6 +159,79 @@ public final class SurfaceAssembler {
         }
 
         return new AssembledSurface(rows, documentExtras);
+    }
+
+    /**
+     * Derives the module's runtime component-scan packages, mirroring
+     * {@code PluginManager.getPluginScanPackages} exactly: merged {@code @ComponentScan}
+     * resolution (which {@code @UltiToolsModule}'s {@code scanBasePackages()}/
+     * {@code scanBasePackageClasses()} both alias onto via {@code @AliasFor}) contributes
+     * every declared package, additively and in order, with duplicates collapsed to their
+     * first occurrence; if none is declared, the entry class's own package is the sole
+     * default, exactly as the runtime falls back.
+     *
+     * @param classes the loaded (uninitialized) classes to scan
+     * @return the derived scan packages, or an EMPTY set when no {@code @UltiToolsModule}
+     *         entry class is present among {@code classes} (e.g. a framework-origin scan) --
+     *         an empty set is the "no restriction" sentinel {@link #filterByScanPackages}
+     *         reads, since there is no per-module scan-package concept to apply at all
+     */
+    private static Set<String> deriveScanPackages(List<Class<?>> classes) {
+        for (Class<?> clazz : classes) {
+            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) == null) {
+                continue;
+            }
+            LinkedHashSet<String> scanPackages = new LinkedHashSet<>();
+            ComponentScan merged = MergedAnnotationResolver.find(clazz, ComponentScan.class);
+            if (merged != null) {
+                Collections.addAll(scanPackages, merged.value());
+                Collections.addAll(scanPackages, merged.basePackages());
+                for (Class<?> markerClass : merged.basePackageClasses()) {
+                    Package markerPackage = markerClass.getPackage();
+                    if (markerPackage != null) {
+                        scanPackages.add(markerPackage.getName());
+                    }
+                }
+            }
+            if (scanPackages.isEmpty()) {
+                Package entryPackage = clazz.getPackage();
+                if (entryPackage != null) {
+                    scanPackages.add(entryPackage.getName());
+                }
+            }
+            return scanPackages;
+        }
+        return Collections.emptySet();
+    }
+
+    /**
+     * Restricts {@code classes} to those whose fully qualified name falls under one of
+     * {@code scanPackages}, matching {@code ComponentScanner.scanJar}'s own prefix test
+     * ({@code entryName.startsWith(packagePath)}) exactly, sibling-package imprecision
+     * included: parity with the real (occasionally over-broad) runtime scan is the goal here,
+     * not a stricter replacement for it.
+     *
+     * @param classes      the loaded (uninitialized) classes to scan
+     * @param scanPackages the packages to restrict to; an EMPTY set means no restriction
+     *                     applies (no {@code @UltiToolsModule} entry class was found)
+     * @return {@code classes} unchanged when {@code scanPackages} is empty, otherwise only
+     *         the classes whose name falls under one of {@code scanPackages}
+     */
+    private static List<Class<?>> filterByScanPackages(List<Class<?>> classes, Set<String> scanPackages) {
+        if (scanPackages.isEmpty()) {
+            return classes;
+        }
+        List<Class<?>> filtered = new ArrayList<>();
+        for (Class<?> clazz : classes) {
+            String className = clazz.getName();
+            for (String scanPackage : scanPackages) {
+                if (className.startsWith(scanPackage)) {
+                    filtered.add(clazz);
+                    break;
+                }
+            }
+        }
+        return filtered;
     }
 
     private static void attachGates(List<Map<String, Object>> rows, Map<String, Map<String, Object>> gatesByClassName) {

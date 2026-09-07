@@ -8,11 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import render_handover  # noqa: E402  (path must be adjusted before this import)
 
 
-def write_surface(tmp_path, items, config_entities=None):
+def write_surface(tmp_path, items, config_entities=None, switches=None):
     path = tmp_path / 'surface.json'
     document = {'schema_version': 1, 'items': items}
     if config_entities is not None:
         document['config_entities'] = config_entities
+    if switches:
+        document.update(switches)
     path.write_text(json.dumps(document), encoding='utf-8')
     return str(path)
 
@@ -344,6 +346,70 @@ def test_a_manually_registered_command_row_states_that_in_its_steps(tmp_path):
 
     assert '/warp go' in document
     assert 'manually registered' in document
+
+
+def test_registers_commands_false_notes_disabled_auto_registration_on_command_rows(tmp_path):
+    # SurfaceAssembler writes registers_commands/registers_listeners/registers_config at
+    # document level from @UltiToolsModule's own cmdExecutor=/eventListener=/config()
+    # switches; load_surface used to discard all three, giving the executor ordinary
+    # trigger steps with no indication that automatic registration was off for the WHOLE
+    # module (Codex review of PR #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go'},
+    ], switches={'registers_commands': False})
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'cmdExecutor=false' in document
+
+
+def test_registers_listeners_false_notes_disabled_auto_registration_on_listener_rows(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'LIS-11111111', 'kind': 'listener', 'event': 'PlayerJoinEvent', 'handler_priority': 'HIGH'},
+    ], switches={'registers_listeners': False})
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'event PlayerJoinEvent' in document
+    assert 'eventListener=false' in document
+
+
+def test_registers_config_false_notes_disabled_auto_registration_on_config_entity_rows(tmp_path):
+    surface = write_surface(tmp_path, [], config_entities=[
+        {'id': 'CFG-11111111', 'class': 'my.Config', 'file': 'config/my.yml', 'entry_count': 2},
+    ], switches={'registers_config': False})
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'config entity my.Config' in document
+    assert 'config=false' in document
+
+
+def test_absent_registration_switches_add_no_note(tmp_path):
+    # A module with no @UltiToolsModule entry class among the scanned classes writes none
+    # of the three switch keys at all -- absence must be treated as "not applicable", never
+    # as a false-y false.
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'cmdExecutor=false' not in document
 
 
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):

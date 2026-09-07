@@ -30,16 +30,31 @@ except ImportError:  # pragma: no cover - environment-dependent; see tools/uat/R
 
 def load_surface(path):
     """
-    Load `surface.json` and return its (items, config_entities).
+    Load `surface.json` and return its (items, config_entities, switches).
 
-    Both default to empty lists when the document omits them. `config_entities` is required,
-    not optional: a `config` row is asserted through its owning entity's id, never its own
-    (D-10-10), so a renderer that drops `config_entities` can never resolve that join and
-    would report every config field as unasserted even when its entity has a real assertion.
+    `items`/`config_entities` default to empty lists when the document omits them.
+    `config_entities` is required, not optional: a `config` row is asserted through its
+    owning entity's id, never its own (D-10-10), so a renderer that drops `config_entities`
+    can never resolve that join and would report every config field as unasserted even when
+    its entity has a real assertion.
+
+    `switches` carries `registers_commands`/`registers_listeners`/`registers_config` verbatim
+    (each `None` when the document omits it, e.g. no `@UltiToolsModule` entry class was found
+    among the scanned classes -- `SurfaceAssembler` only writes these keys when one was).
+    `SurfaceAssembler`'s rows are deliberately retained even when a switch is `false` -- the
+    suppressed/manual registration behavior is still a fact worth verifying -- but a renderer
+    that discards the switch itself gives the executor ordinary trigger steps with no
+    indication that automatic registration is off, turning an expected absence into a false
+    failure (Codex review of PR #427).
     """
     with open(path, encoding='utf-8') as handle:
         document = json.load(handle)
-    return document.get('items') or [], document.get('config_entities') or []
+    switches = {
+        'registers_commands': document.get('registers_commands'),
+        'registers_listeners': document.get('registers_listeners'),
+        'registers_config': document.get('registers_config'),
+    }
+    return document.get('items') or [], document.get('config_entities') or [], switches
 
 
 def load_assertions(path):
@@ -88,7 +103,7 @@ def escape_cell(value):
     return text
 
 
-def describe_steps(item):
+def describe_steps(item, switches=None):
     """
     Describe the "Steps" a real-machine session must exercise for one surface row.
 
@@ -108,6 +123,13 @@ def describe_steps(item):
     failure. A `listener` row additionally states when it is `manual_register`, since Bukkit
     never fires that handler through the normal automatic registration path an executor would
     otherwise expect to observe.
+
+    `switches` (from `load_surface`, `None`-valued keys treated as "not applicable") carries
+    the document-level `registers_commands`/`registers_listeners`/`registers_config` a module's
+    own `@UltiToolsModule(cmdExecutor=/eventListener=/config=)` declares -- distinct from a
+    per-row `manual_register`, this is a MODULE-WIDE suppression of the whole registration
+    class. Surfaced the same way: a note on every affected row, never used to suppress the row
+    itself (Codex review of PR #427).
     """
     kind = item.get('kind')
     if kind in ('command', 'help'):
@@ -121,12 +143,16 @@ def describe_steps(item):
             # failure for a command that fires through the module's own manual call instead
             # (Codex review of PR #427).
             steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
+        if switches and switches.get('registers_commands') is False:
+            steps += ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic command registration is disabled for the whole module; verify its own registration path]'
     elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')
         steps = 'event {} (priority {})'.format(event, priority) if priority else 'event {}'.format(event)
         if item.get('manual_register'):
             steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
+        if switches and switches.get('registers_listeners') is False:
+            steps += ' [this module declares @UltiToolsModule(eventListener=false) -- automatic listener registration is disabled for the whole module; verify its own registration path]'
     elif kind == 'scheduled':
         if item.get('one_shot'):
             steps = 'runs once, {}s after enable'.format(item.get('delay_seconds', 0))
@@ -162,16 +188,22 @@ def describe_gate(gate):
         gate.get('path', ''), gate.get('value', ''), required_value)
 
 
-def describe_entity_steps(entity):
+def describe_entity_steps(entity, switches=None):
     """
     Describe the "Steps" for one config-entity execution row (D-10-10's granularity).
 
     A config entity is exercised as a whole -- load the file, confirm every documented
     default, flip a representative key -- never per field, so the row names the file and
     field count rather than any single key.
+
+    `switches` mirrors `describe_steps`'s own -- a module declaring
+    `@UltiToolsModule(config=false)` disables automatic config registration entirely.
     """
-    return 'config entity {} in {} ({} field(s))'.format(
+    steps = 'config entity {} in {} ({} field(s))'.format(
         entity.get('class', ''), entity.get('file', ''), entity.get('entry_count', 0))
+    if switches and switches.get('registers_config') is False:
+        steps += ' [this module declares @UltiToolsModule(config=false) -- automatic config registration is disabled for the whole module; verify its own registration path]'
+    return steps
 
 
 def with_preconditions(steps, assertion):
@@ -199,7 +231,7 @@ def render_artifact_table(jar, version, byte_size, sha256, commit):
     ])
 
 
-def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
+def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None, switches=None):
     """
     Render the asserted-rows table plus the "Rows with no assertion yet" section.
 
@@ -226,7 +258,7 @@ def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
         if item.get('kind') == 'config':
             continue  # rendered once per entity below, never once per field
         assertion = assertions_by_id.get(item.get('id'))
-        row_id, row_kind, steps = item.get('id', ''), item.get('kind', ''), describe_steps(item)
+        row_id, row_kind, steps = item.get('id', ''), item.get('kind', ''), describe_steps(item, switches)
         if assertion is None:
             unasserted.append((row_id, row_kind, steps))
         else:
@@ -234,7 +266,7 @@ def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
 
     for entity in (config_entities or []):
         assertion = assertions_by_id.get(entity.get('id'))
-        row_id, row_kind, steps = entity.get('id', ''), 'config_entity', describe_entity_steps(entity)
+        row_id, row_kind, steps = entity.get('id', ''), 'config_entity', describe_entity_steps(entity, switches)
         if assertion is None:
             unasserted.append((row_id, row_kind, steps))
         else:
@@ -267,7 +299,7 @@ def render_rows(items, assertions_by_id, config_entities=None, ids_filter=None):
 
 
 def build_document(items, assertions_by_id, jar, version, byte_size, sha256, commit,
-                    config_entities=None, ids_filter=None):
+                    config_entities=None, ids_filter=None, switches=None):
     return '\n'.join([
         '# UAT Handover',
         '',
@@ -277,7 +309,7 @@ def build_document(items, assertions_by_id, jar, version, byte_size, sha256, com
         '',
         '## Rows',
         '',
-        render_rows(items, assertions_by_id, config_entities, ids_filter),
+        render_rows(items, assertions_by_id, config_entities, ids_filter, switches),
     ]) + '\n'
 
 
@@ -297,13 +329,13 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    items, config_entities = load_surface(args.surface)
+    items, config_entities, switches = load_surface(args.surface)
     assertions_by_id = load_assertions(args.assertions)
     ids_filter = set(args.ids.split(',')) if args.ids else None
 
     document = build_document(
         items, assertions_by_id, args.jar, args.version, args.byte_size, args.sha256, args.commit,
-        config_entities, ids_filter)
+        config_entities, ids_filter, switches)
 
     if args.output:
         with open(args.output, 'w', encoding='utf-8', newline='\n') as handle:
