@@ -2,6 +2,9 @@ package com.ultikits.ultitools.uat;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,11 +17,31 @@ import java.util.stream.Stream;
 
 /**
  * Enumerates a module's compiled classes from a {@code --classes} argument (a directory of
- * {@code .class} files, or a jar — UltiBot ships only a final jar plus a multi-module
- * {@code target/}) and resolves each one with {@link Class#forName(String, boolean, ClassLoader)}
- * passing {@code initialize=false}, so no static initializer ever runs (Phase 10, D-10-01,
- * T-10-01). A class that fails to resolve becomes a named {@link ExtractorException} — never a
- * silently skipped row.
+ * {@code .class} files, or a jar — UltiBot's {@code ultibot-dist} is a shade aggregator with no
+ * {@code src/}, so its jar is the only thing that ever exists for that module) and resolves each
+ * one with {@link Class#forName(String, boolean, ClassLoader)} passing {@code initialize=false},
+ * so no static initializer ever runs (Phase 10, D-10-01, T-10-01). A class that fails to resolve
+ * becomes a named {@link ExtractorException} — never a silently skipped row.
+ * <p>
+ * {@code classesRoot} itself is always added to the classpath used to resolve its own classes
+ * (Phase 10 plan 10-02, Task 3): a caller's own {@code -cp} typically carries the module's
+ * <em>dependencies</em> (framework jar, {@code paper-api}, ...), built once via
+ * {@code mvn dependency:build-classpath} against the module's own POM, but never the module's own
+ * output artifact — for a directory target that output already sits inside the working directory
+ * and may incidentally be reachable anyway, but for a jar target (UltiBot's dist jar is never on
+ * that dependency classpath; it is the artifact being inspected, not a dependency of itself) the
+ * jar's own classes would otherwise be unresolvable. Wrapping {@code classesRoot} in its own
+ * {@link URLClassLoader}, parented to the constructor-supplied loader, makes both input forms
+ * self-sufficient the same way and removes the dependency on the caller assembling a perfectly
+ * complete {@code -cp} by hand.
+ * <p>
+ * <b>Deliberately does not reuse {@link com.ultikits.ultitools.utils.SecurityPolicy#isValidModuleJar}.</b>
+ * That guard enforces a 100&nbsp;MB / 10,000-entry ceiling appropriate to an untrusted jar dropped
+ * into a running server's {@code plugins/} directory at load time (ROADMAP criterion 4's zip-bomb
+ * defense). This tool runs in CI, over a jar this very monorepo's own build just produced, as an
+ * argument the CI step itself controls — the threat model that ceiling defends against does not
+ * apply here (Phase 10, T-10-10, disposition {@code accept}), and imposing it would only risk a
+ * false rejection of a legitimately large module jar with no compensating security benefit.
  *
  * @since 6.3.0
  */
@@ -26,10 +49,10 @@ public final class ModuleClassIndex {
 
     private static final String CLASS_SUFFIX = ".class";
 
-    private final ClassLoader loader;
+    private final ClassLoader parentLoader;
 
     public ModuleClassIndex(ClassLoader loader) {
-        this.loader = loader;
+        this.parentLoader = loader;
     }
 
     /**
@@ -41,7 +64,9 @@ public final class ModuleClassIndex {
      * @throws ExtractorException if {@code classesRoot} is neither, or a class fails to resolve
      */
     public List<Class<?>> load(Path classesRoot) throws ExtractorException {
-        List<String> binaryNames = enumerateBinaryNames(classesRoot);
+        Path resolved = resolveClasspathRoot(classesRoot);
+        List<String> binaryNames = enumerateBinaryNames(resolved);
+        ClassLoader loader = buildLoader(resolved);
         List<Class<?>> classes = new ArrayList<>(binaryNames.size());
         for (String binaryName : binaryNames) {
             try {
@@ -53,15 +78,34 @@ public final class ModuleClassIndex {
         return classes;
     }
 
+    private Path resolveClasspathRoot(Path classesRoot) throws ExtractorException {
+        Path candidate = classesRoot.toAbsolutePath().normalize();
+        boolean isDirectory = Files.isDirectory(candidate);
+        boolean isJar = Files.isRegularFile(candidate) && candidate.toString().endsWith(".jar");
+        if (!isDirectory && !isJar) {
+            throw new ExtractorException(
+                    "--classes must be an existing directory or an existing .jar file: " + classesRoot);
+        }
+        try {
+            return candidate.toRealPath();
+        } catch (IOException e) {
+            throw new ExtractorException("Failed to resolve canonical path for " + classesRoot, e);
+        }
+    }
+
+    private ClassLoader buildLoader(Path classesRoot) throws ExtractorException {
+        try {
+            return new URLClassLoader(new URL[] {classesRoot.toUri().toURL()}, parentLoader);
+        } catch (MalformedURLException e) {
+            throw new ExtractorException("Cannot form classpath URL for " + classesRoot, e);
+        }
+    }
+
     private List<String> enumerateBinaryNames(Path classesRoot) throws ExtractorException {
         if (Files.isDirectory(classesRoot)) {
             return enumerateFromDirectory(classesRoot);
         }
-        if (Files.isRegularFile(classesRoot) && classesRoot.toString().endsWith(".jar")) {
-            return enumerateFromJar(classesRoot);
-        }
-        throw new ExtractorException(
-                "--classes must be an existing directory or an existing .jar file: " + classesRoot);
+        return enumerateFromJar(classesRoot);
     }
 
     private List<String> enumerateFromDirectory(Path root) throws ExtractorException {
