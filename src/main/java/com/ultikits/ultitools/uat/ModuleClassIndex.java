@@ -48,6 +48,7 @@ import java.util.stream.Stream;
 public final class ModuleClassIndex {
 
     private static final String CLASS_SUFFIX = ".class";
+    private static final String MULTI_RELEASE_PREFIX = "META-INF/versions/";
 
     private final ClassLoader parentLoader;
 
@@ -131,8 +132,6 @@ public final class ModuleClassIndex {
         String relative = root.relativize(classFile).toString().replace(File.separatorChar, '.');
         return relative.substring(0, relative.length() - CLASS_SUFFIX.length());
     }
-
-    private static final String MULTI_RELEASE_PREFIX = "META-INF/versions/";
 
     private List<String> enumerateFromJar(Path jarPath) throws ExtractorException {
         List<String> names = new ArrayList<>();
