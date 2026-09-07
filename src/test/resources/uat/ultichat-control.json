@@ -1,0 +1,380 @@
+[
+  {
+    "cls": "ChannelCommands",
+    "format": "list",
+    "kind": "command",
+    "member": "onList"
+  },
+  {
+    "cls": "ChannelCommands",
+    "format": "<name>",
+    "kind": "command",
+    "member": "onSwitch"
+  },
+  {
+    "cls": "ChatAdminCommands",
+    "format": "autoreply add <name> <response>",
+    "kind": "command",
+    "member": "onAutoReplyAdd"
+  },
+  {
+    "cls": "ChatAdminCommands",
+    "format": "autoreply list",
+    "kind": "command",
+    "member": "onAutoReplyList"
+  },
+  {
+    "cls": "ChatAdminCommands",
+    "format": "autoreply remove <name>",
+    "kind": "command",
+    "member": "onAutoReplyRemove"
+  },
+  {
+    "cls": "ChatAdminCommands",
+    "format": "reload",
+    "kind": "command",
+    "member": "onReload"
+  },
+  {
+    "cls": "ChannelCommands",
+    "format": "",
+    "kind": "conditional",
+    "member": ""
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "bossBarColor"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "bossBarDuration"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "bossBarEnabled"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "bossBarInterval"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "bossBarMessages"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatEnabled"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatInterval"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatMessages"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatPrefix"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleEnabled"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleFadeIn"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleFadeOut"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleInterval"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleMessages"
+  },
+  {
+    "cls": "AnnouncementConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleStay"
+  },
+  {
+    "cls": "AutoReplyConfig",
+    "format": "",
+    "kind": "config",
+    "member": "cooldown"
+  },
+  {
+    "cls": "AutoReplyConfig",
+    "format": "",
+    "kind": "config",
+    "member": "enabled"
+  },
+  {
+    "cls": "AutoReplyConfig",
+    "format": "",
+    "kind": "config",
+    "member": "rules"
+  },
+  {
+    "cls": "ChannelConfig",
+    "format": "",
+    "kind": "config",
+    "member": "channels"
+  },
+  {
+    "cls": "ChannelConfig",
+    "format": "",
+    "kind": "config",
+    "member": "defaultChannel"
+  },
+  {
+    "cls": "ChannelConfig",
+    "format": "",
+    "kind": "config",
+    "member": "enabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamCapsLimit"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamCooldown"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamDuplicateWindow"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamMaxDuplicate"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "antiSpamMuteDuration"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatFormat"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "chatFormatEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "firstJoinMessage"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "joinMessageEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "joinMessageFormat"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "mentionFormat"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "mentionSound"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "mentionsEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "quitMessageEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "quitMessageFormat"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "selfMention"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleMain"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "titleSub"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "welcomeEnabled"
+  },
+  {
+    "cls": "ChatConfig",
+    "format": "",
+    "kind": "config",
+    "member": "welcomeLines"
+  },
+  {
+    "cls": "EmojiConfig",
+    "format": "",
+    "kind": "config",
+    "member": "enabled"
+  },
+  {
+    "cls": "EmojiConfig",
+    "format": "",
+    "kind": "config",
+    "member": "mappings"
+  },
+  {
+    "cls": "ChannelCommands",
+    "format": "help",
+    "kind": "help",
+    "member": "handleHelp"
+  },
+  {
+    "cls": "ChatAdminCommands",
+    "format": "help",
+    "kind": "help",
+    "member": "handleHelp"
+  },
+  {
+    "cls": "AutoReplyListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onPlayerChat"
+  },
+  {
+    "cls": "ChatListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onChat"
+  },
+  {
+    "cls": "JoinQuitListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onPlayerJoin"
+  },
+  {
+    "cls": "JoinQuitListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onPlayerQuit"
+  },
+  {
+    "cls": "PlayerChannelListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onPlayerJoin"
+  },
+  {
+    "cls": "PlayerChannelListener",
+    "format": "",
+    "kind": "listener",
+    "member": "onPlayerQuit"
+  },
+  {
+    "cls": "AnnouncementService",
+    "format": "",
+    "kind": "scheduled",
+    "member": "broadcastBossBar"
+  },
+  {
+    "cls": "AnnouncementService",
+    "format": "",
+    "kind": "scheduled",
+    "member": "broadcastChat"
+  },
+  {
+    "cls": "AnnouncementService",
+    "format": "",
+    "kind": "scheduled",
+    "member": "broadcastTitle"
+  }
+]
