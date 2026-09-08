@@ -354,12 +354,23 @@ def main(argv=None):
         # be silently dropped, still producing a "successful" document that could end up with
         # NO execution rows at all, quietly losing whatever the dispatcher meant to send
         # (Codex review of PR #427). Fail closed instead: validate every requested id against
-        # both items and config_entities before rendering anything.
-        known_ids = {item.get('id') for item in items} | {entity.get('id') for entity in (config_entities or [])}
+        # the ids render_rows can actually produce a row for.
+        #
+        # A `config`-kind item's OWN id is deliberately EXCLUDED here (fresh evidence after
+        # the first --ids fix, Codex review of PR #427): render_rows always skips `config`
+        # items (D-10-10 -- a config entity is asserted and executed as a whole, keyed by its
+        # OWNING config_entities id, never its own field-level id), so a valid-looking
+        # `config` item id would pass a naive "is it in items" check yet still produce a
+        # handover with zero rows. Only non-config item ids and config_entities ids are ever
+        # independently renderable.
+        known_ids = ({item.get('id') for item in items if item.get('kind') != 'config'}
+                     | {entity.get('id') for entity in (config_entities or [])})
         unknown = sorted(ids_filter - known_ids)
         if unknown:
             sys.exit(f'--ids named {len(unknown)} id(s) not present in this surface: {unknown}. '
-                      f'Check for a typo or a stale id from a previous build.')
+                      f'Check for a typo, a stale id from a previous build, or a `config` '
+                      f'item id (config fields are never independently renderable -- use the '
+                      f'owning config_entities id instead).')
 
     document = build_document(
         items, assertions_by_id, args.jar, args.version, args.byte_size, args.sha256, args.commit,

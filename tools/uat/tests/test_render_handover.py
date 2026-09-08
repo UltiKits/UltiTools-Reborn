@@ -177,6 +177,31 @@ def test_ids_filter_accepts_a_config_entity_id_not_just_an_item_id(tmp_path):
     assert output.exists()
 
 
+def test_ids_filter_rejects_a_config_field_item_id_which_is_never_independently_renderable(tmp_path):
+    # render_rows always skips `config`-kind items (D-10-10 -- a config entity is asserted and
+    # executed as a whole, keyed by its OWNING config_entities id, never its own field-level
+    # id). A `config` item's own id passed the first --ids fix's naive "is it in items" check,
+    # then silently produced a handover with zero rows (Codex review of PR #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'CFG-field-11111111', 'kind': 'config', 'config_entity': 'my.Config'},
+    ], config_entities=[
+        {'id': 'CFG-11111111', 'class': 'my.Config', 'file': 'config/my.yml', 'entry_count': 1},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+
+    try:
+        render_handover.main(['--surface', surface, '--assertions', assertions,
+                               '--ids', 'CFG-field-11111111', '--output', str(output)]
+                              + ARTIFACT_ARGS)
+        raised = False
+    except SystemExit:
+        raised = True
+
+    assert raised
+    assert not output.exists()
+
+
 def test_empty_surface_renders_valid_document_not_a_crash(tmp_path):
     surface = write_surface(tmp_path, [])
     assertions = write_empty_assertions(tmp_path)

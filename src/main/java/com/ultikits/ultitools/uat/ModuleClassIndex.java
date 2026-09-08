@@ -3,10 +3,13 @@ package com.ultikits.ultitools.uat;
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -67,9 +70,11 @@ public final class ModuleClassIndex {
     public List<Class<?>> load(Path classesRoot) throws ExtractorException {
         Path resolved = resolveClasspathRoot(classesRoot);
         List<String> binaryNames = enumerateBinaryNames(resolved);
-        ClassLoader loader = buildLoader(resolved);
+        URL expectedCodeSource = toUrl(resolved);
+        ClassLoader loader = buildLoader(expectedCodeSource);
         List<Class<?>> classes = new ArrayList<>(binaryNames.size());
         for (String binaryName : binaryNames) {
+            Class<?> clazz;
             try {
                 // binaryName is not attacker-controllable: it comes from enumerating the
                 // .class file names actually present under a CI-controlled classesRoot
@@ -77,12 +82,59 @@ public final class ModuleClassIndex {
                 // user-supplied input. The suppression must sit on the line immediately
                 // above the finding to take effect.
                 // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-                classes.add(Class.forName(binaryName, false, loader));
+                clazz = Class.forName(binaryName, false, loader);
             } catch (Throwable t) {
                 throw ExtractorException.classLoadFailure(binaryName, t);
             }
+            requireResolvedFromClassesRoot(binaryName, clazz, expectedCodeSource);
+            classes.add(clazz);
         }
         return classes;
+    }
+
+    /**
+     * Fails closed if {@code clazz} did not actually resolve from {@code expectedCodeSource}
+     * (Codex review of PR #427). {@link #buildLoader}'s {@link URLClassLoader} delegates to its
+     * parent first, per standard Java classloading -- a binary name also present on the
+     * caller's own {@code -cp} (a previously installed version, or in the documented UltiBot
+     * multi-module invocation, a sibling reactor module's own copy of a class also packaged
+     * into the shaded dist jar under test) resolves from THAT parent-visible copy instead of
+     * the bytecode actually under {@code classesRoot}, silently extracting the wrong artifact's
+     * rows or producing a false-clean drift check.
+     */
+    private static void requireResolvedFromClassesRoot(String binaryName, Class<?> clazz, URL expectedCodeSource)
+            throws ExtractorException {
+        ProtectionDomain protectionDomain = clazz.getProtectionDomain();
+        CodeSource codeSource = protectionDomain != null ? protectionDomain.getCodeSource() : null;
+        URL actualLocation = codeSource != null ? codeSource.getLocation() : null;
+        boolean matches = actualLocation != null && urisEqual(actualLocation, expectedCodeSource);
+        if (!matches) {
+            throw ExtractorException.codeSourceMismatch(binaryName, expectedCodeSource.toString(),
+                    actualLocation != null ? actualLocation.toString() : null);
+        }
+    }
+
+    /**
+     * Compares two {@link URL}s by {@link java.net.URI} equality, not {@link URL#equals(Object)}
+     * -- the latter's documented behavior performs DNS resolution to compare hosts, which is
+     * both slow and network-dependent. Both URLs compared here are always {@code file:} URLs
+     * with no host, so this distinction is defensive rather than load-bearing today, but it is
+     * the correct comparison regardless.
+     */
+    private static boolean urisEqual(URL a, URL b) {
+        try {
+            return a.toURI().equals(b.toURI());
+        } catch (URISyntaxException e) {
+            return a.toString().equals(b.toString());
+        }
+    }
+
+    private static URL toUrl(Path path) throws ExtractorException {
+        try {
+            return path.toUri().toURL();
+        } catch (MalformedURLException e) {
+            throw new ExtractorException("Cannot form classpath URL for " + path, e);
+        }
     }
 
     private Path resolveClasspathRoot(Path classesRoot) throws ExtractorException {
@@ -100,12 +152,8 @@ public final class ModuleClassIndex {
         }
     }
 
-    private ClassLoader buildLoader(Path classesRoot) throws ExtractorException {
-        try {
-            return new URLClassLoader(new URL[] {classesRoot.toUri().toURL()}, parentLoader);
-        } catch (MalformedURLException e) {
-            throw new ExtractorException("Cannot form classpath URL for " + classesRoot, e);
-        }
+    private ClassLoader buildLoader(URL classesRootUrl) {
+        return new URLClassLoader(new URL[] {classesRootUrl}, parentLoader);
     }
 
     private List<String> enumerateBinaryNames(Path classesRoot) throws ExtractorException {

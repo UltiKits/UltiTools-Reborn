@@ -53,4 +53,29 @@ public class ExtractorException extends Exception {
         return new ExtractorException(
                 "Row id collision " + id + " between " + existingClassName + " and " + newClassName);
     }
+
+    /**
+     * A class {@code --classes} enumerated resolved to bytecode from somewhere OTHER than the
+     * requested {@code classesRoot} -- a standard {@link java.net.URLClassLoader} delegates to
+     * its parent first, so a binary name also present on the caller's own {@code -cp} (a
+     * previously installed version, or a sibling module's own copy of a shared class) is
+     * resolved from there instead of the artifact under inspection (Codex review of PR #427).
+     * Failing closed here, rather than silently accepting the wrong bytecode, is what prevents
+     * a false-clean drift check or a surface describing a different build than the one named.
+     *
+     * @param binaryClassName the binary name of the class that resolved to the wrong origin
+     * @param expected        {@code classesRoot}'s own URL
+     * @param actual          the resolved class's actual code source location, or {@code null}
+     *                        when it has none (e.g. no {@link java.security.CodeSource} at all)
+     * @return a new {@link ExtractorException} naming both the class and both locations
+     */
+    public static ExtractorException codeSourceMismatch(String binaryClassName, String expected, String actual) {
+        return new ExtractorException(
+                "Class " + binaryClassName + " did not resolve from the requested classesRoot: "
+                        + "expected " + expected + " but resolved from "
+                        + (actual != null ? actual : "an unknown location (no CodeSource)") + ". "
+                        + "A standard URLClassLoader delegates to its parent first, so this binary "
+                        + "name also exists somewhere on the caller's own -cp -- refusing to "
+                        + "extract from the wrong bytecode.");
+    }
 }

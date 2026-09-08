@@ -111,6 +111,48 @@ class JarClassIndexTest {
     }
 
     @Test
+    @DisplayName("a class that resolves from the PARENT loader instead of the requested classesRoot fails closed, naming both locations")
+    void classResolvingFromTheParentLoaderInsteadOfClassesRootFailsClosed(@TempDir Path scratchRoot) throws Exception {
+        // A standard URLClassLoader delegates to its parent FIRST (Codex review of PR #427).
+        // com.ultikits.ultitools.uat.fixtures.TracerCommands is a REAL fixture already compiled
+        // onto this test run's own ambient classpath -- reusing its exact binary name here
+        // reproduces the documented UltiBot multi-module scenario (a sibling reactor module's
+        // class, or a previously installed version, also reachable through the caller's -cp)
+        // without needing a real multi-module build: whatever this scratch directory contains
+        // under that name is NEVER what actually resolves, because the parent (this test JVM's
+        // own classpath) already has a real, different TracerCommands.class that answers first.
+        String shadowedBinaryName = "com.ultikits.ultitools.uat.fixtures.TracerCommands";
+        String shadowedEntryName = shadowedBinaryName.replace('.', '/') + ".class";
+        String shadowSource =
+                "package com.ultikits.ultitools.uat.fixtures;\n"
+                        + "public final class TracerCommands {\n"
+                        + "}\n";
+
+        Path compileDir = scratchRoot.resolve("shadow-compile-out");
+        Files.createDirectories(compileDir);
+        Path sourceFile = scratchRoot.resolve("TracerCommands.java");
+        Files.write(sourceFile, shadowSource.getBytes(StandardCharsets.UTF_8));
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        assertThat(compiler).as("a JDK (not just a JRE) is required to run this test").isNotNull();
+        int result = compiler.run(null, null, null, "-d", compileDir.toString(), sourceFile.toString());
+        assertThat(result).as("compiling the shadow fixture").isZero();
+        byte[] shadowClassBytes = Files.readAllBytes(
+                compileDir.resolve(shadowedEntryName.replace('/', java.io.File.separatorChar)));
+
+        Path shadowDirectoryRoot = scratchRoot.resolve("shadow-dir");
+        Path target = shadowDirectoryRoot.resolve(shadowedEntryName);
+        Files.createDirectories(target.getParent());
+        Files.write(target, shadowClassBytes);
+
+        ModuleClassIndex index = new ModuleClassIndex(Thread.currentThread().getContextClassLoader());
+
+        assertThatThrownBy(() -> index.load(shadowDirectoryRoot))
+                .isInstanceOf(ExtractorException.class)
+                .hasMessageContaining(shadowedBinaryName)
+                .hasMessageContaining("did not resolve from the requested classesRoot");
+    }
+
+    @Test
     @DisplayName("a --classes argument that is neither an existing directory nor an existing jar exits non-zero naming the argument")
     void rejectsArgumentThatIsNeitherDirectoryNorJar() {
         Path missing = Paths.get("this/path/does/not/exist/anywhere.jar");
