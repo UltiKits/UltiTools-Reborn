@@ -30,14 +30,19 @@ for UAT execution and issue reconciliation — the public description of these f
   Kind (`config`, `event`, `gate`, `gui`, `persistence`, `scheduled`, `placeholder`) — the concept
   of "who this targets" does not apply to a config key or a background task the way it applies to
   a command.
-- **Permission:** the literal node string, `none`, or `n/a`. `none` means no permission-node
-  restriction at all, for anyone — `PermissionValidator` treats an empty `permission()` as no
-  check to run, not as an implicit OP requirement. OP-only access, where it exists (e.g. every
-  `/ul`/`/upm`/`/ulticloud` command in this repository), comes from the separate `@CmdExecutor`
-  class-level `requireOp` flag, a different mechanism entirely; a row's Permission column being
-  `none` says nothing about whether its class also carries `requireOp=true`. `n/a` is for every
-  Kind that is not `command` — a config key or a scheduled task has no permission node to declare
-  in the first place, which is a different fact from a command that declares `none` deliberately.
+- **Permission:** the literal node string, `none`, or `n/a`, each optionally suffixed with the
+  literal text ` (requireOp=true)` when the row's class-level `@CmdExecutor` carries that flag —
+  the suffix augments whichever of the three base values applies; it is not a fourth value, and a
+  row without it means its class's `requireOp` is `false` (or the row's Kind has no such class at
+  all). `none` alone means no permission-node restriction at all, for anyone —
+  `PermissionValidator` treats an empty `permission()` as no check to run, not as an implicit OP
+  requirement. OP-only access, where it exists (e.g. every `/ul`/`/upm`/`/ulticloud` command in
+  this repository, hence every one of their 18 rows carrying the suffix), comes from the separate
+  `@CmdExecutor` class-level `requireOp` flag, a different mechanism entirely — the suffix exists
+  so a reader does not have to cross-reference the class declaration to learn it. `n/a` is for
+  every Kind that is not `command` — a config key or a scheduled task has no permission node to
+  declare in the first place, which is a different fact from a command that declares `none`
+  deliberately.
 - **Source:** `ClassName#member`, or the resource path for a `config` row.
 - **Row order:** by section, then by ID ascending within the section.
 - **No manual prose:** no troubleshooting column, no explanatory paragraphs, no draft page text.
@@ -77,11 +82,17 @@ explained, with its reason, in that command group's own section below.
 `UltiToolsCommands` — class-level `@CmdExecutor(alias = {"ul", "ultitools", "ulti"}, requireOp =
 true)`, `@CmdTarget(BOTH)`. `grep -c '@CmdMapping' UltiToolsCommands.java` returns 4 — confirmed
 by reading the file directly at lines 30, 41, 65 and 70 (`reload`, `reload <name>`, `help`,
-`list`).
+`list`). The `help` site (line 65, `UltiToolsCommands#help`) is counted in that 4 and in the
+repository-wide `@CmdMapping` total of 15, but it never actually dispatches:
+`BaseCommandExecutor#onCommand` short-circuits a literal `help` argument to `handleGatedHelp` →
+`#handleHelp` before `matchMethod` runs at all, exactly the same short-circuit that reaches
+`/upm help` and `/ulticloud help` with no `@CmdMapping` site of their own (see those sections
+below). The row below therefore cites `#handleHelp`, the method that actually executes, not
+`#help` — a live annotation site is not the same fact as a reachable dispatch target.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.ul.help | Print the /ul command usage summary | command | `/ul help` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#help |
+| ultitools.ul.help | Print the /ul command usage summary | command | `/ul help` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#handleHelp |
 | ultitools.ul.list | List every currently loaded module and its version | command | `/ul list` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#listPlugins |
 | ultitools.ul.reload | Reload every loaded module | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
 | ultitools.ul.reload-module | Reload a single named module | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
@@ -96,10 +107,14 @@ matching D-08's independently stated count exactly. This section carries 10 rows
 reasons, neither an omission. First: `/upm help` (also the bare `/upm` with no arguments) is
 reachable and operator-visible, but has no `@CmdMapping` site — `BaseCommandExecutor#onCommand`
 short-circuits a `help` argument before format-matching and dispatches straight to
-`PluginInstallCommands#handleHelp`, an override with no annotation. Unlike `/ul help` (its own
-`@CmdMapping(format = "help")` site, counted above), the `@CmdMapping` reconciliation line for
-this repository stays at 15, not 16 or 17 — neither of this section's two extra rows is counted
-against it. Second: `update <plugin>` is one `@CmdMapping` site whose method,
+`PluginInstallCommands#handleHelp`, an override with no annotation. `/ul help` is dispatched by
+the exact same short-circuit — the presence or absence of a `@CmdMapping(format = "help")` site
+on the class (`UltiToolsCommands` has one, `PluginInstallCommands` does not) makes no difference
+to which method actually runs, only to whether the annotation-counting instrument sees an extra
+site; see the `/ul` section's own note above. The `@CmdMapping` reconciliation line for this
+repository stays at 15 regardless — neither of this section's two extra rows is counted against
+it, and `UltiToolsCommands#help`'s own site (counted in that 15) is dead code, not a second
+dispatch path. Second: `update <plugin>` is one `@CmdMapping` site whose method,
 `PluginInstallCommands#updatePlugin`, internally branches on whether the argument is the literal
 string `all` — two materially different, independently-observable behaviors
 (`ultitools.upm.update` for one named module; `ultitools.upm.update-all` for
