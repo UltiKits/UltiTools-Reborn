@@ -11,9 +11,13 @@ for UAT execution and issue reconciliation — the public description of these f
   drawn from `[a-z0-9-]`. `<repo-slug>` is the repository name lowercased with no separators —
   `ultitools` here, `ultichat`, `ultiessentials`, and `ultitools-example` for
   `UltiTools-External-Example`. `<area>` is the feature section's slug. `<action>` is the verb.
-  A `config` row is the one shape that exceeds three segments:
-  `<repo-slug>.config.<file-stem>.<yml key path>`, the key path keeping its own dots. An ID
-  changes only when the feature's identity changes, never on rewording. IDs are unique within a
+  A `config` row is the one shape that exceeds three segments and is exempt from the
+  lowercase-ASCII rule for its key-path suffix:
+  `<repo-slug>.config.<file-stem>.<yml key path>`, the key path keeping its own dots and its own
+  casing verbatim from the yml file (`config.yml` itself uses camelCase for several keys, e.g.
+  `maximumPoolSize`) — a config ID is a citation of the key, not a re-derived slug, so lowercasing
+  it would make it un-greppable against its own source line. An ID changes only when the feature's
+  identity changes, never on rewording. IDs are unique within a
   repository.
 - **Kind**, exactly these eight values: `command`, `config`, `event`, `gui`, `scheduled`,
   `placeholder`, `persistence`, `gate`. Each maps one-to-one onto a reconciliation-table line.
