@@ -3,7 +3,7 @@
 This document catalogues every operator- or player-visible function, command, content item and
 configuration key in this repository, as read directly from source. It is an internal reference
 for UAT execution and issue reconciliation — the public description of these features lives on
-https://doc.ultikits.com/. Update this file in the same pull request as any feature change.
+<https://doc.ultikits.com/>. Update this file in the same pull request as any feature change.
 
 ## Conventions
 
