@@ -66,9 +66,11 @@ rather than an error:
    warning message text, not annotations.
 
 **Positive control:** the line-start form returns `/ul` = 4, `/upm` = 8, `/ulticloud` = 3 for
-this repository, matching this document's own row counts for those three command groups exactly
-— confirmed by reading `UltiToolsCommands.java`, `PluginInstallCommands.java` and
-`CloudLoginCommand.java` directly, not by trusting the count alone.
+this repository, matching the number of `@CmdMapping` sites in each class exactly — confirmed by
+reading `UltiToolsCommands.java`, `PluginInstallCommands.java` and `CloudLoginCommand.java`
+directly, not by trusting the count alone. This document's own row counts diverge from these
+annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 rows) — each divergence is
+explained, with its reason, in that command group's own section below.
 
 ## /ul — framework administration
 
@@ -189,31 +191,6 @@ check have no annotation-based instrument in this codebase.
 |---|---|---|---|---|---|---|---|---|
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | console | admin | brief | UltiTools#initLanguage |
 
-## WebSocket connection liveness
-
-`UltiPanelWebSocketClient#heartbeatTick` runs every `HEARTBEAT_INTERVAL_SECONDS` (60 s) once
-connected: check whether a `pong` arrived within `PONG_TIMEOUT_MS` (120 s, twice the interval)
-first, and only send the next `ping` if so. This ordering exists because a TCP connection can go
-silently dead without ever firing `onClose` — the check-first design is what actually detects
-that state, rather than pings going out forever into a dead socket that never signals failure.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.heartbeat | Send a `ping` every 60 s while connected, and record the round-trip latency from each `pong` reply | event | automatic, while connected | n/a | n/a | internal | none | UltiPanelWebSocketClient#heartbeatTick |
-| ultitools.remote.heartbeat-timeout-reconnect | Detect a silently-dead connection (no `pong` for 120 s) and force a reconnect via `close(4000, ...)`, routing through the existing reconnect state machine rather than a second path | event | automatic, when no `pong` arrives for 120 s | n/a | n/a | internal | brief | UltiPanelWebSocketClient#heartbeatTick |
-
-## Connection-time synchronization
-
-Three steps `PluginInitiationUtils#onWebSocketOpened` runs, in order, on every successful
-WebSocket connection (fresh login, and every reconnect): a subscription handshake, then two
-outbound pushes, before either capability's own inbound message type applies its own gate.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.connection-subscribe | Send `type: "subscribe"` with this server's ID immediately on connect; the panel's `subscribe` reply (`data.subscribed`, `data.serverId`, `data.message`) drives an INFO "successfully subscribed" or WARNING "subscription failed" console line — a failed handshake leaves the panel unable to associate the connection with this server, with no other visible symptom | event | automatic, on WebSocket connect or reconnect | n/a | console | admin | brief | UltiPanelWebSocketClient#subscribeToServer / PluginInitiationUtils#handleSubscribe |
-| ultitools.remote.connection-config-upload | Unconditionally push the framework's full config map to the panel on every successful connection, as `type: "upload_config"`, `data.configType: "plugin_config"`, `data.configName: "UltiTools.yml"`. `data.configContent` and `data.comment` are each a JSON-encoded STRING (`ConfigEditorUtils#getConfigMapString`/`#getCommentMapString`, built with `addProperty`), not an embedded JSON object — a consumer expecting a map value for either field will reject a healthy message. No capability gates this outbound push, unlike the inbound `upload_config`/`update_config` editing routes it superficially resembles | event | automatic, on WebSocket connect or reconnect | n/a | console | admin | brief | PluginInitiationUtils#uploadConfig |
-| ultitools.remote.connection-server-properties-upload | Push the safe-key `server.properties` map to the panel on every successful connection, as `type: "server_properties_result"` — the SAME message type the inbound `get` reply above uses, gated by `Capability.SERVER_PROPERTIES`; skipped entirely (not even attempted) when `getSafeProperties()` is empty | event | automatic, on WebSocket connect or reconnect, when `ultipanel.capabilities.server-properties: true` | n/a | console | admin | brief | PluginInitiationUtils#uploadServerProperties |
-
 ## Panel capabilities
 
 Eight independently-switchable panel-facing capabilities, each with its own
@@ -230,113 +207,6 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.monitoring | Allow the panel to receive live TPS/memory/world/player monitoring data — the panel's only "server is alive" signal; ships enabled | gate | `ultipanel.capabilities.monitoring` in config.yml | n/a | console | admin | detailed | Capability#MONITORING |
 | ultitools.capability.player-events | Allow the panel to receive live player events — join, quit, chat, death, kick, command preprocessing, and world change, seven distinct `PlayerEventManager` handlers each with their own `event_type` value and payload shape, not just join/quit/chat; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
-
-## Player event relay (beyond join/quit/chat)
-
-`ultitools.capability.player-events` above covers the switch and the three events already relayed
-in the capability rows (`player_join`/`player_quit`/`player_chat`); these four are the remaining
-`PlayerEventManager` handlers, each its own Bukkit `@EventHandler` with a distinct payload,
-gated by the same capability.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.player-event-command | Relay every player command (before dispatch) to the panel as `player_event`/`player_command`, including whether it was cancelled by another plugin | event | any player-run command while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerCommandPreprocess |
-| ultitools.remote.player-event-death | Relay a player death to the panel as `player_event`/`player_death`, with the death message and killer name when applicable | event | a player death while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerDeath |
-| ultitools.remote.player-event-kick | Relay a player kick to the panel as `player_event`/`player_kick`, with the kick reason and whether the kick was cancelled | event | a player kick while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerKick |
-| ultitools.remote.player-event-world-change | Relay a player's world change to the panel as `player_event`/`player_world_change`, naming both the origin and destination world | event | a player changing worlds while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerChangedWorld |
-
-**Reconciliation note (D-07), continued:** these four rows, plus the three `Connection-time
-synchronization` rows and the two `WebSocket connection liveness` rows above
-(`ultitools.remote.connection-subscribe`, `ultitools.remote.connection-config-upload`,
-`ultitools.remote.connection-server-properties-upload`, `ultitools.remote.heartbeat`,
-`ultitools.remote.heartbeat-timeout-reconnect` — all triggered by direct Bukkit/WebSocket-client
-callbacks, none an `@EventListener`-scanned method), add to the `event`-Kind total the
-boot-section note above already covers, bringing the repository-wide total to fourteen
-`event`-Kind rows against the repository's one `@EventListener` site, still zero additional
-annotation sites — `PlayerEventManager implements Listener` and self-registers via a direct
-`Bukkit.getPluginManager().registerEvents(this, plugin)` call, the same registration shape as
-`PlayerJoinListener`/`UpdateJoinListener` already explained above, not the framework's own
-`@EventListener` mechanism.
-
-## Inbound notifications
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.notification | Log an operator-visible console line for a panel-pushed notification, naming the message text and the originating client ID; ungated (`Capability.NONE`) | gate | `notification` panel message with `message` and `clientId` | n/a | console | admin | none | PluginInitiationUtils#handleNotification |
-| ultitools.remote.error-notification | Log an operator-visible SEVERE console line for a panel-pushed error report, naming the supplied message; ungated (`Capability.NONE`) | gate | `error` panel message with `message` | n/a | console | admin | none | PluginInitiationUtils#handleError |
-
-## Backup operations (placeholder)
-
-`backup_operation` (`Capability.FILE_WRITE`-gated) and `backup_progress` (`Capability.NONE`) are
-registered inbound message types whose handlers are, by the code's own comment, "a pure logging
-placeholder today" with "declared intent" toward a real file-producing backup operation —
-neither `PluginInitiationUtils#handleBackupOperation` nor `#handleBackupProgress` does anything
-beyond logging the received fields at `INFO`, and neither sends any reply. This is a disclosed,
-intentional stub, not a silent regression risk the way the other no-ops on this page are — there
-is no working behavior for a checklist row to protect yet.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.backup-operation | Currently a logging-only placeholder: accepts and logs `operation`/`operationId`, performs no backup and sends no reply | gate | `backup_operation` panel message | n/a | console | internal | none | PluginInitiationUtils#handleBackupOperation |
-| ultitools.remote.backup-progress | Currently a logging-only placeholder: accepts and logs `operationId`/`progress`/`currentStep`/`completed`, has no effect and sends no reply | gate | `backup_progress` panel message | n/a | console | internal | none | PluginInitiationUtils#handleBackupProgress |
-
-## On-demand monitoring requests
-
-Beyond the periodic `batch_update` (5 s cycle, per the Panel capabilities section above),
-`PluginInitiationUtils#buildInboundHandlers` registers three MONITORING-gated on-demand pull
-requests, each with its own `requestId`-correlated reply: `server_status`
-(`ServerMonitorManager#sendServerStatusWithRequestId`, replies with `type: "server_status"`,
-the same status payload `batch_update` carries), `metrics_data`
-(`#sendMetricsDataWithRequestId`, replies `type: "metrics_data"`), and `plugin_list`
-(`PluginInitiationUtils#handlePluginListRequest`, replies `type: "plugin_list"` with a
-`{plugins: [...], totalCount}` array distinct from `batch_update`'s own `plugins` field).
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.on-demand-server-status | Immediately reply with current server status outside the 5 s `batch_update` cycle | gate | `server_status` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendServerStatusWithRequestId |
-| ultitools.remote.on-demand-metrics | Immediately reply (outside the 5 s cycle) with the LAST-SAMPLED performance metrics (`playerActivity`, `serverPerformance`, `pluginUsage`) — `getCurrentMetricsData` reads from the same `currentSnapshot()` the periodic sampling task refreshes every 5 s, it does not compute a fresh reading per request, so "immediate" describes the reply latency, not the data's freshness. Two known-mislabeled fields, neither fixed here per this plan's zero-new-code rule: `serverPerformance.diskUsage` is unconditionally hardcoded to `0.0`, never a real reading (UltiKits/UltiTools-Reborn#436); `pluginUsage.enabledPlugins` counts every installed plugin regardless of `Plugin#isEnabled()`, despite its name (UltiKits/UltiTools-Reborn#437) | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
-| ultitools.remote.on-demand-plugin-list | Immediately reply with every Bukkit plugin's name, version, enabled state, author, and description — every plugin, not just UltiTools modules | gate | `plugin_list` panel message with a `requestId` | n/a | console | admin | none | PluginInitiationUtils#handlePluginListRequest |
-
-## Log stream controls
-
-The `log_stream` panel message's `action` field routes to five further
-`LogStreamManager#handleLogStreamMessage` branches beyond the initial `start` the "allow the panel
-to stream" capability row above already covers — `stop`, `pause`, `resume`, `status`, and
-`config` — each replying with its own `log_stream_response`. `stop`/`pause`/`resume` share one
-response shape (`data.status` ∈ `stopped`/`paused`/`resumed`, plus `message`, `clientId`,
-`subscriberCount`, `streaming`); `status` uses a different shape (`data.action: "status"` instead
-of a `status` field, plus `streaming`, `subscriberCount`, `clientId`,
-`logTransmitterEnabled`, `queueSize`) — the two are not interchangeable to parse. `log_stream` and
-`log_stream_control` are two distinct panel message types registered against the exact same
-handler (`PluginInitiationUtils#buildInboundHandlers` binds both to
-`LogStreamManager#handleLogStreamMessage`) — a message of either type carries the same `action`
-vocabulary and produces the same effect.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.log-stream-lifecycle | Stop, pause, resume, or query the status of an open log stream per `clientId`; `subscriberCount` reaching zero also flips the shared `streaming` flag off. `pause` acknowledges but does not actually stop delivery — `SystemLogHandler#publish` never consults the pause state before sending — a known product defect (UltiKits/UltiTools-Reborn#434), not fixed here per this plan's zero-new-code rule | gate | `log_stream` panel message with `action: "stop"` \| `"pause"` \| `"resume"` \| `"status"` | n/a | console | admin | brief | LogStreamManager#handleLogStreamMessage |
-| ultitools.remote.log-stream-config | Runtime-adjust the batch-send settings (`enabled`/`size`/`interval`) for an already-open log stream via its own `config` sub-action, independent of the `ultipanel.logging.batch.*` config.yml keys' own opt-in path. The same sub-action accepts a `levels` field too, but that branch only logs receipt of the request and never applies it — a known silent no-op (UltiKits/UltiTools-Reborn#433), not fixed here per this plan's zero-new-code rule | gate | `log_stream` panel message with `action: "config"` and a `batchConfig` object (`levels` has no effect, see #433) | n/a | console | admin | none | LogStreamManager#handleLogStreamMessage |
-
-## Remote configuration editing
-
-The `update_config` panel message, gated by `Capability.FILE_WRITE` (not a dedicated capability
-of its own), reaches `PluginInitiationUtils#handleConfigUpdate` and branches on the message's
-`fileName` field into three shapes. A reply is sent only when the inbound message carried a
-`requestId` — `sendConfigUpdateResponse` returns without sending anything otherwise — as one
-`config_update_response` whose nested `data` holds `requestId` (echoed) and `status: "success"` or
-`status: "error"` (plus an `error` message field when failed); the field is `status`, a string, not
-a boolean `success` field. This targets `ConfigManager`'s registered `@ConfigEntity` files — this
-framework itself has zero such classes (see the Configuration section above), so this path is
-scoped to loaded modules' own configs, not the framework's own `config.yml`, except the
-special-cased `server.properties` branch below.
-
-| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
-|---|---|---|---|---|---|---|---|---|
-| ultitools.remote.config-update-file | Overwrite a single loaded module's `@ConfigEntity`-registered config file from a panel-supplied JSON map, via `ConfigManager#loadFromJson(String, String)` | gate | `update_config` panel message with a `fileName` naming a registered config path and `configData` holding that file's `{configEntry: value}` JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
-| ultitools.remote.config-update-all-files | Overwrite every currently-registered module config file in one call when `fileName` is omitted or empty — a distinct `ConfigManager#loadFromJson(String)` overload expecting the full nested `{pluginName: {configPath: {...}}}` structure, not one file's flat map | gate | `update_config` panel message with no `fileName` field (or an empty string) and `configData` holding the nested multi-file JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
-| ultitools.remote.config-upload | A second, separate remote-editing message: `upload_config` requires `requestId`, `configType`, `configName`, `format`, `backup`, and `configContent` (a JSON object, not a string — the opposite convention from `update_config`'s `configData`). Only `configType: "plugin_config"` actually writes anything, via `ConfigEditorUtils#updateConfigMap(String)` — the SAME single-arg, full-nested-structure overload the empty-`fileName` `update_config` path uses; `configName` is read but never passed to the write call, so it has no effect on which file is targeted despite its name. `configType: "server_properties"` and `"permissions"` are no-op stubs that log one FINE line and return `upload_config_response`/`status: "success"` without writing anything — a known product defect (UltiKits/UltiTools-Reborn#435), not fixed here per this plan's zero-new-code rule. An unrecognized `configType` throws and reports failure honestly through a plain `error` message, NOT `upload_config_response` — the failure and success paths use two different response types | gate | `upload_config` panel message with the six fields above | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpload |
-| ultitools.remote.config-update-server-properties | `update_config` with `fileName: "server_properties"` and `configData` present reaches the same `ServerPropertiesManager#applySetAll` SAFE_KEYS-checked write path as the dedicated `server_properties` message type, but is gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` — an operator who disables `server-properties` but leaves `file-write` enabled has not actually closed this write path | gate | `update_config` panel message with `fileName: "server_properties"` and `configData` holding the property map | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
-| ultitools.remote.config-update-server-properties-read | `update_config` with `fileName: "server_properties"` and `configData` ABSENT reaches `ServerPropertiesManager#handleGet` (a read) — the same read path `ultitools.remote.server-properties-safe-keys-read` documents, reached through a second entry point — also gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` | gate | `update_config` panel message with `fileName: "server_properties"` and no `configData` field | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 
 ## Remote surface guards
 
