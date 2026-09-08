@@ -44,6 +44,7 @@ for real-machine verification, not user-facing documentation.
 |---|---|---|---|---|---|
 | ultitools.upm.check | `language: en` in config.yml; at least one update available (module or framework) | Run `/upm check` | Console/chat shows `Available updates:` followed by one `<name> <current> → <latest>` line per available update — `checkUpdates` formats the transition with a Unicode arrow `→`, not the ASCII sequence `->` | server | |
 | ultitools.upm.check.neg-none | `language: en` in config.yml; no update available for any module or the framework | Run `/upm check` | Chat/console line reads `No updates available.` (green) | server | |
+| ultitools.upm.help | `language: en` in config.yml | Run `/upm help`; separately, run bare `/upm` with no arguments | Chat/console shows `========|Plugin Install Help|========` followed by eight usage lines, all green, starting with `/upm list [page] - View available plugin list` and ending with `/upm update all - Update all plugins`; identical for both invocations. This path has no `@CmdMapping` site — `BaseCommandExecutor#onCommand` dispatches the literal `help` argument, and any unmatched argument vector including zero args, straight to `handleHelp` | server | |
 | ultitools.upm.install | `language: en` in config.yml; `<plugin>` exists on UltiCloud and is not yet installed | Run `/upm install <plugin>` | Chat/console line reads `Installed! Please restart the server! Please be sure to delete the old version module!` (green); the module JAR now exists under `plugins/UltiTools/plugins/` | server | |
 | ultitools.upm.install.neg-not-found | `language: en` in config.yml | Run `/upm install does-not-exist-on-ulticloud` | Chat/console line reads `Install Failed!` (red); no new file appears under `plugins/UltiTools/plugins/` | server | |
 | ultitools.upm.install-version | `language: en` in config.yml; `<plugin>` has more than one version on UltiCloud | Run `/upm install <plugin> <version>`, choosing an older version | Chat/console line reads `Installed! Please restart the server! Please be sure to delete the old version module!` (green); the installed JAR reports `<version>` after restart | server | |
@@ -62,6 +63,7 @@ for real-machine verification, not user-facing documentation.
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|
+| ultitools.ulticloud.help | Console access | Run `/ulticloud help`; separately, run bare `/ulticloud` with no arguments | Console shows `=== UltiCloud Commands ===` (aqua) followed by `/ulticloud login - Authenticate with UltiCloud`, `/ulticloud logout - Clear saved credentials`, `/ulticloud status - Show connection status` (white command, gray description); identical for both invocations. This path has no `@CmdMapping` site — same `BaseCommandExecutor#onCommand` dispatch as `ultitools.upm.help` | server | |
 | ultitools.ulticloud.login | Console access; this server not currently authenticated with UltiCloud; the maintainer's own UltiCloud account and browser access to open the printed link | Run `/ulticloud login` from console, then open the printed URL and complete the login in a browser within 5 minutes | Console prints a boxed `Open this URL in your browser to login:` block with a real URL, then confirms the login once the browser flow completes; `/ulticloud status` (see below) then reports Connected | human | |
 | ultitools.ulticloud.login.neg-already-logged-in | This server already authenticated with UltiCloud | Run `/ulticloud login` | Chat/console line reads `Already logged in to UltiCloud. Use /ulticloud logout first to re-login.` (yellow) | server | |
 | ultitools.ulticloud.login.neg-rate-limited | Run `/ulticloud login` once first so a login attempt has just been made | Run `/ulticloud login` again immediately | Chat/console line reads `Please wait <N> seconds before trying again.` (red) | server | |
@@ -77,8 +79,8 @@ for real-machine verification, not user-facing documentation.
 | ultitools.boot.plugin-load-order | At least two modules installed with a declared hard `@PluginDependency` between them | Restart the server and read the console output during startup | Console shows `[UltiTools-API] Plugin load order resolved successfully.`, and the dependent module's own `onEnable` log line appears after its dependency's | server | |
 | ultitools.boot.plugin-load-order.neg-missing | One installed module declares a hard `@PluginDependency` on a module name that is not installed | Restart the server and read the console output during startup | Console shows `[UltiTools-API] A required plugin dependency is missing.` followed by the resolver's own message naming the missing dependency; every module without that dependency still loads and appears in `/ul list` | server | |
 | ultitools.boot.plugin-load-order.neg-circular | Two installed modules declare a hard `@PluginDependency` on each other | Restart the server and read the console output during startup | Console shows `[UltiTools-API] Circular dependency detected among plugins.` followed by a `Loop: A -> B -> A`-shaped line naming both modules; every module outside the cycle still loads | server | |
-| ultitools.boot.update-check | Server has outbound access to the update-check endpoint; a newer framework or module version exists | Restart the server and read the console output roughly one tick after startup completes | Console shows `[UltiTools-API] Checking for updates...` followed by one `UltiTools-API update available: <latest> (current: <current>)` or `<module> <current> -> <latest>` line per available update | server | |
-| ultitools.boot.update-check.neg-none | No newer framework or module version exists | Restart the server and read the console output roughly one tick after startup completes | Console shows `[UltiTools-API] All plugins are up to date!` | server | |
+| ultitools.boot.update-check | `language: en` in config.yml; server has outbound access to the update-check endpoint; a newer framework or module version exists | Restart the server and read the console output roughly one tick after startup completes | Console shows `[UltiTools-API] Checking for updates...`; if a newer framework version exists, `[UltiTools-API] UltiTools-API update available: <latest> (current: <current>)` then `[UltiTools-API] Download URL: https://github.com/UltiKits/UltiTools-Reborn/releases/latest`; if any module updates exist, `[UltiTools-API] Module updates available (<N>):` then one `[UltiTools-API]   <module> <current> -> <latest>` line per module — this startup log path is not i18n'd for the arrow, so it is the ASCII `->`, unlike `/upm check`'s chat output which uses `→` | server | |
+| ultitools.boot.update-check.neg-none | `language: en` in config.yml; no newer framework or module version exists | Restart the server and read the console output roughly one tick after startup completes | Console shows `[UltiTools-API] All plugins are up to date!` | server | |
 | ultitools.listener.placeholderapi-bridge | PlaceholderAPI installed and enabled; a UltiTools-provided placeholder expansion (e.g. `player`) not yet registered | Join the server as any player | Within about 60 seconds the console shows the framework dispatching `papi ecloud download Player` (and, if any expansion needed downloading, a later `papi reload`) from the console sender | server | |
 | ultitools.listener.update-notify | An OP player joins after ultitools.boot.update-check found at least one update, and has not yet been notified this session | Join the server as an OP player | Chat shows `[UltiTools] <N> update(s) available. Run /upm check for details.` (green prefix, yellow count) exactly once for that connection | server | |
 | ultitools.listener.update-notify.neg-repeat-after-quit | Same precondition as ultitools.listener.update-notify, then the same player quits | Rejoin as the same OP player, without restarting the server | The notification is sent again — `PlayerCacheManager#onPlayerQuit` clears the `@PlayerCache`-backed `notifiedPlayers` set for that UUID on every quit, so `UpdateJoinListener`'s own javadoc claim of "once per server session" does not hold across a quit/rejoin. This is a known product defect (framework#431, not a checklist error) — the row exists to document the actual behaviour, not the intended one | server | |
@@ -93,7 +95,7 @@ for real-machine verification, not user-facing documentation.
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|
-| ultitools.storage.backend-select | `datasource.type: sqlite` in config.yml (shipped default); at least one loaded module has performed a `@Table`-backed data operation since the last restart — `SQLiteDataStore` creates its `.db` file lazily from `getOperator`, never at startup, so a server with zero data operations has no file to find | Restart the server, trigger one module data operation, and read the startup console log | Console shows `Data Storage Method: sqlite`; a `<plugin>.db` (or `data.db`) file now exists under the plugin's data folder | server | |
+| ultitools.storage.backend-select | `language: en` in config.yml; `datasource.type: sqlite` in config.yml (shipped default); at least one loaded module has performed a `@Table`-backed data operation since the last restart — `SQLiteDataStore` creates its `.db` file lazily from `getOperator`, never at startup, so a server with zero data operations has no file to find | Restart the server, trigger one module data operation, and read the startup console log | Console shows `Data Storage Method: sqlite`; a `<plugin>.db` (or `data.db`) file now exists under the plugin's data folder | server | |
 | ultitools.storage.backend-select.neg-fallback | `datasource.type: mysql` in config.yml but no reachable MySQL server configured | Restart the server and read the startup console log | The backend actually obtained falls back to `json`, and the console reports the requested backend and the one actually used are different, rather than silently reporting `mysql` | server | |
 | ultitools.storage.restart-survival | A row written through a `DataOperator` while the server is up (any module command backed by `@Table`) | Stop the server completely, then start it again, then read the same row back through the same module command | The same value is returned after restart, in whichever backend `ultitools.storage.backend-select` is currently active | server | |
 
@@ -106,11 +108,19 @@ for real-machine verification, not user-facing documentation.
 
 ## Panel capabilities
 
-Every row below is exercised by toggling the named `ultipanel.capabilities.*` key, restarting or
-reloading, then sending the corresponding panel message type (or reading `RemoteActionLog` for
-the same effect without a live panel session). The refusal text checked below is
-`Capability#configurableRefusal`'s literal wording, produced by
-`Capability#refusalMessage()`.
+Every row below is exercised by toggling the named `ultipanel.capabilities.*` key, then sending
+the corresponding panel message type (or reading `RemoteActionLog` for the same effect without a
+live panel session). The refusal text checked below is `Capability#configurableRefusal`'s literal
+wording, produced by `Capability#refusalMessage()`.
+
+**How the toggle takes effect differs by capability, and only five of the eight can use `/ul
+reload`.** `commands`, `file-read`, `file-write`, `file-delete`, and `server-properties` are
+gated per-request — `PluginInitiationUtils#dispatchWithCapabilityGate` calls
+`Capability#isEnabled()` fresh on every inbound message, which reads the live (already-reloaded)
+`config.yml`, so `/ul reload` is sufficient. `monitoring`, `logs`, and `player-events` are gated
+once, at connect time, inside `PluginInitiationUtils#wireManagers` — `/ul reload`'s
+`UltiTools#reloadPlugins` never calls `wireManagers`, so toggling one of these three requires a
+full server restart (or a cloud reconnect) to take effect, not just a reload.
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|

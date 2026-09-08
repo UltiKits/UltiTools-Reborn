@@ -81,11 +81,18 @@ by reading the file directly at lines 30, 41, 65 and 70 (`reload`, `reload <name
 `@CmdTarget(BOTH)`. `grep -c '@CmdMapping' PluginInstallCommands.java` returns 8 — confirmed by
 reading the file directly (`list <page>`, `list`, `install <plugin> <version>`,
 `install <plugin>`, `versions <plugin>`, `uninstall <plugin>`, `check`, `update <plugin>`),
-matching D-08's independently stated count exactly.
+matching D-08's independently stated count exactly. This section carries 9 rows, not 8: `/upm
+help` (also the bare `/upm` with no arguments) is reachable and operator-visible, but has no
+`@CmdMapping` site — `BaseCommandExecutor#onCommand` short-circuits a `help` argument before
+format-matching and dispatches straight to `PluginInstallCommands#handleHelp`, an override with no
+annotation. Unlike `/ul help` (its own `@CmdMapping(format = "help")` site, counted above), the
+`@CmdMapping` reconciliation line for this repository stays at 15, not 16 — this row's absence
+from that count is deliberate, not an omission.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.upm.check | List available framework and module updates | command | `/upm check` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#checkUpdates |
+| ultitools.upm.help | Show the `/upm` subcommand help text | command | `/upm help` (also the bare `/upm` with no arguments) | none (requireOp=true) | both | admin | none | PluginInstallCommands#handleHelp |
 | ultitools.upm.install | Install the latest version of a plugin from UltiCloud | command | `/upm install <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#installPlugin(plugin) |
 | ultitools.upm.install-version | Install a specific version of a plugin from UltiCloud | command | `/upm install <plugin> <version>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#installPlugin(plugin,version) |
 | ultitools.upm.list | List page 1 of the plugins available on UltiCloud | command | `/upm list` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listPlugins(sender) |
@@ -99,10 +106,14 @@ matching D-08's independently stated count exactly.
 `CloudLoginCommand` — class-level `@CmdExecutor(alias = "ulticloud", requireOp = true)`,
 `@CmdTarget(CONSOLE)`. `grep -c '@CmdMapping' CloudLoginCommand.java` returns 3 — confirmed by
 reading the file directly (`login`, `logout`, `status`), matching D-08's independently stated
-count exactly.
+count exactly. This section carries 4 rows, not 3, for the same reason as `/upm help` above:
+`/ulticloud help` (also the bare `/ulticloud` with no arguments) reaches
+`CloudLoginCommand#handleHelp` through `BaseCommandExecutor`'s built-in short-circuit, with no
+`@CmdMapping` site of its own — the repository's total `@CmdMapping` count stays 15.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
+| ultitools.ulticloud.help | Show the `/ulticloud` subcommand help text | command | `/ulticloud help` (also the bare `/ulticloud` with no arguments) | none (requireOp=true) | console | admin | none | CloudLoginCommand#handleHelp |
 | ultitools.ulticloud.login | Request a UltiCloud magic-link login for this server | command | `/ulticloud login` | none (requireOp=true) | console | admin | detailed | CloudLoginCommand#login |
 | ultitools.ulticloud.logout | Tear down the cloud connection and clear the saved credential | command | `/ulticloud logout` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#logout |
 | ultitools.ulticloud.status | Show whether this server is currently connected to UltiCloud | command | `/ulticloud status` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#status |
@@ -120,7 +131,7 @@ session.
 | ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load | event | console log during server startup | n/a | console | admin | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.update-check | Check for a newer framework version and newer module versions once, asynchronously, shortly after startup | event | console log during server startup | n/a | console | admin | none | UpdateManager#checkUpdatesSync |
 | ultitools.listener.placeholderapi-bridge | On a player's first join needing an unregistered PlaceholderAPI expansion, download and reload it automatically | event | join the server as any player while PlaceholderAPI is installed | n/a | player | internal | none | PlayerJoinListener#onPlayerJoin |
-| ultitools.listener.update-notify | Notify an OP player once per session, on join, if a framework or module update is available | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | player | admin | none | UpdateJoinListener#onPlayerJoin |
+| ultitools.listener.update-notify | Notify an OP player once per connection, on join, if a framework or module update is available. `UpdateJoinListener`'s own javadoc claims "once per server session", but `PlayerCacheManager#onPlayerQuit` clears the backing `@PlayerCache` set on every quit, so a quit and rejoin re-sends the notification within the same session — a known product defect (UltiKits/UltiTools-Reborn#431), not the intended behaviour | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | player | admin | none | UpdateJoinListener#onPlayerJoin |
 
 **Reconciliation note (D-07):** the line-start form of the canonical command reports exactly one
 `@EventListener` site in this repository (`PlayerJoinListener`) against the two `event`-Kind rows
@@ -140,7 +151,7 @@ no annotation-based instrument in this codebase.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.task.player-cache-sweep | Periodically evict expired `@PlayerCache`-backed state on a five-minute clock, independent of any player quitting | scheduled | runs automatically every 5 minutes while the server is up | n/a | console | internal | none | PlayerCacheManager#sweepExpiredEntries |
+| ultitools.task.player-cache-sweep | Periodically evict expired `@PlayerCache`-backed state on a five-minute clock, independent of any player quitting — but only for a bean that opts in by implementing `PlayerCacheManager.ExpiringPlayerCache`; an ordinary `@PlayerCache` field on a bean that does not implement it is never touched by this task | scheduled | runs automatically every 5 minutes while the server is up | n/a | console | internal | none | PlayerCacheManager#sweepExpiredEntries |
 
 **Reconciliation note:** the line-start form of the canonical command reports exactly one
 `@Scheduled` site in this repository, and this is that one row — the count balances exactly.
