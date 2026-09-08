@@ -167,7 +167,7 @@ no annotation-based instrument in this codebase.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start | n/a | console | admin | brief | UltiTools#initLanguage |
+| ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | console | admin | brief | UltiTools#initLanguage |
 
 ## Panel capabilities
 
@@ -213,6 +213,20 @@ shipped `config.yml`, read directly by `Bukkit`'s `FileConfiguration`, not a bou
 `@ConfigEntity` entity — so the `@ConfigEntity` reconciliation line in the pull request reads 0
 against 0, with this sentence as its reason, rather than being omitted.
 
+This section carries 51 rows, not 44, and that divergence has a reason rather than being an
+omission (the counting command above only sees `src/main/resources/config.yml`, the shipped
+default resource — it cannot see a key the framework recognises but does not ship a default
+for). Seven keys are genuinely read by production code (`SystemLogHandler`, `LogStreamManager`,
+`CommandExecutionManager`, `FileOperationManager`, confirmed by reading each) but are absent from
+that resource: `ultipanel.commands.blocklist` and `ultipanel.files.editable-roots` are migrated
+onto disk on first boot if absent (`UltiTools#migrateKeyIfAbsent`), so a running server always
+has them even though the packaged jar's default resource does not; `ultipanel.logging.levels`,
+`ultipanel.logging.excluded-loggers`, and the three `ultipanel.logging.batch.*` keys are purely
+opt-in — read via `FileConfiguration#contains` with a code-level fallback, present only if the
+operator adds them by hand per `config-example.yml`, and have no effect at all otherwise. The
+reconciliation-table verify command's own `keys=44 rows=51` output is therefore the accurate,
+intentional result of this reading, not a defect the row count should be forced to match.
+
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.config.config.datasource.flushRate | JSON-backend auto-save interval; lower values reduce data-loss risk at the cost of more disk I/O; only takes effect for the JSON storage backend | config | `src/main/resources/config.yml: datasource.flushRate (default: 10)` | n/a | n/a | admin | none | JsonStore#initScheduler |
@@ -229,7 +243,7 @@ against 0, with this sentence as its reason, rather than being omitted.
 | ultitools.config.config.email.smtp.ssl | Use SSL encryption for the SMTP connection; typically `true` when the port is 465 | config | `src/main/resources/config.yml: email.smtp.ssl (default: false)` | n/a | n/a | admin | brief | DefaultEmailService |
 | ultitools.config.config.email.smtp.starttls | Use STARTTLS encryption for the SMTP connection; typically `true` when the port is 587 | config | `src/main/resources/config.yml: email.smtp.starttls (default: true)` | n/a | n/a | admin | brief | DefaultEmailService |
 | ultitools.config.config.email.smtp.username | SMTP authentication username, usually the mailbox address | config | `src/main/resources/config.yml: email.smtp.username (default: "")` | n/a | n/a | admin | brief | DefaultEmailService |
-| ultitools.config.config.language | Framework message language (`en` or `zh`), applied on next start | config | `src/main/resources/config.yml: language (default: zh)` | n/a | n/a | admin | brief | UltiTools#initLanguage |
+| ultitools.config.config.language | Framework message language (`en` or `zh`), applied on next start or `/ul reload` | config | `src/main/resources/config.yml: language (default: zh)` | n/a | n/a | admin | brief | UltiTools#initLanguage |
 | ultitools.config.config.mysql.cachePrepStmts | HikariCP/MySQL JDBC driver prepared-statement caching switch | config | `src/main/resources/config.yml: mysql.cachePrepStmts (default: true)` | n/a | n/a | admin | none | MysqlConfig |
 | ultitools.config.config.mysql.connectionTestQuery | Query HikariCP runs to validate a pooled MySQL connection before handing it out | config | `src/main/resources/config.yml: mysql.connectionTestQuery (default: "select 1")` | n/a | n/a | admin | none | MysqlConfig |
 | ultitools.config.config.mysql.connectionTimeout | HikariCP connection-acquisition timeout, in milliseconds | config | `src/main/resources/config.yml: mysql.connectionTimeout (default: 30000)` | n/a | n/a | admin | none | MysqlConfig |
@@ -252,11 +266,18 @@ against 0, with this sentence as its reason, rather than being omitted.
 | ultitools.config.config.ultipanel.capabilities.monitoring | Whether the panel may receive live TPS/memory/world/player monitoring data; ships enabled | config | `src/main/resources/config.yml: ultipanel.capabilities.monitoring (default: true)` | n/a | n/a | admin | brief | Capability#MONITORING |
 | ultitools.config.config.ultipanel.capabilities.player-events | Whether the panel may receive live player join/quit/chat events; ships enabled | config | `src/main/resources/config.yml: ultipanel.capabilities.player-events (default: true)` | n/a | n/a | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.config.config.ultipanel.capabilities.server-properties | Whether the panel may read and edit the `server.properties` safe-key whitelist; ships disabled | config | `src/main/resources/config.yml: ultipanel.capabilities.server-properties (default: false)` | n/a | n/a | admin | brief | Capability#SERVER_PROPERTIES |
+| ultitools.config.config.ultipanel.commands.blocklist | Remote command blocklist, fully operator-editable in both directions; not present in the shipped default resource but migrated onto disk on first boot if absent (`UltiTools#migrateKeyIfAbsent`), so a running server always has this key even though `src/main/resources/config.yml` does not ship it | config | `plugins/UltiTools/config.yml: ultipanel.commands.blocklist (default: [op, deop, stop, restart, reload, ban-ip, pardon-ip, whitelist, save-off, save-all])` | n/a | n/a | admin | detailed | CommandExecutionManager#isCommandAllowed |
+| ultitools.config.config.ultipanel.files.editable-roots | Root directories (relative to the server root) the panel's file capabilities are confined to; not present in the shipped default resource but migrated onto disk on first boot if absent, same as the blocklist above | config | `plugins/UltiTools/config.yml: ultipanel.files.editable-roots (default: [plugins, logs])` | n/a | n/a | admin | detailed | FileOperationManager#isPathAllowed |
 | ultitools.config.config.ultipanel.logging.action-log.max-files | Number of rotated `action.log.<generation>` files retained; there is no key to disable the log itself | config | `src/main/resources/config.yml: ultipanel.logging.action-log.max-files (default: 5)` | n/a | n/a | admin | none | RemoteActionLog |
 | ultitools.config.config.ultipanel.logging.action-log.max-size-bytes | Rotation size, in bytes, for the active `action.log.0` file before it rolls to the next generation | config | `src/main/resources/config.yml: ultipanel.logging.action-log.max-size-bytes (default: 1048576)` | n/a | n/a | admin | none | RemoteActionLog |
+| ultitools.config.config.ultipanel.logging.batch.enabled | Whether log-stream delivery to the panel is batched rather than sent line-by-line; purely opt-in — absent from both the shipped resource and the migration path, has effect only if the operator adds it by hand per `config-example.yml` | config | `config-example.yml: ultipanel.logging.batch.enabled (code default when present: true)` | n/a | n/a | admin | none | LogStreamManager |
+| ultitools.config.config.ultipanel.logging.batch.size | Entries per batch when batched log delivery is enabled; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.batch.size (code default when present: 10)` | n/a | n/a | admin | none | LogStreamManager |
+| ultitools.config.config.ultipanel.logging.batch.interval | Send interval, in milliseconds, when batched log delivery is enabled; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.batch.interval (code default when present: 5000)` | n/a | n/a | admin | none | LogStreamManager |
 | ultitools.config.config.ultipanel.logging.error-reporting.dedup-window-seconds | Time window, in seconds, within which a repeat of the same error fingerprint is not re-reported | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.dedup-window-seconds (default: 300)` | n/a | n/a | admin | none | ErrorReportCollector |
 | ultitools.config.config.ultipanel.logging.error-reporting.enabled | Whether errors are auto-reported to UltiPanel | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.enabled (default: true)` | n/a | n/a | admin | brief | ErrorReportCollector |
 | ultitools.config.config.ultipanel.logging.error-reporting.max-errors-per-batch | Maximum number of error reports sent per `batch_update` cycle | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.max-errors-per-batch (default: 10)` | n/a | n/a | admin | none | ErrorReportCollector |
 | ultitools.config.config.ultipanel.logging.error-reporting.sample-after-count | Number of cumulative occurrences of the same error fingerprint after which sampling begins | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.sample-after-count (default: 10)` | n/a | n/a | admin | none | ErrorReportCollector |
 | ultitools.config.config.ultipanel.logging.error-reporting.sample-rate | Fraction of a sampled error's repeat occurrences that are still reported (`0.1` = 10%) | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.sample-rate (default: 0.1)` | n/a | n/a | admin | none | ErrorReportCollector |
+| ultitools.config.config.ultipanel.logging.excluded-loggers | Logger name prefixes excluded from the log stream sent to the panel, to avoid transmitting excessive volume; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.excluded-loggers (default when present: [com.mojang.authlib, net.minecraft.network, org.apache.http, com.zaxxer.hikari, org.eclipse.jetty])` | n/a | n/a | admin | none | SystemLogHandler |
+| ultitools.config.config.ultipanel.logging.levels | Log levels transmitted to the panel's live log stream; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.levels (default when present: [info, warning, error])` | n/a | n/a | admin | none | SystemLogHandler |
 | ultitools.config.env.api-url | UltiCloud API base URL; Maven-filtered at build time from the `ultitools.api.url` property, not editable at runtime by the server operator | config | `src/main/resources/env.yml: api-url (default: https://api.ultikits.com, from pom.xml property ultitools.api.url)` | n/a | n/a | admin | none | env.yml / pom.xml `ultitools.api.url` |
