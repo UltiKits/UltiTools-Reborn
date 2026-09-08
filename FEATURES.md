@@ -31,7 +31,8 @@ for UAT execution and issue reconciliation — the public description of these f
   of "who this targets" does not apply to a config key or a background task the way it applies to
   a command.
 - **Permission:** the literal node string, `none`, or `n/a`, each optionally suffixed with the
-  literal text ` (requireOp=true)` when the row's class-level `@CmdExecutor` carries that flag —
+  literal text `(requireOp=true)` (preceded by one space) when the row's class-level
+  `@CmdExecutor` carries that flag —
   the suffix augments whichever of the three base values applies; it is not a fourth value, and a
   row without it means its class's `requireOp` is `false` (or the row's Kind has no such class at
   all). `none` alone means no permission-node restriction at all, for anyone —
