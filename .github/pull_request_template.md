@@ -35,3 +35,4 @@ the example above closes nothing. Put real declarations outside this comment.
 - [ ] Line endings preserved per file (`file <path>` before and after; this tree is mixed CRLF/LF)
 - [ ] Every comment, javadoc, workflow comment, and this PR's own title and body are English-first with Chinese as a supplement, and nothing was added to `.github/cjk-allowlist.txt`
 - [ ] Documentation synced in `UltiTools-Dev-Doc` (branch `alpha`) if documented behaviour changed
+- [ ] `FEATURES.md` and `UAT-CHECKLIST.md` updated for every feature change in this PR, or N/A with the reason
