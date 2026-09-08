@@ -141,3 +141,15 @@ the same effect without a live panel session). The refusal text checked below is
 | ultitools.remote.file-editable-roots.neg-protected | `ultipanel.capabilities.file-read: true` | Send a file-read panel message for `server.properties` | Refused unconditionally — `'server.properties' is a protected server file` — regardless of the editable-root and capability settings | server | |
 | ultitools.remote.server-properties-safe-keys | `ultipanel.capabilities.server-properties: true` | Send a `server_properties` edit for `motd` | The key is written | server | |
 | ultitools.remote.server-properties-safe-keys.neg-unsafe-key | `ultipanel.capabilities.server-properties: true` | Send a `server_properties` edit for a key not on the safe list (e.g. `online-mode`) | Rejected — `setProperty` returns `false` for anything outside `SAFE_KEYS`, and `server.properties` is unchanged | server | |
+
+## Configuration
+
+One row per shipped yml file (D-06's config-per-file rule), not per key: `config.yml` (44 keys)
+and `env.yml` (1 operator-relevant key). Each row confirms every key in the file is present at
+its `FEATURES.md`-documented default, then flips one representative key and observes the
+behaviour follow.
+
+| ID | Preconditions | Steps | Expected | Layer | Covers |
+|---|---|---|---|---|---|
+| ultitools.config.config-yml | Fresh `plugins/UltiTools/config.yml` at its shipped default (not hand-edited) | Load the file; confirm each of the 44 keys listed under this document's companion `FEATURES.md` `## Configuration` section is present at its documented default; then set `language: "en"`, restart the server, and run `/ul help` | Every one of the 44 keys is present at its documented default before the change; after the restart, `/ul help` prints the English `=== UltiTools Commands ===` block instead of the `lang/zh.json`-localized block, proving the flipped key took effect | server | |
+| ultitools.config.env-yml | A clean `mvn -B -q clean package -DskipTests` build of the current commit, no `-Dultitools.api.url` override | Unzip the built jar and read `env.yml`; confirm `api-url` equals the shipped default `https://api.ultikits.com`; rebuild with `-Dultitools.api.url=http://localhost:8787` and re-extract `env.yml` from the new jar | The first jar's `env.yml` reads `api-url: "https://api.ultikits.com"`; the second jar's `env.yml` reads `api-url: "http://localhost:8787"` — the packaged value tracks the Maven property exactly, and there is no runtime key to change it after packaging | protocol | |
