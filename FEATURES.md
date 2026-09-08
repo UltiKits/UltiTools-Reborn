@@ -149,7 +149,7 @@ no annotation-based instrument in this codebase.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.storage.backend-select | Choose the ORM storage backend (`json`, `sqlite`, or `mysql`) via `config.yml`; falls back to `json` if the configured backend is unavailable | persistence | `datasource.type` in `plugins/UltiTools/config.yml`, applied on next start/`/ul reload` | n/a | console | admin | brief | UltiTools#initDataStore |
+| ultitools.storage.backend-select | Choose the ORM storage backend (`json`, `sqlite`, or `mysql`) via `config.yml`; falls back to `json` if the configured backend is unavailable | persistence | `datasource.type` in `plugins/UltiTools/config.yml`, applied only on a full server restart — `/ul reload` (`UltiTools#reloadPlugins`) reloads config, language, and modules but never re-runs `initDataStore`, so the active data store is unchanged until restart | n/a | console | admin | brief | UltiTools#initDataStore |
 | ultitools.storage.restart-survival | Data written through a `DataOperator` survives a full server restart, in whichever backend is active | persistence | write data via any module command backed by `@Table`, then restart the server | n/a | console | admin | none | DataStoreManager#getDatastore |
 
 ## Language
