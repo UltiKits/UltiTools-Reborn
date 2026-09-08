@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.uat.fixtures.additionalentities;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 /**
@@ -11,9 +12,16 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
  * {@code PluginManager.scanPluginEntities} de-duplicates through its own {@code HashSet}, so a
  * plain list concatenation here would trip {@code PersistenceRowScanner}'s id-collision guard
  * for a module configuration the runtime accepts without complaint.
+ * <p>
+ * Extends {@link UltiToolsPlugin} -- see {@code ModuleWithDefaultScanScope}'s javadoc for why.
  *
  * @since 6.3.0
  */
 @UltiToolsModule(additionalEntities = {ExternalEntity.class})
-public final class ModuleWithOverlappingAdditionalEntity {
+public final class ModuleWithOverlappingAdditionalEntity extends UltiToolsPlugin {
+
+    @Override
+    public boolean registerSelf() {
+        return true;
+    }
 }

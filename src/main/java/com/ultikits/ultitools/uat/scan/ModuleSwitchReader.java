@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.uat.scan;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 
@@ -9,11 +11,12 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Reads {@code @UltiToolsModule}'s {@code cmdExecutor}/{@code eventListener}/{@code config}
- * registration switches from the module's entry class (Phase 10, D-10-04), surfaced at document
- * level as {@code registers_commands}/{@code registers_listeners}/{@code registers_config}, and
- * its {@code additionalEntities()} attribute — {@code @Table} classes the module owns that live
- * outside its own classesRoot (a shared library jar, a multi-module build's common artifact).
+ * Reads a module's {@code cmdExecutor}/{@code eventListener}/{@code config} registration
+ * switches from its entry class (Phase 10, D-10-04), surfaced at document level as
+ * {@code registers_commands}/{@code registers_listeners}/{@code registers_config}, and
+ * {@code @UltiToolsModule}'s {@code additionalEntities()} attribute — {@code @Table} classes the
+ * module owns that live outside its own classesRoot (a shared library jar, a multi-module
+ * build's common artifact).
  * <p>
  * A {@code false} switch is reported, never used to suppress the rows it governs — a suppressed
  * registration is a fact to verify, not a reason to hide the function it would have registered.
@@ -23,57 +26,73 @@ import java.util.List;
  * are distinct per the JVM specification, so this stays within D-10-01's no-initialization
  * contract without any extra classloading of its own.
  * <p>
- * The three switches and {@code additionalEntities()} are read differently, matching two
- * DIFFERENT runtime lookups (Codex review of PR #427): {@code UltiToolsPlugin.initConfig}
- * reads its switch via {@code MergedAnnotationResolver.find(this.getClass(), ...)} (a merged,
- * hierarchy-walking lookup, so an unannotated subclass of an annotated abstract module base
- * still inherits it), but {@code PluginManager.scanPluginEntities} reads
- * {@code pluginClass.getAnnotation(UltiToolsModule.class)} DIRECTLY — {@code @UltiToolsModule}
- * is not {@code @Inherited}, so such a subclass gets NONE of the base's
- * {@code additionalEntities()}. Using merged resolution for both would falsely attribute the
- * base's additional entities to a concrete module class that never actually receives them.
+ * {@link #findModuleEntryClass} identifies the entry class by {@code PluginManager
+ * .loadPluginMainClass}'s own runtime predicate — a concrete, non-interface
+ * {@link UltiToolsPlugin} subclass — not by carrying {@code @UltiToolsModule} (Codex review of
+ * PR #427): a module using the supported direct {@code @EnableAutoRegister}/
+ * {@code @ComponentScan} annotations instead of {@code @UltiToolsModule} is still a valid entry
+ * point at runtime, and requiring {@code @UltiToolsModule} specifically made this reader return
+ * {@code null} for it, silently treating the scan-package set as unrestricted and omitting the
+ * registration switches entirely.
  * <p>
- * {@link #findModuleEntryClass} additionally requires the candidate be neither an interface
- * nor {@code abstract} (Codex review of PR #427): {@code PluginManager.loadPluginMainClass}
- * requires the same of the class it selects as a module's real entry point
- * ({@code UltiToolsPlugin.class.isAssignableFrom(aClass) && !aClass.isInterface() &&
- * !Modifier.isAbstract(...)}), and {@code ModuleClassIndex} supplies classes in an arbitrary
- * (typically lexicographic) order — an abstract module base sorting before its concrete
- * subclass would otherwise be picked here first, wrongly attributing the base's own directly
- * declared {@code additionalEntities()} to a class the runtime never treats as the entry point
- * at all.
+ * The three switches and {@code additionalEntities()} are resolved differently on that entry
+ * class, matching two DIFFERENT real lookups: {@code PluginManager.registerBukkit}/
+ * {@code UltiToolsPlugin.initConfig} both resolve {@code @EnableAutoRegister} via
+ * {@code MergedAnnotationResolver.find} (so an unannotated subclass of an annotated abstract
+ * base still inherits the switches, and a bare {@code @EnableAutoRegister} works the same as one
+ * composed via {@code @UltiToolsModule}) — {@code registerBukkit} registers NEITHER commands nor
+ * listeners at all when that resolution finds nothing, which this reader mirrors by defaulting
+ * both (and {@code config}, matching {@code initConfig}'s own null-check) to {@code false} rather
+ * than {@code EnableAutoRegister}'s own annotation-default {@code true} — but
+ * {@code PluginManager.scanPluginEntities} reads {@code pluginClass.getAnnotation
+ * (UltiToolsModule.class)} DIRECTLY, since only {@code @UltiToolsModule} (not bare
+ * {@code @EnableAutoRegister}) declares {@code additionalEntities()} at all, and the annotation
+ * is not {@code @Inherited} — so an unannotated subclass gets NONE of an abstract base's
+ * {@code additionalEntities()}, and using merged resolution for it would falsely attribute them.
  *
  * @since 6.3.0
  */
 public final class ModuleSwitchReader {
 
     /**
-     * Finds the {@code @UltiToolsModule} entry class among {@code classes} and reads its
-     * registration switches (merged resolution) and {@code additionalEntities()} (direct
-     * lookup on the same concrete class only).
+     * Finds the module's entry class among {@code classes} and reads its registration switches
+     * (merged {@code @EnableAutoRegister} resolution) and {@code additionalEntities()} (direct
+     * {@code @UltiToolsModule} lookup on the same concrete class only).
      *
      * @param classes the loaded (uninitialized) classes to scan
-     * @return the module's switches, or {@code null} if no {@code @UltiToolsModule} class is present
+     * @return the module's switches, or {@code null} if no valid entry class is present
      */
     public Switches read(List<Class<?>> classes) {
         Class<?> entryClass = findModuleEntryClass(classes);
         if (entryClass == null) {
             return null;
         }
-        UltiToolsModule module = MergedAnnotationResolver.find(entryClass, UltiToolsModule.class);
+        // PluginManager.registerBukkit/UltiToolsPlugin.initConfig both return/branch away
+        // early when this resolves to null -- neither commands, listeners, nor package-scanned
+        // config are ever auto-registered for a class with no @EnableAutoRegister anywhere in
+        // its hierarchy (whether declared bare or composed via @UltiToolsModule). Defaulting
+        // the switches to true here (EnableAutoRegister's own annotation default) would
+        // misreport a module the runtime never auto-registers anything for.
+        EnableAutoRegister autoRegister = MergedAnnotationResolver.find(entryClass, EnableAutoRegister.class);
+        boolean registersCommands = autoRegister != null && autoRegister.cmdExecutor();
+        boolean registersListeners = autoRegister != null && autoRegister.eventListener();
+        boolean registersConfig = autoRegister != null && autoRegister.config();
+
         UltiToolsModule directlyDeclared = entryClass.getAnnotation(UltiToolsModule.class);
         Class<?>[] additionalEntities = directlyDeclared != null
                 ? directlyDeclared.additionalEntities()
                 : new Class<?>[0];
-        return new Switches(module.cmdExecutor(), module.eventListener(), module.config(),
+        return new Switches(registersCommands, registersListeners, registersConfig,
                 Arrays.asList(additionalEntities));
     }
 
     /**
-     * Finds the {@code @UltiToolsModule} entry class among {@code classes}, the same way
-     * {@code PluginManager.loadPluginMainClass} selects a module's real entry point: carries
-     * {@code @UltiToolsModule} (merged resolution, so an inherited declaration still counts),
-     * and is neither an interface nor {@code abstract}.
+     * Finds the module's entry class among {@code classes}, the same way
+     * {@code PluginManager.loadPluginMainClass} selects a module's real entry point: a concrete
+     * (non-{@code abstract}, non-interface) {@link UltiToolsPlugin} subclass. Deliberately does
+     * NOT require {@code @UltiToolsModule} -- a module using the supported direct
+     * {@code @EnableAutoRegister}/{@code @ComponentScan} annotations instead is still a valid
+     * entry point at runtime (Codex review of PR #427).
      *
      * @param classes the loaded (uninitialized) classes to scan
      * @return the entry class, or {@code null} if none qualifies
@@ -83,14 +102,14 @@ public final class ModuleSwitchReader {
             if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) {
                 continue;
             }
-            if (MergedAnnotationResolver.find(clazz, UltiToolsModule.class) != null) {
+            if (UltiToolsPlugin.class.isAssignableFrom(clazz)) {
                 return clazz;
             }
         }
         return null;
     }
 
-    /** The three registration switches plus {@code additionalEntities()}, read from {@code @UltiToolsModule}. */
+    /** The three registration switches plus {@code additionalEntities()}. */
     public static final class Switches {
         private final boolean registersCommands;
         private final boolean registersListeners;

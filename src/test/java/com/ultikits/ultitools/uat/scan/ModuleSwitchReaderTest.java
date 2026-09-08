@@ -4,6 +4,8 @@ import com.ultikits.ultitools.uat.fixtures.additionalentities.AbstractModuleBase
 import com.ultikits.ultitools.uat.fixtures.additionalentities.ConcreteModuleNotRedeclaringAdditionalEntities;
 import com.ultikits.ultitools.uat.fixtures.additionalentities.ExternalEntity;
 import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithAdditionalEntities;
+import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithBareEnableAutoRegister;
+import com.ultikits.ultitools.uat.fixtures.additionalentities.ModuleWithNoRelevantAnnotationAtAll;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -96,5 +98,51 @@ class ModuleSwitchReaderTest {
         ModuleSwitchReader.Switches switches = new ModuleSwitchReader().read(classes);
         assertThat(switches).isNotNull();
         assertThat(switches.getAdditionalEntities()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a concrete UltiToolsPlugin subclass using bare @EnableAutoRegister (no @UltiToolsModule at all) is still identified as the entry class and resolves its switches")
+    void bareEnableAutoRegisterIsStillAValidEntryClass() {
+        // PluginManager.loadPluginMainClass selects any concrete UltiToolsPlugin subclass --
+        // NOT specifically one carrying @UltiToolsModule. The OLD findModuleEntryClass
+        // predicate (requiring @UltiToolsModule) returned null for this fixture entirely,
+        // silently treating its scan-package set as unrestricted and omitting its
+        // registration switches (Codex review of PR #427).
+        ModuleSwitchReader.Switches switches = new ModuleSwitchReader()
+                .read(Collections.singletonList(ModuleWithBareEnableAutoRegister.class));
+
+        assertThat(switches).isNotNull();
+        assertThat(switches.isRegistersCommands()).isTrue();
+        assertThat(switches.isRegistersListeners()).isFalse();
+        assertThat(switches.isRegistersConfig()).isTrue();
+        // Only @UltiToolsModule declares additionalEntities() -- bare @EnableAutoRegister has
+        // no such attribute at all.
+        assertThat(switches.getAdditionalEntities()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a concrete UltiToolsPlugin subclass with NEITHER @UltiToolsModule NOR @EnableAutoRegister still resolves switches, all false -- PluginManager.registerBukkit registers nothing for it")
+    void noRelevantAnnotationAtAllResolvesAllSwitchesFalse() {
+        // PluginManager.registerBukkit resolves EnableAutoRegister to null and returns EARLY --
+        // registering NEITHER commands NOR listeners. Defaulting to EnableAutoRegister's own
+        // annotation-default `true` here would misreport a module the runtime auto-registers
+        // nothing for (Codex review of PR #427).
+        ModuleSwitchReader.Switches switches = new ModuleSwitchReader()
+                .read(Collections.singletonList(ModuleWithNoRelevantAnnotationAtAll.class));
+
+        assertThat(switches).isNotNull();
+        assertThat(switches.isRegistersCommands()).isFalse();
+        assertThat(switches.isRegistersListeners()).isFalse();
+        assertThat(switches.isRegistersConfig()).isFalse();
+        assertThat(switches.getAdditionalEntities()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findModuleEntryClass identifies a concrete UltiToolsPlugin subclass even with no @UltiToolsModule/@EnableAutoRegister annotation at all")
+    void findModuleEntryClassIdentifiesAnyConcreteUltiToolsPluginSubclass() {
+        Class<?> entryClass = ModuleSwitchReader.findModuleEntryClass(
+                Collections.singletonList(ModuleWithNoRelevantAnnotationAtAll.class));
+
+        assertThat(entryClass).isEqualTo(ModuleWithNoRelevantAnnotationAtAll.class);
     }
 }

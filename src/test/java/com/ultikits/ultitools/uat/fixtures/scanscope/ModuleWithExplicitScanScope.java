@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.uat.fixtures.scanscope;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 /**
@@ -7,9 +8,16 @@ import com.ultikits.ultitools.annotations.UltiToolsModule;
  * does NOT include this class's own package -- proving the default-own-package fallback only
  * applies when nothing is declared, matching {@code PluginManager.getPluginScanPackages}
  * exactly (Phase 10, Codex review of PR #427).
+ * <p>
+ * Extends {@link UltiToolsPlugin} -- see {@link ModuleWithDefaultScanScope}'s javadoc for why.
  *
  * @since 6.3.0
  */
 @UltiToolsModule(scanBasePackages = "com.ultikits.ultitools.uat.fixtures.scanscope.declaredpackage")
-public final class ModuleWithExplicitScanScope {
+public final class ModuleWithExplicitScanScope extends UltiToolsPlugin {
+
+    @Override
+    public boolean registerSelf() {
+        return true;
+    }
 }

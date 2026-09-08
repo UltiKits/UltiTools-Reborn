@@ -12,4 +12,9 @@ package com.ultikits.ultitools.uat.fixtures.additionalentities;
  * @since 6.3.0
  */
 public final class ConcreteModuleNotRedeclaringAdditionalEntities extends AbstractModuleBaseWithAdditionalEntities {
+
+    @Override
+    public boolean registerSelf() {
+        return true;
+    }
 }

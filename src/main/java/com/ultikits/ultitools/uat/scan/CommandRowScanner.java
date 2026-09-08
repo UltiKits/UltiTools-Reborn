@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.uat.scan;
 
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
@@ -107,9 +108,23 @@ public final class CommandRowScanner {
             // already resolved to a different method. Emitting a row for it would ask a
             // real-machine session to exercise a subcommand that can never actually dispatch.
             Set<String> claimedFormats = new LinkedHashSet<>();
+            boolean helpDispatchShadowsMapping = isDefaultHelpCommand(clazz);
             for (Method method : ReflectionUtil.getAllMethods(clazz)) {
                 CmdMapping mapping = method.getAnnotation(CmdMapping.class);
                 if (mapping == null || !claimedFormats.add(mapping.format())) {
+                    continue;
+                }
+                // BaseCommandExecutor.onCommand intercepts a single-token "help" argument
+                // BEFORE matchMethod ever runs, dispatching to the synthesized help row
+                // instead -- a @CmdMapping(format = "help") method (a real, currently-shipping
+                // pattern: UltiToolsCommands declares exactly this) is therefore never
+                // reachable when getHelpCommand() has not been overridden away from its
+                // default "help" (Codex review of PR #427). Only excluded in that unambiguous
+                // case: if some class between this one and BaseCommandExecutor DOES override
+                // getHelpCommand(), this scanner cannot know what it returns without executing
+                // it, and silently DROPPING a possibly-legitimate row is worse than a phantom
+                // one an executor can mark blocked.
+                if (helpDispatchShadowsMapping && "help".equals(mapping.format())) {
                     continue;
                 }
                 SurfaceRow row = buildCommandRow(origin, clazz, executor, classTarget, method, mapping);
@@ -121,6 +136,24 @@ public final class CommandRowScanner {
             rows.add(help);
         }
         return rows;
+    }
+
+    /**
+     * True when {@code clazz} resolves {@code getHelpCommand()} to {@code BaseCommandExecutor}'s
+     * own default (i.e. nothing between {@code clazz} and {@code BaseCommandExecutor} overrides
+     * it) -- the unambiguous case in which the string {@code "help"} definitely triggers
+     * {@code onCommand}'s single-token help shortcut. Uses {@link ReflectionUtil#getAllMethods}
+     * (which already resolves overrides correctly) rather than {@code Class#getMethod}, since
+     * {@code getHelpCommand()} is {@code protected} and {@code getMethod} only ever finds
+     * {@code public} members.
+     */
+    private static boolean isDefaultHelpCommand(Class<?> clazz) {
+        for (Method method : ReflectionUtil.getAllMethods(clazz)) {
+            if (method.getName().equals("getHelpCommand") && method.getParameterCount() == 0) {
+                return method.getDeclaringClass() == BaseCommandExecutor.class;
+            }
+        }
+        return false;
     }
 
     private static void claim(Map<String, String> idOwners, String id, String fullyQualifiedClassName)

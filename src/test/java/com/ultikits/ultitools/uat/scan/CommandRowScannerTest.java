@@ -7,6 +7,8 @@ import com.ultikits.ultitools.uat.fixtures.AnnotatedButNotACommandExecutor;
 import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
+import com.ultikits.ultitools.uat.fixtures.HelpFormatMapping;
+import com.ultikits.ultitools.uat.fixtures.HelpFormatMappingWithOverriddenHelpCommand;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.AmbiguousCmdTargetComposition;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.RedeclaringSubclassWithoutTarget;
@@ -137,6 +139,33 @@ class CommandRowScannerTest {
                 .scan("Fixture", Arrays.asList(AmbiguousCmdTargetComposition.class));
 
         assertThat(rows).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a @CmdMapping(format = \"help\") is skipped when getHelpCommand() is not overridden -- BaseCommandExecutor.onCommand intercepts the single-token \"help\" argument before matchMethod ever runs")
+    void helpFormatMappingIsSkippedWhenHelpCommandIsNotOverridden() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(HelpFormatMapping.class));
+
+        Map<String, Object> goRow = fieldMapOf(rows, "go");
+        assertThat(goRow.get("format")).isEqualTo("go");
+
+        boolean hasShadowedHelpMappingRow = rows.stream()
+                .anyMatch(row -> "help".equals(row.toFieldMap().get("member")));
+        assertThat(hasShadowedHelpMappingRow).isFalse();
+
+        // Exactly two rows: the "go" command and the synthesized help row -- not three.
+        assertThat(rows).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("a @CmdMapping(format = \"help\") is NOT skipped when getHelpCommand() IS overridden -- the scanner cannot know what the override returns without executing it")
+    void helpFormatMappingIsNotSkippedWhenHelpCommandIsOverridden() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(HelpFormatMappingWithOverriddenHelpCommand.class));
+
+        Map<String, Object> helpMappingRow = fieldMapOf(rows, "help");
+        assertThat(helpMappingRow.get("format")).isEqualTo("help");
     }
 
     @Test
