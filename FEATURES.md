@@ -45,7 +45,7 @@ for UAT execution and issue reconciliation — the public description of these f
   declare in the first place, which is a different fact from a command that declares `none`
   deliberately.
 - **Source:** `ClassName#member` — the class and member that actually reads or applies the
-  feature — for every Kind, `config` included: all 52 `config` rows below cite the reading
+  feature — for every Kind, `config` included: all 53 `config` rows below cite the reading
   member (e.g. `JsonStore#initScheduler`, `UltiTools#initDataStore`), not the resource path,
   because the resource path is already stated in the How-to-reach column and does not by itself
   say what code does with the key. `ClassName#member` for a `config` row need not be an
