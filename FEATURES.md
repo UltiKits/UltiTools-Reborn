@@ -25,14 +25,19 @@ for UAT execution and issue reconciliation — the public description of these f
   not from whether it carries a permission string — most command executors in this repository
   carry one, so judging by the string alone would make nearly everything `admin`.
 - **Manual**, exactly three: `detailed`, `brief`, `none`.
-- **Target**, exactly three: `player`, `console`, `both` — read straight off `@CmdTarget`; it is
-  a property, not a tier.
-- **Permission:** the literal node string, or the word `none`. `none` means no permission-node
+- **Target**, exactly four: `player`, `console`, `both`, or `n/a` — the first three read straight
+  off `@CmdTarget` for a `command` row; it is a property, not a tier. `n/a` is for every other
+  Kind (`config`, `event`, `gate`, `gui`, `persistence`, `scheduled`, `placeholder`) — the concept
+  of "who this targets" does not apply to a config key or a background task the way it applies to
+  a command.
+- **Permission:** the literal node string, `none`, or `n/a`. `none` means no permission-node
   restriction at all, for anyone — `PermissionValidator` treats an empty `permission()` as no
   check to run, not as an implicit OP requirement. OP-only access, where it exists (e.g. every
   `/ul`/`/upm`/`/ulticloud` command in this repository), comes from the separate `@CmdExecutor`
   class-level `requireOp` flag, a different mechanism entirely; a row's Permission column being
-  `none` says nothing about whether its class also carries `requireOp=true`.
+  `none` says nothing about whether its class also carries `requireOp=true`. `n/a` is for every
+  Kind that is not `command` — a config key or a scheduled task has no permission node to declare
+  in the first place, which is a different fact from a command that declares `none` deliberately.
 - **Source:** `ClassName#member`, or the resource path for a `config` row.
 - **Row order:** by section, then by ID ascending within the section.
 - **No manual prose:** no troubleshooting column, no explanatory paragraphs, no draft page text.
@@ -184,6 +189,19 @@ check have no annotation-based instrument in this codebase.
 |---|---|---|---|---|---|---|---|---|
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | console | admin | brief | UltiTools#initLanguage |
 
+## WebSocket connection liveness
+
+`UltiPanelWebSocketClient#heartbeatTick` runs every `HEARTBEAT_INTERVAL_SECONDS` (60 s) once
+connected: check whether a `pong` arrived within `PONG_TIMEOUT_MS` (120 s, twice the interval)
+first, and only send the next `ping` if so. This ordering exists because a TCP connection can go
+silently dead without ever firing `onClose` — the check-first design is what actually detects
+that state, rather than pings going out forever into a dead socket that never signals failure.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.heartbeat | Send a `ping` every 60 s while connected, and record the round-trip latency from each `pong` reply | event | automatic, while connected | n/a | n/a | internal | none | UltiPanelWebSocketClient#heartbeatTick |
+| ultitools.remote.heartbeat-timeout-reconnect | Detect a silently-dead connection (no `pong` for 120 s) and force a reconnect via `close(4000, ...)`, routing through the existing reconnect state machine rather than a second path | event | automatic, when no `pong` arrives for 120 s | n/a | n/a | internal | brief | UltiPanelWebSocketClient#heartbeatTick |
+
 ## Connection-time synchronization
 
 Three steps `PluginInitiationUtils#onWebSocketOpened` runs, in order, on every successful
@@ -228,11 +246,12 @@ gated by the same capability.
 | ultitools.remote.player-event-world-change | Relay a player's world change to the panel as `player_event`/`player_world_change`, naming both the origin and destination world | event | a player changing worlds while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerChangedWorld |
 
 **Reconciliation note (D-07), continued:** these four rows, plus the three `Connection-time
-synchronization` rows above (`ultitools.remote.connection-subscribe`,
-`ultitools.remote.connection-config-upload`,
-`ultitools.remote.connection-server-properties-upload` — triggered by a Bukkit `WebSocket`
-connect callback, not an `@EventListener`-scanned method either), add to the `event`-Kind total
-the boot-section note above already covers, bringing the repository-wide total to twelve
+synchronization` rows and the two `WebSocket connection liveness` rows above
+(`ultitools.remote.connection-subscribe`, `ultitools.remote.connection-config-upload`,
+`ultitools.remote.connection-server-properties-upload`, `ultitools.remote.heartbeat`,
+`ultitools.remote.heartbeat-timeout-reconnect` — all triggered by direct Bukkit/WebSocket-client
+callbacks, none an `@EventListener`-scanned method), add to the `event`-Kind total the
+boot-section note above already covers, bringing the repository-wide total to fourteen
 `event`-Kind rows against the repository's one `@EventListener` site, still zero additional
 annotation sites — `PlayerEventManager implements Listener` and self-registers via a direct
 `Bukkit.getPluginManager().registerEvents(this, plugin)` call, the same registration shape as
