@@ -184,6 +184,17 @@ check have no annotation-based instrument in this codebase.
 |---|---|---|---|---|---|---|---|---|
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | console | admin | brief | UltiTools#initLanguage |
 
+## Connection-time synchronization
+
+Two outbound pushes `PluginInitiationUtils#onWebSocketOpened` runs on every successful WebSocket
+connection (fresh login, and every reconnect), before either capability's own inbound message
+type applies its own gate.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.connection-config-upload | Unconditionally push the framework's full config map (as `type: "upload_config"`, `configType: "plugin_config"`, `configName: "UltiTools.yml"`, plus a `comment` map) to the panel on every successful connection — no capability gates this outbound push, unlike the inbound `upload_config`/`update_config` editing routes it superficially resembles | event | automatic, on WebSocket connect or reconnect | n/a | console | admin | brief | PluginInitiationUtils#uploadConfig |
+| ultitools.remote.connection-server-properties-upload | Push the safe-key `server.properties` map to the panel on every successful connection, as `type: "server_properties_result"` — the SAME message type the inbound `get` reply above uses, gated by `Capability.SERVER_PROPERTIES`; skipped entirely (not even attempted) when `getSafeProperties()` is empty | event | automatic, on WebSocket connect or reconnect, when `ultipanel.capabilities.server-properties: true` | n/a | console | admin | brief | PluginInitiationUtils#uploadServerProperties |
+
 ## Panel capabilities
 
 Eight independently-switchable panel-facing capabilities, each with its own
@@ -215,12 +226,16 @@ gated by the same capability.
 | ultitools.remote.player-event-kick | Relay a player kick to the panel as `player_event`/`player_kick`, with the kick reason and whether the kick was cancelled | event | a player kick while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerKick |
 | ultitools.remote.player-event-world-change | Relay a player's world change to the panel as `player_event`/`player_world_change`, naming both the origin and destination world | event | a player changing worlds while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerChangedWorld |
 
-**Reconciliation note (D-07), continued:** these four rows add to the `event`-Kind total the
-boot-section note above already covers, bringing it to nine `event`-Kind rows against the
-repository's one `@EventListener` site, still zero additional annotation sites — `PlayerEventManager
-implements Listener` and self-registers via a direct `Bukkit.getPluginManager().registerEvents(this,
-plugin)` call, the same registration shape as `PlayerJoinListener`/`UpdateJoinListener` already
-explained above, not the framework's own `@EventListener` mechanism.
+**Reconciliation note (D-07), continued:** these four rows, plus the two `Connection-time
+synchronization` rows above (`ultitools.remote.connection-config-upload`,
+`ultitools.remote.connection-server-properties-upload` — triggered by a Bukkit `WebSocket`
+connect callback, not an `@EventListener`-scanned method either), add to the `event`-Kind total
+the boot-section note above already covers, bringing the repository-wide total to eleven
+`event`-Kind rows against the repository's one `@EventListener` site, still zero additional
+annotation sites — `PlayerEventManager implements Listener` and self-registers via a direct
+`Bukkit.getPluginManager().registerEvents(this, plugin)` call, the same registration shape as
+`PlayerJoinListener`/`UpdateJoinListener` already explained above, not the framework's own
+`@EventListener` mechanism.
 
 ## Inbound notifications
 
@@ -257,7 +272,7 @@ the same status payload `batch_update` carries), `metrics_data`
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.remote.on-demand-server-status | Immediately reply with current server status outside the 5 s `batch_update` cycle | gate | `server_status` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendServerStatusWithRequestId |
-| ultitools.remote.on-demand-metrics | Immediately reply with current performance metrics outside the 5 s cycle | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
+| ultitools.remote.on-demand-metrics | Immediately reply with current performance metrics (`playerActivity`, `serverPerformance`, `pluginUsage`) outside the 5 s cycle; `serverPerformance.diskUsage` is unconditionally hardcoded to `0.0`, never a real reading — a known product defect (UltiKits/UltiTools-Reborn#436), not fixed here per this plan's zero-new-code rule | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
 | ultitools.remote.on-demand-plugin-list | Immediately reply with every Bukkit plugin's name, version, enabled state, author, and description — every plugin, not just UltiTools modules | gate | `plugin_list` panel message with a `requestId` | n/a | console | admin | none | PluginInitiationUtils#handlePluginListRequest |
 
 ## Log stream controls
