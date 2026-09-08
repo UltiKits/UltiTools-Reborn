@@ -102,6 +102,21 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     die "版本号 ${VERSION} 不符合 MAJOR.MINOR.PATCH 格式。"
 fi
 
+# tools/uat-surface 是与框架同仓库、但独立发布的内部工具产物
+# (com.ultikits:ultitools-uat-tools，D-10-03 2026-09-08 修订)。它必须与框架
+# 同版本号发布，否则十七个模块仓库的 CI drift guard 会解析到不存在或不匹配
+# 的坐标。放在这里而不是构建之后：越早失败，离打 tag 越远，且这条检查本身
+# 廉价（只是再读一次 pom.xml）。
+echo "▶ 校验 ultitools-uat-tools 版本与框架一致"
+TOOL_VERSION="$(mvn -B -q -f tools/uat-surface/pom.xml help:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null | tail -1 | tr -d '[:space:]')"
+[ -n "$TOOL_VERSION" ] || die "从 tools/uat-surface/pom.xml 读不出版本号。"
+note "tools/uat-surface/pom.xml: ${TOOL_VERSION}"
+if [ "$VERSION" != "$TOOL_VERSION" ]; then
+    die "版本不一致：框架 pom.xml 是 ${VERSION}，tools/uat-surface/pom.xml（ultitools-uat-tools）是 ${TOOL_VERSION}。
+        两者必须以同一版本号发布，否则模块仓库的 CI 会解析到不匹配的坐标 (D-10-03)。
+        先把两边的 <version> 对齐再重新发布。"
+fi
+
 TAG="v${VERSION}"
 
 # ---------------------------------------------------------------- tag 冲突

@@ -28,8 +28,9 @@
 # Scope enumeration:
 #   Candidate files come from `git ls-files -- <scope>`, never a bare `find` or a recursive `grep`
 #   over the working tree — this keeps untracked and gitignored paths out of the scan and makes
-#   the file list deterministic. Default scope is three areas: src/main/java, .github/workflows,
-#   and the buildtools test package (src/test/java/com/ultikits/ultitools/buildtools).
+#   the file list deterministic. Default scope is four areas: src/main/java, .github/workflows,
+#   the buildtools test package (src/test/java/com/ultikits/ultitools/buildtools), and
+#   tools/uat-surface/src/main/java.
 #
 #   Scope correction (08-17, "08-SAME-LINE-CJK-RESIDUE.md" DECISIVE MEASUREMENT section): the
 #   default scope used to be src/main (which also pulls in src/main/resources). GATE-02 and
@@ -42,6 +43,14 @@
 #   either miss that runtime-generated portion or contradict it. Narrowed to src/main/java, which
 #   is unambiguously in criterion 2's scope and contains no such runtime-generated content.
 #   This is a deliberate scope narrowing, not a silent one — see the commit that made this change.
+#
+#   Scope widening (Phase 10 plan 10-05, Task 3): tools/uat-surface/src/main/java was added
+#   deliberately, not silently. Its 14 classes lived inside src/main/java (and so were already
+#   gated here) until Phase 10 plan 10-05's Task 2 moved them into their own Maven project
+#   (D-10-03 as amended 2026-09-08); this restores the coverage that move would otherwise have
+#   removed. Its test/java is deliberately NOT added: this project's own src/test/java is out of
+#   scope except for the buildtools carve-out above, and the tool's tests are the same kind of
+#   thing as that exclusion, not an exception to it.
 #
 #   Two structural exclusions apply regardless of --scope:
 #     - lang/*.json catalogue files (src/main/resources/lang/{en,zh}.json) are never scanned.
@@ -159,6 +168,7 @@ if [ ${#SCOPES[@]} -eq 0 ]; then
         "src/main/java"
         ".github/workflows"
         "src/test/java/com/ultikits/ultitools/buildtools"
+        "tools/uat-surface/src/main/java"
     )
 fi
 

@@ -26,13 +26,30 @@ jobs:
         cache: maven
 
     - name: 🧪 Build & Test with Coverage
-      # verify, not test: the shade filters, resource filtering, jar packaging and javadoc
-      # generation are all bound to the package phase, so running test alone would leave them
-      # to execute for the first time only after merging.
+      # install, not verify: `install` is a superset of `verify` (Phase 10, D-10-03 as amended
+      # 2026-09-08) -- the tools/uat-surface sibling project below declares UltiTools-API as a
+      # `provided` dependency, and Maven can only resolve that from the *local* repository, not
+      # this job's own reactor (there is no reactor; tools/uat-surface is a separate, non-module
+      # Maven project by design -- see tools/uat-surface/pom.xml's own comment). `install` is
+      # what puts the just-built jar there. The shade filters, resource filtering, jar packaging
+      # and javadoc generation are all bound to the package phase either way, so this still
+      # exercises them before merging.
       # No need to disable signing: maven-gpg-plugin lives only in the release profile and is
       # not active by default.
-      run: mvn -B clean verify
-      
+      run: mvn -B clean install
+
+    - name: 🛠️ Build & Test the UAT surface extractor tool project
+      # Phase 10, D-10-03 as amended 2026-09-08: com.ultikits:ultitools-uat-tools is build-time
+      # tooling, published as its own artifact rather than shipped inside the plugin jar, so it
+      # is not part of any reactor and gets its own Maven invocation. Run in this same job,
+      # after the framework has been installed above, rather than a new job: the `test` job is
+      # the sole required status check on both alpha and main, and adding a second job would
+      # need a branch-protection change nobody has asked for. Deliberately no `-U` here -- the
+      # framework snapshot this project resolves must be the one the previous step just
+      # installed into this runner's local repository, not whatever the remote snapshot
+      # repository last accepted.
+      run: mvn -B -f tools/uat-surface/pom.xml clean test
+
     - name: 🇨🇳 CJK Comment/Javadoc Scope Gate
       # D-11/D-20: enforces the publication-language constraint (English-first comments and
       # javadoc, Chinese as a supplement) over src/main/java, .github/workflows and the

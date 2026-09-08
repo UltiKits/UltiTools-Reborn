@@ -27,26 +27,55 @@ jobs:
           server-username: SONATYPE_USERNAME
           server-password: SONATYPE_PASSWORD
 
-      - name: Refuse to publish a non-SNAPSHOT version
-        # This workflow fires on every push to alpha. Without this guard, a branch that ever
-        # carries a release version (e.g. mid-release-prep, or a maintainer mistake) would
-        # publish a release from a routine push -- breaching the standing rule that a release
-        # requires an explicit maintainer instruction. A -SNAPSHOT project version is required
-        # to reach the deploy step below.
+      - name: Refuse to publish a non-SNAPSHOT version, or a version mismatch between the two artifacts
+        # This workflow fires on every push to alpha. Without the -SNAPSHOT half of this guard,
+        # a branch that ever carries a release version (e.g. mid-release-prep, or a maintainer
+        # mistake) would publish a release from a routine push -- breaching the standing rule
+        # that a release requires an explicit maintainer instruction.
+        #
+        # The equality half (Phase 10, D-10-03 as amended 2026-09-08) is what actually holds
+        # the lockstep between the framework and tools/uat-surface's ultitools-uat-tools --  a
+        # sentence in a checklist cannot enforce that, only a machine check reading both poms
+        # can. Both versions are emitted into the log unconditionally, not just on failure, so a
+        # mismatch is diagnosable from the run alone without needing to reproduce it locally.
         run: |
           set -euo pipefail
           VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
-          echo "Project version: ${VERSION}"
+          TOOL_VERSION="$(mvn -B -q -f tools/uat-surface/pom.xml help:evaluate -Dexpression=project.version -DforceStdout)"
+          echo "Framework project.version: ${VERSION}"
+          echo "Tool (ultitools-uat-tools) project.version: ${TOOL_VERSION}"
           if [[ "${VERSION}" != *-SNAPSHOT ]]; then
             echo "::error::project.version [${VERSION}] does not end in -SNAPSHOT -- refusing to publish. This workflow only ever publishes snapshots; releases require an explicit maintainer instruction."
             exit 1
           fi
+          if [[ "${TOOL_VERSION}" != *-SNAPSHOT ]]; then
+            echo "::error::tools/uat-surface/pom.xml's project.version [${TOOL_VERSION}] does not end in -SNAPSHOT -- refusing to publish."
+            exit 1
+          fi
+          if [[ "${VERSION}" != "${TOOL_VERSION}" ]]; then
+            echo "::error::version mismatch -- framework is [${VERSION}], ultitools-uat-tools is [${TOOL_VERSION}]. These must be published in lockstep (D-10-03)."
+            exit 1
+          fi
 
-      - name: Deploy snapshot to Central
+      - name: Deploy framework snapshot to Central
         # Deliberately does not activate the release Maven profile: that profile exists only
         # to attach GPG signing, and Sonatype performs no validation on snapshot deploys, so
         # signing is neither required nor meaningful for this job.
+        #
+        # Ordering matters for the next step: `deploy` runs `install` as part of the same Maven
+        # lifecycle, which is what puts this framework jar in the runner's local repository for
+        # ultitools-uat-tools's `provided` dependency on it to resolve against.
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
         run: mvn -B deploy -DskipTests
+
+      - name: Deploy UAT surface extractor tool snapshot to Central
+        # Phase 10, D-10-03 as amended 2026-09-08: published from the same workflow run as the
+        # framework, at the version the guard above just proved matches, so the seventeen
+        # module-side CI drift guards can resolve it. Runs after the framework's own deploy --
+        # see that step's comment for why the order is load-bearing, not incidental.
+        env:
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        run: mvn -B -f tools/uat-surface/pom.xml deploy -DskipTests

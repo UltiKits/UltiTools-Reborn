@@ -4,6 +4,24 @@ This document explains what the version numbers of `com.ultikits:UltiTools-API` 
 deprecation and removal work, and which removals are currently scheduled. It is written for
 downstream module authors.
 
+## Scope of this contract
+
+**Everything in this document applies to `com.ultikits:UltiTools-API` only.**
+
+This repository also publishes a second artifact, `com.ultikits:ultitools-uat-tools` (Phase 10,
+D-10-03, amended 2026-09-08) — internal release tooling for the UAT surface extractor, resolved
+by the seventeen UltiKits module repositories' own CI, never carried inside the `UltiTools-API`
+plugin jar. It is versioned in lockstep with `UltiTools-API` (the same snapshot and release
+workflows refuse to publish one without the other at a matching version), but that is a deployment
+convenience, not a compatibility promise. `ultitools-uat-tools` carries **none** of this document's
+guarantees: its classes, its entry point (`SurfaceExtractorMain`), and the JSON field names its
+extractor emits may change or be removed in any release, including a patch, without notice and
+without appearing in the removal list below. The `japicmp` binary-compatibility gate (see
+"Binary incompatibilities the removal list cannot cover") diffs only `UltiTools-API` — this is the
+mechanism that enforces the scope stated here, not merely a description of it. It is not advertised
+to third-party module authors as a stable dependency; see `UAT-MATRIX-SCHEMA.md` for what it is
+and how the module-side tooling resolves it.
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**

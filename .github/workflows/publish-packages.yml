@@ -56,9 +56,17 @@ jobs:
         cache: maven
 
     - name: 🔧 Set version from release tag
+      # The root invocation does not reach tools/uat-surface's sibling pom -- run versions:set
+      # against it too, or a release would publish UltiTools-API at the released version while
+      # ultitools-uat-tools still said -SNAPSHOT, breaking the lockstep D-10-03 requires (Phase
+      # 10 plan 10-05, Task 3). This job does not deploy the tool artifact itself -- see
+      # publish-central below for that -- but keeps the checkout's version state consistent
+      # with the other job so neither pom is left stale mid-workflow.
       env:
         VERSION: ${{ needs.validate.outputs.version }}
-      run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+      run: |
+        mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+        mvn -f tools/uat-surface/pom.xml versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
     - name: 🔨 Build package
       # GitHub Packages does not require signing, so the release profile is not activated.
@@ -235,11 +243,16 @@ jobs:
       run: .github/scripts/check-gpg-expiry.sh --mode secret --warn-days 30
 
     - name: 🔧 Set version from release tag
+      # Same lockstep requirement as publish-github's equivalent step -- see its comment. This
+      # job is the one that actually deploys ultitools-uat-tools (below), so this versions:set
+      # is load-bearing here, not just for consistency.
       env:
         VERSION: ${{ needs.validate.outputs.version }}
-      run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+      run: |
+        mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+        mvn -f tools/uat-surface/pom.xml versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
-    - name: 📤 Publish to Maven Central
+    - name: 📤 Publish framework to Maven Central
       env:
         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
@@ -248,3 +261,15 @@ jobs:
       # signed artifacts. Omitting it would not silently ship an unsigned artifact -- Central's
       # own validation rejects it outright.
       run: mvn -B deploy -P release -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
+
+    - name: 📤 Publish UAT surface extractor tool to Maven Central
+      # Phase 10, D-10-03 as amended 2026-09-08: same release profile, for the same reason --
+      # Central rejects unsigned artifacts regardless of which pom they come from. Runs after
+      # the framework's own publish, mirroring snapshot-publish.yml's ordering (the framework
+      # jar must be installed into the local repository before this project's `provided`
+      # dependency on it can resolve).
+      env:
+        SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+        SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+      run: mvn -B -f tools/uat-surface/pom.xml deploy -P release -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
