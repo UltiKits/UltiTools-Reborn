@@ -156,6 +156,13 @@ before the next login re-runs `wireManagers`.
 | ultitools.capability.server-properties | `ultipanel.capabilities.server-properties: true` | Send a `server_properties` edit for a key on `ServerPropertiesManager`'s safe-key list | The key is written to `server.properties` and the response reports success | server | |
 | ultitools.capability.server-properties.neg-disabled | `ultipanel.capabilities.server-properties: false` (shipped default) | Send a `server_properties` edit | The edit is refused with the reason naming `ultipanel.capabilities.server-properties` | server | |
 
+## Backup operations (placeholder)
+
+| ID | Preconditions | Steps | Expected | Layer | Covers |
+|---|---|---|---|---|---|
+| ultitools.remote.backup-operation | `ultipanel.capabilities.file-write: true` | Send a `backup_operation` panel message with `operation` and `operationId` set | One INFO-level console line naming the operation type and ID appears — the line itself is Chinese, not i18n'd, per `handleBackupOperation`'s literal source string; no reply message is sent, no backup file is produced — this is a disclosed placeholder, not a checklist error | server | |
+| ultitools.remote.backup-progress | Console access (`Capability.NONE`, no capability gate) | Send a `backup_progress` panel message with `operationId`/`progress`/`currentStep`/`completed` set | One INFO-level console line naming the operation ID, progress percentage, current step, and completion flag appears — the line itself is Chinese, not i18n'd, per `handleBackupProgress`'s literal source string; no reply message is sent, no observable state changes | server | |
+
 ## On-demand monitoring requests
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |
@@ -163,6 +170,9 @@ before the next login re-runs `wireManagers`.
 | ultitools.remote.on-demand-server-status | `ultipanel.capabilities.monitoring: true` (shipped default) | Send a `server_status` panel message with a `requestId`, without waiting for the next `batch_update` cycle | A `server_status` reply arrives before the next 5 s cycle boundary, echoing `requestId` and carrying the same status fields `batch_update` reports | server | |
 | ultitools.remote.on-demand-metrics | `ultipanel.capabilities.monitoring: true` (shipped default) | Send a `metrics_data` panel message with a `requestId` | A `metrics_data` reply arrives immediately, echoing `requestId` | server | |
 | ultitools.remote.on-demand-plugin-list | `ultipanel.capabilities.monitoring: true` (shipped default); at least one non-UltiTools Bukkit plugin also installed | Send a `plugin_list` panel message with a `requestId` | A `plugin_list` reply arrives with `data.plugins` listing every installed Bukkit plugin (not only UltiTools modules), each with `name`/`version`/`enabled`/`author`/`description`, and `data.totalCount` matching the array length | server | |
+| ultitools.remote.on-demand-server-status.neg-disabled | `ultipanel.capabilities.monitoring: false` (not the shipped default) | Send a `server_status` panel message with a `requestId` | Refused, naming `ultipanel.capabilities.monitoring` — these three on-demand requests share the same `Capability.MONITORING` gate as the periodic `batch_update`, dispatched through `dispatchWithCapabilityGate` before any of the three handlers run | server | |
+| ultitools.remote.on-demand-metrics.neg-disabled | `ultipanel.capabilities.monitoring: false` (not the shipped default) | Send a `metrics_data` panel message with a `requestId` | Refused, naming `ultipanel.capabilities.monitoring` | server | |
+| ultitools.remote.on-demand-plugin-list.neg-disabled | `ultipanel.capabilities.monitoring: false` (not the shipped default) | Send a `plugin_list` panel message with a `requestId` | Refused, naming `ultipanel.capabilities.monitoring` | server | |
 
 ## Log stream controls
 

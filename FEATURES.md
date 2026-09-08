@@ -201,6 +201,21 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.player-events | Allow the panel to receive live player join/quit/chat events; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
 
+## Backup operations (placeholder)
+
+`backup_operation` (`Capability.FILE_WRITE`-gated) and `backup_progress` (`Capability.NONE`) are
+registered inbound message types whose handlers are, by the code's own comment, "a pure logging
+placeholder today" with "declared intent" toward a real file-producing backup operation —
+neither `PluginInitiationUtils#handleBackupOperation` nor `#handleBackupProgress` does anything
+beyond logging the received fields at `INFO`, and neither sends any reply. This is a disclosed,
+intentional stub, not a silent regression risk the way the other no-ops on this page are — there
+is no working behavior for a checklist row to protect yet.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.backup-operation | Currently a logging-only placeholder: accepts and logs `operation`/`operationId`, performs no backup and sends no reply | gate | `backup_operation` panel message | n/a | console | internal | none | PluginInitiationUtils#handleBackupOperation |
+| ultitools.remote.backup-progress | Currently a logging-only placeholder: accepts and logs `operationId`/`progress`/`currentStep`/`completed`, has no effect and sends no reply | gate | `backup_progress` panel message | n/a | console | internal | none | PluginInitiationUtils#handleBackupProgress |
+
 ## On-demand monitoring requests
 
 Beyond the periodic `batch_update` (5 s cycle, per the Panel capabilities section above),
