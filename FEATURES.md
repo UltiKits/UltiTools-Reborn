@@ -85,13 +85,21 @@ by reading the file directly at lines 30, 41, 65 and 70 (`reload`, `reload <name
 `@CmdTarget(BOTH)`. `grep -c '@CmdMapping' PluginInstallCommands.java` returns 8 — confirmed by
 reading the file directly (`list <page>`, `list`, `install <plugin> <version>`,
 `install <plugin>`, `versions <plugin>`, `uninstall <plugin>`, `check`, `update <plugin>`),
-matching D-08's independently stated count exactly. This section carries 9 rows, not 8: `/upm
-help` (also the bare `/upm` with no arguments) is reachable and operator-visible, but has no
-`@CmdMapping` site — `BaseCommandExecutor#onCommand` short-circuits a `help` argument before
-format-matching and dispatches straight to `PluginInstallCommands#handleHelp`, an override with no
-annotation. Unlike `/ul help` (its own `@CmdMapping(format = "help")` site, counted above), the
-`@CmdMapping` reconciliation line for this repository stays at 15, not 16 — this row's absence
-from that count is deliberate, not an omission.
+matching D-08's independently stated count exactly. This section carries 10 rows, not 8, for two
+reasons, neither an omission. First: `/upm help` (also the bare `/upm` with no arguments) is
+reachable and operator-visible, but has no `@CmdMapping` site — `BaseCommandExecutor#onCommand`
+short-circuits a `help` argument before format-matching and dispatches straight to
+`PluginInstallCommands#handleHelp`, an override with no annotation. Unlike `/ul help` (its own
+`@CmdMapping(format = "help")` site, counted above), the `@CmdMapping` reconciliation line for
+this repository stays at 15, not 16 or 17 — neither of this section's two extra rows is counted
+against it. Second: `update <plugin>` is one `@CmdMapping` site whose method,
+`PluginInstallCommands#updatePlugin`, internally branches on whether the argument is the literal
+string `all` — two materially different, independently-observable behaviors
+(`ultitools.upm.update` for one named module; `ultitools.upm.update-all` for
+`PluginInstallCommands#updateAllPlugins`'s own iteration and partial-failure accounting) sharing
+one annotation site, split into two rows here so the checklist can cite a real feature ID for
+each rather than inventing a non-negative ID-suffix convention this document does not otherwise
+use.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
@@ -102,7 +110,8 @@ from that count is deliberate, not an omission.
 | ultitools.upm.list | List page 1 of the plugins available on UltiCloud | command | `/upm list` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listPlugins(sender) |
 | ultitools.upm.list-page | List a chosen page of the plugins available on UltiCloud | command | `/upm list <page>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listPlugins(sender,page) |
 | ultitools.upm.uninstall | Uninstall a plugin and report where its files still live | command | `/upm uninstall <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#uninstallPlugin |
-| ultitools.upm.update | Update one named module, or every module with an available update | command | `/upm update <plugin\|all>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#updatePlugin |
+| ultitools.upm.update | Update one named module | command | `/upm update <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#updatePlugin |
+| ultitools.upm.update-all | Update every module with an available update in one command, with per-module partial-failure accounting | command | `/upm update all` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#updateAllPlugins |
 | ultitools.upm.versions | List every version of a plugin available on UltiCloud | command | `/upm versions <plugin>` | none (requireOp=true) | both | admin | brief | PluginInstallCommands#listVersions |
 
 ## /ulticloud — cloud authentication
@@ -196,8 +205,11 @@ funnels through the same `Capability#isEnabled()` accessor.
 
 The `update_config` panel message, gated by `Capability.FILE_WRITE` (not a dedicated capability
 of its own), reaches `PluginInitiationUtils#handleConfigUpdate` and branches on the message's
-`fileName` field into three shapes, replying with one `config_update_response` (`success`/`error`
-plus message) per request. This targets `ConfigManager`'s registered `@ConfigEntity` files — this
+`fileName` field into three shapes. A reply is sent only when the inbound message carried a
+`requestId` — `sendConfigUpdateResponse` returns without sending anything otherwise — as one
+`config_update_response` whose nested `data` holds `requestId` (echoed) and `status: "success"` or
+`status: "error"` (plus an `error` message field when failed); the field is `status`, a string, not
+a boolean `success` field. This targets `ConfigManager`'s registered `@ConfigEntity` files — this
 framework itself has zero such classes (see the Configuration section above), so this path is
 scoped to loaded modules' own configs, not the framework's own `config.yml`, except the
 special-cased `server.properties` branch below.
