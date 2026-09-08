@@ -4,6 +4,7 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.SurfaceRow;
 import com.ultikits.ultitools.uat.fixtures.AnnotatedButNotACommandExecutor;
+import com.ultikits.ultitools.uat.fixtures.BothPermissionLevelsCommand;
 import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
@@ -183,6 +184,27 @@ class CommandRowScannerTest {
         assertThat(helpRow.get("trigger")).asString()
                 .doesNotContain("/helpoverridden help")
                 .contains("cannot be statically resolved");
+    }
+
+    @Test
+    @DisplayName("a class-level AND a method-level permission are both preserved, not one overriding the other -- PermissionValidator checks them conjunctively")
+    void bothPermissionLevelsAreRepresentedConjunctively() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(BothPermissionLevelsCommand.class));
+
+        Map<String, Object> goRow = fieldMapOf(rows, "go");
+        assertThat(goRow.get("permission")).isEqualTo("uat.base");
+        assertThat(goRow.get("mapping_permission")).isEqualTo("uat.mapping");
+    }
+
+    @Test
+    @DisplayName("a row with no method-level permission carries no mapping_permission field at all")
+    void noMethodLevelPermissionMeansNoMappingPermissionField() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(TracerCommands.class));
+
+        Map<String, Object> echoRow = fieldMapOf(rows, "onEcho");
+        assertThat(echoRow).doesNotContainKey("mapping_permission");
     }
 
     @Test

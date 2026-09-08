@@ -140,6 +140,13 @@ def describe_steps(item, switches=None):
     kind = item.get('kind')
     if kind in ('command', 'help'):
         steps = item.get('trigger', '')
+        cmd_target = item.get('cmd_target')
+        if cmd_target in ('PLAYER', 'CONSOLE'):
+            # SenderTypeValidator rejects invocation from the OTHER sender type -- omitting
+            # this from the rendered steps let an executor try from the wrong context and
+            # record a false failure for a command that was never reachable from there at all
+            # (Codex review of PR #427). BOTH is not a real restriction and gets no note.
+            steps += ' [{}-only -- invoking from the other sender type is rejected]'.format(cmd_target)
         if item.get('manual_register'):
             # CommandManager.register's autowire-and-register path is skipped entirely for
             # an @CmdExecutor(manualRegister = true) class -- the module itself must call

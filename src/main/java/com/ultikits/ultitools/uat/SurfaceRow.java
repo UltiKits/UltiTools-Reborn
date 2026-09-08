@@ -28,6 +28,7 @@ public final class SurfaceRow {
     private final String format;
     private final List<String> aliases;
     private final String permission;
+    private final String mappingPermission;
     private final boolean requireOp;
     private final boolean manualRegister;
     private final String cmdTarget;
@@ -47,6 +48,7 @@ public final class SurfaceRow {
         this.format = builder.format;
         this.aliases = builder.aliases;
         this.permission = builder.permission;
+        this.mappingPermission = builder.mappingPermission;
         this.requireOp = builder.requireOp;
         this.manualRegister = builder.manualRegister;
         this.cmdTarget = builder.cmdTarget;
@@ -78,6 +80,14 @@ public final class SurfaceRow {
         map.put("format", format);
         map.put("aliases", aliases);
         map.put("permission", permission);
+        // PermissionValidator checks the class-level (`permission`, above) and method-level
+        // permission CONJUNCTIVELY -- a sender needs BOTH when both are declared, never either
+        // one overriding the other (Codex review of PR #427). Emitted only when the mapping
+        // itself declares one, so a row with no method-level permission stays unchanged from
+        // before this field existed.
+        if (mappingPermission != null && !mappingPermission.isEmpty()) {
+            map.put("mapping_permission", mappingPermission);
+        }
         map.put("require_op", requireOp);
         map.put("manual_register", manualRegister);
         if (cmdTarget != null) {
@@ -110,6 +120,7 @@ public final class SurfaceRow {
         private String format;
         private List<String> aliases;
         private String permission;
+        private String mappingPermission;
         private boolean requireOp;
         private boolean manualRegister;
         private String cmdTarget;
@@ -164,6 +175,11 @@ public final class SurfaceRow {
 
         public Builder permission(String value) {
             this.permission = value;
+            return this;
+        }
+
+        public Builder mappingPermission(String value) {
+            this.mappingPermission = value;
             return this;
         }
 

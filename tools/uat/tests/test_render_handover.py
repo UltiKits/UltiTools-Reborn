@@ -557,6 +557,53 @@ def test_absent_registration_switches_add_no_note(tmp_path):
     assert 'cmdExecutor=false' not in document
 
 
+def test_a_player_only_command_row_states_that_in_its_steps(tmp_path):
+    # SenderTypeValidator rejects invocation from the OTHER sender type -- omitting this from
+    # the rendered steps let an executor try from the wrong context and record a false
+    # failure for a command that was never reachable from there at all (Codex review of PR
+    # #427).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'cmd_target': 'PLAYER'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'PLAYER-only' in document
+
+
+def test_a_console_only_help_row_states_that_in_its_steps(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'HLP-11111111', 'kind': 'help', 'trigger': '/warp help', 'cmd_target': 'CONSOLE'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp help' in document
+    assert 'CONSOLE-only' in document
+
+
+def test_a_both_sender_command_row_has_no_sender_restriction_note(tmp_path):
+    # BOTH is not a real restriction -- both sender types can invoke it, so no note applies.
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'cmd_target': 'BOTH'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert '-only' not in document
+
+
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
     surface = write_surface(tmp_path, [
         {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},

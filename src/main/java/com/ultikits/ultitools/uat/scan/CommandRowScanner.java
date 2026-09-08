@@ -190,7 +190,12 @@ public final class CommandRowScanner {
         UsageLimit usageLimit = ReflectionUtil.resolveMethodOrClassAnnotation(method, clazz, UsageLimit.class);
 
         boolean requireOp = executor.requireOp() || mapping.requireOp();
-        String permission = !mapping.permission().isEmpty() ? mapping.permission() : executor.permission();
+        // PermissionValidator checks the class-level (@CmdExecutor) and method-level
+        // (@CmdMapping) permission CONJUNCTIVELY -- both are required when both are declared,
+        // exactly like requireOp above, never one overriding the other. Treating the mapping
+        // permission as an override (the old `mapping.permission().isEmpty() ? ... :
+        // executor.permission()` idiom) silently dropped a real, enforced class-level
+        // prerequisite whenever a method also declared its own (Codex review of PR #427).
         String trigger = trigger(executor, format);
 
         return SurfaceRow.builder()
@@ -202,7 +207,8 @@ public final class CommandRowScanner {
                 .member(member)
                 .format(format)
                 .aliases(Arrays.asList(executor.alias()))
-                .permission(permission)
+                .permission(executor.permission())
+                .mappingPermission(mapping.permission())
                 .requireOp(requireOp)
                 .manualRegister(executor.manualRegister())
                 .cmdTarget(effectiveTarget != null ? effectiveTarget.value().name() : null)
