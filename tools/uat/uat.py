@@ -284,6 +284,46 @@ def cmd_status(a):
                 print(f"  {it['id']}  {it['origin']}/{it['cls']}  {r.get('note','')[:80]}")
 
 
+def group_listener_items_by_event(listener_items):
+    """
+    Group listener items by their event key, in first-seen order.
+
+    An event fires every handler registered for it at once -- keying by `event` (falling back
+    to `trigger` when absent) is what lets `cmd_next` render one trigger per section instead of
+    one per handler row.
+    """
+    seen, order = {}, []
+    for item in listener_items:
+        key = item.get('event') or item['trigger']
+        if key not in seen:
+            seen[key] = []
+            order.append(key)
+        seen[key].append(item)
+    return seen, order
+
+
+def select_events_within_row_budget(order, seen, remaining_size, other_count):
+    """
+    Greedily select whole events, never splitting one across the row budget.
+
+    Selects from `order[:remaining_size]`, stopping before the next event would push the
+    expanded execution-row total (including `other_count`) past `MAX_BATCH_SIZE`. Counting
+    events as --size's own units (each "however many handlers it reaches" counts as one) does
+    not by itself bound the raw execution-row total UAT-MATRIX-SCHEMA.md fixes at 60 -- an
+    event with multiple handlers can expand well past --size's own count (Codex review of PR
+    #427).
+    """
+    chosen_events = []
+    expanded_row_budget = MAX_BATCH_SIZE - other_count
+    for key in order[:remaining_size]:
+        group_size = len(seen[key])
+        if group_size > expanded_row_budget:
+            break
+        chosen_events.append(key)
+        expanded_row_budget -= group_size
+    return chosen_events
+
+
 def cmd_next(a):
     reg = load_reg(registry_path(a)); led = load_ledger(reg, ledger_path(a)); res = led['results']
     scope = resolve_scope(reg, led, None)
@@ -308,12 +348,7 @@ def cmd_next(a):
     # exactly that common case, letting handlers for one event be split across batches.
     other_items = [i for i in pend if i['kind'] != 'listener']
     listener_items = [i for i in pend if i['kind'] == 'listener']
-    seen, order = {}, []
-    for i in listener_items:
-        k = i.get('event') or i['trigger']
-        if k not in seen:
-            seen[k] = []; order.append(k)
-        seen[k].append(i)
+    seen, order = group_listener_items_by_event(listener_items)
 
     # --size counts UNITS: one non-listener item, or one listener event (however many
     # handlers it reaches) -- never a raw listener row. Non-listener items are filled first,
@@ -321,20 +356,7 @@ def cmd_next(a):
     # boundary the way per-row slicing would risk.
     chosen_other = other_items[:a.size]
     remaining_size = max(0, a.size - len(chosen_other))
-    # A whole event's handler count can itself be > 1, so counting EVENTS as units (above)
-    # does not by itself bound the number of raw execution rows -- UAT-MATRIX-SCHEMA.md's
-    # absolute 60-execution-row ceiling is a SEPARATE, stricter constraint `positive_capped_int`
-    # alone cannot enforce, since it only caps --size's unit count, not the expanded handler
-    # total (Codex review of PR #427). Greedily add whole events (never split one across the
-    # boundary) until the NEXT one would push the expanded row count past the ceiling.
-    chosen_events = []
-    expanded_row_budget = MAX_BATCH_SIZE - len(chosen_other)
-    for k in order[:remaining_size]:
-        group_size = len(seen[k])
-        if group_size > expanded_row_budget:
-            break
-        chosen_events.append(k)
-        expanded_row_budget -= group_size
+    chosen_events = select_events_within_row_budget(order, seen, remaining_size, len(chosen_other))
     batch = chosen_other + [i for k in chosen_events for i in seen[k]]
     groups = [(k, seen[k]) for k in chosen_events] if chosen_events else None
     remaining_units = (len(other_items) - len(chosen_other)) + (len(order) - len(chosen_events))
