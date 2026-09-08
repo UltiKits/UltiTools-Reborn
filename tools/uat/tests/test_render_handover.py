@@ -604,6 +604,73 @@ def test_a_both_sender_command_row_has_no_sender_restriction_note(tmp_path):
     assert '-only' not in document
 
 
+def test_a_permission_gated_command_row_states_that_in_its_steps(tmp_path):
+    # PermissionValidator's class-level check (from @CmdExecutor.permission()) rejects a
+    # sender lacking it -- omitting this from the rendered steps let an executor invoke the
+    # command without the permission, observe Paper's unknown-command response or the
+    # framework's rejection, and record a false failure (Codex review of PR #427, round 21).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'permission': 'warp.use'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert '/warp go' in document
+    assert 'requires permission: warp.use' in document
+
+
+def test_a_mapping_level_permission_states_that_separately_from_class_permission(tmp_path):
+    # PermissionValidator checks the class-level and method-level permissions CONJUNCTIVELY --
+    # a sender needs BOTH when both are declared, so both must be individually visible in the
+    # rendered steps, not just the class-level one (Codex review of PR #427, round 21).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go',
+         'permission': 'warp.base', 'mapping_permission': 'warp.go'},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'requires permission: warp.base' in document
+    assert 'also requires mapping permission: warp.go' in document
+
+
+def test_a_require_op_command_row_states_that_in_its_steps(tmp_path):
+    # PermissionValidator's OP check runs independently of, and in addition to, the
+    # permission string checks -- an executor granted every named permission but lacking OP
+    # still gets rejected (Codex review of PR #427, round 21).
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'require_op': True},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'requires sender to be server OP' in document
+
+
+def test_a_command_row_with_no_permission_or_op_requirement_adds_no_access_notes(tmp_path):
+    surface = write_surface(tmp_path, [
+        {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/warp go', 'permission': '',
+         'require_op': False},
+    ])
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--output', str(output)] + ARTIFACT_ARGS)
+    document = output.read_text(encoding='utf-8')
+
+    assert 'requires permission' not in document
+    assert 'requires sender to be server OP' not in document
+
+
 def test_a_literal_pipe_in_truth_is_escaped_not_a_broken_table_column(tmp_path):
     surface = write_surface(tmp_path, [
         {'id': 'COM-11111111', 'kind': 'command', 'trigger': '/x reload'},

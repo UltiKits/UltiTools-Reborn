@@ -161,6 +161,26 @@ def describe_steps(item, switches=None):
                 ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic '
                 'command registration is disabled for the whole module; verify its own '
                 'registration path]')
+        permission = item.get('permission')
+        mapping_permission = item.get('mapping_permission')
+        # PermissionValidator checks the class-level permission (`permission`, from
+        # @CmdExecutor) and the method-level permission (`mapping_permission`, from
+        # @CmdMapping) CONJUNCTIVELY -- a sender needs BOTH when both are declared, never
+        # either alone overriding the other. Omitting either from the rendered steps lets an
+        # executor invoke the command with only one of the two granted, observe Paper's
+        # unknown-command response or the framework's permission rejection, and record a
+        # false failure for a command that was never reachable without both (Codex review of
+        # PR #427).
+        if permission:
+            steps += ' [requires permission: {}]'.format(permission)
+        if mapping_permission:
+            steps += ' [also requires mapping permission: {}]'.format(mapping_permission)
+        if item.get('require_op'):
+            # PermissionValidator's OP check runs independently of, and in addition to, the
+            # permission string checks above -- an executor granted every named permission
+            # but lacking OP still gets rejected, which looks identical to a broken
+            # permission grant without this note (Codex review of PR #427).
+            steps += ' [requires sender to be server OP]'
     elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')
