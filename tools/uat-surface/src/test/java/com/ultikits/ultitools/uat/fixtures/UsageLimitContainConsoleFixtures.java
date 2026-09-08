@@ -24,11 +24,13 @@ public class UsageLimitContainConsoleFixtures extends BaseCommandExecutor {
     @CmdMapping(format = "default")
     @UsageLimit(UsageLimit.LimitType.ALL)
     public void defaultContainConsole(@CmdSender CommandSender sender) {
+        // no-op: the scanner reads the annotation, never invokes this method
     }
 
     @CmdMapping(format = "opt-out")
     @UsageLimit(value = UsageLimit.LimitType.ALL, ContainConsole = false)
     public void optedOutContainConsole(@CmdSender CommandSender sender) {
+        // no-op: the scanner reads the annotation, never invokes this method
     }
 
     @Override
