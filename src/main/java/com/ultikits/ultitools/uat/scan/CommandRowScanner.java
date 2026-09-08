@@ -131,7 +131,7 @@ public final class CommandRowScanner {
                 claim(idOwners, row.getId(), clazz.getName());
                 rows.add(row);
             }
-            SurfaceRow help = buildHelpRow(origin, clazz, executor, classTarget);
+            SurfaceRow help = buildHelpRow(origin, clazz, executor, classTarget, helpDispatchShadowsMapping);
             claim(idOwners, help.getId(), clazz.getName());
             rows.add(help);
         }
@@ -214,10 +214,22 @@ public final class CommandRowScanner {
                 .build();
     }
 
-    private SurfaceRow buildHelpRow(String origin, Class<?> clazz, CmdExecutor executor, CmdTarget classTarget) {
+    private SurfaceRow buildHelpRow(String origin, Class<?> clazz, CmdExecutor executor, CmdTarget classTarget,
+            boolean helpCommandIsDefault) {
         String cls = clazz.getSimpleName();
         String id = RowId.of(KIND_HELP, origin, cls, HELP_MEMBER, HELP_FORMAT);
-        String trigger = trigger(executor, HELP_FORMAT);
+        // The literal "/alias help" is only actually true when getHelpCommand() has not been
+        // overridden away from BaseCommandExecutor's own default (Codex review of PR #427,
+        // discovered via the HelpFormatMappingWithOverriddenHelpCommand fixture the PREVIOUS
+        // round's own regression test added): an override changes the real token
+        // onCommand's single-token shortcut checks against, so "/alias help" would then
+        // dispatch to a DIFFERENT method (a real @CmdMapping("help"), if one exists) while the
+        // synthesized help behavior moves to whatever the override actually returns -- a value
+        // this scanner cannot resolve without executing the method, which D-10-01 forbids.
+        String trigger = helpCommandIsDefault
+                ? trigger(executor, HELP_FORMAT)
+                : "getHelpCommand() is overridden on this class -- the real help token cannot "
+                        + "be statically resolved; do not assume it is \"help\"";
 
         return SurfaceRow.builder()
                 .id(id)

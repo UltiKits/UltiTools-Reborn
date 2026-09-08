@@ -156,6 +156,11 @@ class CommandRowScannerTest {
 
         // Exactly two rows: the "go" command and the synthesized help row -- not three.
         assertThat(rows).hasSize(2);
+
+        // getHelpCommand() is NOT overridden here, so the synthesized row's literal
+        // "/alias help" claim is trustworthy.
+        Map<String, Object> helpRow = fieldMapOf(rows, "handleHelp");
+        assertThat(helpRow.get("trigger")).isEqualTo("/helpshadowed help");
     }
 
     @Test
@@ -166,6 +171,18 @@ class CommandRowScannerTest {
 
         Map<String, Object> helpMappingRow = fieldMapOf(rows, "help");
         assertThat(helpMappingRow.get("format")).isEqualTo("help");
+    }
+
+    @Test
+    @DisplayName("the synthesized help row does not claim a literal \"help\" trigger when getHelpCommand() is overridden -- the real token cannot be statically resolved (Codex review of PR #427, discovered via the fixture above)")
+    void synthesizedHelpRowDoesNotClaimALiteralTriggerWhenHelpCommandIsOverridden() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(HelpFormatMappingWithOverriddenHelpCommand.class));
+
+        Map<String, Object> helpRow = fieldMapOf(rows, "handleHelp");
+        assertThat(helpRow.get("trigger")).asString()
+                .doesNotContain("/helpoverridden help")
+                .contains("cannot be statically resolved");
     }
 
     @Test

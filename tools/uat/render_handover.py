@@ -27,6 +27,12 @@ try:
 except ImportError:  # pragma: no cover - environment-dependent; see tools/uat/README.md
     yaml = None
 
+# UAT-MATRIX-SCHEMA.md's "Handover and verdict protocol" section fixes this as an absolute
+# per-dispatch ceiling on execution rows -- the same value uat.py's own MAX_BATCH_SIZE enforces
+# for `next`. Kept as a separate constant (not imported from uat.py) since this is the only
+# value this otherwise-standalone script needs from there.
+MAX_BATCH_SIZE = 60
+
 
 def load_surface(path):
     """
@@ -371,6 +377,16 @@ def main(argv=None):
                       f'Check for a typo, a stale id from a previous build, or a `config` '
                       f'item id (config fields are never independently renderable -- use the '
                       f'owning config_entities id instead).')
+
+        # --ids is treated as the EXACT batch being dispatched, so it must obey the same
+        # absolute 60-execution-row ceiling `next` enforces -- an operator hand-assembling
+        # --ids from several prior batches could otherwise generate a handover the protocol
+        # itself forbids (Codex review of PR #427). Counted the same way render_rows counts:
+        # one row per non-config item, one per config_entities entry.
+        if len(ids_filter) > MAX_BATCH_SIZE:
+            sys.exit(f'--ids named {len(ids_filter)} id(s), exceeding the {MAX_BATCH_SIZE}-'
+                      f'execution-row ceiling UAT-MATRIX-SCHEMA.md fixes for a single dispatch. '
+                      f'Split this into multiple handovers.')
 
     document = build_document(
         items, assertions_by_id, args.jar, args.version, args.byte_size, args.sha256, args.commit,

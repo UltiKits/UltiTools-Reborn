@@ -202,6 +202,41 @@ def test_ids_filter_rejects_a_config_field_item_id_which_is_never_independently_
     assert not output.exists()
 
 
+def test_ids_filter_rejects_more_than_60_ids_even_when_all_are_valid(tmp_path):
+    # --ids is treated as the EXACT batch being dispatched, so it must obey the same absolute
+    # 60-execution-row ceiling `uat.py next` enforces -- an operator hand-assembling --ids from
+    # several prior batches could otherwise generate a handover the protocol itself forbids
+    # (Codex review of PR #427).
+    items = [{'id': f'COM-{i:08d}', 'kind': 'command', 'trigger': f'/x {i}'} for i in range(61)]
+    surface = write_surface(tmp_path, items)
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    ids_arg = ','.join(item['id'] for item in items)
+
+    try:
+        render_handover.main(['--surface', surface, '--assertions', assertions,
+                               '--ids', ids_arg, '--output', str(output)] + ARTIFACT_ARGS)
+        raised = False
+    except SystemExit:
+        raised = True
+
+    assert raised
+    assert not output.exists()
+
+
+def test_ids_filter_accepts_exactly_60_ids(tmp_path):
+    items = [{'id': f'COM-{i:08d}', 'kind': 'command', 'trigger': f'/x {i}'} for i in range(60)]
+    surface = write_surface(tmp_path, items)
+    assertions = write_empty_assertions(tmp_path)
+    output = tmp_path / 'handover.md'
+    ids_arg = ','.join(item['id'] for item in items)
+
+    render_handover.main(['--surface', surface, '--assertions', assertions,
+                           '--ids', ids_arg, '--output', str(output)] + ARTIFACT_ARGS)
+
+    assert output.exists()
+
+
 def test_empty_surface_renders_valid_document_not_a_crash(tmp_path):
     surface = write_surface(tmp_path, [])
     assertions = write_empty_assertions(tmp_path)
