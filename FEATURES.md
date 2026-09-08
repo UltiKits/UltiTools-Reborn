@@ -198,8 +198,35 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.file-write | Allow the panel to write or upload files within the editable roots; ships disabled | gate | `ultipanel.capabilities.file-write` in config.yml | n/a | console | admin | brief | Capability#FILE_WRITE |
 | ultitools.capability.logs | Allow the panel to stream and control the live console log; ships enabled | gate | `ultipanel.capabilities.logs` in config.yml | n/a | console | admin | brief | Capability#LOGS |
 | ultitools.capability.monitoring | Allow the panel to receive live TPS/memory/world/player monitoring data — the panel's only "server is alive" signal; ships enabled | gate | `ultipanel.capabilities.monitoring` in config.yml | n/a | console | admin | detailed | Capability#MONITORING |
-| ultitools.capability.player-events | Allow the panel to receive live player join/quit/chat events; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
+| ultitools.capability.player-events | Allow the panel to receive live player events — join, quit, chat, death, kick, command preprocessing, and world change, seven distinct `PlayerEventManager` handlers each with their own `event_type` value and payload shape, not just join/quit/chat; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
+
+## Player event relay (beyond join/quit/chat)
+
+`ultitools.capability.player-events` above covers the switch and the three events already relayed
+in the capability rows (`player_join`/`player_quit`/`player_chat`); these four are the remaining
+`PlayerEventManager` handlers, each its own Bukkit `@EventHandler` with a distinct payload,
+gated by the same capability.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.player-event-command | Relay every player command (before dispatch) to the panel as `player_event`/`player_command`, including whether it was cancelled by another plugin | event | any player-run command while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerCommandPreprocess |
+| ultitools.remote.player-event-death | Relay a player death to the panel as `player_event`/`player_death`, with the death message and killer name when applicable | event | a player death while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerDeath |
+| ultitools.remote.player-event-kick | Relay a player kick to the panel as `player_event`/`player_kick`, with the kick reason and whether the kick was cancelled | event | a player kick while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerKick |
+| ultitools.remote.player-event-world-change | Relay a player's world change to the panel as `player_event`/`player_world_change`, naming both the origin and destination world | event | a player changing worlds while a panel session is open | n/a | player | admin | none | PlayerEventManager#onPlayerChangedWorld |
+
+**Reconciliation note (D-07), continued:** these four rows add to the `event`-Kind total the
+boot-section note above already covers, bringing it to nine `event`-Kind rows against the
+repository's one `@EventListener` site, still zero additional annotation sites — `PlayerEventManager
+implements Listener` and self-registers via a direct `Bukkit.getPluginManager().registerEvents(this,
+plugin)` call, the same registration shape as `PlayerJoinListener`/`UpdateJoinListener` already
+explained above, not the framework's own `@EventListener` mechanism.
+
+## Inbound notifications
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.notification | Log an operator-visible console line for a panel-pushed notification, naming the message text and the originating client ID; ungated (`Capability.NONE`) | gate | `notification` panel message with `message` and `clientId` | n/a | console | admin | none | PluginInitiationUtils#handleNotification |
 
 ## Backup operations (placeholder)
 
