@@ -215,19 +215,25 @@ shipped `config.yml`, read directly by `Bukkit`'s `FileConfiguration`, not a bou
 `@ConfigEntity` entity — so the `@ConfigEntity` reconciliation line in the pull request reads 0
 against 0, with this sentence as its reason, rather than being omitted.
 
-This section carries 51 rows, not 44, and that divergence has a reason rather than being an
-omission (the counting command above only sees `src/main/resources/config.yml`, the shipped
-default resource — it cannot see a key the framework recognises but does not ship a default
-for). Seven keys are genuinely read by production code (`SystemLogHandler`, `LogStreamManager`,
-`CommandExecutionManager`, `FileOperationManager`, confirmed by reading each) but are absent from
-that resource: `ultipanel.commands.blocklist` and `ultipanel.files.editable-roots` are migrated
-onto disk on first boot if absent (`UltiTools#migrateKeyIfAbsent`), so a running server always
-has them even though the packaged jar's default resource does not; `ultipanel.logging.levels`,
+This section carries 52 rows total (51 `ultitools.config.config.*` rows for `config.yml`, plus
+the one `ultitools.config.env.api-url` row for `env.yml`), not the 44 the counting command above
+measures, and that divergence has a reason rather than being an omission — the counting command
+only sees `src/main/resources/config.yml`, the shipped default resource; it cannot see a key the
+framework recognises but does not ship a default for, and it was never meant to count `env.yml`
+at all (that is a second, separate file with its own single-key row). Seven keys are genuinely
+read by production code (`SystemLogHandler`, `LogStreamManager`, `CommandExecutionManager`,
+`FileOperationManager`, confirmed by reading each) but are absent from the `config.yml` resource:
+`ultipanel.commands.blocklist` and `ultipanel.files.editable-roots` are migrated onto disk on
+first boot if absent (`UltiTools#migrateKeyIfAbsent`), so a running server always has them even
+though the packaged jar's default resource does not; `ultipanel.logging.levels`,
 `ultipanel.logging.excluded-loggers`, and the three `ultipanel.logging.batch.*` keys are purely
 opt-in — read via `FileConfiguration#contains` with a code-level fallback, present only if the
-operator adds them by hand per `config-example.yml`, and have no effect at all otherwise. The
-reconciliation-table verify command's own `keys=44 rows=51` output is therefore the accurate,
-intentional result of this reading, not a defect the row count should be forced to match.
+operator adds them by hand per `config-example.yml`, and have no effect at all otherwise (except
+`batch.interval`, which has no effect regardless — see the row below and
+UltiKits/UltiTools-Reborn#432). The reconciliation-table verify command's own `keys=44 rows=51`
+output (measuring `config.yml` alone, its own stated scope) is therefore the accurate, intentional
+result of this reading, not a defect the row count should be forced to match; the section's true
+total including `env.yml` is 52.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
