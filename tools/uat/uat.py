@@ -321,7 +321,20 @@ def cmd_next(a):
     # boundary the way per-row slicing would risk.
     chosen_other = other_items[:a.size]
     remaining_size = max(0, a.size - len(chosen_other))
-    chosen_events = order[:remaining_size]
+    # A whole event's handler count can itself be > 1, so counting EVENTS as units (above)
+    # does not by itself bound the number of raw execution rows -- UAT-MATRIX-SCHEMA.md's
+    # absolute 60-execution-row ceiling is a SEPARATE, stricter constraint `positive_capped_int`
+    # alone cannot enforce, since it only caps --size's unit count, not the expanded handler
+    # total (Codex review of PR #427). Greedily add whole events (never split one across the
+    # boundary) until the NEXT one would push the expanded row count past the ceiling.
+    chosen_events = []
+    expanded_row_budget = MAX_BATCH_SIZE - len(chosen_other)
+    for k in order[:remaining_size]:
+        group_size = len(seen[k])
+        if group_size > expanded_row_budget:
+            break
+        chosen_events.append(k)
+        expanded_row_budget -= group_size
     batch = chosen_other + [i for k in chosen_events for i in seen[k]]
     groups = [(k, seen[k]) for k in chosen_events] if chosen_events else None
     remaining_units = (len(other_items) - len(chosen_other)) + (len(order) - len(chosen_events))

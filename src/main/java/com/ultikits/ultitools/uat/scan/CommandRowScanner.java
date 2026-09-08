@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.uat.scan;
 
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -86,6 +87,16 @@ public final class CommandRowScanner {
             // carrying the annotation but not implementing it is never returned by that
             // lookup and none of its rows could ever actually be exercised.
             if (executor == null || !CommandExecutor.class.isAssignableFrom(clazz)) {
+                continue;
+            }
+            // ComponentScanner.registerComponent runs CmdTargetComposition.check BEFORE
+            // registerBeanDefinition -- a WIDENING or LATERAL class-versus-method @CmdTarget
+            // transition (e.g. class-level PLAYER with a method-level CONSOLE) refuses the
+            // ENTIRE class, not just the offending mapping: no bean is registered at all, so
+            // neither its commands nor its help output are ever reachable (Codex review of PR
+            // #427). Reusing the same check here, not reimplementing it, guarantees this
+            // scanner can never drift from what actually gets refused.
+            if (!CmdTargetComposition.check(clazz).isEmpty()) {
                 continue;
             }
             CmdTarget classTarget = clazz.getAnnotation(CmdTarget.class);

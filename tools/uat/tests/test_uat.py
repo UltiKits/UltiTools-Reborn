@@ -119,6 +119,34 @@ def test_kind_filtered_to_listener_still_groups_exactly_as_before():
         assert 'LIS-22222222' in out
 
 
+def test_expanded_listener_batch_never_exceeds_the_60_execution_row_ceiling():
+    # Counting EVENTS as --size's units (each "however many handlers it reaches") does not by
+    # itself bound the raw execution-row total UAT-MATRIX-SCHEMA.md fixes at 60 -- an event
+    # with multiple handlers can push the expanded total well past --size's own unit count
+    # (Codex review of PR #427). 40 distinct events with 2 handlers each is 80 potential rows;
+    # --size 40 selects all 40 as units, but the expanded batch must still stop at 60 rows.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = []
+        for event_index in range(40):
+            for handler_index in range(2):
+                item_id = f'LIS-{event_index:04d}{handler_index:04d}'
+                item = listener_item(item_id, f'L{event_index}', f'onEvent{handler_index}')
+                item['trigger'] = f'event {event_index}'
+                item['event'] = f'Event{event_index}'
+                items.append(item)
+        registry = write_registry(tmp_path, items)
+        ledger = write_ledger(tmp_path)
+
+        out = run_next(registry, ledger, size=40)
+
+        rendered_ids = sum(1 for item in items if item['id'] in out)
+        assert rendered_ids <= 60
+        # Whole events only -- never a lone handler without its sibling from the same event.
+        assert rendered_ids % 2 == 0
+
+
 def test_record_rejects_an_id_excluded_by_the_ledgers_own_scope():
     # After a narrowed `rebase --scope framework`, the manual record path must reject an
     # excluded module's id the same way import_verdicts.py's own scope check does (Codex

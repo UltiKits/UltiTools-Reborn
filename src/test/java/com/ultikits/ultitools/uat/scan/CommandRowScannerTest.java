@@ -8,6 +8,7 @@ import com.ultikits.ultitools.uat.fixtures.Dup;
 import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
+import com.ultikits.ultitools.uat.fixtures.classlevellimits.AmbiguousCmdTargetComposition;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.RedeclaringSubclassWithoutTarget;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.SubclassWithClassLevelLimits;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.UnannotatedSubclass;
@@ -125,6 +126,15 @@ class CommandRowScannerTest {
     void annotatedButNotACommandExecutorProducesNoRows() throws ExtractorException {
         List<SurfaceRow> rows = new CommandRowScanner()
                 .scan("Fixture", Arrays.asList(AnnotatedButNotACommandExecutor.class));
+
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a class with an ambiguous class-versus-method @CmdTarget composition (LATERAL/WIDENING) produces no rows -- ComponentScanner refuses to register the whole class as a bean")
+    void ambiguousCmdTargetCompositionProducesNoRows() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(AmbiguousCmdTargetComposition.class));
 
         assertThat(rows).isEmpty();
     }
