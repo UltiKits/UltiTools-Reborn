@@ -201,6 +201,22 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.player-events | Allow the panel to receive live player join/quit/chat events; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
 
+## Log stream controls
+
+The `log_stream` panel message's `action` field routes to five further
+`LogStreamManager#handleLogStreamMessage` branches beyond the initial `start` the "allow the panel
+to stream" capability row above already covers — `stop`, `pause`, `resume`, `status`, and
+`config` — each replying with its own `log_stream_response`. `stop`/`pause`/`resume` share one
+response shape (`data.status` ∈ `stopped`/`paused`/`resumed`, plus `message`, `clientId`,
+`subscriberCount`, `streaming`); `status` uses a different shape (`data.action: "status"` instead
+of a `status` field, plus `streaming`, `subscriberCount`, `clientId`,
+`logTransmitterEnabled`, `queueSize`) — the two are not interchangeable to parse.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.log-stream-lifecycle | Stop, pause, resume, or query the status of an open log stream per `clientId`; `subscriberCount` reaching zero also flips the shared `streaming` flag off | gate | `log_stream` panel message with `action: "stop"` \| `"pause"` \| `"resume"` \| `"status"` | n/a | console | admin | brief | LogStreamManager#handleLogStreamMessage |
+| ultitools.remote.log-stream-config | Runtime-adjust the batch-send settings (`enabled`/`size`/`interval`) for an already-open log stream via its own `config` sub-action, independent of the `ultipanel.logging.batch.*` config.yml keys' own opt-in path. The same sub-action accepts a `levels` field too, but that branch only logs receipt of the request and never applies it — a known silent no-op (UltiKits/UltiTools-Reborn#433), not fixed here per this plan's zero-new-code rule | gate | `log_stream` panel message with `action: "config"` and a `batchConfig` object (`levels` has no effect, see #433) | n/a | console | admin | none | LogStreamManager#handleLogStreamMessage |
+
 ## Remote configuration editing
 
 The `update_config` panel message, gated by `Capability.FILE_WRITE` (not a dedicated capability
@@ -216,7 +232,8 @@ special-cased `server.properties` branch below.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.remote.config-update-file | Overwrite a single loaded module's `@ConfigEntity`-registered config file (or, with an empty `fileName`, every registered module config in one call) from a panel-supplied JSON map, via `ConfigManager#loadFromJson` | gate | `update_config` panel message with a `fileName` naming a registered config path (or omitted for all) and `configData` holding that file's `{configEntry: value}` JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
+| ultitools.remote.config-update-file | Overwrite a single loaded module's `@ConfigEntity`-registered config file from a panel-supplied JSON map, via `ConfigManager#loadFromJson(String, String)` | gate | `update_config` panel message with a `fileName` naming a registered config path and `configData` holding that file's `{configEntry: value}` JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
+| ultitools.remote.config-update-all-files | Overwrite every currently-registered module config file in one call when `fileName` is omitted or empty — a distinct `ConfigManager#loadFromJson(String)` overload expecting the full nested `{pluginName: {configPath: {...}}}` structure, not one file's flat map | gate | `update_config` panel message with no `fileName` field (or an empty string) and `configData` holding the nested multi-file JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 | ultitools.remote.config-update-server-properties | `update_config` with `fileName: "server.properties"` reaches the same `ServerPropertiesManager#applySetAll` SAFE_KEYS-checked write path as the dedicated `server_properties` message type, but is gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` — an operator who disables `server-properties` but leaves `file-write` enabled has not actually closed this write path | gate | `update_config` panel message with `fileName: "server.properties"` and `configData` holding the property map | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 
 ## Remote surface guards
@@ -230,6 +247,7 @@ unlisted `server.properties` key.
 | ultitools.remote.command-blocklist | Refuse a remote command whose base name (namespace prefix stripped first) is on the operator-editable blocklist; ships with 10 dangerous commands blocked (`op`, `deop`, `stop`, `restart`, `reload`, `ban-ip`, `pardon-ip`, `whitelist`, `save-off`, `save-all`) | gate | `ultipanel.commands.blocklist` in config.yml | n/a | console | admin | detailed | CommandExecutionManager#isCommandAllowed |
 | ultitools.remote.file-editable-roots | Restrict panel file access to an operator-configured set of root directories (ships as `plugins`, `logs` only), with credential-bearing files and dangerous extensions unconditionally protected regardless of root | gate | `ultipanel.files.editable-roots` in config.yml | n/a | console | admin | detailed | FileOperationManager#isPathAllowed |
 | ultitools.remote.server-properties-safe-keys | Refuse to write any `server.properties` key not on the fixed safe-key whitelist (`motd`, `max-players`, `view-distance`, `simulation-distance`, `spawn-protection`, `difficulty`, `gamemode`, `pvp`, `allow-nether`, `allow-flight`, `spawn-animals`, `spawn-monsters`, `spawn-npcs`, `enable-command-block`) | gate | panel `server.properties` edit, or read `ServerPropertiesManager` source directly | n/a | console | admin | brief | ServerPropertiesManager#setProperty |
+| ultitools.remote.server-properties-safe-keys-read | Return only the same fixed safe-key whitelist's current values, never the full `server.properties` file — a distinct code path (`handleGet`) from the write guard above, not just its mirror image | gate | `server_properties` panel message with `action: "get"` (or omitted, `get` is the default) | n/a | console | admin | brief | ServerPropertiesManager#handleGet |
 
 ## Configuration
 
