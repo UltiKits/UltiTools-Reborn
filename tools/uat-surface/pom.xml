@@ -42,10 +42,6 @@
     <properties>
         <java.version>1.8</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- Held in lockstep with the framework's own version by two machine checks, not by
-             memory: snapshot-publish.yml's refusal guard (both versions must be equal AND end
-             in -SNAPSHOT) and release.sh's pre-tag assertion. -->
-        <ultitools-api.version>6.3.0-SNAPSHOT</ultitools-api.version>
     </properties>
 
     <distributionManagement>
@@ -73,11 +69,20 @@
         <!-- provided: every module's own compile classpath already carries this jar, which is
              exactly the classpath the extractor runs against (UAT-MATRIX-SCHEMA.md,
              "Regenerating a surface"). The extractor imports MergedAnnotationResolver,
-             ReflectionUtil, BaseCommandExecutor, UltiToolsPlugin and the annotation types. -->
+             ReflectionUtil, BaseCommandExecutor, UltiToolsPlugin and the annotation types.
+
+             Pinned to ${project.version}, NOT a separate property (Codex review, restructure
+             head): `mvn versions:set -DnewVersion=X` (publish-packages.yml's release path)
+             rewrites this project's own <version> element but does not touch an independent
+             property - a property here would silently keep resolving the pre-release
+             -SNAPSHOT after a release, exactly the scenario the lockstep guards
+             (snapshot-publish.yml, release.sh) exist to prevent. Binding to ${project.version}
+             makes those guards' equality assertion the same fact this dependency resolves
+             against, by construction, rather than a second value that could drift from it. -->
         <dependency>
             <groupId>com.ultikits</groupId>
             <artifactId>UltiTools-API</artifactId>
-            <version>${ultitools-api.version}</version>
+            <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

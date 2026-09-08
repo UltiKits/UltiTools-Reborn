@@ -187,21 +187,28 @@ the steps exist, is the actual test of that claim.
 
 1. **Build the framework, the tool artifact, and pick a module.** From the framework repository
    root -- the extractor is a separate artifact from the framework jar (D-10-03 as amended), so
-   both need installing:
+   both need installing. Capture the version while still at the repository root, before `cd`ing
+   into the module checkout:
    ```bash
    mvn -B -q clean install -DskipTests
    mvn -B -q -f tools/uat-surface/pom.xml clean install -DskipTests
+   UAT_TOOL_VERSION="$(mvn -B -q -f tools/uat-surface/pom.xml help:evaluate -Dexpression=project.version -DforceStdout)"
    cd <path-to-a-module-checkout>       # e.g. Modules/UltiChat
    mvn -B -q clean test-compile
    ```
 2. **Take a baseline.** Build the classpath, regenerate the surface, and hash it. The tool jar is
-   resolved from the local repository the previous step just installed into and prepended to the
-   classpath -- the extractor's classes are not on the module's own resolved classpath:
+   resolved by explicit coordinate from the local repository step 1 just installed into --
+   mirroring `tools/uat/ci-drift-guard.sh`'s own resolution, not a `find` over the local
+   repository (a `find` can come up empty on a cache that never resolved this artifact before,
+   and picks an arbitrary entry if more than one version was ever resolved locally):
    ```bash
    mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
        -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
-   TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
-   java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+   mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy \
+       -Dartifact=com.ultikits:ultitools-uat-tools:${UAT_TOOL_VERSION}:jar \
+       -DoutputDirectory=target/uat-tool -Dmdep.stripVersion=false
+   java -cp "target/uat-tool/ultitools-uat-tools-${UAT_TOOL_VERSION}.jar:$(cat target/uat-cp.txt):target/classes" \
+       com.ultikits.ultitools.uat.SurfaceExtractorMain \
        --module <ModuleName> --classes target/classes --output /tmp/baseline-surface.json
    sha256sum /tmp/baseline-surface.json
    ```

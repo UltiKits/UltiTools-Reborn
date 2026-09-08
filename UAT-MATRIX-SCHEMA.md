@@ -145,17 +145,28 @@ surface, so it is published as its own Maven artifact — `com.ultikits:ultitool
 same version as `UltiTools-API` — and must be resolved separately and put on the classpath before
 running it. It carries no compatibility promise (`COMPATIBILITY.md`).
 
-Run from inside a module checkout, after `mvn test-compile` or `mvn verify`:
+Run from inside a module checkout, after `mvn test-compile` or `mvn verify`. Resolve the tool jar
+by its explicit coordinate at the same version as `UltiTools-API` — the same thing
+`tools/uat/ci-drift-guard.sh` does, and for the same reason: a plain search of the local
+repository (`find ~/.m2/repository/...`) can come up empty on a cache that has never resolved this
+artifact before, and if more than one version has ever been resolved locally, an unqualified
+search has no way to prefer the one matching this module's framework version:
 
 ```bash
 mvn -B org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
     -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
 
-TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
-java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+mvn -B org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy \
+    -Dartifact=com.ultikits:ultitools-uat-tools:<UltiToolsVersion>:jar \
+    -DoutputDirectory=target/uat-tool -Dmdep.stripVersion=false
+
+java -cp "target/uat-tool/ultitools-uat-tools-<UltiToolsVersion>.jar:$(cat target/uat-cp.txt):target/classes" \
+    com.ultikits.ultitools.uat.SurfaceExtractorMain \
     --module <ModuleName> --classes target/classes --output uat/surface.json
 ```
 
+Substitute `<UltiToolsVersion>` with the same version this module resolves for `UltiTools-API`
+(D-10-03's lockstep guarantees a matching `ultitools-uat-tools` release exists at that version).
 The `maven-dependency-plugin` coordinate is pinned to `3.11.0` explicitly — a module's own
 unpinned default can resolve the old `2.8` goal implementation, which behaves differently.
 
@@ -182,8 +193,12 @@ real shaded jar — not the pre-shade `original-*.jar` that sits alongside it in
 mvn -B -pl ultibot-v1_21_R1 org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
     -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
 
-TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
-java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt)" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+mvn -B org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy \
+    -Dartifact=com.ultikits:ultitools-uat-tools:<UltiToolsVersion>:jar \
+    -DoutputDirectory=target/uat-tool -Dmdep.stripVersion=false
+
+java -cp "target/uat-tool/ultitools-uat-tools-<UltiToolsVersion>.jar:$(cat target/uat-cp.txt)" \
+    com.ultikits.ultitools.uat.SurfaceExtractorMain \
     --module UltiBot --classes ultibot-dist/target/UltiBot-<version>.jar --output uat/surface.json
 ```
 
