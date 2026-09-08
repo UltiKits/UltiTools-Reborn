@@ -10,6 +10,7 @@ import com.ultikits.ultitools.uat.fixtures.DuplicateFormatCommands;
 import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.HelpFormatMapping;
 import com.ultikits.ultitools.uat.fixtures.HelpFormatMappingWithOverriddenHelpCommand;
+import com.ultikits.ultitools.uat.fixtures.CmdSuggestFixtures;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
 import com.ultikits.ultitools.uat.fixtures.UsageLimitContainConsoleFixtures;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.AmbiguousCmdTargetComposition;
@@ -91,6 +92,42 @@ class CommandRowScannerTest {
         Map<String, Object> optedOutRow = fieldMapOf(rows, "optedOutContainConsole");
         assertThat(optedOutRow.get("usage_limit")).isEqualTo("ALL");
         assertThat(optedOutRow.get("usage_limit_contain_console")).isEqualTo(false);
+    }
+
+    @Test
+    @DisplayName("@CmdExecutor.description() is captured on both command and help rows (Codex review)")
+    void descriptionIsCapturedOnCommandAndHelpRows() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner().scan("Fixture", Arrays.asList(TracerCommands.class));
+
+        Map<String, Object> pingRow = fieldMapOf(rows, "onPing");
+        assertThat(pingRow.get("description")).isEqualTo("Tracer fixture command");
+
+        Map<String, Object> helpRow = fieldMapOf(rows, "handleHelp");
+        assertThat(helpRow.get("description")).isEqualTo("Tracer fixture command");
+    }
+
+    @Test
+    @DisplayName("a @CmdSuggest value's provider classes are captured only for a plain method-name lookup that falls through to them (Codex review)")
+    void cmdSuggestProviderClassesAreCapturedOnlyWhenTheyAreActuallyConsulted() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner().scan("Fixture", Arrays.asList(CmdSuggestFixtures.class));
+
+        // A "@key" built-in completer never looks at @CmdSuggest at all.
+        assertThat(fieldMapOf(rows, "withBuiltInKey")).doesNotContainKey("cmd_suggest_classes");
+
+        // A plain method name found on the executor's OWN class never falls through either.
+        assertThat(fieldMapOf(rows, "withOwnMethod")).doesNotContainKey("cmd_suggest_classes");
+
+        // A plain method name absent from the executor class falls through to @CmdSuggest's
+        // declared classes, in declaration order -- the order MethodInvocationCompleter.
+        // getSuggestMethodsByName actually walks.
+        Map<String, Object> delegatedRow = fieldMapOf(rows, "withDelegatedMethod");
+        Optional<?> argParam = ((List<?>) delegatedRow.get("params")).stream()
+                .filter(p -> "arg".equals(((Map<?, ?>) p).get("name")))
+                .findFirst();
+        assertThat(argParam).as("row for param 'arg'").isPresent();
+        assertThat(((Map<?, ?>) argParam.get()).get("cmd_suggest_classes")).asList().containsExactly(
+                "com.ultikits.ultitools.uat.fixtures.SuggestProviderOne",
+                "com.ultikits.ultitools.uat.fixtures.SuggestProviderTwo");
     }
 
     @Test

@@ -61,9 +61,14 @@ public final class SurfaceAssembler {
      *     surface is; the command row already exists independent of this attribute.</li>
      *     <li>{@code @RunAsync} — same reasoning as {@code @AsyncCommand}, the older sibling
      *     annotation with identical intent.</li>
-     *     <li>{@code @CmdSuggest} — its tab-completion contribution is already folded into the
-     *     command row's {@code params[].suggest} field via {@code @CmdParam}, so a dedicated
-     *     scanner would duplicate information already on the row rather than add new surface.</li>
+     *     <li>{@code @CmdSuggest} — its tab-completion contribution is folded into the command
+     *     row's {@code params[].suggest} field via {@code @CmdParam}, rather than given its own
+     *     scanner, which would duplicate information already on the row. Since a Codex review of
+     *     PR #427's restructure head, that field also carries {@code cmd_suggest_classes} — the
+     *     declared provider class order {@link com.ultikits.ultitools.commands.tabcomplete
+     *     .MethodInvocationCompleter#getSuggestMethodsByName} actually falls through to — when a
+     *     plain (non-{@code "@key"}) suggest value and a class-level {@code @CmdSuggest} are both
+     *     present, so reordering or changing those classes is no longer invisible to the row.</li>
      * </ul>
      */
     public static final Set<Class<? extends Annotation>> COVERED_ANNOTATION_TYPES =

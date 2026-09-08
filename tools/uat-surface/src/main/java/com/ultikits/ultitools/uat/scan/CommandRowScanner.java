@@ -7,6 +7,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.annotations.command.CmdSuggest;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.uat.ExtractorException;
@@ -173,7 +174,7 @@ public final class CommandRowScanner {
 
         List<Map<String, Object>> params = new ArrayList<>();
         List<String> senders = new ArrayList<>();
-        collectParamsAndSenders(method, params, senders);
+        collectParamsAndSenders(clazz, method, params, senders);
 
         CmdTarget methodTarget = method.getAnnotation(CmdTarget.class);
         CmdTarget effectiveTarget = methodTarget != null ? methodTarget : classTarget;
@@ -208,6 +209,7 @@ public final class CommandRowScanner {
                 .format(format)
                 .aliases(Arrays.asList(executor.alias()))
                 .permission(executor.permission())
+                .description(executor.description())
                 .mappingPermission(mapping.permission())
                 .requireOp(requireOp)
                 .manualRegister(executor.manualRegister())
@@ -248,6 +250,7 @@ public final class CommandRowScanner {
                 .format(HELP_FORMAT)
                 .aliases(Arrays.asList(executor.alias()))
                 .permission(executor.permission())
+                .description(executor.description())
                 .requireOp(executor.requireOp())
                 .manualRegister(executor.manualRegister())
                 .cmdTarget(classTarget != null ? classTarget.value().name() : null)
@@ -259,7 +262,7 @@ public final class CommandRowScanner {
                 .build();
     }
 
-    private static void collectParamsAndSenders(Method method, List<Map<String, Object>> params,
+    private static void collectParamsAndSenders(Class<?> clazz, Method method, List<Map<String, Object>> params,
             List<String> senders) {
         for (Parameter parameter : method.getParameters()) {
             CmdSender cmdSender = parameter.getAnnotation(CmdSender.class);
@@ -273,6 +276,27 @@ public final class CommandRowScanner {
                 param.put("name", cmdParam.value());
                 param.put("type", parameter.getType().getSimpleName());
                 param.put("suggest", cmdParam.suggest());
+                // MethodInvocationCompleter.getSuggestMethodsByName (Codex review, restructure
+                // head): a plain (non-"@key") suggest() value is looked up on the executor
+                // class FIRST, and only falls through to @CmdSuggest's declared classes, IN
+                // ARRAY ORDER, when no matching method exists on the executor itself. Changing
+                // or reordering those classes changes which suggest method actually runs
+                // while `suggest` above (the method name alone) stays byte-identical. Emitted
+                // only when the suggest value is a real method-name lookup (steps 2-3 of
+                // CmdParam.suggest()'s own javadoc, i.e. not a "@key" built-in completer) AND
+                // the class carries @CmdSuggest -- the common case (no override) stays
+                // unchanged from before this field existed.
+                String suggest = cmdParam.suggest();
+                if (!suggest.isEmpty() && !suggest.startsWith("@")) {
+                    CmdSuggest cmdSuggest = clazz.getAnnotation(CmdSuggest.class);
+                    if (cmdSuggest != null) {
+                        List<String> providerClasses = new ArrayList<>();
+                        for (Class<?> providerClass : cmdSuggest.value()) {
+                            providerClasses.add(providerClass.getName());
+                        }
+                        param.put("cmd_suggest_classes", providerClasses);
+                    }
+                }
                 params.add(param);
             }
         }
