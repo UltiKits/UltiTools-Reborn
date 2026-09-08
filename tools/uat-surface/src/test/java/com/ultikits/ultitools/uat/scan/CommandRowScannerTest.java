@@ -11,6 +11,7 @@ import com.ultikits.ultitools.uat.fixtures.DuplicateHolder;
 import com.ultikits.ultitools.uat.fixtures.HelpFormatMapping;
 import com.ultikits.ultitools.uat.fixtures.HelpFormatMappingWithOverriddenHelpCommand;
 import com.ultikits.ultitools.uat.fixtures.TracerCommands;
+import com.ultikits.ultitools.uat.fixtures.UsageLimitContainConsoleFixtures;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.AmbiguousCmdTargetComposition;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.RedeclaringSubclassWithoutTarget;
 import com.ultikits.ultitools.uat.fixtures.classlevellimits.SubclassWithClassLevelLimits;
@@ -75,6 +76,21 @@ class CommandRowScannerTest {
         Map<String, Object> goRow = fieldMapOf(rows, "go");
         assertThat(goRow.get("cooldown_seconds")).isEqualTo(30);
         assertThat(goRow.get("usage_limit")).isEqualTo("SENDER");
+    }
+
+    @Test
+    @DisplayName("@UsageLimit's ContainConsole is captured only when it opts out of the default (Codex review)")
+    void usageLimitContainConsoleIsCapturedOnlyWhenNonDefault() throws ExtractorException {
+        List<SurfaceRow> rows = new CommandRowScanner()
+                .scan("Fixture", Arrays.asList(UsageLimitContainConsoleFixtures.class));
+
+        Map<String, Object> defaultRow = fieldMapOf(rows, "defaultContainConsole");
+        assertThat(defaultRow.get("usage_limit")).isEqualTo("ALL");
+        assertThat(defaultRow).doesNotContainKey("usage_limit_contain_console");
+
+        Map<String, Object> optedOutRow = fieldMapOf(rows, "optedOutContainConsole");
+        assertThat(optedOutRow.get("usage_limit")).isEqualTo("ALL");
+        assertThat(optedOutRow.get("usage_limit_contain_console")).isEqualTo(false);
     }
 
     @Test

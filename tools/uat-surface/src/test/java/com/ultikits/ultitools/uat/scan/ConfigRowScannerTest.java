@@ -97,6 +97,19 @@ class ConfigRowScannerTest {
     }
 
     @Test
+    @DisplayName("a default-parser field carries no parser key, but a custom @ConfigEntry(parser = ...) is captured (Codex review)")
+    void customParserIsCapturedButDefaultParserIsNot() throws ExtractorException {
+        ConfigRowScanner.Result defaultResult = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.Entity.class));
+        assertThat(rowFor(defaultResult.getRows(), "enabled")).doesNotContainKey("parser");
+
+        ConfigRowScanner.Result customResult = new ConfigRowScanner().scan("Fixture",
+                Arrays.asList(FixtureConfig.EntityWithCustomParser.class));
+        Map<String, Object> customRow = rowFor(customResult.getRows(), "value");
+        assertThat(customRow.get("parser")).isEqualTo(FixtureConfig.CustomParser.class.getName());
+    }
+
+    @Test
     @DisplayName("when the real entity is also present, a subclass not redeclaring @ConfigEntity does not duplicate or collide with it")
     void subclassAlongsideRealEntityDoesNotDuplicateRows() throws ExtractorException {
         ConfigRowScanner.Result result = new ConfigRowScanner().scan("Fixture",

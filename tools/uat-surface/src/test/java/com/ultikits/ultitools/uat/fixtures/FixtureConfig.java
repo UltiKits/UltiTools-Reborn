@@ -2,6 +2,8 @@ package com.ultikits.ultitools.uat.fixtures;
 
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
+import org.bukkit.configuration.MemorySection;
 
 /**
  * Fixture {@code @ConfigEntity}/{@code @ConfigEntry} classes for {@code ConfigRowScannerTest}
@@ -69,5 +71,29 @@ public final class FixtureConfig {
     // getAnnotation check never treats this as a config entity, so neither should the
     // extractor (Codex review of PR #427: @ConfigEntity is not @Inherited).
     public static class SubclassWithoutOwnConfigEntity extends Entity {
+    }
+
+    /**
+     * A no-op custom parser -- exists only so its class object is distinct from
+     * {@code DefaultConfigParser.class} (Codex review, restructure head: a custom
+     * {@code @ConfigEntry(parser = ...)} changes {@code AbstractConfigEntity}'s runtime
+     * load/save behaviour without changing the field's type, path, or comment).
+     */
+    public static final class CustomParser extends ConfigParser<String> {
+        @Override
+        public String parse(Object object) {
+            return String.valueOf(object);
+        }
+
+        @Override
+        public MemorySection serializeToMemorySection(String object) {
+            return null;
+        }
+    }
+
+    @ConfigEntity("config/customparser.yml")
+    public static class EntityWithCustomParser {
+        @ConfigEntry(path = "custom.value", parser = CustomParser.class)
+        private String value = "raw";
     }
 }

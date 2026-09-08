@@ -210,6 +210,34 @@ def test_record_accepts_an_id_within_the_ledgers_own_scope():
         assert led_after['results']['COM-aaaaaaaa']['status'] == 'pass'
 
 
+def test_record_rejects_an_empty_or_whitespace_only_note():
+    # import_verdicts.py's REQUIRED_STRING_FIELDS already rejects a blank `observed` value on
+    # that path; this direct recording path had no equivalent guard (Codex review, restructure
+    # head) -- `record <id> pass ""` wrote a completed pass into the ledger with no actual
+    # observed evidence, bypassing the same protocol both paths are meant to enforce equally.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp_path = Path(d)
+        items = [{'id': 'COM-aaaaaaaa', 'kind': 'command', 'origin': 'framework', 'cls': 'A'}]
+        registry = write_registry(tmp_path, items)
+        ledger_path_str = write_ledger(tmp_path)
+        before = Path(ledger_path_str).read_bytes()
+
+        for blank_note in ('', '   ', '\t\n'):
+            args = type('Args', (), {
+                'registry': registry, 'ledger': ledger_path_str, 'id': 'COM-aaaaaaaa',
+                'status': 'pass', 'note': blank_note,
+            })()
+            raised = False
+            try:
+                uat.cmd_record(args)
+            except SystemExit:
+                raised = True
+            assert raised, f'blank note {blank_note!r} should have been rejected'
+
+        assert Path(ledger_path_str).read_bytes() == before
+
+
 def test_size_argument_rejects_a_value_above_the_60_unit_ceiling():
     # UAT-MATRIX-SCHEMA.md fixes 60 execution rows as an absolute per-dispatch ceiling (Codex
     # review of PR #427). --size was an unrestricted `type=int` before this test, so a value

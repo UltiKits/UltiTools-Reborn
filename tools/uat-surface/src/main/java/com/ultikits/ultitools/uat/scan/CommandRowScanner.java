@@ -216,6 +216,7 @@ public final class CommandRowScanner {
                 .senders(senders)
                 .cooldownSeconds(cooldown != null ? cooldown.value() : null)
                 .usageLimit(usageLimit != null ? usageLimit.value().name() : null)
+                .usageLimitContainConsole(usageLimit != null ? usageLimit.ContainConsole() : null)
                 .trigger(trigger)
                 .build();
     }

@@ -36,6 +36,7 @@ public final class SurfaceRow {
     private final List<String> senders;
     private final Integer cooldownSeconds;
     private final String usageLimit;
+    private final Boolean usageLimitContainConsole;
     private final String trigger;
 
     private SurfaceRow(Builder builder) {
@@ -56,6 +57,7 @@ public final class SurfaceRow {
         this.senders = builder.senders;
         this.cooldownSeconds = builder.cooldownSeconds;
         this.usageLimit = builder.usageLimit;
+        this.usageLimitContainConsole = builder.usageLimitContainConsole;
         this.trigger = builder.trigger;
     }
 
@@ -101,6 +103,16 @@ public final class SurfaceRow {
         if (usageLimit != null) {
             map.put("usage_limit", usageLimit);
         }
+        // UsageLockValidator.acquireLock checks ContainConsole() to decide whether a console
+        // sender is subject to this limit at all -- `value()` alone (usage_limit above) does
+        // not distinguish a mapping that locks out console from one that does not (Codex
+        // review, restructure head). Emitted only alongside a non-null usage_limit AND only
+        // when it differs from the annotation's own default (true, as of 6.3.0), so a row
+        // whose ContainConsole is left at its default stays unchanged from before this field
+        // existed.
+        if (usageLimit != null && usageLimitContainConsole != null && !usageLimitContainConsole) {
+            map.put("usage_limit_contain_console", usageLimitContainConsole);
+        }
         map.put("trigger", trigger);
         return map;
     }
@@ -128,6 +140,7 @@ public final class SurfaceRow {
         private List<String> senders;
         private Integer cooldownSeconds;
         private String usageLimit;
+        private Boolean usageLimitContainConsole;
         private String trigger;
 
         private Builder() {
@@ -215,6 +228,11 @@ public final class SurfaceRow {
 
         public Builder usageLimit(String value) {
             this.usageLimit = value;
+            return this;
+        }
+
+        public Builder usageLimitContainConsole(Boolean value) {
+            this.usageLimitContainConsole = value;
             return this;
         }
 

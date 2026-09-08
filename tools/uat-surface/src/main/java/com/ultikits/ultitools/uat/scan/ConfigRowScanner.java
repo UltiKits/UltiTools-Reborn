@@ -2,6 +2,7 @@ package com.ultikits.ultitools.uat.scan;
 
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
 import com.ultikits.ultitools.uat.ExtractorException;
 import com.ultikits.ultitools.uat.RowId;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -147,6 +148,16 @@ public final class ConfigRowScanner {
             row.put("comment", entry.comment());
         }
         row.put("field_type", field.getType().getSimpleName());
+        // Codex review, restructure head: a custom @ConfigEntry(parser = ...) changes what
+        // AbstractConfigEntity actually does when loading/saving this field, but the type,
+        // path and comment can all stay identical while the parser class changes -- byte
+        // identity would silently miss a real serialization-behavior change. Emitted only
+        // when non-default, matching `comment`'s sparse-field pattern, so a module using no
+        // custom parsers (every one measured so far) produces no new rows in its committed
+        // surface.json.
+        if (!entry.parser().equals(DefaultConfigParser.class)) {
+            row.put("parser", entry.parser().getName());
+        }
         return row;
     }
 

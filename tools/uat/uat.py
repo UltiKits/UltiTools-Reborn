@@ -455,6 +455,13 @@ def cmd_record(a):
     item = items_by_id.get(a.id)
     if item is None or not in_scope(item, led['scope']):
         sys.exit(f'unknown id {a.id} -- not present in the registry, or not in this ledger\'s current scope')
+    # import_verdicts.py's own known-ids-and-required-fields check already rejects a blank
+    # `observed` string (REQUIRED_STRING_FIELDS); this direct recording path is the OTHER way
+    # a result reaches the ledger and had no equivalent guard (Codex review, restructure
+    # head) -- `record <id> pass ""` wrote a completed pass with no actual observed evidence,
+    # bypassing the same protocol both paths are meant to enforce equally.
+    if not a.note.strip():
+        sys.exit(f'{a.id}: note must be a non-empty observed response, not blank or whitespace-only')
     led['results'][a.id] = dict(status=a.status, note=a.note,
                                 at=datetime.datetime.now().astimezone().isoformat(timespec='seconds'))
     save_ledger(led, ledger_file)
