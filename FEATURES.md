@@ -27,8 +27,12 @@ for UAT execution and issue reconciliation — the public description of these f
 - **Manual**, exactly three: `detailed`, `brief`, `none`.
 - **Target**, exactly three: `player`, `console`, `both` — read straight off `@CmdTarget`; it is
   a property, not a tier.
-- **Permission:** the literal node string, or the word `none`. An undeclared permission is
-  granted to OP only, by Bukkit's own default; this is stated once here rather than per row.
+- **Permission:** the literal node string, or the word `none`. `none` means no permission-node
+  restriction at all, for anyone — `PermissionValidator` treats an empty `permission()` as no
+  check to run, not as an implicit OP requirement. OP-only access, where it exists (e.g. every
+  `/ul`/`/upm`/`/ulticloud` command in this repository), comes from the separate `@CmdExecutor`
+  class-level `requireOp` flag, a different mechanism entirely; a row's Permission column being
+  `none` says nothing about whether its class also carries `requireOp=true`.
 - **Source:** `ClassName#member`, or the resource path for a `config` row.
 - **Row order:** by section, then by ID ascending within the section.
 - **No manual prose:** no troubleshooting column, no explanatory paragraphs, no draft page text.
@@ -187,6 +191,21 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.monitoring | Allow the panel to receive live TPS/memory/world/player monitoring data — the panel's only "server is alive" signal; ships enabled | gate | `ultipanel.capabilities.monitoring` in config.yml | n/a | console | admin | detailed | Capability#MONITORING |
 | ultitools.capability.player-events | Allow the panel to receive live player join/quit/chat events; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
+
+## Remote configuration editing
+
+The `update_config` panel message, gated by `Capability.FILE_WRITE` (not a dedicated capability
+of its own), reaches `PluginInitiationUtils#handleConfigUpdate` and branches on the message's
+`fileName` field into three shapes, replying with one `config_update_response` (`success`/`error`
+plus message) per request. This targets `ConfigManager`'s registered `@ConfigEntity` files — this
+framework itself has zero such classes (see the Configuration section above), so this path is
+scoped to loaded modules' own configs, not the framework's own `config.yml`, except the
+special-cased `server.properties` branch below.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.config-update-file | Overwrite a single loaded module's `@ConfigEntity`-registered config file (or, with an empty `fileName`, every registered module config in one call) from a panel-supplied JSON map, via `ConfigManager#loadFromJson` | gate | `update_config` panel message with a `fileName` naming a registered config path (or omitted for all) and `configData` holding that file's `{configEntry: value}` JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
+| ultitools.remote.config-update-server-properties | `update_config` with `fileName: "server.properties"` reaches the same `ServerPropertiesManager#applySetAll` SAFE_KEYS-checked write path as the dedicated `server_properties` message type, but is gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` — an operator who disables `server-properties` but leaves `file-write` enabled has not actually closed this write path | gate | `update_config` panel message with `fileName: "server.properties"` and `configData` holding the property map | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 
 ## Remote surface guards
 
