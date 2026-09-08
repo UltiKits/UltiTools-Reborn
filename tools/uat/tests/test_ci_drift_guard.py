@@ -34,12 +34,23 @@ def init_repo(repo_dir):
     subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=repo_dir, check=True)  # nosec B603 -- fixed git/bash args, never external input
 
 
-def stub_toolchain(tmp_path, cp_line=DEFAULT_CP_LINE, surface_content=DEFAULT_SURFACE):
+def stub_toolchain(tmp_path, cp_line=DEFAULT_CP_LINE, surface_content=DEFAULT_SURFACE,
+                    tool_resolution='ok'):
     """
-    Install fake `mvn` and `java` executables on a directory to prepend to PATH.
+    Install fake `mvn`, `java`, and (for the tool-resolution `copy` goal) `jar` executables on
+    a directory to prepend to PATH.
 
-    The fake `mvn` writes `cp_line` to whatever `-Dmdep.outputFile=...` path it is given. The
-    fake `java` writes `surface_content` to whatever `--output ...` path it is given, and also
+    The fake `mvn` writes `cp_line` to whatever `-Dmdep.outputFile=...` path it is given for the
+    build-classpath goal. For the `...:copy` goal (Phase 10, D-10-03 as amended -- resolving
+    `com.ultikits:ultitools-uat-tools` by explicit coordinate), `tool_resolution` selects the
+    fake behaviour:
+      - 'ok' (default): writes a real jar at `<outputDirectory>/ultitools-uat-tools-<version>.jar`
+        carrying a `com/ultikits/ultitools/uat/SurfaceExtractorMain.class` entry, via the real
+        `jar` tool already on PATH -- this repository's tests already require a JDK for `java`.
+      - 'missing-class': writes a jar to the same path, but with no class entries at all.
+      - 'fail': the goal exits non-zero, as a real Maven resolution failure against an
+        unpublished/unreachable coordinate would.
+    The fake `java` writes `surface_content` to whatever `--output ...` path it is given, and also
     appends its full argv (one arg per line, blank-line separated per invocation) to
     `java-invocations.log` in the same directory, so a test can assert on --module/--classes.
     """
@@ -50,11 +61,34 @@ def stub_toolchain(tmp_path, cp_line=DEFAULT_CP_LINE, surface_content=DEFAULT_SU
         '#!/usr/bin/env bash\n'
         'set -euo pipefail\n'
         'OUT=""\n'
+        'ARTIFACT=""\n'
+        'OUTDIR=""\n'
+        'IS_COPY=0\n'
         'for arg in "$@"; do\n'
         '  case "$arg" in\n'
         '    -Dmdep.outputFile=*) OUT="${arg#-Dmdep.outputFile=}" ;;\n'
+        '    -Dartifact=*) ARTIFACT="${arg#-Dartifact=}" ;;\n'
+        '    -DoutputDirectory=*) OUTDIR="${arg#-DoutputDirectory=}" ;;\n'
+        '    *:copy) IS_COPY=1 ;;\n'
         '  esac\n'
         'done\n'
+        'if [ "$IS_COPY" = "1" ]; then\n'
+        + ('  exit 1\n' if tool_resolution == 'fail' else (
+            '  mkdir -p "$OUTDIR"\n'
+            '  VERSION="$(printf %s "$ARTIFACT" | cut -d: -f3)"\n'
+            # OUTDIR is relative to this script's own cwd. Resolve it to an absolute path
+            # BEFORE the `cd "$STAGE"` below, or a relative JAR_PATH would resolve against
+            # the staging directory instead once we cd into it.
+            '  OUTDIR_ABS="$(cd "$OUTDIR" && pwd)"\n'
+            '  JAR_PATH="$OUTDIR_ABS/ultitools-uat-tools-$VERSION.jar"\n'
+            '  STAGE="$(mktemp -d)"\n'
+            + ('  mkdir -p "$STAGE/com/ultikits/ultitools/uat"\n'
+               '  touch "$STAGE/com/ultikits/ultitools/uat/SurfaceExtractorMain.class"\n'
+               if tool_resolution != 'missing-class' else '')
+            + '  (cd "$STAGE" && jar cf "$JAR_PATH" .)\n'
+              '  exit 0\n'
+        ))
+        + 'fi\n'
         'mkdir -p "$(dirname "$OUT")"\n'
         'printf %s ' + shlex.quote(cp_line) + ' > "$OUT"\n'
     )
@@ -117,6 +151,59 @@ class TestFrameworkJarMissing:
         result = run_guard(tmp_path, bin_dir, args=['TestModule'])
 
         assert result.returncode != 0
+
+
+class TestToolResolution:
+    """
+    Phase 10, D-10-03 as amended 2026-09-08: the extractor moved into its own artifact,
+    com.ultikits:ultitools-uat-tools, resolved by explicit coordinate at the module's own
+    framework version rather than carried inside the plugin jar. These cover the three new
+    failure modes named in the plan's acceptance criteria: resolution failure, a jar missing
+    the entry point, and correct version derivation from the resolved classpath.
+    """
+
+    def test_version_is_derived_from_the_resolved_classpath_not_hardcoded(self, tmp_path):
+        init_repo(tmp_path)
+        other_version_cp = (
+            '/fake/repo/com/ultikits/UltiTools-API/6.2.9-SNAPSHOT/'
+            'UltiTools-API-6.2.9-SNAPSHOT.jar:/fake/gson.jar'
+        )
+        bin_dir = stub_toolchain(tmp_path, cp_line=other_version_cp)
+
+        result = run_guard(tmp_path, bin_dir, args=['TestModule'])
+
+        assert 'ultitools-uat-tools:6.2.9-SNAPSHOT' in result.stderr
+
+    def test_tool_resolution_failure_fails_named(self, tmp_path):
+        init_repo(tmp_path)
+        bin_dir = stub_toolchain(tmp_path, tool_resolution='fail')
+
+        result = run_guard(tmp_path, bin_dir, args=['TestModule'])
+
+        assert result.returncode != 0
+        assert 'ultitools-uat-tools' in result.stderr
+        assert 'could not resolve' in result.stderr.lower()
+
+    def test_tool_jar_missing_the_main_class_fails_named(self, tmp_path):
+        init_repo(tmp_path)
+        bin_dir = stub_toolchain(tmp_path, tool_resolution='missing-class')
+
+        result = run_guard(tmp_path, bin_dir, args=['TestModule'])
+
+        assert result.returncode != 0
+        assert 'surfaceextractormain' in result.stderr.lower()
+
+    def test_successful_resolution_never_silently_skips_the_step(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / 'uat').mkdir()
+        (tmp_path / 'uat' / 'surface.json').write_text(DEFAULT_SURFACE, encoding='utf-8')
+        subprocess.run(['git', 'add', 'uat/surface.json'], cwd=tmp_path, check=True)  # nosec B603 -- fixed git/bash args, never external input
+        bin_dir = stub_toolchain(tmp_path)
+
+        result = run_guard(tmp_path, bin_dir, args=['TestModule'])
+
+        assert result.returncode == 0
+        assert 'resolving com.ultikits:ultitools-uat-tools' in result.stderr.lower()
 
 
 class TestUntrackedSurfaceFile:

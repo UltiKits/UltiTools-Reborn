@@ -7,11 +7,14 @@ module author who has never seen this workflow before — someone who did not bu
 only this document, should be able to regenerate a surface, write an assertion, and read a
 handover document.
 
-The workflow's tooling lives in two places: the extractor (`com.ultikits.ultitools.uat.*`, shipped
-in the framework jar) and the Python side (`tools/uat/`, tracked in the framework repository).
-`tools/uat/README.md` documents the Python tooling's own command-line usage, the two per-module CI
-gates, and the exact reproduction procedure for the repeatability demonstration; this document is
-the schema those tools implement, and does not duplicate their command reference.
+The workflow's tooling lives in two places: the extractor (`com.ultikits.ultitools.uat.*`,
+published from this repository as its own artifact, `com.ultikits:ultitools-uat-tools` -- **not**
+shipped inside the `UltiTools-API` plugin jar; see "Regenerating a surface" below and
+`COMPATIBILITY.md` for why) and the Python side (`tools/uat/`, tracked in the framework
+repository). `tools/uat/README.md` documents the Python tooling's own command-line usage, the two
+per-module CI gates, and the exact reproduction procedure for the repeatability demonstration;
+this document is the schema those tools implement, and does not duplicate their command
+reference.
 
 ## Surface schema
 
@@ -136,13 +139,20 @@ and conditional gates invisible to the extractor no matter how the surface is re
 is no `additionalEntities()`-style attribute for this (that attribute exists for persistence
 entities only); if a module genuinely needs this, its own classes must own the scanned package.
 
+**The extractor is a separate published artifact, not part of the plugin jar.** Per D-10-03 as
+amended 2026-09-08, `com.ultikits.ultitools.uat.*` is build-time tooling, not runtime plugin
+surface, so it is published as its own Maven artifact — `com.ultikits:ultitools-uat-tools`, at the
+same version as `UltiTools-API` — and must be resolved separately and put on the classpath before
+running it. It carries no compatibility promise (`COMPATIBILITY.md`).
+
 Run from inside a module checkout, after `mvn test-compile` or `mvn verify`:
 
 ```bash
 mvn -B org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
     -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
 
-java -cp "$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
+java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
     --module <ModuleName> --classes target/classes --output uat/surface.json
 ```
 
@@ -150,13 +160,15 @@ The `maven-dependency-plugin` coordinate is pinned to `3.11.0` explicitly — a 
 unpinned default can resolve the old `2.8` goal implementation, which behaves differently.
 
 **Why a shorter, single-jar invocation does not work.** `java -cp UltiTools-API-<version>.jar
-com.ultikits.ultitools.uat.SurfaceExtractorMain ...` looks like it should be sufficient — the
-extractor's classes are in that jar — but it is not. Gson and ByteBuddy are declared `provided`
-scope in the framework's own `pom.xml`, supplied at runtime by Paper's `libraries:` loader, and are
-therefore absent from the shaded jar entirely. `CanonicalJsonWriter` needs Gson to run at all. The
-module's own resolved compile classpath (the first command above) is what actually supplies these
-— every module already depends on the framework and, transitively, on Paper's declared libraries —
-so the classpath, not the jar alone, is the correct unit of "what the extractor needs to run".
+com.ultikits.ultitools.uat.SurfaceExtractorMain ...` looks like it should be sufficient, and since
+the move it is doubly wrong: the extractor's classes are no longer in that jar at all (they moved
+to `ultitools-uat-tools`), and even with the tool jar added, Gson and ByteBuddy are declared
+`provided` scope in the framework's own `pom.xml`, supplied at runtime by Paper's `libraries:`
+loader, and are therefore absent from the shaded jar entirely. `CanonicalJsonWriter` needs Gson to
+run at all. The module's own resolved compile classpath (the first command above) is what actually
+supplies these — every module already depends on the framework and, transitively, on Paper's
+declared libraries — so the classpath, not any single jar alone, is the correct unit of "what the
+extractor needs to run".
 
 **The UltiBot variant.** UltiBot is a multi-module Maven reactor with no single `src/main/java`
 root; its shaded artifact is `ultibot-dist`'s dist jar. `ultibot-dist`'s own
@@ -170,7 +182,8 @@ real shaded jar — not the pre-shade `original-*.jar` that sits alongside it in
 mvn -B -pl ultibot-v1_21_R1 org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
     -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
 
-java -cp "$(cat target/uat-cp.txt)" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
+java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt)" com.ultikits.ultitools.uat.SurfaceExtractorMain \
     --module UltiBot --classes ultibot-dist/target/UltiBot-<version>.jar --output uat/surface.json
 ```
 

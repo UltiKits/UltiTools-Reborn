@@ -26,6 +26,8 @@ CLASSES="${2:-target/classes}"
 CP_FILE="target/uat-cp.txt"
 SURFACE_OUTPUT="uat/surface.json"
 DEPENDENCY_PLUGIN_VERSION="3.11.0"
+TOOL_GROUP_ARTIFACT="com.ultikits:ultitools-uat-tools"
+TOOL_JAR_DIR="target/uat-tool"
 
 echo "ci-drift-guard.sh: building the compile classpath for '${MODULE}' (maven-dependency-plugin pinned to ${DEPENDENCY_PLUGIN_VERSION} -- an unpinned default can silently resolve the old 2.8 goal implementation)." >&2
 mvn -B "org.apache.maven.plugins:maven-dependency-plugin:${DEPENDENCY_PLUGIN_VERSION}:build-classpath" \
@@ -38,11 +40,46 @@ fi
 
 if ! grep -q "UltiTools-API" "${CP_FILE}"; then
     echo "ci-drift-guard.sh: FATAL: the resolved classpath does not include the UltiTools-API framework jar (checked ${CP_FILE})." >&2
-    echo "ci-drift-guard.sh: com.ultikits.ultitools.uat.SurfaceExtractorMain is carried by that jar and cannot run without it -- confirm this module depends on the framework and that the framework jar is resolvable (e.g. installed to the local Maven repository)." >&2
+    echo "ci-drift-guard.sh: the extractor needs the framework's own classes at runtime -- confirm this module depends on the framework and that the framework jar is resolvable (e.g. installed to the local Maven repository)." >&2
     exit 1
 fi
 
-CLASSPATH="$(cat "${CP_FILE}")"
+# Phase 10, D-10-03 as amended 2026-09-08: the extractor moved out of the plugin jar into its
+# own artifact, com.ultikits:ultitools-uat-tools, published in lockstep with the framework by
+# the same snapshot/publish workflows. Derive the version to resolve from this module's own
+# resolved framework version (the UltiTools-API entry the check above just confirmed is on the
+# classpath), never a hardcoded one, so a module pinning a different framework version gets the
+# matching tool.
+FRAMEWORK_VERSION="$(grep -oE 'UltiTools-API-[^/:]+\.jar' "${CP_FILE}" | head -1 | sed -E 's/^UltiTools-API-(.+)\.jar$/\1/')"
+if [ -z "${FRAMEWORK_VERSION}" ]; then
+    echo "ci-drift-guard.sh: FATAL: could not derive the framework version from the resolved classpath (checked ${CP_FILE})." >&2
+    echo "ci-drift-guard.sh: expected an entry matching UltiTools-API-<version>.jar; without it the matching ${TOOL_GROUP_ARTIFACT} version cannot be determined." >&2
+    exit 1
+fi
+
+echo "ci-drift-guard.sh: resolving ${TOOL_GROUP_ARTIFACT}:${FRAMEWORK_VERSION} (the module's own resolved framework version)." >&2
+mkdir -p "${TOOL_JAR_DIR}"
+if ! mvn -B "org.apache.maven.plugins:maven-dependency-plugin:${DEPENDENCY_PLUGIN_VERSION}:copy" \
+    -Dartifact="${TOOL_GROUP_ARTIFACT}:${FRAMEWORK_VERSION}:jar" \
+    -DoutputDirectory="${TOOL_JAR_DIR}" -Dmdep.stripVersion=false; then
+    echo "ci-drift-guard.sh: FATAL: could not resolve ${TOOL_GROUP_ARTIFACT}:${FRAMEWORK_VERSION} from the repositories this build already declares." >&2
+    echo "ci-drift-guard.sh: this artifact is published by the same snapshot/publish workflow as the framework -- confirm the framework version above has a matching tool release, and that this build has network access to the same repositories that resolved UltiTools-API." >&2
+    exit 1
+fi
+
+TOOL_JAR="$(ls "${TOOL_JAR_DIR}"/ultitools-uat-tools-"${FRAMEWORK_VERSION}".jar 2>/dev/null | head -1)"
+if [ -z "${TOOL_JAR}" ] || [ ! -f "${TOOL_JAR}" ]; then
+    echo "ci-drift-guard.sh: FATAL: the resolved tool artifact was not found at the expected path under ${TOOL_JAR_DIR}." >&2
+    exit 1
+fi
+
+if ! unzip -l "${TOOL_JAR}" | grep -q 'com/ultikits/ultitools/uat/SurfaceExtractorMain.class'; then
+    echo "ci-drift-guard.sh: FATAL: ${TOOL_JAR} does not contain com/ultikits/ultitools/uat/SurfaceExtractorMain.class." >&2
+    echo "ci-drift-guard.sh: the downloaded jar is not a usable ${TOOL_GROUP_ARTIFACT} build -- do not fall back to skipping this check silently." >&2
+    exit 1
+fi
+
+CLASSPATH="${TOOL_JAR}:$(cat "${CP_FILE}")"
 
 echo "ci-drift-guard.sh: regenerating ${SURFACE_OUTPUT} for '${MODULE}' from ${CLASSES}." >&2
 java -cp "${CLASSPATH}:${CLASSES}" com.ultikits.ultitools.uat.SurfaceExtractorMain \

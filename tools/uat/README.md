@@ -141,6 +141,13 @@ pass an explicit jar path for a module whose classes live in a shaded dist jar (
 `ultibot-dist`). It regenerates `uat/surface.json` from the module's own compiled classes and
 proves the result is byte-identical to the one already committed (D-10-07).
 
+The extractor, `com.ultikits.ultitools.uat.SurfaceExtractorMain`, is **not** carried by the
+`UltiTools-API` plugin jar (Phase 10, D-10-03 as amended 2026-09-08) -- it is its own published
+artifact, `com.ultikits:ultitools-uat-tools`, resolved by explicit coordinate at the module's own
+resolved framework version and prepended to the classpath before the extractor runs. See
+`UAT-MATRIX-SCHEMA.md`'s "Regenerating a surface" section for why build-time tooling lives outside
+the runtime plugin jar and for the two-command form a module author runs by hand.
+
 **The CI step every module's `maven-ci.yml` adds, after its existing `Verify` step:**
 
 ```yaml
@@ -157,12 +164,15 @@ resolve a module's own default: UltiChat's own unpinned default resolves the old
 implementation, while the framework's own build resolves `3.11.0` -- pinning makes all seventeen
 module repositories behave identically regardless of each repo's own unpinned-plugin default.
 
-The guard fails, naming the problem, in three cases: the resolved classpath does not carry the
-`UltiTools-API` framework jar (the extractor cannot run without it); `uat/surface.json` is not
-tracked by git (a completely untracked path is invisible to plain `git diff`, which reports zero
-differences for a file it has never seen -- exactly the false-clean this check exists to prevent,
-per T-10-14); or regeneration produced a file that differs from the one already committed (the
-diff is printed before the failure message).
+The guard fails, naming the problem, in these cases: the resolved classpath does not carry the
+`UltiTools-API` framework jar (the extractor still needs the framework's classes at runtime);
+`com.ultikits:ultitools-uat-tools` cannot be resolved at the module's own framework version from
+the repositories the module's build already declares; the resolved tool jar does not contain
+`com/ultikits/ultitools/uat/SurfaceExtractorMain.class` (never treated as a silent skip);
+`uat/surface.json` is not tracked by git (a completely untracked path is invisible to plain
+`git diff`, which reports zero differences for a file it has never seen -- exactly the
+false-clean this check exists to prevent, per T-10-14); or regeneration produced a file that
+differs from the one already committed (the diff is printed before the failure message).
 
 ## Reproducing the repeatability demonstration (Phase 10 success criterion 5)
 
@@ -175,17 +185,23 @@ prove it, against a real module checkout. The second half of criterion 5 asks wh
 cannot make on its own behalf; a reviewer following the numbered steps below, not the fact that
 the steps exist, is the actual test of that claim.
 
-1. **Build the framework and pick a module.** From the framework repository root:
+1. **Build the framework, the tool artifact, and pick a module.** From the framework repository
+   root -- the extractor is a separate artifact from the framework jar (D-10-03 as amended), so
+   both need installing:
    ```bash
    mvn -B -q clean install -DskipTests
+   mvn -B -q -f tools/uat-surface/pom.xml clean install -DskipTests
    cd <path-to-a-module-checkout>       # e.g. Modules/UltiChat
    mvn -B -q clean test-compile
    ```
-2. **Take a baseline.** Build the classpath, regenerate the surface, and hash it:
+2. **Take a baseline.** Build the classpath, regenerate the surface, and hash it. The tool jar is
+   resolved from the local repository the previous step just installed into and prepended to the
+   classpath -- the extractor's classes are not on the module's own resolved classpath:
    ```bash
    mvn -B -q org.apache.maven.plugins:maven-dependency-plugin:3.11.0:build-classpath \
        -Dmdep.outputFile=target/uat-cp.txt -Dmdep.includeScope=test
-   java -cp "$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
+   TOOL_JAR="$(find ~/.m2/repository/com/ultikits/ultitools-uat-tools -name '*.jar' | grep -v sources | grep -v javadoc | head -1)"
+   java -cp "${TOOL_JAR}:$(cat target/uat-cp.txt):target/classes" com.ultikits.ultitools.uat.SurfaceExtractorMain \
        --module <ModuleName> --classes target/classes --output /tmp/baseline-surface.json
    sha256sum /tmp/baseline-surface.json
    ```

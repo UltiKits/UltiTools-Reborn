@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.ultikits</groupId>
+    <artifactId>ultitools-uat-tools</artifactId>
+    <version>6.3.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>ultitools-uat-tools</name>
+    <description>
+        Internal build-time tooling for the UltiTools-API UAT surface extractor (Phase 10,
+        D-10-03 as amended 2026-09-08). This is NOT part of the UltiTools-API compatibility
+        contract -- see COMPATIBILITY.md at the repository root. Its classes, entry point, and
+        JSON field names may change or be removed in any release, including a patch.
+    </description>
+    <url>https://dev.ultikits.com/</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://raw.githubusercontent.com/UltiKits/UltiTools-Reborn/main/LICENSE</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git@github.com:UltiKits/UltiTools-Reborn.git</connection>
+        <developerConnection>scm:git@github.com:UltiKits/UltiTools-Reborn.git</developerConnection>
+        <url>https://github.com/UltiKits/UltiTools-Reborn</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <name>wisdomme</name>
+            <email>xia.erich03@gmail.com</email>
+            <organization>UltiKits</organization>
+            <timezone>+10</timezone>
+        </developer>
+    </developers>
+
+    <properties>
+        <java.version>1.8</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Held in lockstep with the framework's own version by two machine checks, not by
+             memory: snapshot-publish.yml's refusal guard (both versions must be equal AND end
+             in -SNAPSHOT) and release.sh's pre-tag assertion. -->
+        <ultitools-api.version>6.3.0-SNAPSHOT</ultitools-api.version>
+    </properties>
+
+    <distributionManagement>
+        <!-- Same destinations as the root pom's distributionManagement, so Task 3's deploy step
+             reaches the same place with the same credentials. -->
+        <snapshotRepository>
+            <id>ultikits-sonatype</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+        <repository>
+            <id>ultikits-sonatype</id>
+            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
+
+    <repositories>
+        <!-- paper-api is a snapshot artifact and does not resolve from Central. -->
+        <repository>
+            <id>papermc</id>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- provided: every module's own compile classpath already carries this jar, which is
+             exactly the classpath the extractor runs against (UAT-MATRIX-SCHEMA.md,
+             "Regenerating a surface"). The extractor imports MergedAnnotationResolver,
+             ReflectionUtil, BaseCommandExecutor, UltiToolsPlugin and the annotation types. -->
+        <dependency>
+            <groupId>com.ultikits</groupId>
+            <artifactId>UltiTools-API</artifactId>
+            <version>${ultitools-api.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.papermc.paper</groupId>
+            <artifactId>paper-api</artifactId>
+            <version>1.21.11-R0.1-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.10.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <version>5.10.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>5.10.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.27.7</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <!-- Pinned to the same version the root pom uses. Surefire's own default
+                     (2.12.4) predates the JUnit 5 provider and silently runs zero tests
+                     against a JUnit 5 suite instead of failing - the version pin is load
+                     bearing, not cosmetic. -->
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- No excludedGroups property here: unlike the framework, this project
+                         carries no @Tag("isolated") test, so the framework's isolation-filter
+                         convention has nothing to apply to. -->
+                </configuration>
+            </plugin>
+            <!--
+                Deliberately absent, and that absence is the point (D-10-03): japicmp,
+                animal-sniffer, maven-shade-plugin, jacoco-maven-plugin, and
+                com.ultikits:ultitools-maven-plugin. Their absence is what makes this artifact
+                carry no compatibility promise and no runtime footprint - the japicmp gate in
+                the root pom diffs only com.ultikits:UltiTools-API, never this artifact.
+            -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.9.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>ultikits-sonatype</publishingServerId>
+                    <autoPublish>true</autoPublish>
+                    <waitUntil>published</waitUntil>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!--
+            Release-only profile, same rationale as the root pom's: GPG signing (and, here,
+            the source/javadoc jars Central also requires) are activated only where a private
+            key exists. Unlike the root pom - which attaches sources/javadoc unconditionally
+            for every build - this tool project bundles all three into one profile, since a CI
+            test run of this internal artifact has no need to produce a signed release bundle.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>2.2.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <configuration>
+                            <show>private</show>
+                            <nohelp>true</nohelp>
+                            <charset>UTF-8</charset>
+                            <encoding>UTF-8</encoding>
+                            <docencoding>UTF-8</docencoding>
+                            <locale>en_US</locale>
+                            <failOnWarnings>false</failOnWarnings>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>
