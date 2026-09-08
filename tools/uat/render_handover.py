@@ -109,6 +109,61 @@ def escape_cell(value):
     return text
 
 
+def describe_command_or_help_steps(item, switches=None):
+    """
+    Build the "Steps" text for a single `command`/`help` row.
+
+    Extracted out of `describe_steps` (Codacy Prospector_mccabe -- the combined function
+    exceeded the McCabe complexity gate once permission/OP notes were added) so each
+    per-restriction note stays independently readable; see `describe_steps`'s own
+    docstring for the shared rationale (self-contained batches, gate/manual_register/
+    registration-switch notes).
+    """
+    steps = item.get('trigger', '')
+    cmd_target = item.get('cmd_target')
+    if cmd_target in ('PLAYER', 'CONSOLE'):
+        # SenderTypeValidator rejects invocation from the OTHER sender type -- omitting
+        # this from the rendered steps let an executor try from the wrong context and
+        # record a false failure for a command that was never reachable from there at all
+        # (Codex review of PR #427). BOTH is not a real restriction and gets no note.
+        steps += ' [{}-only -- invoking from the other sender type is rejected]'.format(cmd_target)
+    if item.get('manual_register'):
+        # CommandManager.register's autowire-and-register path is skipped entirely for
+        # an @CmdExecutor(manualRegister = true) class -- the module itself must call
+        # CommandManager.register(...) somewhere in its own startup path. Without this
+        # note the handover looks identical to an automatically registered command, and
+        # an executor who only checks the normal registration path records a false
+        # failure for a command that fires through the module's own manual call instead
+        # (Codex review of PR #427).
+        steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
+    if switches and switches.get('registers_commands') is False:
+        steps += (
+            ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic '
+            'command registration is disabled for the whole module; verify its own '
+            'registration path]')
+    permission = item.get('permission')
+    mapping_permission = item.get('mapping_permission')
+    # PermissionValidator checks the class-level permission (`permission`, from
+    # @CmdExecutor) and the method-level permission (`mapping_permission`, from
+    # @CmdMapping) CONJUNCTIVELY -- a sender needs BOTH when both are declared, never
+    # either alone overriding the other. Omitting either from the rendered steps lets an
+    # executor invoke the command with only one of the two granted, observe Paper's
+    # unknown-command response or the framework's permission rejection, and record a
+    # false failure for a command that was never reachable without both (Codex review of
+    # PR #427).
+    if permission:
+        steps += ' [requires permission: {}]'.format(permission)
+    if mapping_permission:
+        steps += ' [also requires mapping permission: {}]'.format(mapping_permission)
+    if item.get('require_op'):
+        # PermissionValidator's OP check runs independently of, and in addition to, the
+        # permission string checks above -- an executor granted every named permission
+        # but lacking OP still gets rejected, which looks identical to a broken
+        # permission grant without this note (Codex review of PR #427).
+        steps += ' [requires sender to be server OP]'
+    return steps
+
+
 def describe_steps(item, switches=None):
     """
     Describe the "Steps" a real-machine session must exercise for one surface row.
@@ -139,48 +194,7 @@ def describe_steps(item, switches=None):
     """
     kind = item.get('kind')
     if kind in ('command', 'help'):
-        steps = item.get('trigger', '')
-        cmd_target = item.get('cmd_target')
-        if cmd_target in ('PLAYER', 'CONSOLE'):
-            # SenderTypeValidator rejects invocation from the OTHER sender type -- omitting
-            # this from the rendered steps let an executor try from the wrong context and
-            # record a false failure for a command that was never reachable from there at all
-            # (Codex review of PR #427). BOTH is not a real restriction and gets no note.
-            steps += ' [{}-only -- invoking from the other sender type is rejected]'.format(cmd_target)
-        if item.get('manual_register'):
-            # CommandManager.register's autowire-and-register path is skipped entirely for
-            # an @CmdExecutor(manualRegister = true) class -- the module itself must call
-            # CommandManager.register(...) somewhere in its own startup path. Without this
-            # note the handover looks identical to an automatically registered command, and
-            # an executor who only checks the normal registration path records a false
-            # failure for a command that fires through the module's own manual call instead
-            # (Codex review of PR #427).
-            steps += ' [manually registered -- verify the module\'s own registration path, not the automatic one]'
-        if switches and switches.get('registers_commands') is False:
-            steps += (
-                ' [this module declares @UltiToolsModule(cmdExecutor=false) -- automatic '
-                'command registration is disabled for the whole module; verify its own '
-                'registration path]')
-        permission = item.get('permission')
-        mapping_permission = item.get('mapping_permission')
-        # PermissionValidator checks the class-level permission (`permission`, from
-        # @CmdExecutor) and the method-level permission (`mapping_permission`, from
-        # @CmdMapping) CONJUNCTIVELY -- a sender needs BOTH when both are declared, never
-        # either alone overriding the other. Omitting either from the rendered steps lets an
-        # executor invoke the command with only one of the two granted, observe Paper's
-        # unknown-command response or the framework's permission rejection, and record a
-        # false failure for a command that was never reachable without both (Codex review of
-        # PR #427).
-        if permission:
-            steps += ' [requires permission: {}]'.format(permission)
-        if mapping_permission:
-            steps += ' [also requires mapping permission: {}]'.format(mapping_permission)
-        if item.get('require_op'):
-            # PermissionValidator's OP check runs independently of, and in addition to, the
-            # permission string checks above -- an executor granted every named permission
-            # but lacking OP still gets rejected, which looks identical to a broken
-            # permission grant without this note (Codex review of PR #427).
-            steps += ' [requires sender to be server OP]'
+        steps = describe_command_or_help_steps(item, switches)
     elif kind == 'listener':
         event = item.get('event', '')
         priority = item.get('handler_priority')
