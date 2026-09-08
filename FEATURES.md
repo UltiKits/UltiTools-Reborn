@@ -192,7 +192,7 @@ type applies its own gate.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.remote.connection-config-upload | Unconditionally push the framework's full config map (as `type: "upload_config"`, `configType: "plugin_config"`, `configName: "UltiTools.yml"`, plus a `comment` map) to the panel on every successful connection — no capability gates this outbound push, unlike the inbound `upload_config`/`update_config` editing routes it superficially resembles | event | automatic, on WebSocket connect or reconnect | n/a | console | admin | brief | PluginInitiationUtils#uploadConfig |
+| ultitools.remote.connection-config-upload | Unconditionally push the framework's full config map to the panel on every successful connection, as `type: "upload_config"`, `data.configType: "plugin_config"`, `data.configName: "UltiTools.yml"`. `data.configContent` and `data.comment` are each a JSON-encoded STRING (`ConfigEditorUtils#getConfigMapString`/`#getCommentMapString`, built with `addProperty`), not an embedded JSON object — a consumer expecting a map value for either field will reject a healthy message. No capability gates this outbound push, unlike the inbound `upload_config`/`update_config` editing routes it superficially resembles | event | automatic, on WebSocket connect or reconnect | n/a | console | admin | brief | PluginInitiationUtils#uploadConfig |
 | ultitools.remote.connection-server-properties-upload | Push the safe-key `server.properties` map to the panel on every successful connection, as `type: "server_properties_result"` — the SAME message type the inbound `get` reply above uses, gated by `Capability.SERVER_PROPERTIES`; skipped entirely (not even attempted) when `getSafeProperties()` is empty | event | automatic, on WebSocket connect or reconnect, when `ultipanel.capabilities.server-properties: true` | n/a | console | admin | brief | PluginInitiationUtils#uploadServerProperties |
 
 ## Panel capabilities
@@ -242,6 +242,7 @@ annotation sites — `PlayerEventManager implements Listener` and self-registers
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.remote.notification | Log an operator-visible console line for a panel-pushed notification, naming the message text and the originating client ID; ungated (`Capability.NONE`) | gate | `notification` panel message with `message` and `clientId` | n/a | console | admin | none | PluginInitiationUtils#handleNotification |
+| ultitools.remote.error-notification | Log an operator-visible SEVERE console line for a panel-pushed error report, naming the supplied message; ungated (`Capability.NONE`) | gate | `error` panel message with `message` | n/a | console | admin | none | PluginInitiationUtils#handleError |
 
 ## Backup operations (placeholder)
 
@@ -272,7 +273,7 @@ the same status payload `batch_update` carries), `metrics_data`
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.remote.on-demand-server-status | Immediately reply with current server status outside the 5 s `batch_update` cycle | gate | `server_status` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendServerStatusWithRequestId |
-| ultitools.remote.on-demand-metrics | Immediately reply with current performance metrics (`playerActivity`, `serverPerformance`, `pluginUsage`) outside the 5 s cycle; `serverPerformance.diskUsage` is unconditionally hardcoded to `0.0`, never a real reading — a known product defect (UltiKits/UltiTools-Reborn#436), not fixed here per this plan's zero-new-code rule | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
+| ultitools.remote.on-demand-metrics | Immediately reply with current performance metrics (`playerActivity`, `serverPerformance`, `pluginUsage`) outside the 5 s cycle. Two known-mislabeled fields, neither fixed here per this plan's zero-new-code rule: `serverPerformance.diskUsage` is unconditionally hardcoded to `0.0`, never a real reading (UltiKits/UltiTools-Reborn#436); `pluginUsage.enabledPlugins` counts every installed plugin regardless of `Plugin#isEnabled()`, despite its name (UltiKits/UltiTools-Reborn#437) | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
 | ultitools.remote.on-demand-plugin-list | Immediately reply with every Bukkit plugin's name, version, enabled state, author, and description — every plugin, not just UltiTools modules | gate | `plugin_list` panel message with a `requestId` | n/a | console | admin | none | PluginInitiationUtils#handlePluginListRequest |
 
 ## Log stream controls
