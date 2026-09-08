@@ -116,7 +116,7 @@ count exactly. This section carries 4 rows, not 3, for the same reason as `/upm 
 | ultitools.ulticloud.help | Show the `/ulticloud` subcommand help text | command | `/ulticloud help` (also the bare `/ulticloud` with no arguments) | none (requireOp=true) | console | admin | none | CloudLoginCommand#handleHelp |
 | ultitools.ulticloud.login | Request a UltiCloud magic-link login for this server | command | `/ulticloud login` | none (requireOp=true) | console | admin | detailed | CloudLoginCommand#login |
 | ultitools.ulticloud.logout | Tear down the cloud connection and clear the saved credential | command | `/ulticloud logout` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#logout |
-| ultitools.ulticloud.status | Show whether this server is currently connected to UltiCloud | command | `/ulticloud status` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#status |
+| ultitools.ulticloud.status | Show whether this server holds a valid UltiCloud authentication token — checks `CloudAuthManager.hasValidToken()` only, never the live WebSocket connection state, so it reports token/authentication status, not whether the panel socket is actually connected | command | `/ulticloud status` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#status |
 
 ## Boot sequence and listeners
 
@@ -129,23 +129,25 @@ session.
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load | event | console log during server startup | n/a | console | admin | brief | PluginManager#sortPluginsByDependencies |
+| ultitools.boot.plugin-load-order-legacy | Opt-in JVM system property that bypasses dependency resolution entirely and loads modules in filesystem order, modeled on Paper's own `-Dpaper.useLegacyPluginLoading=true` precedent | event | `-Dultitools.useLegacyPluginLoading=true` on the server's launch command line | n/a | console | internal | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.update-check | Check for a newer framework version and newer module versions once, asynchronously, shortly after startup | event | console log during server startup | n/a | console | admin | none | UpdateManager#checkUpdatesSync |
 | ultitools.listener.placeholderapi-bridge | On a player's first join needing an unregistered PlaceholderAPI expansion, download and reload it automatically | event | join the server as any player while PlaceholderAPI is installed | n/a | player | internal | none | PlayerJoinListener#onPlayerJoin |
 | ultitools.listener.update-notify | Notify an OP player once per connection, on join, if a framework or module update is available. `UpdateJoinListener`'s own javadoc claims "once per server session", but `PlayerCacheManager#onPlayerQuit` clears the backing `@PlayerCache` set on every quit, so a quit and rejoin re-sends the notification within the same session — a known product defect (UltiKits/UltiTools-Reborn#431), not the intended behaviour | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | player | admin | none | UpdateJoinListener#onPlayerJoin |
 
 **Reconciliation note (D-07):** the line-start form of the canonical command reports exactly one
-`@EventListener` site in this repository (`PlayerJoinListener`) against the two `event`-Kind rows
-above whose Source is a Bukkit join listener, plus a third (`ultitools.listener.update-notify`)
-with no framework annotation at all. This is a deliberate, explained mismatch, not an omission:
-`PlayerJoinListener` carries `@EventListener`, but the core framework's own bootstrap never runs
-`ComponentScanner`/`ListenerManager` over itself — only a per-plugin `@UltiToolsModule`'s declared
-`scanBasePackages` are scanned — so the annotation is not what causes registration here. Both
-`PlayerJoinListener` and `UpdateJoinListener` are registered the same way: a direct
-`Bukkit.getPluginManager().registerEvents(...)` call inside `UltiTools.onEnable()` /
-`scheduleStartupMessages()`. The two boot-sequence `event` rows above (`ultitools.boot.*`) are not
-driven by any annotation at all and are not counted against the `@EventListener` reconciliation
-line either; they reconcile against nothing because module-load-order and the update check have
-no annotation-based instrument in this codebase.
+`@EventListener` site in this repository (`PlayerJoinListener`) against five `event`-Kind rows
+above. This is a deliberate, explained mismatch, not an omission. Two of the five
+(`ultitools.listener.placeholderapi-bridge`, `ultitools.listener.update-notify`) are Bukkit join
+listeners: `PlayerJoinListener` carries `@EventListener`, but the core framework's own bootstrap
+never runs `ComponentScanner`/`ListenerManager` over itself — only a per-plugin
+`@UltiToolsModule`'s declared `scanBasePackages` are scanned — so the annotation is not what
+causes registration here. Both `PlayerJoinListener` and `UpdateJoinListener` are registered the
+same way: a direct `Bukkit.getPluginManager().registerEvents(...)` call inside
+`UltiTools.onEnable()` / `scheduleStartupMessages()`. The other three
+(`ultitools.boot.plugin-load-order`, `ultitools.boot.plugin-load-order-legacy`,
+`ultitools.boot.update-check`) are not driven by any annotation at all and reconcile against
+nothing, because module load-order (in either its resolved or legacy-bypass form) and the update
+check have no annotation-based instrument in this codebase.
 
 ## Scheduled tasks
 
