@@ -44,7 +44,14 @@ for UAT execution and issue reconciliation — the public description of these f
   every Kind that is not `command` — a config key or a scheduled task has no permission node to
   declare in the first place, which is a different fact from a command that declares `none`
   deliberately.
-- **Source:** `ClassName#member`, or the resource path for a `config` row.
+- **Source:** `ClassName#member` — the class and member that actually reads or applies the
+  feature — for every Kind, `config` included: all 52 `config` rows below cite the reading
+  member (e.g. `JsonStore#initScheduler`, `UltiTools#initDataStore`), not the resource path,
+  because the resource path is already stated in the How-to-reach column and does not by itself
+  say what code does with the key. `ClassName#member` for a `config` row need not be an
+  annotation site — most config keys in this repository are read directly via Bukkit's
+  `FileConfiguration`, with no `@ConfigEntity`/`@ConfigEntry` binding at all (see the
+  `## Configuration` section's own zero-`@ConfigEntity` note).
 - **Row order:** by section, then by ID ascending within the section.
 - **No manual prose:** no troubleshooting column, no explanatory paragraphs, no draft page text.
   A hazard noticed while reading becomes a negative checklist row, not a note here.
@@ -325,4 +332,4 @@ total including `env.yml` is 52.
 | ultitools.config.config.ultipanel.logging.error-reporting.sample-rate | Fraction of a sampled error's repeat occurrences that are still reported (`0.1` = 10%) | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.sample-rate (default: 0.1)` | n/a | n/a | admin | none | ErrorReportCollector |
 | ultitools.config.config.ultipanel.logging.excluded-loggers | Logger name prefixes excluded from the log stream sent to the panel, to avoid transmitting excessive volume; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.excluded-loggers (default when present: [com.mojang.authlib, net.minecraft.network, org.apache.http, com.zaxxer.hikari, org.eclipse.jetty])` | n/a | n/a | admin | none | SystemLogHandler |
 | ultitools.config.config.ultipanel.logging.levels | Log levels transmitted to the panel's live log stream; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.levels (default when present: [info, warning, error])` | n/a | n/a | admin | none | SystemLogHandler |
-| ultitools.config.env.api-url | UltiCloud API base URL; Maven-filtered at build time from the `ultitools.api.url` property, not editable at runtime by the server operator | config | `src/main/resources/env.yml: api-url (default: https://api.ultikits.com, from pom.xml property ultitools.api.url)` | n/a | n/a | admin | none | env.yml / pom.xml `ultitools.api.url` |
+| ultitools.config.env.api-url | UltiCloud API base URL; Maven-filtered at build time from the `ultitools.api.url` property, not editable at runtime by the server operator | config | `src/main/resources/env.yml: api-url (default: https://api.ultikits.com, from pom.xml property ultitools.api.url)` | n/a | n/a | admin | none | UltiTools#getEnv |
