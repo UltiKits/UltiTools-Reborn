@@ -201,6 +201,23 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.player-events | Allow the panel to receive live player join/quit/chat events; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | console | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | console | admin | brief | Capability#SERVER_PROPERTIES |
 
+## On-demand monitoring requests
+
+Beyond the periodic `batch_update` (5 s cycle, per the Panel capabilities section above),
+`PluginInitiationUtils#buildInboundHandlers` registers three MONITORING-gated on-demand pull
+requests, each with its own `requestId`-correlated reply: `server_status`
+(`ServerMonitorManager#sendServerStatusWithRequestId`, replies with `type: "server_status"`,
+the same status payload `batch_update` carries), `metrics_data`
+(`#sendMetricsDataWithRequestId`, replies `type: "metrics_data"`), and `plugin_list`
+(`PluginInitiationUtils#handlePluginListRequest`, replies `type: "plugin_list"` with a
+`{plugins: [...], totalCount}` array distinct from `batch_update`'s own `plugins` field).
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.on-demand-server-status | Immediately reply with current server status outside the 5 s `batch_update` cycle | gate | `server_status` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendServerStatusWithRequestId |
+| ultitools.remote.on-demand-metrics | Immediately reply with current performance metrics outside the 5 s cycle | gate | `metrics_data` panel message with a `requestId` | n/a | console | admin | none | ServerMonitorManager#sendMetricsDataWithRequestId |
+| ultitools.remote.on-demand-plugin-list | Immediately reply with every Bukkit plugin's name, version, enabled state, author, and description — every plugin, not just UltiTools modules | gate | `plugin_list` panel message with a `requestId` | n/a | console | admin | none | PluginInitiationUtils#handlePluginListRequest |
+
 ## Log stream controls
 
 The `log_stream` panel message's `action` field routes to five further
@@ -210,7 +227,11 @@ to stream" capability row above already covers — `stop`, `pause`, `resume`, `s
 response shape (`data.status` ∈ `stopped`/`paused`/`resumed`, plus `message`, `clientId`,
 `subscriberCount`, `streaming`); `status` uses a different shape (`data.action: "status"` instead
 of a `status` field, plus `streaming`, `subscriberCount`, `clientId`,
-`logTransmitterEnabled`, `queueSize`) — the two are not interchangeable to parse.
+`logTransmitterEnabled`, `queueSize`) — the two are not interchangeable to parse. `log_stream` and
+`log_stream_control` are two distinct panel message types registered against the exact same
+handler (`PluginInitiationUtils#buildInboundHandlers` binds both to
+`LogStreamManager#handleLogStreamMessage`) — a message of either type carries the same `action`
+vocabulary and produces the same effect.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
@@ -235,7 +256,8 @@ special-cased `server.properties` branch below.
 | ultitools.remote.config-update-file | Overwrite a single loaded module's `@ConfigEntity`-registered config file from a panel-supplied JSON map, via `ConfigManager#loadFromJson(String, String)` | gate | `update_config` panel message with a `fileName` naming a registered config path and `configData` holding that file's `{configEntry: value}` JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 | ultitools.remote.config-update-all-files | Overwrite every currently-registered module config file in one call when `fileName` is omitted or empty — a distinct `ConfigManager#loadFromJson(String)` overload expecting the full nested `{pluginName: {configPath: {...}}}` structure, not one file's flat map | gate | `update_config` panel message with no `fileName` field (or an empty string) and `configData` holding the nested multi-file JSON | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 | ultitools.remote.config-upload | A second, separate remote-editing message: `upload_config` requires `requestId`, `configType`, `configName`, `format`, `backup`, and `configContent` (a JSON object, not a string — the opposite convention from `update_config`'s `configData`). Only `configType: "plugin_config"` actually writes anything, via `ConfigEditorUtils#updateConfigMap(String)` — the SAME single-arg, full-nested-structure overload the empty-`fileName` `update_config` path uses; `configName` is read but never passed to the write call, so it has no effect on which file is targeted despite its name. `configType: "server_properties"` and `"permissions"` are no-op stubs that log one FINE line and return `upload_config_response`/`status: "success"` without writing anything — a known product defect (UltiKits/UltiTools-Reborn#435), not fixed here per this plan's zero-new-code rule. An unrecognized `configType` throws and reports failure honestly through a plain `error` message, NOT `upload_config_response` — the failure and success paths use two different response types | gate | `upload_config` panel message with the six fields above | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpload |
-| ultitools.remote.config-update-server-properties | `update_config` with `fileName: "server_properties"` reaches the same `ServerPropertiesManager#applySetAll` SAFE_KEYS-checked write path as the dedicated `server_properties` message type, but is gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` — an operator who disables `server-properties` but leaves `file-write` enabled has not actually closed this write path | gate | `update_config` panel message with `fileName: "server_properties"` and `configData` holding the property map | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
+| ultitools.remote.config-update-server-properties | `update_config` with `fileName: "server_properties"` and `configData` present reaches the same `ServerPropertiesManager#applySetAll` SAFE_KEYS-checked write path as the dedicated `server_properties` message type, but is gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` — an operator who disables `server-properties` but leaves `file-write` enabled has not actually closed this write path | gate | `update_config` panel message with `fileName: "server_properties"` and `configData` holding the property map | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
+| ultitools.remote.config-update-server-properties-read | `update_config` with `fileName: "server_properties"` and `configData` ABSENT reaches `ServerPropertiesManager#handleGet` (a read) — the same read path `ultitools.remote.server-properties-safe-keys-read` documents, reached through a second entry point — also gated by `Capability.FILE_WRITE`, not `Capability.SERVER_PROPERTIES` | gate | `update_config` panel message with `fileName: "server_properties"` and no `configData` field | n/a | console | admin | detailed | PluginInitiationUtils#handleConfigUpdate |
 
 ## Remote surface guards
 
