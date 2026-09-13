@@ -192,6 +192,21 @@ same way: a direct `Bukkit.getPluginManager().registerEvents(...)` call inside
 nothing, because module load-order (in either its resolved or legacy-bypass form) and the update
 check have no annotation-based instrument in this codebase.
 
+## Economy
+
+New in this section (D-08/D-09, #451, 6.3.0): before this, a module requesting the economy on a
+server with no Vault plugin — or with Vault present but no economy provider registered — crashed
+the entire framework at boot, before the request itself could even fail. Kept `event`-Kind and
+placed in its own section rather than folded into "Boot sequence and listeners" above, since
+neither row here is driven by a Bukkit event or an `@Scheduled`/`@EventListener` annotation the
+way every row in that section's own reconciliation note accounts for — both are triggered by an
+`EconomyUtils` call from module code, not by anything Bukkit dispatches.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.economy.report-startup-state | Log one line at framework start naming the current economy service state — Vault not installed, Vault installed but no provider registered, or hooked into Vault naming the registered provider | event | console log during server startup | n/a | n/a | admin | none | EconomyUtils#logStartupState |
+| ultitools.economy.report-unavailable | On a module's first economy request while unavailable, log one WARNING per calling module per server session naming the module, distinguishing "Vault is not installed" from "Vault is installed but no provider is registered", stating the condition is the server's environment rather than a framework or module defect, and giving the install instruction. A request whose calling module cannot be attributed is still logged once, as an unknown caller | event | any module calls an `EconomyUtils` operation (`getBalance`, `has`, `deposit`, `withdraw`, `format`, `getCurrencyName`, `getCurrencyNamePlural`) while Vault is absent or has no registered provider | n/a | n/a | admin | none | EconomyUtils#reportEconomyStateIfUnavailable |
+
 ## Scheduled tasks
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

@@ -154,7 +154,7 @@ green, but it was never public API and its removal is not a compatibility event.
 
 ### Same-release exceptions applied in 6.3.0
 
-Seven removals used the [same-release exception](#exception-removal-in-the-same-release-that-announces-it)
+Eight removals used the [same-release exception](#exception-removal-in-the-same-release-that-announces-it)
 above instead of waiting a full MINOR:
 
 - `aop.CglibProxyFactory` — clause 1, proven non-functional (issue #188).
@@ -171,8 +171,15 @@ above instead of waiting a full MINOR:
 - `listeners.EnhancedPlayerEventListener` — clause 1, proven non-functional: it carried
   `@EventListener`, nothing registered it, and all seven of its handlers were measured never to
   fire on a real 1.21.4 server (issue #387).
+- `UltiTools#getEconomy()` — clause 2, public and zero measured callers anywhere in this
+  framework's own `src/main`, all sixteen product modules, and the external example (issue #451).
+  It was also the sole cause of a total bootstrap crash on a server with no Vault plugin
+  installed: reflecting over `UltiTools`'s declared methods (done the instant the core plugin
+  bean is registered) eagerly resolved this accessor's `net.milkbowl.vault.economy.Economy`
+  return type, which is absent from the classpath when Vault is absent. Replacement:
+  `EconomyUtils.getEconomy()`, the pre-existing façade six modules already call.
 
-Full reasoning and evidence for all seven live in
+Full reasoning and evidence for all eight live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 ### Measurement notes carried forward from the 6.3.0 survey
