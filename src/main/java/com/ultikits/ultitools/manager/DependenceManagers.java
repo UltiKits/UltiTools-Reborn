@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.services.EconomyProvider;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
@@ -10,6 +11,8 @@ import com.ultikits.ultitools.services.impl.DefaultEmailService;
 import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.impl.InMemoryNotificationService;
 import com.ultikits.ultitools.services.impl.NoOpGameMailService;
+import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
+import com.ultikits.ultitools.utils.EconomyUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
@@ -82,6 +85,18 @@ public class DependenceManagers {
         NoOpGameMailService gameMailService = new NoOpGameMailService();
         context.registerSingleton("noOpGameMailService", gameMailService);
         context.registerSingleton(GameMailService.class.getName(), gameMailService);
+
+        // Register EconomyProvider (D-08/D-09, #451): the internal, @ApiStatus.Internal seam
+        // EconomyUtils delegates to, following the same bean-name-plus-interface-name shape as
+        // every service above. EconomyUtils.setProvider shares this exact instance so the
+        // framework's façade and any future container-resolved EconomyProvider consumer see the
+        // same state. logStartupState() is called last, after the provider is wired in, so the
+        // one-time start-up log line reflects the real, current Vault/provider state.
+        VaultEconomyProvider economyProvider = new VaultEconomyProvider();
+        context.registerSingleton("vaultEconomyProvider", economyProvider);
+        context.registerSingleton(EconomyProvider.class.getName(), economyProvider);
+        EconomyUtils.setProvider(economyProvider);
+        EconomyUtils.logStartupState();
     }
 
     /**
