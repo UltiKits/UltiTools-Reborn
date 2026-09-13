@@ -22,7 +22,6 @@ import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -384,10 +383,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // saveResources()'s own pattern) rather than trusting the precomputed jarHash,
                 // so a partial/failed write can never be misreported as success (WR-01).
                 if (writeBytes(file, jarBytes)) {
-                    ResourceHashSidecar.record(resourceFolder, resourcePath, ResourceHashSidecar.sha256(file));
-                    getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
-                            + "' was not modified since it was extracted and has been updated to the "
-                            + "current bundled version.");
+                    String newDiskHash = ResourceHashSidecar.sha256(file);
+                    ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
+                    // Codex round 2, P2: record(...) swallows its own IOException and returns
+                    // void, so a caller cannot otherwise tell a sidecar write failure from
+                    // success. Read the record back to confirm it actually persisted before
+                    // claiming success -- logging "has been updated" when the file WAS
+                    // refreshed but the sidecar was NOT would misrepresent provenance
+                    // tracking as healthy. Deliberately not reverted on failure: a second
+                    // write introduces its own atomicity risk for a genuinely rare failure;
+                    // the next boot's hash mismatch safely falls into branch 2 (treated as
+                    // customised) instead, which is this mechanism's own conservative default.
+                    boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
+                            .filter(newDiskHash::equals).isPresent();
+                    if (recordPersisted) {
+                        getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                                + "' was not modified since it was extracted and has been updated to the "
+                                + "current bundled version.");
+                    } else {
+                        getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
+                                + getPluginName() + "' but could not persist its provenance record; it may "
+                                + "be treated as customised on the next start until this is resolved.");
+                    }
                 }
                 return readLanguageFile(file, extension);
             }
@@ -456,27 +473,33 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Counts the DISTINCT {@code String.format} argument positions {@code value} consumes --
-     * not the number of conversion occurrences. A value repeating one EXPLICIT index twice
-     * (e.g. {@code "%1$s and %1$s again"}) has arity one, since both conversions consume the
-     * SAME argument; a naive occurrence count would call it two and warn on a rewording that
-     * changed nothing about the message's parameter shape. An unindexed conversion (this
-     * framework's own catalogues use only this form) consumes the NEXT sequential position, so
-     * two unindexed {@code %s} conversions in one value ARE two distinct positions -- unlike the
-     * explicit-index case, repetition without an index is never a re-use of the same argument.
-     * {@code %%} (a literal percent) and {@code %n} (a line separator) consume no argument and
-     * are excluded from the count.
+     * Returns the highest {@code String.format} argument POSITION {@code value} requires --
+     * not the count of distinct positions used (Codex round 2, P2). {@code "%2$s" alone}
+     * requires an args array of length (at least) 2, since {@code String.format} demands every
+     * position up to the highest one referenced be present, even if a lower position (here,
+     * 1) is never itself rendered -- so its arity is 2, not 1. Counting DISTINCT positions
+     * (a one-element set for both {@code "%2$s"} alone and {@code "%s"} alone) would wrongly
+     * call those two equal.
+     * <p>
+     * A value repeating one EXPLICIT index twice (e.g. {@code "%1$s and %1$s again"}) still
+     * has arity one, since both conversions consume the SAME argument and neither raises the
+     * highest-position watermark past 1; a naive occurrence count would call it two and warn
+     * on a rewording that changed nothing about the message's parameter shape. An unindexed
+     * conversion (this framework's own catalogues use only this form) consumes the NEXT
+     * sequential position, so two unindexed {@code %s} conversions in one value require arity
+     * two. {@code %%} (a literal percent) and {@code %n} (a line separator) consume no
+     * argument and are excluded.
      *
      * @param value a language value, or {@code null}
-     * @return the number of distinct argument positions {@code value}'s {@code String.format}
-     *         conversions consume, or {@code 0} for {@code null} or a value with none
+     * @return the highest argument position {@code value}'s {@code String.format} conversions
+     *         require, or {@code 0} for {@code null} or a value with none
      */
     private static int placeholderArity(String value) {
         if (value == null) {
             return 0;
         }
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
-        Set<Integer> positions = new HashSet<>();
+        int highestPosition = 0;
         int nextImplicitPosition = 1;
         while (matcher.find()) {
             char conversion = matcher.group(2).charAt(0);
@@ -485,13 +508,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
             String explicitIndex = matcher.group(1);
             if (explicitIndex != null) {
-                positions.add(Integer.parseInt(explicitIndex));
+                highestPosition = Math.max(highestPosition, Integer.parseInt(explicitIndex));
             } else {
-                positions.add(nextImplicitPosition);
+                highestPosition = Math.max(highestPosition, nextImplicitPosition);
                 nextImplicitPosition++;
             }
         }
-        return positions.size();
+        return highestPosition;
     }
 
     /**
