@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -8,6 +10,7 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
+import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -17,18 +20,27 @@ import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
+import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -72,6 +84,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * and the loader silently produced an empty dictionary for every one of them.
      */
     private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
+    /**
+     * Matches a {@code MessageFormat}-style placeholder index, e.g. {@code {0}} in {@code "Hello,
+     * {0}!"}. Used only by {@link #placeholderArity(String)} for the D-05 per-key comparison; not
+     * a change to how placeholders are substituted anywhere.
+     */
+    private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(\\d+)}");
+
+    /**
+     * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
+     * change to {@link Language}'s own Gson usage, which stays entirely inside {@code
+     * Language.java} (untouched by this plan).
+     */
+    private static final Gson ARITY_GSON = new Gson();
+    private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private Language language;
     @Getter
@@ -246,12 +273,99 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Reads {@code <folderPath>/lang/<code><extension>} if it exists, else {@code null}.
+     * <p>
+     * D-05/D-06/D-07 (#441): before returning, applies the recorded-provenance decision -- an
+     * upgraded server whose language file was never touched since extraction gets it silently
+     * replaced by the current jar's copy; one an operator customised is left alone, with a
+     * per-key warning for any key whose placeholder count moved out from under it. Layered in
+     * front of the resolution split, not inside {@link Language}: {@link
+     * #resolveLanguageWithProvenance} decides which bytes/dictionary this method returns, and
+     * {@link Language#withFallback} (unchanged) still owns filling a key this dictionary lacks
+     * entirely.
      */
     private Language loadLanguageFromDisk(String folderPath, String code, String extension) {
         File file = new File(folderPath + File.separator + "lang" + File.separator + code + extension);
         if (!file.exists()) {
             return null;
         }
+        String resourcePath = "lang/" + code + extension;
+        return resolveLanguageWithProvenance(folderPath, file, resourcePath, extension);
+    }
+
+    /**
+     * Applies the D-05/D-06 recorded-provenance decision to a single on-disk language file. Four
+     * branches, mutually exclusive:
+     * <ol>
+     *   <li>Recorded hash present and equal to the disk file's current hash -- never touched by
+     *       the operator since extraction: overwrite the disk file with the current jar's bytes,
+     *       re-record the new (jar) hash as the baseline, and log one informative line.</li>
+     *   <li>Recorded hash present and different -- operator customisation: leave the disk file
+     *       alone; apply the per-key placeholder-arity override for any key that moved.</li>
+     *   <li>No recorded hash, but the disk bytes already equal the jar's -- provably unmodified,
+     *       unknown provenance only because an older jar (pre-#441) extracted it: record the hash
+     *       as the new baseline and enter the normal mechanism, with no overwrite this pass
+     *       (D-06). Never adopt an unequal disk hash as a baseline -- that would silently
+     *       overwrite a real customisation on the next jar change.</li>
+     *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance,
+     *       assume customisation: never record, never overwrite; the per-key placeholder-arity
+     *       override still applies.</li>
+     * </ol>
+     * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
+     * circuits before any of the four branches: the disk file is left alone and nothing is
+     * recorded, since there is nothing to compare against.
+     *
+     * @param folderPath   the module's on-disk resource folder root
+     * @param file         the on-disk language file, already confirmed to exist
+     * @param resourcePath the extracted resource's path relative to the resource folder (e.g.
+     *                     {@code "lang/en.json"}), matching {@code saveResources()}'s own keys
+     * @param extension    the language file extension ({@code ".json"}, {@code ".yml"} or {@code
+     *                     ".yaml"})
+     * @return the language that {@link #loadLanguageFromDisk} should treat as "the disk language"
+     */
+    private Language resolveLanguageWithProvenance(String folderPath, File file, String resourcePath,
+                                                     String extension) {
+        byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
+        if (jarBytes == null) {
+            // Jar entry absent for this exact resource path: nothing to compare against, so the
+            // disk file is left alone and no record is written (D-05).
+            return readLanguageFile(file, extension);
+        }
+        File resourceFolder = new File(folderPath);
+        String diskHash = ResourceHashSidecar.sha256(file);
+        String jarHash = ResourceHashSidecar.sha256(jarBytes);
+        Optional<String> recorded = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath);
+
+        if (recorded.isPresent()) {
+            if (recorded.get().equals(diskHash)) {
+                // Branch 1: never touched since extraction -> overwrite from the jar.
+                writeBytes(file, jarBytes);
+                ResourceHashSidecar.record(resourceFolder, resourcePath, jarHash);
+                getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                        + "' was not modified since it was extracted and has been updated to the "
+                        + "current bundled version.");
+                return readLanguageFile(file, extension);
+            }
+            // Branch 2: operator customisation -> leave the disk file alone.
+            return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+        }
+
+        if (diskHash.equals(jarHash)) {
+            // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
+            // no overwrite this pass (D-06).
+            ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+            return readLanguageFile(file, extension);
+        }
+        // Branch 4: unknown provenance and the bytes differ -> assume customisation, never record.
+        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+    }
+
+    /**
+     * Reads an on-disk language file exactly as the pre-#441 {@code loadLanguageFromDisk} did --
+     * extracted unchanged so both provenance branches that keep the disk file's own parse
+     * (branches 1 and 3 in {@link #resolveLanguageWithProvenance}) share the same reading logic
+     * the jar-absent short-circuit also uses.
+     */
+    private Language readLanguageFile(File file, String extension) {
         if (".json".equals(extension)) {
             return new Language(file);
         }
@@ -260,6 +374,166 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         } catch (IOException e) {
             getLogger().error("Failed to read language file " + file.getPath(), e);
             return new Language("{}");
+        }
+    }
+
+    /**
+     * Builds the disk language for the "operator customisation" branches (2 and 4 in {@link
+     * #resolveLanguageWithProvenance}): the disk dictionary stays authoritative for every key,
+     * except a key whose {@link #placeholderArity(String)} differs from the jar's value for the
+     * same key -- that key is overridden to the jar's value and warned about once, naming the
+     * module, the file and the key but never either value (T-16-04-02). A key present only in the
+     * jar is deliberately left out of the returned dictionary: {@link Language#withFallback}
+     * (unchanged) already resolves a key the disk dictionary lacks entirely, and duplicating that
+     * here would just be a second, redundant path to the same answer.
+     */
+    private Language applyPlaceholderArityOverride(File file, byte[] jarBytes, String extension,
+                                                     String resourcePath) {
+        Map<String, String> diskDictionary = readFlatDictionary(file, extension);
+        Map<String, String> jarDictionary = readFlatDictionary(jarBytes, extension);
+        Map<String, String> resolved = new LinkedHashMap<>(diskDictionary);
+        for (Map.Entry<String, String> jarEntry : jarDictionary.entrySet()) {
+            String key = jarEntry.getKey();
+            String diskValue = diskDictionary.get(key);
+            if (diskValue == null) {
+                // Missing from disk entirely: Language.withFallback already covers this key.
+                continue;
+            }
+            if (placeholderArity(diskValue) != placeholderArity(jarEntry.getValue())) {
+                resolved.put(key, jarEntry.getValue());
+                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                        + getPluginName() + "' has a different placeholder count than the current "
+                        + "bundled version; using the current version's value for this key.");
+            }
+        }
+        return new Language(resolved);
+    }
+
+    /**
+     * Counts the DISTINCT {@code {n}} placeholder indices in {@code value} -- not the number of
+     * occurrences. A value repeating one index twice (e.g. {@code "{0} and {0} again"}) has arity
+     * one; a naive occurrence count would call it two and warn on a rewording that changed
+     * nothing about the message's parameter shape.
+     *
+     * @param value a language value, or {@code null}
+     * @return the number of distinct placeholder indices in {@code value}, or {@code 0} for
+     *         {@code null} or a value with none
+     */
+    private static int placeholderArity(String value) {
+        if (value == null) {
+            return 0;
+        }
+        Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
+        Set<Integer> indices = new HashSet<>();
+        while (matcher.find()) {
+            indices.add(Integer.parseInt(matcher.group(1)));
+        }
+        return indices.size();
+    }
+
+    /**
+     * Reads a flat {@code key -> value} dictionary from a language file on disk, for the
+     * placeholder-arity comparison only -- {@link Language} itself exposes no way to enumerate its
+     * keys, so this is a small, independent read of the same file formats, not a change to {@link
+     * Language}'s own parsing. Degrades to an empty map on any read/parse failure (an empty file
+     * is "no keys", never an error, per D-05).
+     */
+    private static Map<String, String> readFlatDictionary(File file, String extension) {
+        if (file == null || !file.isFile()) {
+            return Collections.emptyMap();
+        }
+        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            return readFlatDictionary(reader, extension);
+        } catch (IOException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Reads a flat {@code key -> value} dictionary from jar-bundled bytes, mirroring the file
+     * overload above for the jar side of the comparison.
+     */
+    private static Map<String, String> readFlatDictionary(byte[] bytes, String extension) {
+        try (Reader reader = new InputStreamReader(new ByteArrayInputStream(bytes), StandardCharsets.UTF_8)) {
+            return readFlatDictionary(reader, extension);
+        } catch (IOException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    private static Map<String, String> readFlatDictionary(Reader reader, String extension) {
+        try {
+            if (".json".equals(extension)) {
+                Map<String, String> parsed = ARITY_GSON.fromJson(reader, ARITY_MAP_TYPE);
+                return parsed != null ? parsed : Collections.emptyMap();
+            }
+            // Mirrors Language.fromYaml's own flattening -- duplicated here (not called) because
+            // Language exposes no way to get its dictionary back out, and this plan does not touch
+            // Language.java at all.
+            YamlConfiguration yaml = YamlConfiguration.loadConfiguration(reader);
+            Map<String, String> flattened = new LinkedHashMap<>();
+            for (String key : yaml.getKeys(true)) {
+                if (yaml.isString(key)) {
+                    flattened.put(key, yaml.getString(key));
+                }
+            }
+            return flattened;
+        } catch (JsonSyntaxException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    private void writeBytes(File file, byte[] bytes) {
+        try {
+            Files.write(file.toPath(), bytes);
+        } catch (IOException e) {
+            getLogger().error("Failed to write language file " + file.getPath(), e);
+        }
+    }
+
+    /**
+     * Reads the raw bytes of {@code resourcePath} (e.g. {@code "lang/en.json"}) from this module's
+     * own {@link CodeSource} location, or {@code null} if it is not present there. Mirrors {@link
+     * #loadLanguageFromJar(String, String)}'s directory/jar dual branch exactly (13-REVIEW CR-01,
+     * issue #412 follow-up) but returns raw bytes instead of a parsed {@link Language}, so the
+     * D-05/D-06 provenance decision can hash and, in the overwrite branch, write those exact bytes
+     * to disk.
+     */
+    private byte[] readEmbeddedResourceBytes(String resourcePath) {
+        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
+        if (src == null || src.getLocation() == null) {
+            return null;
+        }
+        File location = resolveCodeSourceFile(src.getLocation());
+        if (location.isDirectory()) {
+            File resource = new File(location, resourcePath.replace('/', File.separatorChar));
+            if (!resource.isFile()) {
+                return null;
+            }
+            try {
+                return Files.readAllBytes(resource.toPath());
+            } catch (IOException e) {
+                getLogger().error(e, "Failed to read embedded resource " + resource + " from " + location);
+                return null;
+            }
+        }
+        try (JarFile jarFile = new JarFile(location)) {
+            JarEntry entry = jarFile.getJarEntry(resourcePath);
+            if (entry == null) {
+                return null;
+            }
+            try (InputStream in = jarFile.getInputStream(entry)) {
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[4096];
+                int len;
+                while ((len = in.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, len);
+                }
+                return buffer.toByteArray();
+            }
+        } catch (IOException e) {
+            getLogger().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
+            return null;
         }
     }
 
