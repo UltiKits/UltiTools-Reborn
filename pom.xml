@@ -589,6 +589,9 @@
                                  recorded as a formal COMPATIBILITY.md binary-incompatibility occurrence
                                  (Task 3), not a same-release removal. -->
                             <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#unregisterSelf()</exclude>
+                            <!-- 16-02-PLAN.md (D-01, #419/#455): same shape as the exclude immediately
+                                 above, for UltiToolsPlugin.reloadSelf() gaining `final`. -->
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#reloadSelf()</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
