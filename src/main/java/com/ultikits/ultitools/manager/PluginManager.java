@@ -363,12 +363,21 @@ public class PluginManager {
         // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
         // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
         // (IN-01, harmless but redundant).
-        plugin.unregisterSelf();
-        // unregister() is reachable with an instance the caller constructed directly, which never
-        // went through PluginManager.register(...) and so never received a container (SILENT-19,
-        // #338). Guard the close the same way the @PlayerCache block above already does.
-        if (plugin.getContext() != null) {
-            plugin.getContext().close();
+        //
+        // unregisterSelf() can still throw (a module's onUnregister() override) even with its
+        // own internal try/finally -- wrap the context close in a finally here too, so a
+        // throwing hook cannot leave this module's container, its destruction callbacks and
+        // its resources open for the rest of the server's lifetime (Codex review on #457:
+        // "Close the module context when its unload hook throws").
+        try {
+            plugin.unregisterSelf();
+        } finally {
+            // unregister() is reachable with an instance the caller constructed directly, which
+            // never went through PluginManager.register(...) and so never received a container
+            // (SILENT-19, #338). Guard the close the same way the @PlayerCache block above does.
+            if (plugin.getContext() != null) {
+                plugin.getContext().close();
+            }
         }
     }
 

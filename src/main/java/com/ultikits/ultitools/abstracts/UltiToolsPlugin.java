@@ -763,8 +763,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             onUnregister();
         } finally {
-            getCommandManager().unregisterAll(this);
-            getListenerManager().unregisterAll(this);
+            // Nested, not sequential: if CommandManager.unregisterAll(this) itself throws
+            // (e.g. reflective Bukkit command-map access fails), a single flat finally block
+            // would exit before ListenerManager.unregisterAll(this) ever ran, leaving this
+            // unloaded module's listeners active (Codex review on #457: "Run listener cleanup
+            // even if command cleanup throws"). Nesting means each cleanup step's own failure
+            // cannot suppress the other's.
+            try {
+                getCommandManager().unregisterAll(this);
+            } finally {
+                getListenerManager().unregisterAll(this);
+            }
         }
     }
 
