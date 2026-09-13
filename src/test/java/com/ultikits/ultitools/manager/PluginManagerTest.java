@@ -2,7 +2,9 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -247,6 +249,20 @@ class PluginManagerTest {
 
             verify(context).close();
             verify(registered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("unregisterSelf() 抛出异常时仍会关闭 context（Codex review on #457: \"Close the module context when its unload hook throws\"）")
+        void unregisterSelfThrowing_stillClosesContext() {
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("Throwing");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new RuntimeException("onUnregister boom")).when(plugin).unregisterSelf();
+
+            assertThrows(RuntimeException.class, () -> pluginManager.unregister(plugin));
+
+            verify(context).close();
         }
     }
 

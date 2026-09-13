@@ -369,4 +369,19 @@ class UltiToolsPluginLifecycleHookTest {
         verify(mockCommandManager, times(1)).unregisterAll(plugin);
         verify(mockListenerManager, times(1)).unregisterAll(plugin);
     }
+
+    @Test
+    @DisplayName("CommandManager.unregisterAll() throwing still runs ListenerManager.unregisterAll() (Codex review on #457: \"Run listener cleanup even if command cleanup throws\")")
+    void commandUnregisterAllThrowing_stillRunsListenerUnregisterAll() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        doThrow(new RuntimeException("command manager boom")).when(mockCommandManager).unregisterAll(plugin);
+
+        // A single flat finally block runs its statements sequentially -- if the FIRST one
+        // throws, the SECOND never executes. Nesting is required so each cleanup step's own
+        // failure cannot suppress the other's.
+        assertThrows(RuntimeException.class, plugin::unregisterSelf);
+
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+    }
 }
