@@ -136,6 +136,15 @@ public final class EconomyUtils {
      * @return true if economy is available
      */
     public static boolean isAvailable() {
+        // [Rule 1/2 fix, 16-06]: this is the check every real consuming module actually calls
+        // before deciding whether to act (UltiEssentials#DeathPunishListener,
+        // UltiKits#KitServiceImpl and others all gate on isAvailable() first, and only call
+        // getBalance/has/deposit/withdraw when it returns true) -- so this is where a module's
+        // economy request is genuinely first observed. Reporting only from the data-operation
+        // methods below would mean the honest-reporting behaviour this plan exists to add almost
+        // never fires against real module call patterns, since none of those methods are reached
+        // once a module has already seen isAvailable() return false.
+        reportIfUnavailable();
         return provider.getState() == EconomyProvider.State.AVAILABLE;
     }
 
