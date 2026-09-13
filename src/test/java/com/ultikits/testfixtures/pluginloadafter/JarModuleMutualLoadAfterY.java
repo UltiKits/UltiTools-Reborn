@@ -14,7 +14,7 @@ public class JarModuleMutualLoadAfterY extends UltiToolsPlugin {
     }
 
     @Override
-    public void unregisterSelf() {
+    protected void onUnregister() {
         // No-op fixture.
     }
 }

@@ -148,87 +148,87 @@ class PluginDependencyResolverTest {
     // Test plugin classes with various dependency configurations
     public static class PluginA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     public static class PluginB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     public static class PluginC extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(depends = {"PluginA"})
     public static class PluginDependsOnA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(depends = {"PluginA", "PluginB"})
     public static class PluginDependsOnAB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(softDepends = {"PluginA"})
     public static class PluginSoftDependsOnA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(loadBefore = {"PluginC"})
     public static class PluginLoadBeforeC extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(depends = {"MissingPlugin"})
     public static class PluginWithMissingDep extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     // Circular dependency plugins
     @PluginDependency(depends = {"CircularB"})
     public static class CircularA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(depends = {"CircularA"})
     public static class CircularB extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     // A second, independent circular pair - proves two cycles in one input are each reported.
     @PluginDependency(depends = {"CircularD"})
     public static class CircularC extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @PluginDependency(depends = {"CircularC"})
     public static class CircularD extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     // Depends on a cycle member without being part of the cycle itself.
     @PluginDependency(depends = {"CircularA"})
     public static class PluginDependsOnCircularA extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     // Depends on a plugin that itself has a missing hard dependency.
     @PluginDependency(depends = {"PluginWithMissingDep"})
     public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     // JAR-backed fixtures for plugin.yml loadAfter merging (D-12) live as top-level classes in
@@ -242,7 +242,7 @@ class PluginDependencyResolverTest {
     @PluginDependency(depends = {"TargetModule"})
     public static class DependsOnYmlNamedTarget extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
+        @Override protected void onUnregister() { }
     }
 
     @Nested

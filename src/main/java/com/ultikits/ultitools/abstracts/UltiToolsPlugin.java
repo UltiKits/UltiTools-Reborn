@@ -721,8 +721,23 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
+    /**
+     * Extension point for a module's own unload cleanup.
+     * <p>
+     * Called by {@link #unregisterSelf()} <em>before</em> the framework unregisters this
+     * plugin's commands and listeners (D-02), so the module's own beans are still alive
+     * while this runs. {@link #unregisterSelf()} is {@code final} and always calls this
+     * hook and the framework's own unregistration afterward -- a module cannot skip either
+     * by overriding {@link #unregisterSelf()} itself, because that is no longer possible
+     * (D-01). The default body does nothing; override this method, not
+     * {@link #unregisterSelf()}, to add cleanup work.
+     */
+    protected void onUnregister() {
+    }
+
     @Override
-    public void unregisterSelf() {
+    public final void unregisterSelf() {
+        onUnregister();
         getCommandManager().unregisterAll(this);
         getListenerManager().unregisterAll(this);
     }
