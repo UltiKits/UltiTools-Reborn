@@ -51,6 +51,7 @@ import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
@@ -603,6 +604,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * extracted entry's resolved destination is checked against the resource folder's own
      * canonical path, and any entry whose path would resolve outside it (a Zip Slip attempt) is
      * skipped with a warning rather than written.
+     * <p>
+     * Every file this method actually extracts gets its provenance recorded via {@link
+     * ResourceHashSidecar#record(File, String, String)} -- across all three prefixes, D-07 -- so a
+     * later boot can tell "the operator edited this" from "an old jar extracted this and nobody has
+     * touched it since" (#441, D-05/D-06). A file this method skips (already present on disk) gets
+     * no record here: the skip already means the file predates this mechanism, or was already
+     * decided on by {@link #loadLanguageFromDisk} on a previous boot.
      */
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
@@ -642,6 +650,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                                 out.write(buf, 0, len);
                             }
                         }
+                        ResourceHashSidecar.record(new File(resourceFolderPath), fileName,
+                                ResourceHashSidecar.sha256(outFile));
                     } catch (IOException ex) {
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }
