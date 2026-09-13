@@ -280,6 +280,25 @@ public class PluginManager {
     }
 
     /**
+     * Logs one WARNING for a module whose {@link #unregister(UltiToolsPlugin)} call threw,
+     * mirroring {@link #logPluginInitializationFailure(String, Throwable)}'s message shape
+     * so both refusal classes (load-time, unload-time) read the same way in the console.
+     * Package-private for the same reason as that method: a test-seam choice, not a widened
+     * API surface (WR-01, 16-REVIEW-lifecycle.md).
+     *
+     * @param moduleName the module whose unregistration failed, however the caller
+     *                   identifies it
+     * @param thrown     the throwable caught at the {@link #close()} loop boundary
+     */
+    static void logPluginUnregistrationFailure(String moduleName, Throwable thrown) {
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                String.format("[UltiTools-API] Failed to unregister plugin %s: %s", moduleName, rootCauseMessage(thrown)),
+                thrown
+        );
+    }
+
+    /**
      * Walks {@code thrown}'s cause chain for the deepest {@link UltiToolsException}, returning
      * its message - or {@code thrown.getMessage()} if the chain holds none. Bounded via
      * identity-based cycle detection ({@link IdentityHashMap}) so a self-referential or cyclic
@@ -338,13 +357,27 @@ public class PluginManager {
         // after unload, exactly like the TabCompletionManager / EventBus / PanelResponderRegistry
         // releases immediately above.
         ConditionalRegistrationEvaluator.clear(plugin);
-        UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
-        plugin.unregisterSelf();
-        // unregister() is reachable with an instance the caller constructed directly, which never
-        // went through PluginManager.register(...) and so never received a container (SILENT-19,
-        // #338). Guard the close the same way the @PlayerCache block above already does.
-        if (plugin.getContext() != null) {
-            plugin.getContext().close();
+        // Listener unregistration happens inside unregisterSelf() itself, AFTER
+        // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
+        // directly at this point ran onUnregister() with the module's own listeners
+        // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
+        // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
+        // (IN-01, harmless but redundant).
+        //
+        // unregisterSelf() can still throw (a module's onUnregister() override) even with its
+        // own internal try/finally -- wrap the context close in a finally here too, so a
+        // throwing hook cannot leave this module's container, its destruction callbacks and
+        // its resources open for the rest of the server's lifetime (Codex review on #457:
+        // "Close the module context when its unload hook throws").
+        try {
+            plugin.unregisterSelf();
+        } finally {
+            // unregister() is reachable with an instance the caller constructed directly, which
+            // never went through PluginManager.register(...) and so never received a container
+            // (SILENT-19, #338). Guard the close the same way the @PlayerCache block above does.
+            if (plugin.getContext() != null) {
+                plugin.getContext().close();
+            }
         }
     }
 
@@ -357,7 +390,17 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
-            unregister(plugin);
+            // One module's unregister() (ultimately its own onUnregister()) throwing must
+            // not cascade into every subsequent module's own command/listener/EventBus/
+            // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
+            // taskManager.cancelAllCore() below, nor propagate out of close() into
+            // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
+            // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
+            try {
+                unregister(plugin);
+            } catch (Exception | Error e) {
+                logPluginUnregistrationFailure(plugin.getPluginName(), e);
+            }
         }
         pluginList.clear();
         pluginClassList.clear();

@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -71,6 +72,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * and the loader silently produced an empty dictionary for every one of them.
      */
     private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
+    /** Named logger for the D-03 per-module reload line -- see {@link #RELOAD_LOG_MESSAGE_KEY}. */
+    private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
+
+    /**
+     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
+     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
+     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
+     * shipped catalogues actually carry a translation for it, rather than duplicating the
+     * literal string between production and test code.
+     */
+    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
 
     private Language language;
     @Getter
@@ -721,10 +734,66 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
+    /**
+     * Extension point for a module's own unload cleanup.
+     * <p>
+     * Called by {@link #unregisterSelf()} <em>before</em> the framework unregisters this
+     * plugin's commands and listeners (D-02), so the module's own beans are still alive
+     * while this runs. {@link #unregisterSelf()} is {@code final} and always calls this
+     * hook and the framework's own unregistration afterward -- a module cannot skip either
+     * by overriding {@link #unregisterSelf()} itself, because that is no longer possible
+     * (D-01). The default body does nothing; override this method, not
+     * {@link #unregisterSelf()}, to add cleanup work.
+     * <p>
+     * If this hook throws, {@link #unregisterSelf()} still unregisters this module's own
+     * commands and listeners before the exception propagates (WR-01,
+     * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
+     * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
+     * call could.
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onUnregister() {
+    }
+
     @Override
-    public void unregisterSelf() {
-        getCommandManager().unregisterAll(this);
-        getListenerManager().unregisterAll(this);
+    public final void unregisterSelf() {
+        try {
+            onUnregister();
+        } finally {
+            // Nested, not sequential: if CommandManager.unregisterAll(this) itself throws
+            // (e.g. reflective Bukkit command-map access fails), a single flat finally block
+            // would exit before ListenerManager.unregisterAll(this) ever ran, leaving this
+            // unloaded module's listeners active (Codex review on #457: "Run listener cleanup
+            // even if command cleanup throws"). Nesting means each cleanup step's own failure
+            // cannot suppress the other's.
+            try {
+                getCommandManager().unregisterAll(this);
+            } finally {
+                getListenerManager().unregisterAll(this);
+            }
+        }
+    }
+
+    /**
+     * Extension point for a module's own reload work.
+     * <p>
+     * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
+     * reload, language-catalogue refresh, {@code @ConditionalOnConfig} drift report, and the
+     * framework-owned per-module reload log line (D-02, D-03) -- so a real-work override sees
+     * the already-reloaded configuration rather than the stale one. {@link #reloadSelf()} is
+     * {@code final} and always runs its own steps first; a module cannot skip them by
+     * overriding {@link #reloadSelf()} itself, because that is no longer possible (D-01). The
+     * default body does nothing; override this method, not {@link #reloadSelf()}, to add reload
+     * work.
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no reload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onReload() {
     }
 
     /**
@@ -733,18 +802,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
      * is evaluated once, at component-scan time during startup, so a reload can only log that a
      * watched key has changed direction since then -- it never registers, unregisters, or
-     * rebuilds anything (issue #392, D-01). A module overriding {@code reloadSelf()} without
-     * calling {@code super.reloadSelf()} will not get this report; that is pre-existing
-     * behaviour for the two statements above too, stated here so it is not a surprise.
+     * rebuilds anything (issue #392, D-01). {@code final} and always runs its own three steps,
+     * then logs one framework-owned INFO line naming this module (D-03), then calls
+     * {@link #onReload()} -- a module can no longer skip any of this by overriding
+     * {@code reloadSelf()} itself, because that override point no longer exists (D-01).
      */
     @Override
-    public void reloadSelf() {
+    public final void reloadSelf() {
         getConfigManager().reloadConfigs(this);
         // Reinitialize language in case language setting changed
         language = createLanguageFromPath(resourceFolderPath);
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
+        LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        onReload();
     }
 
     /**

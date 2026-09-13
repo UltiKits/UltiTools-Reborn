@@ -109,5 +109,6 @@
   "正在上传本地配置...": "Uploading local configuration...",
   "获取服务器UUID失败！": "Could not obtain the server UUID!",
   "获取版本列表失败！": "Could not fetch the version list!",
-  "配置编辑Websocket服务初始化失败！": "Config-editor WebSocket service failed to initialise!"
+  "配置编辑Websocket服务初始化失败！": "Config-editor WebSocket service failed to initialise!",
+  "Module '%s' reloaded.": "Module '%s' reloaded."
 }

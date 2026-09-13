@@ -580,6 +580,18 @@
                             <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                            <!-- 16-02-PLAN.md (D-01, #419/#455): UltiToolsPlugin.unregisterSelf() gains
+                                 `final` so a module can no longer override it and skip the framework's
+                                 own CommandManager/ListenerManager unregistration; the class itself
+                                 still exists (a member-level exclude, not a whole-class one; the
+                                 over-broad-exclusion invariant only flags class-level entries, per its
+                                 own evaluate()). METHOD_NOW_FINAL is japicmp's change type here,
+                                 recorded as a formal COMPATIBILITY.md binary-incompatibility occurrence
+                                 (Task 3), not a same-release removal. -->
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#unregisterSelf()</exclude>
+                            <!-- 16-02-PLAN.md (D-01, #419/#455): same shape as the exclude immediately
+                                 above, for UltiToolsPlugin.reloadSelf() gaining `final`. -->
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#reloadSelf()</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
