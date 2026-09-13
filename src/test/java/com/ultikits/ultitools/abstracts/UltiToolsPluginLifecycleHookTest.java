@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -335,5 +337,26 @@ class UltiToolsPluginLifecycleHookTest {
                         + "identical to the (English) key -- equal values here would mean a "
                         + "Chinese-locale server sees the raw English key text leak through")
                 .isNotEqualTo(UltiToolsPlugin.RELOAD_LOG_MESSAGE_KEY);
+    }
+
+    // ==================== Task 3: exception isolation (WR-01, 16-REVIEW-lifecycle.md) ====================
+
+    @Test
+    @DisplayName("onUnregister() throwing still unregisters commands and listeners, then propagates (WR-01)")
+    void onUnregisterThrowing_stillUnregistersCommandsAndListenersThenPropagates() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        doThrow(new IllegalStateException("module cleanup boom")).when(plugin).onUnregister();
+
+        // A throwing hook must not be swallowed -- the module author needs to see it -- but the
+        // framework's OWN cleanup for this module must still run despite it (try/finally, not
+        // try/catch). Before the fix, the exception from onUnregister() skipped both
+        // CommandManager.unregisterAll and ListenerManager.unregisterAll entirely, reproducing
+        // (via an uncaught exception instead of a skipped super call) exactly the D-01 defect
+        // this whole plan exists to close.
+        assertThrows(IllegalStateException.class, plugin::unregisterSelf);
+
+        verify(mockCommandManager, times(1)).unregisterAll(plugin);
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
     }
 }
