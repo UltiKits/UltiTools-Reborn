@@ -324,59 +324,71 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        // Cancel all @Scheduled tasks before unregistering
-        if (taskManager != null) {
-            taskManager.cancelAll(plugin);
-        }
-        // Unregister @PlayerCache beans before context closes
-        if (playerCacheManager != null && plugin.getContext() != null) {
-            for (Object bean : plugin.getContext().getSingletonValues()) {
-                playerCacheManager.unregisterBean(bean);
-            }
-        }
-        // Bulk-unregister this module's tab-completion completers so the singleton does not
-        // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
-        // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
-        // return 0 and throw nothing).
-        TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
-        // Unregister @ModuleEventHandler handlers from EventBus
-        EventBus eventBus = UltiTools.getInstance().getEventBus();
-        if (eventBus != null) {
-            eventBus.unregisterAll(plugin.getPluginName());
-        }
-        // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08 Task
-        // 3) — mirrors the EventBus.unregisterAll call immediately above; a responder left behind
-        // by an unloaded module would go on answering panel requests with code whose classloader
-        // is gone.
-        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
-        if (panelResponderRegistry != null) {
-            panelResponderRegistry.unregisterAll(plugin.getPluginName());
-        }
-        // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392, D-01).
-        // The record holds Class<?> references and would otherwise pin the module's ClassLoader
-        // after unload, exactly like the TabCompletionManager / EventBus / PanelResponderRegistry
-        // releases immediately above.
-        ConditionalRegistrationEvaluator.clear(plugin);
-        // Listener unregistration happens inside unregisterSelf() itself, AFTER
-        // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
-        // directly at this point ran onUnregister() with the module's own listeners
-        // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
-        // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
-        // (IN-01, harmless but redundant).
-        //
-        // unregisterSelf() can still throw (a module's onUnregister() override) even with its
-        // own internal try/finally -- wrap the context close in a finally here too, so a
-        // throwing hook cannot leave this module's container, its destruction callbacks and
-        // its resources open for the rest of the server's lifetime (Codex review on #457:
-        // "Close the module context when its unload hook throws").
         try {
-            plugin.unregisterSelf();
+            // Cancel all @Scheduled tasks before unregistering
+            if (taskManager != null) {
+                taskManager.cancelAll(plugin);
+            }
+            // Unregister @PlayerCache beans before context closes
+            if (playerCacheManager != null && plugin.getContext() != null) {
+                for (Object bean : plugin.getContext().getSingletonValues()) {
+                    playerCacheManager.unregisterBean(bean);
+                }
+            }
+            // Bulk-unregister this module's tab-completion completers so the singleton does not
+            // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
+            // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
+            // return 0 and throw nothing).
+            TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
+            // Unregister @ModuleEventHandler handlers from EventBus
+            EventBus eventBus = UltiTools.getInstance().getEventBus();
+            if (eventBus != null) {
+                eventBus.unregisterAll(plugin.getPluginName());
+            }
+            // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
+            // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
+            // left behind by an unloaded module would go on answering panel requests with code
+            // whose classloader is gone.
+            PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+            if (panelResponderRegistry != null) {
+                panelResponderRegistry.unregisterAll(plugin.getPluginName());
+            }
+            // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
+            // D-01). The record holds Class<?> references and would otherwise pin the module's
+            // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
+            // PanelResponderRegistry releases immediately above.
+            ConditionalRegistrationEvaluator.clear(plugin);
         } finally {
-            // unregister() is reachable with an instance the caller constructed directly, which
-            // never went through PluginManager.register(...) and so never received a container
-            // (SILENT-19, #338). Guard the close the same way the @PlayerCache block above does.
-            if (plugin.getContext() != null) {
-                plugin.getContext().close();
+            // Mandatory cleanup: this module's own commands/listeners (via unregisterSelf())
+            // and its container MUST run regardless of whether any step above threw (Codex
+            // review on #457: "Preserve mandatory cleanup before swallowing unregister
+            // failures") -- otherwise an Error from e.g. BukkitTask.cancel() (which
+            // TaskManager.cancelAll() does not catch) would skip unregisterSelf() and the
+            // context close entirely, while PluginManager.close()'s own try/catch (WR-01)
+            // still clears pluginList, losing track of the leaked module altogether.
+            //
+            // Listener unregistration happens inside unregisterSelf() itself, AFTER
+            // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
+            // directly at this point ran onUnregister() with the module's own listeners
+            // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
+            // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
+            // (IN-01, harmless but redundant).
+            //
+            // unregisterSelf() can still throw (a module's onUnregister() override) even with
+            // its own internal try/finally -- wrap the context close in its own nested finally
+            // too, so a throwing hook cannot leave this module's container, its destruction
+            // callbacks and its resources open for the rest of the server's lifetime (Codex
+            // review on #457: "Close the module context when its unload hook throws").
+            try {
+                plugin.unregisterSelf();
+            } finally {
+                // unregister() is reachable with an instance the caller constructed directly,
+                // which never went through PluginManager.register(...) and so never received a
+                // container (SILENT-19, #338). Guard the close the same way the @PlayerCache
+                // block above does.
+                if (plugin.getContext() != null) {
+                    plugin.getContext().close();
+                }
             }
         }
     }
