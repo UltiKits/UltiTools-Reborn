@@ -28,7 +28,6 @@ import java.util.stream.Collectors;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -71,7 +70,6 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
 import lombok.Getter;
 import lombok.Setter;
-import net.milkbowl.vault.economy.Economy;
 
 /**
  * UltiTools plugin main class.
@@ -643,26 +641,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException ex) {
             return null;
         }
-    }
-
-    /**
-     * Get the economy provider
-     *
-     * @return the instance of the Economy provider
-     */
-    public Economy getEconomy() {
-        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
-            // a missing plugin dependency, exactly what dependencyMissing exists for.
-            throw PluginModuleException.dependencyMissing("UltiTools", "Vault");
-        }
-        RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
-        if (registration == null) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
-            // present but no economy provider (e.g. EssentialsX) has registered one.
-            throw PluginModuleException.dependencyMissing("UltiTools", "an Economy provider registered with Vault");
-        }
-        return registration.getProvider();
     }
 
     /**

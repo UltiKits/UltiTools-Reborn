@@ -580,6 +580,19 @@
                             <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                            <!-- 16-06-PLAN.md (D-08, #451, same-release exception clause 2): UltiTools#getEconomy()
+                                 was the ONLY net.milkbowl.vault-typed signature on this class, and it is the reason
+                                 AopEligibility.findAopAnnotatedMethods(UltiTools.class), called from
+                                 SimpleContainer.registerSingleton the instant the core plugin bean is registered,
+                                 crashed the whole bootstrap on a server with no Vault plugin installed: Class#
+                                 getDeclaredMethods() resolves every declared method's return/parameter types
+                                 eagerly, and net.milkbowl.vault.economy.Economy is not on the classpath when Vault
+                                 is absent. Public, zero measured callers across this framework's own src/main, all
+                                 sixteen product modules and the external example (HiddenVaultBootstrapTest pins the
+                                 fix). Member-level exclude, not class-level - UltiTools itself is unchanged and
+                                 still present, only this one method is gone. Replacement:
+                                 EconomyUtils.getEconomy(), the pre-existing façade six modules already call. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#getEconomy()</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
