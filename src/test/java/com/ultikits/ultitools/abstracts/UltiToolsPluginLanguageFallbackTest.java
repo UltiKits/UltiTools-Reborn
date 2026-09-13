@@ -425,31 +425,49 @@ class UltiToolsPluginLanguageFallbackTest {
 
     @Test
     @DisplayName("D-05 branch 2 + arity mismatch: exactly one WARN naming the key; that key uses the "
-            + "jar value, every other key keeps the disk value")
+            + "jar value, every other key keeps the disk value (real %s/%d convention, CR-01)")
     void arityMismatchedKeyWarnsOnceAndUsesJarValueWhileOtherKeysKeepDiskValue() throws Throwable {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
-                "{\"known\":\"Hi {0}, you have {1} items\",\"other\":\"stable\"}",
-                "{\"known\":\"Hi {0}\",\"other\":\"stable-customised\"}");
+                "{\"known\":\"Hi %s, you have %s items\",\"other\":\"stable\"}",
+                "{\"known\":\"Hi %s\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
         Language language = resolveProvenanceLanguage(fixture);
 
-        assertThat(language.getLocalizedText("known")).isEqualTo("Hi {0}, you have {1} items");
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi %s, you have %s items");
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
         verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
                 msg.contains("known") && msg.contains("lang/en.json") && msg.contains("TestModule")));
     }
 
     @Test
-    @DisplayName("D-05 branch 2, same-arity reword: no warning, disk value kept")
+    @DisplayName("D-05 branch 2, same-arity reword: no warning, disk value kept (real %s convention, CR-01)")
     void sameArityRewordProducesNoWarningAndKeepsDiskValue() throws Throwable {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
-                "{\"known\":\"Hello {0}!\"}", "{\"known\":\"Hi there {0}!\"}");
+                "{\"known\":\"Hello %s!\"}", "{\"known\":\"Hi there %s!\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
         Language language = resolveProvenanceLanguage(fixture);
 
-        assertThat(language.getLocalizedText("known")).isEqualTo("Hi there {0}!");
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi there %s!");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("arity counts DISTINCT argument positions, not occurrences: an explicit index "
+            + "repeated twice does not fabricate a mismatch against a value using it once (CR-01/WR-03)")
+    void repeatedExplicitIndexCountsAsOneDistinctPositionNotTwoOccurrences() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Value %1$s repeated as %1$s again\"}",
+                "{\"known\":\"Just %1$s once\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        // Both values consume exactly ONE distinct argument position ({1}); a naive occurrence
+        // count would see 2 occurrences in the jar value vs 1 in the disk value and incorrectly
+        // warn. The disk value must be kept untouched, with no warning.
+        assertThat(language.getLocalizedText("known")).isEqualTo("Just %1$s once");
         verify(fixture.mockLogger, never()).warning(anyString());
     }
 
@@ -473,16 +491,16 @@ class UltiToolsPluginLanguageFallbackTest {
 
     @Test
     @DisplayName("D-06 branch 4: no record, disk != jar -> never recorded, never rewritten, per-key "
-            + "placeholder check still applies")
+            + "placeholder check still applies (real %s/%d convention, CR-01)")
     void noRecordWithDiskDifferingFromJarNeverRecordsNeverRewritesAppliesPlaceholderCheck() throws Throwable {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
-                "{\"known\":\"Hi {0}, {1} items\"}", "{\"known\":\"Hi {0}\"}");
+                "{\"known\":\"Hi %s, %d items\"}", "{\"known\":\"Hi %s\"}");
         File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
         byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
 
         Language language = resolveProvenanceLanguage(fixture);
 
-        assertThat(language.getLocalizedText("known")).isEqualTo("Hi {0}, {1} items");
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi %s, %d items");
         assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
         assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json")).isEmpty();
         verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
@@ -519,5 +537,37 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThat(viaKnownCustomisation.getLocalizedText("common"))
                 .isEqualTo(viaUnknownProvenance.getLocalizedText("common"))
                 .isEqualTo("disk-value");
+    }
+
+    @Test
+    @DisplayName("D-05 branch 1, write failure: a failed overwrite neither records the jar hash nor "
+            + "logs the success line (WR-01)")
+    void overwriteWriteFailureDoesNotRecordJarHashOrLogSuccess() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
+        String originalHash = ResourceHashSidecar.sha256(diskFile);
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", originalHash);
+
+        // Force Files.write(...) to fail with an IOException without touching the file's
+        // existing bytes: remove write permission on the file itself (this test runs as a
+        // non-root user, so this reliably raises AccessDeniedException on POSIX).
+        assertThat(diskFile.setWritable(false)).isTrue();
+        try {
+            assertThatCode(() -> resolveProvenanceLanguage(fixture)).doesNotThrowAnyException();
+
+            // The sidecar must still record the ORIGINAL hash -- never the jar's hash -- since
+            // the write never actually landed those bytes on disk.
+            assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                    .contains(originalHash);
+            // The disk bytes must be untouched (the write failed before any content changed).
+            assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(originalBytes);
+            // No success-shaped log line may be emitted for a write that did not succeed.
+            verify(fixture.mockLogger, never()).info(anyString());
+        } finally {
+            // Restore write permission so JUnit's @TempDir cleanup can delete the file afterward.
+            diskFile.setWritable(true);
+        }
     }
 }
