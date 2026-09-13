@@ -11,27 +11,39 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
+import org.objenesis.Objenesis;
+import org.objenesis.ObjenesisStd;
 
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -233,5 +245,279 @@ class UltiToolsPluginLanguageFallbackTest {
         languageField.setAccessible(true);
         Language language = (Language) languageField.get(plugin);
         assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // D-05/D-06/D-07 (#441): recorded-provenance decision on load, plus the per-key
+    // placeholder-arity warning. See resolveLanguageWithProvenance/applyPlaceholderArityOverride
+    // in UltiToolsPlugin.java.
+    //
+    // Uses an exploded-directory fixture (not the mock-based FixturePlugin above) because these
+    // tests need a real, readable "jar" side to hash and compare against -- same idiom as
+    // UltiToolsPluginLanguagePerKeyFallbackTest, whose ModuleFixturePlugin fixture (declared in
+    // UltiToolsPluginLanguageScopeTest, same package) is reused directly below.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Same asymmetry as {@code UltiToolsPluginLanguageScopeTest}'s {@code ChildFirstClassLoader}:
+     * child-first for the module's own class, parent-first (default) for resources. Duplicated
+     * here rather than shared, matching the existing convention in this test package (see {@code
+     * UltiToolsPluginLanguagePerKeyFallbackTest}, which duplicates the same class for the same
+     * reason: it is {@code private static} in its original home).
+     */
+    private static final class ProvenanceChildFirstClassLoader extends URLClassLoader {
+        ProvenanceChildFirstClassLoader(URL[] urls, ClassLoader parent) {
+            super(urls, parent);
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> found = findLoadedClass(name);
+                if (found == null) {
+                    try {
+                        found = findClass(name);
+                    } catch (ClassNotFoundException notShippedByThisJar) {
+                        found = super.loadClass(name, false);
+                    }
+                }
+                if (resolve) {
+                    resolveClass(found);
+                }
+                return found;
+            }
+        }
+    }
+
+    private ProvenanceChildFirstClassLoader provenanceLoader;
+
+    @org.junit.jupiter.api.AfterEach
+    void closeProvenanceLoaderIfOpen() throws IOException {
+        if (provenanceLoader != null) {
+            provenanceLoader.close();
+            provenanceLoader = null;
+        }
+    }
+
+    private static byte[] compiledModuleFixtureClassBytes() throws IOException {
+        String resourceName = UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName()
+                .replace('.', '/') + ".class";
+        try (InputStream in = UltiToolsPluginLanguageFallbackTest.class.getClassLoader()
+                .getResourceAsStream(resourceName)) {
+            if (in == null) {
+                throw new IOException("Compiled fixture class not found on the test classpath: " + resourceName);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int len;
+            while ((len = in.read(buf)) != -1) {
+                out.write(buf, 0, len);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * Bundles everything a provenance-decision test needs: the plugin instance (its {@code
+     * CodeSource} is {@code jarRoot}, standing in for the module's own jar), the separate {@code
+     * resourceFolder} standing in for the on-disk extraction target, and the mocked {@link Logger}
+     * backing {@code getLogger()} so INFO/WARN calls can be verified.
+     */
+    private static final class ProvenanceFixture {
+        final Object plugin;
+        final File resourceFolder;
+        final Logger mockLogger;
+
+        ProvenanceFixture(Object plugin, File resourceFolder, Logger mockLogger) {
+            this.plugin = plugin;
+            this.resourceFolder = resourceFolder;
+            this.mockLogger = mockLogger;
+        }
+    }
+
+    /**
+     * Builds one exploded "jar" directory containing {@code lang/<code><extension>} = {@code
+     * jarJson}, one separate on-disk resource folder containing the same path = {@code diskJson}
+     * (or no file at all when {@code diskJson} is {@code null}), and wires {@code
+     * UltiTools.getInstance()} so {@code getLogger()} returns a mock this test can verify.
+     */
+    private ProvenanceFixture buildProvenanceFixture(String code, String extension, String jarJson,
+                                                       String diskJson) throws Exception {
+        File explodedRoot = new File(tempDir, "jar-root-" + System.nanoTime());
+        File classFile = new File(explodedRoot,
+                UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName().replace('.', '/') + ".class");
+        Files.createDirectories(classFile.getParentFile().toPath());
+        Files.write(classFile.toPath(), compiledModuleFixtureClassBytes());
+
+        File jarLangFile = new File(explodedRoot, "lang" + File.separator + code + extension);
+        Files.createDirectories(jarLangFile.getParentFile().toPath());
+        Files.write(jarLangFile.toPath(), jarJson.getBytes(StandardCharsets.UTF_8));
+
+        File resourceFolder = new File(tempDir, "disk-root-" + System.nanoTime());
+        if (diskJson != null) {
+            File diskLangFile = new File(resourceFolder, "lang" + File.separator + code + extension);
+            Files.createDirectories(diskLangFile.getParentFile().toPath());
+            Files.write(diskLangFile.toPath(), diskJson.getBytes(StandardCharsets.UTF_8));
+        } else {
+            Files.createDirectories(resourceFolder.toPath());
+        }
+
+        provenanceLoader = new ProvenanceChildFirstClassLoader(new URL[]{explodedRoot.toURI().toURL()},
+                UltiToolsPluginLanguageFallbackTest.class.getClassLoader());
+        Class<?> fixtureClass = Class.forName(
+                UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName(), true, provenanceLoader);
+        Objenesis objenesis = new ObjenesisStd();
+        Object plugin = objenesis.newInstance(fixtureClass);
+
+        Field pluginNameField = UltiToolsPlugin.class.getDeclaredField("pluginName");
+        pluginNameField.setAccessible(true);
+        pluginNameField.set(plugin, "TestModule");
+
+        Logger mockLogger = Mockito.mock(Logger.class);
+        YamlConfiguration config = new YamlConfiguration();
+        config.set("language", code);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            Mockito.lenient().when(ultiTools.getConfig()).thenReturn(config);
+            Mockito.lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+        });
+
+        return new ProvenanceFixture(plugin, resourceFolder, mockLogger);
+    }
+
+    private Language resolveProvenanceLanguage(ProvenanceFixture fixture) throws Throwable {
+        return invokeCreateLanguageFromPath((UltiToolsPlugin) fixture.plugin, fixture.resourceFolder.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("D-05 branch 1: recorded hash == disk hash -> overwritten from the jar, one INFO line")
+    void recordedHashEqualsDiskHashOverwritesFromJarWithOneInfoLine() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json",
+                ResourceHashSidecar.sha256(diskFile));
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        assertThat(Files.readAllBytes(diskFile.toPath()))
+                .isEqualTo("{\"greeting\":\"Hi v2\"}".getBytes(StandardCharsets.UTF_8));
+        verify(fixture.mockLogger, times(1)).info(argThat((String msg) ->
+                msg.contains("lang/en.json") && msg.contains("TestModule")));
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("D-05 branch 2: recorded hash != disk hash -> disk left alone, no overwrite INFO line")
+    void recordedHashDiffersFromDiskHashLeavesFileAloneWithNoOverwriteLog() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi customised\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi customised");
+        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
+        verify(fixture.mockLogger, never()).info(anyString());
+    }
+
+    @Test
+    @DisplayName("D-05 branch 2 + arity mismatch: exactly one WARN naming the key; that key uses the "
+            + "jar value, every other key keeps the disk value")
+    void arityMismatchedKeyWarnsOnceAndUsesJarValueWhileOtherKeysKeepDiskValue() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Hi {0}, you have {1} items\",\"other\":\"stable\"}",
+                "{\"known\":\"Hi {0}\",\"other\":\"stable-customised\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi {0}, you have {1} items");
+        assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains("known") && msg.contains("lang/en.json") && msg.contains("TestModule")));
+    }
+
+    @Test
+    @DisplayName("D-05 branch 2, same-arity reword: no warning, disk value kept")
+    void sameArityRewordProducesNoWarningAndKeepsDiskValue() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Hello {0}!\"}", "{\"known\":\"Hi there {0}!\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi there {0}!");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("D-06 branch 3: no record, disk == jar -> baseline recorded afterwards, no rewrite, no log")
+    void noRecordWithDiskEqualToJarRecordsBaselineWithoutRewriteOrLog() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi\"}", "{\"greeting\":\"Hi\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi");
+        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                .contains(ResourceHashSidecar.sha256(diskFile));
+        verify(fixture.mockLogger, never()).info(anyString());
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("D-06 branch 4: no record, disk != jar -> never recorded, never rewritten, per-key "
+            + "placeholder check still applies")
+    void noRecordWithDiskDifferingFromJarNeverRecordsNeverRewritesAppliesPlaceholderCheck() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Hi {0}, {1} items\"}", "{\"known\":\"Hi {0}\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi {0}, {1} items");
+        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json")).isEmpty();
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
+    }
+
+    @Test
+    @DisplayName("empty disk file: treated as a file with no keys, resolves every key through the jar "
+            + "fallback, never as an error")
+    void emptyDiskFileResolvesEveryKeyThroughJarFallbackWithoutError() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json", "{\"greeting\":\"Hi\"}", "");
+
+        Language resolved = resolveProvenanceLanguage(fixture);
+
+        assertThat(resolved.getLocalizedText("greeting")).isEqualTo("Hi");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("order invariant: a same-arity shared key resolves to the same (disk) value whether "
+            + "the decision took the known-customisation branch or the unknown-provenance branch")
+    void sameArityKeyResolvesIdenticallyRegardlessOfWhichLeaveAloneBranchFired() throws Throwable {
+        ProvenanceFixture knownCustomisation = buildProvenanceFixture("en", ".json",
+                "{\"common\":\"jar-value\",\"onlyInJar\":\"x\"}",
+                "{\"common\":\"disk-value\",\"onlyInJar\":\"x\"}");
+        ResourceHashSidecar.record(knownCustomisation.resourceFolder, "lang/en.json",
+                "stale-baseline-hash-not-matching");
+        Language viaKnownCustomisation = resolveProvenanceLanguage(knownCustomisation);
+
+        ProvenanceFixture unknownProvenance = buildProvenanceFixture("en", ".json",
+                "{\"common\":\"jar-value\",\"onlyInJar\":\"x\"}",
+                "{\"common\":\"disk-value\"}");
+        Language viaUnknownProvenance = resolveProvenanceLanguage(unknownProvenance);
+
+        assertThat(viaKnownCustomisation.getLocalizedText("common"))
+                .isEqualTo(viaUnknownProvenance.getLocalizedText("common"))
+                .isEqualTo("disk-value");
     }
 }
