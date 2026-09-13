@@ -735,15 +735,24 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * by overriding {@link #unregisterSelf()} itself, because that is no longer possible
      * (D-01). The default body does nothing; override this method, not
      * {@link #unregisterSelf()}, to add cleanup work.
+     * <p>
+     * If this hook throws, {@link #unregisterSelf()} still unregisters this module's own
+     * commands and listeners before the exception propagates (WR-01,
+     * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
+     * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
+     * call could.
      */
     protected void onUnregister() {
     }
 
     @Override
     public final void unregisterSelf() {
-        onUnregister();
-        getCommandManager().unregisterAll(this);
-        getListenerManager().unregisterAll(this);
+        try {
+            onUnregister();
+        } finally {
+            getCommandManager().unregisterAll(this);
+            getListenerManager().unregisterAll(this);
+        }
     }
 
     /**

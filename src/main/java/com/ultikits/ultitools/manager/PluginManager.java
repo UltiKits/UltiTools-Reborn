@@ -280,6 +280,25 @@ public class PluginManager {
     }
 
     /**
+     * Logs one WARNING for a module whose {@link #unregister(UltiToolsPlugin)} call threw,
+     * mirroring {@link #logPluginInitializationFailure(String, Throwable)}'s message shape
+     * so both refusal classes (load-time, unload-time) read the same way in the console.
+     * Package-private for the same reason as that method: a test-seam choice, not a widened
+     * API surface (WR-01, 16-REVIEW-lifecycle.md).
+     *
+     * @param moduleName the module whose unregistration failed, however the caller
+     *                   identifies it
+     * @param thrown     the throwable caught at the {@link #close()} loop boundary
+     */
+    static void logPluginUnregistrationFailure(String moduleName, Throwable thrown) {
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                String.format("[UltiTools-API] Failed to unregister plugin %s: %s", moduleName, rootCauseMessage(thrown)),
+                thrown
+        );
+    }
+
+    /**
      * Walks {@code thrown}'s cause chain for the deepest {@link UltiToolsException}, returning
      * its message - or {@code thrown.getMessage()} if the chain holds none. Bounded via
      * identity-based cycle detection ({@link IdentityHashMap}) so a self-referential or cyclic
@@ -362,7 +381,17 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
-            unregister(plugin);
+            // One module's unregister() (ultimately its own onUnregister()) throwing must
+            // not cascade into every subsequent module's own command/listener/EventBus/
+            // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
+            // taskManager.cancelAllCore() below, nor propagate out of close() into
+            // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
+            // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
+            try {
+                unregister(plugin);
+            } catch (Exception | Error e) {
+                logPluginUnregistrationFailure(plugin.getPluginName(), e);
+            }
         }
         pluginList.clear();
         pluginClassList.clear();
