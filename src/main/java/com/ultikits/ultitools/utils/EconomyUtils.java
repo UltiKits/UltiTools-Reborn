@@ -83,8 +83,22 @@ public final class EconomyUtils {
      * Framework-internal — called once by {@code DependenceManagers} after {@link #setProvider}.
      */
     public static void logStartupState() {
-        // TDD RED stub (16-06 Task 2): intentionally a no-op so EconomyUtilsReportingTest fails
-        // for the right reason before the real implementation lands.
+        EconomyProvider.State state = provider.getState();
+        String message;
+        switch (state) {
+            case VAULT_NOT_INSTALLED:
+                message = "[UltiTools-API] Vault not installed - economy service unavailable.";
+                break;
+            case NO_PROVIDER_REGISTERED:
+                message = "[UltiTools-API] Vault detected, but no economy provider is registered - "
+                        + "economy service unavailable.";
+                break;
+            case AVAILABLE:
+            default:
+                message = "[UltiTools-API] Hooked into Vault, economy provider: " + provider.getProviderName() + ".";
+                break;
+        }
+        log(message, true);
     }
 
     /**
@@ -332,8 +346,15 @@ public final class EconomyUtils {
      *                    still logs once, attributed to {@link #UNKNOWN_MODULE}, and never throws)
      */
     static void reportEconomyStateIfUnavailable(String moduleName) {
-        // TDD RED stub (16-06 Task 2): intentionally a no-op so EconomyUtilsReportingTest fails
-        // for the right reason before the real implementation lands.
+        EconomyProvider.State state = provider.getState();
+        if (state == EconomyProvider.State.AVAILABLE) {
+            return;
+        }
+        String dedupKey = moduleName == null ? UNKNOWN_MODULE : moduleName;
+        if (!warnedModules.add(dedupKey)) {
+            return;
+        }
+        log(buildWarningMessage(dedupKey, state), false);
     }
 
     private static String buildWarningMessage(String moduleName, EconomyProvider.State state) {
@@ -354,6 +375,15 @@ public final class EconomyUtils {
             } else {
                 instance.getLogger().warning(message);
             }
+            return;
+        }
+        // No live UltiTools instance -- fall back to Bukkit's own logger, but only when a live
+        // Server actually exists (Bukkit.getLogger() dereferences it internally too). Without
+        // either, there is nowhere safe left to log to; silently drop rather than throw --
+        // "never throws" is one of D-08's own truths. Measured: DependenceManagersTest invokes
+        // the real initCoreServices() against a bare Mockito JavaPlugin with no live Server at
+        // all, exactly this case.
+        if (Bukkit.getServer() == null) {
             return;
         }
         if (info) {

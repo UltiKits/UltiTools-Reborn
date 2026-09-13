@@ -24,7 +24,8 @@ import org.jetbrains.annotations.ApiStatus;
  * None of this interface's methods mention a Vault type in their own signature — every Vault
  * reference in the sole implementation lives inside method bodies as local variables, never as a
  * declared return or parameter type — so nothing here needs an allowlist entry in
- * {@code buildtools.SoftDependencySignatureInvariantTest}'s structural guard. {@link EconomyUtils}
+ * {@code buildtools.SoftDependencySignatureInvariantTest}'s structural guard.
+ * {@link com.ultikits.ultitools.utils.EconomyUtils EconomyUtils}
  * is the one class in this seam that keeps a genuine Vault-typed signature (its pre-existing
  * public {@code getEconomy(): net.milkbowl.vault.economy.Economy}), because its own signatures
  * are frozen for backward compatibility with the six modules that already call it — that is why

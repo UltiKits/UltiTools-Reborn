@@ -21,12 +21,19 @@ import net.milkbowl.vault.economy.EconomyResponse;
  * it is exactly what lets the container reflect over this class — and every other class in the
  * framework — without the eager {@link Class#getDeclaredMethods()} signature resolution that
  * caused #451, while still concentrating every Vault type reference in one small, obviously-named
- * class instead of scattering it across the framework.
+ * class instead of scattering it across the framework. Deliberately no shared private helper
+ * returning {@code Economy}/{@code RegisteredServiceProvider<Economy>} either — that would put a
+ * Vault-typed signature back on this class and need the very allowlist entry this design avoids;
+ * {@link #bukkitReady()} exists for exactly this reason, returning a plain {@code boolean}.
  * <p>
  * Every public method re-checks Vault's presence and the registered provider on every call — the
  * state is never cached — because Vault, and the economy plugin that registers the provider, can
  * load after this framework does; Bukkit does not guarantee plugin load order beyond declared
- * dependencies.
+ * dependencies. {@link #bukkitReady()} additionally guards every method against a live
+ * {@code Bukkit.getServer()} not existing yet at all (measured: {@code DependenceManagersTest}
+ * invokes the real {@code initCoreServices()} — which now wires this class in — against a bare
+ * Mockito {@code JavaPlugin} with no {@code Bukkit.setServer(...)} call, exactly the environment
+ * this guard exists for).
  *
  * @author wisdomme
  * @since 6.3.0
@@ -36,9 +43,18 @@ public final class VaultEconomyProvider implements EconomyProvider {
 
     private static final String VAULT_PLUGIN_NAME = "Vault";
 
+    /**
+     * @return {@code false} when no live {@link org.bukkit.Server} is set yet — every other
+     *         method below treats this exactly like Vault being absent, since nothing Vault-shaped
+     *         can possibly be observed without a live server either way
+     */
+    private static boolean bukkitReady() {
+        return Bukkit.getServer() != null;
+    }
+
     @Override
     public State getState() {
-        if (Bukkit.getPluginManager().getPlugin(VAULT_PLUGIN_NAME) == null) {
+        if (!bukkitReady() || Bukkit.getPluginManager().getPlugin(VAULT_PLUGIN_NAME) == null) {
             return State.VAULT_NOT_INSTALLED;
         }
         return Bukkit.getServicesManager().getRegistration(Economy.class) == null
@@ -48,25 +64,34 @@ public final class VaultEconomyProvider implements EconomyProvider {
 
     @Override
     public String getProviderName() {
+        if (!bukkitReady()) {
+            return null;
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration == null ? null : registration.getProvider().getName();
     }
 
     @Override
     public double getBalance(OfflinePlayer player) {
+        if (!bukkitReady()) {
+            return 0;
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration == null ? 0 : registration.getProvider().getBalance(player);
     }
 
     @Override
     public boolean has(OfflinePlayer player, double amount) {
+        if (!bukkitReady()) {
+            return false;
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration != null && registration.getProvider().has(player, amount);
     }
 
     @Override
     public boolean deposit(OfflinePlayer player, double amount) {
-        if (amount <= 0) {
+        if (amount <= 0 || !bukkitReady()) {
             return false;
         }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
@@ -79,7 +104,7 @@ public final class VaultEconomyProvider implements EconomyProvider {
 
     @Override
     public boolean withdraw(OfflinePlayer player, double amount) {
-        if (amount <= 0) {
+        if (amount <= 0 || !bukkitReady()) {
             return false;
         }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
@@ -92,18 +117,27 @@ public final class VaultEconomyProvider implements EconomyProvider {
 
     @Override
     public String format(double amount) {
+        if (!bukkitReady()) {
+            return String.format("%.2f", amount);
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration == null ? String.format("%.2f", amount) : registration.getProvider().format(amount);
     }
 
     @Override
     public String getCurrencyNameSingular() {
+        if (!bukkitReady()) {
+            return "coins";
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration == null ? "coins" : registration.getProvider().currencyNameSingular();
     }
 
     @Override
     public String getCurrencyNamePlural() {
+        if (!bukkitReady()) {
+            return "coins";
+        }
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         return registration == null ? "coins" : registration.getProvider().currencyNamePlural();
     }
