@@ -576,4 +576,73 @@ class UltiToolsPluginLanguageFallbackTest {
             diskFile.setWritable(true);
         }
     }
+
+    @Test
+    @DisplayName("disk hash read failure (e.g. an unreadable path or accidentally a directory) does "
+            + "not abort module startup -- degrades to a best-effort read instead (Codex round 1, P1)")
+    void diskHashReadFailureDoesNotAbortResolution() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi from jar\"}", "{\"greeting\":\"Hi from disk\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        // Force ResourceHashSidecar.sha256(file) to throw UncheckedIOException by replacing the
+        // on-disk file with a directory of the same path -- Files.readAllBytes on a directory
+        // throws "Is a directory", which sha256(File) rethrows unchecked.
+        assertThat(diskFile.delete()).isTrue();
+        assertThat(diskFile.mkdirs()).isTrue();
+
+        Language language = null;
+        try {
+            language = resolveProvenanceLanguage(fixture);
+        } catch (Throwable t) {
+            org.junit.jupiter.api.Assertions.fail(
+                    "resolution must not throw when the on-disk file cannot be hashed", t);
+        }
+
+        assertThat(language).isNotNull();
+        // The disk dictionary could not be read at all, so it resolves nothing for "greeting";
+        // this test's own createLanguageFromPath call chain then falls back to the jar-bundled
+        // value via Language.withFallback -- never the stale/inaccessible disk content.
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi from jar");
+    }
+
+    @Test
+    @DisplayName("branch 1, unchanged bundled content: no rewrite and no 'has been updated' log line "
+            + "when the jar's bytes already equal the disk bytes (Codex round 1, P2)")
+    void overwriteSkippedWhenBundledContentUnchanged() throws Throwable {
+        // Every subsequent boot after a normal extraction lands exactly here: recorded hash ==
+        // disk hash (branch 1's own condition) AND the bundled jar content has not changed since
+        // -- the common case on every restart, not an edge case. Rewriting identical bytes and
+        // logging "has been updated" here is misleading every single time it happens, and (per
+        // the review finding) an avoidable write on installations that harden module resources
+        // read-only after provisioning.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi\"}", "{\"greeting\":\"Hi\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi");
+        verify(fixture.mockLogger, never()).info(anyString());
+    }
+
+    @Test
+    @DisplayName("branch 1 overwrite writes via a same-directory temp file and leaves none behind "
+            + "after a successful replace (Codex round 1, P2 -- atomic-replace mechanism)")
+    void overwriteWritesAtomicallyAndLeavesNoTempFileBehind() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        File langDir = diskFile.getParentFile();
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        assertThat(Files.readAllBytes(diskFile.toPath()))
+                .isEqualTo("{\"greeting\":\"Hi v2\"}".getBytes(StandardCharsets.UTF_8));
+        // Only the final language file should remain in the lang/ directory -- no leftover
+        // temp/staging file from the write-then-atomic-move sequence.
+        assertThat(langDir.listFiles()).extracting(File::getName).containsExactly("en.json");
+    }
 }
