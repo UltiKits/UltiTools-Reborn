@@ -650,4 +650,53 @@ class UltiToolsPluginLanguageFallbackTest {
         // temp/staging file from the write-then-atomic-move sequence.
         assertThat(langDir.listFiles()).extracting(File::getName).containsExactly("en.json");
     }
+
+    @Test
+    @DisplayName("branch 1 overwrite: a provenance-record write failure does not claim success, even "
+            + "though the language file itself was refreshed (Codex round 2, P2)")
+    void overwriteSucceedsButSidecarRecordFailsDoesNotLogFalseSuccess() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+        // The sidecar lives directly under the resource folder root, independently of lang/ --
+        // making ONLY it read-only reproduces "the language file write succeeds but the
+        // provenance record write fails" without touching the language file's own permissions.
+        File sidecarFile = new File(fixture.resourceFolder, ".ultitools-resource-hashes.json");
+        assertThat(sidecarFile).exists();
+        assertThat(sidecarFile.setWritable(false)).isTrue();
+        try {
+            Language language = resolveProvenanceLanguage(fixture);
+
+            // The language file itself WAS refreshed (its own write is unaffected)...
+            assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+            assertThat(Files.readAllBytes(diskFile.toPath()))
+                    .isEqualTo("{\"greeting\":\"Hi v2\"}".getBytes(StandardCharsets.UTF_8));
+            // ...but since the sidecar could not be updated, no success-shaped INFO line may be
+            // logged -- it would misrepresent provenance tracking as healthy when it is not.
+            verify(fixture.mockLogger, never()).info(anyString());
+        } finally {
+            sidecarFile.setWritable(true);
+        }
+    }
+
+    @Test
+    @DisplayName("arity is the highest REQUIRED argument position, not the count of distinct "
+            + "positions used -- a gap from an explicit index still changes the required arg count "
+            + "(Codex round 2, P2)")
+    void arityAccountsForExplicitIndexGapsNotJustDistinctPositionCount() throws Throwable {
+        // "%2$s" alone requires TWO arguments to String.format (positions 1 and 2 must both be
+        // present in the args array, even though only position 2 is ever rendered) -- its
+        // required arg count is 2. "%s" alone requires exactly ONE argument. A naive "count of
+        // distinct positions used" (a one-element set in both cases) would wrongly call these
+        // equal and skip the warning a real regression like this should trigger.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Uses %2$s only\"}", "{\"known\":\"Uses %s only\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Uses %2$s only");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
+    }
 }
