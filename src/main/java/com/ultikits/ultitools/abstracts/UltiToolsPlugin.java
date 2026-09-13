@@ -86,11 +86,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
 
     /**
-     * Matches a {@code MessageFormat}-style placeholder index, e.g. {@code {0}} in {@code "Hello,
-     * {0}!"}. Used only by {@link #placeholderArity(String)} for the D-05 per-key comparison; not
-     * a change to how placeholders are substituted anywhere.
+     * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
+     * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
+     * #placeholderArity(String)} for the D-05 per-key comparison; not a change to how
+     * placeholders are substituted anywhere -- every parameterised {@code i18n(...)} value in
+     * this framework is formatted with {@code String.format}, never {@code MessageFormat}
+     * (measured: 0 {@code {n}}-style placeholders anywhere in {@code src/main/resources/lang}
+     * or across any {@code i18n(...)} call site; the shipped catalogues use {@code %s}/{@code
+     * %d} exclusively).
      */
-    private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(\\d+)}");
+    private static final Pattern PLACEHOLDER_PATTERN =
+            Pattern.compile("%(?:(\\d+)\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?([a-zA-Z%])");
 
     /**
      * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
@@ -337,12 +343,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
         if (recorded.isPresent()) {
             if (recorded.get().equals(diskHash)) {
-                // Branch 1: never touched since extraction -> overwrite from the jar.
-                writeBytes(file, jarBytes);
-                ResourceHashSidecar.record(resourceFolder, resourcePath, jarHash);
-                getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
-                        + "' was not modified since it was extracted and has been updated to the "
-                        + "current bundled version.");
+                // Branch 1: never touched since extraction -> overwrite from the jar. Only
+                // record the new baseline and log success once the write is CONFIRMED to have
+                // landed -- re-hash the bytes actually on disk afterward (mirroring
+                // saveResources()'s own pattern) rather than trusting the precomputed jarHash,
+                // so a partial/failed write can never be misreported as success (WR-01).
+                if (writeBytes(file, jarBytes)) {
+                    ResourceHashSidecar.record(resourceFolder, resourcePath, ResourceHashSidecar.sha256(file));
+                    getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                            + "' was not modified since it was extracted and has been updated to the "
+                            + "current bundled version.");
+                }
                 return readLanguageFile(file, extension);
             }
             // Branch 2: operator customisation -> leave the disk file alone.
@@ -410,25 +421,42 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Counts the DISTINCT {@code {n}} placeholder indices in {@code value} -- not the number of
-     * occurrences. A value repeating one index twice (e.g. {@code "{0} and {0} again"}) has arity
-     * one; a naive occurrence count would call it two and warn on a rewording that changed
-     * nothing about the message's parameter shape.
+     * Counts the DISTINCT {@code String.format} argument positions {@code value} consumes --
+     * not the number of conversion occurrences. A value repeating one EXPLICIT index twice
+     * (e.g. {@code "%1$s and %1$s again"}) has arity one, since both conversions consume the
+     * SAME argument; a naive occurrence count would call it two and warn on a rewording that
+     * changed nothing about the message's parameter shape. An unindexed conversion (this
+     * framework's own catalogues use only this form) consumes the NEXT sequential position, so
+     * two unindexed {@code %s} conversions in one value ARE two distinct positions -- unlike the
+     * explicit-index case, repetition without an index is never a re-use of the same argument.
+     * {@code %%} (a literal percent) and {@code %n} (a line separator) consume no argument and
+     * are excluded from the count.
      *
      * @param value a language value, or {@code null}
-     * @return the number of distinct placeholder indices in {@code value}, or {@code 0} for
-     *         {@code null} or a value with none
+     * @return the number of distinct argument positions {@code value}'s {@code String.format}
+     *         conversions consume, or {@code 0} for {@code null} or a value with none
      */
     private static int placeholderArity(String value) {
         if (value == null) {
             return 0;
         }
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
-        Set<Integer> indices = new HashSet<>();
+        Set<Integer> positions = new HashSet<>();
+        int nextImplicitPosition = 1;
         while (matcher.find()) {
-            indices.add(Integer.parseInt(matcher.group(1)));
+            char conversion = matcher.group(2).charAt(0);
+            if (conversion == '%' || conversion == 'n' || conversion == 'N') {
+                continue;
+            }
+            String explicitIndex = matcher.group(1);
+            if (explicitIndex != null) {
+                positions.add(Integer.parseInt(explicitIndex));
+            } else {
+                positions.add(nextImplicitPosition);
+                nextImplicitPosition++;
+            }
         }
-        return indices.size();
+        return positions.size();
     }
 
     /**
@@ -483,11 +511,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
     }
 
-    private void writeBytes(File file, byte[] bytes) {
+    /**
+     * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
+     * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
+     * a write that threw partway through.
+     */
+    private boolean writeBytes(File file, byte[] bytes) {
         try {
             Files.write(file.toPath(), bytes);
+            return true;
         } catch (IOException e) {
             getLogger().error("Failed to write language file " + file.getPath(), e);
+            return false;
         }
     }
 
