@@ -264,6 +264,32 @@ class PluginManagerTest {
 
             verify(context).close();
         }
+
+        @Test
+        @DisplayName("taskManager.cancelAll() 抛出异常时仍会运行 unregisterSelf() 并关闭 context（Codex review on #457: \"Preserve mandatory cleanup before swallowing unregister failures\"）")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a mock TaskManager
+        // mirrors the reflection idiom already used throughout this package's own field tests
+        void earlyStepThrowing_stillRunsUnregisterSelfAndClosesContext() throws Exception {
+            TaskManager mockTaskManager = mock(TaskManager.class);
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("EarlyStepThrows");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new Error("BukkitTask.cancel() boom")).when(mockTaskManager).cancelAll(plugin);
+
+            Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+            taskManagerField.setAccessible(true);
+            taskManagerField.set(pluginManager, mockTaskManager);
+
+            // An Error from a step BEFORE unregisterSelf() must not skip this module's own
+            // mandatory cleanup (its commands/listeners via unregisterSelf(), and its context) --
+            // otherwise the module's handlers and container stay live but PluginManager.close()'s
+            // own try/catch (WR-01) would still clear pluginList, losing track of them entirely.
+            assertThrows(Error.class, () -> pluginManager.unregister(plugin));
+
+            verify(plugin).unregisterSelf();
+            verify(context).close();
+        }
     }
 
     @Nested
