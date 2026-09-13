@@ -552,14 +552,18 @@ class UltiToolsPluginLanguageFallbackTest {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
                 "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
         File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        File langDir = diskFile.getParentFile();
         byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
         String originalHash = ResourceHashSidecar.sha256(diskFile);
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", originalHash);
 
-        // Force Files.write(...) to fail with an IOException without touching the file's
-        // existing bytes: remove write permission on the file itself (this test runs as a
-        // non-root user, so this reliably raises AccessDeniedException on POSIX).
-        assertThat(diskFile.setWritable(false)).isTrue();
+        // Force the write to fail with an IOException without touching the file's existing
+        // bytes: remove write permission on the CONTAINING DIRECTORY (this test runs as a
+        // non-root user). The write-then-atomic-move implementation needs directory write
+        // permission to create its temp staging file in the first place -- unlike a direct
+        // Files.write(file, bytes), it does NOT need write permission on the target file itself,
+        // since a rename only consults the directory entry, never the target's own mode bits.
+        assertThat(langDir.setWritable(false)).isTrue();
         try {
             assertThatCode(() -> resolveProvenanceLanguage(fixture)).doesNotThrowAnyException();
 
@@ -572,8 +576,9 @@ class UltiToolsPluginLanguageFallbackTest {
             // No success-shaped log line may be emitted for a write that did not succeed.
             verify(fixture.mockLogger, never()).info(anyString());
         } finally {
-            // Restore write permission so JUnit's @TempDir cleanup can delete the file afterward.
-            diskFile.setWritable(true);
+            // Restore write permission so JUnit's @TempDir cleanup can delete the directory
+            // (and any stray temp file inside it) afterward.
+            langDir.setWritable(true);
         }
     }
 

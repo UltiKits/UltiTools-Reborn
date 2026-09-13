@@ -8,8 +8,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
+import java.nio.file.StandardCopyOption;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
@@ -337,15 +339,48 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return readLanguageFile(file, extension);
         }
         File resourceFolder = new File(folderPath);
-        String diskHash = ResourceHashSidecar.sha256(file);
+        String diskHash;
+        try {
+            diskHash = ResourceHashSidecar.sha256(file);
+        } catch (UncheckedIOException e) {
+            // Codex round 1, P1: an unreadable disk file (or one accidentally replaced by a
+            // directory) must degrade to a best-effort read, exactly like the pre-#441 code
+            // path -- it must never abort this module's whole language resolution, let alone
+            // its startup. readLanguageFile()/Language(File) already catch a read failure on
+            // their own and return an empty dictionary, which Language.withFallback (in the
+            // caller) then backstops from the jar side.
+            getLogger().error("Could not hash on-disk language file " + file.getPath()
+                    + " for module '" + getPluginName() + "'; leaving it untouched.", e);
+            try {
+                return readLanguageFile(file, extension);
+            } catch (RuntimeException readFailure) {
+                // The same unreadable path (e.g. a directory where a file is expected) can also
+                // defeat the best-effort fallback read in a way Language's own IOException-only
+                // catch does not cover -- this method must still never propagate, so fall back
+                // one more step to an empty dictionary. Language.withFallback (in the caller)
+                // then resolves every key from the jar side instead.
+                getLogger().error("Also failed to read on-disk language file " + file.getPath()
+                        + " as a best-effort fallback for module '" + getPluginName() + "'.", readFailure);
+                return new Language("{}");
+            }
+        }
         String jarHash = ResourceHashSidecar.sha256(jarBytes);
         Optional<String> recorded = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath);
 
         if (recorded.isPresent()) {
             if (recorded.get().equals(diskHash)) {
-                // Branch 1: never touched since extraction -> overwrite from the jar. Only
-                // record the new baseline and log success once the write is CONFIRMED to have
-                // landed -- re-hash the bytes actually on disk afterward (mirroring
+                // Branch 1: never touched since extraction -> overwrite from the jar. Codex
+                // round 1, P2: skip entirely when the bundled content has not actually
+                // changed since it was last synced -- the common case on every restart after
+                // the first successful sync, not an edge case. Rewriting identical bytes and
+                // logging "has been updated" every single time is misleading, touches the
+                // file's mtime for no reason, and fails needlessly on an installation that
+                // hardens module resources read-only after provisioning.
+                if (jarHash.equals(diskHash)) {
+                    return readLanguageFile(file, extension);
+                }
+                // Only record the new baseline and log success once the write is CONFIRMED to
+                // have landed -- re-hash the bytes actually on disk afterward (mirroring
                 // saveResources()'s own pattern) rather than trusting the precomputed jarHash,
                 // so a partial/failed write can never be misreported as success (WR-01).
                 if (writeBytes(file, jarBytes)) {
@@ -515,14 +550,35 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
      * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
      * a write that threw partway through.
+     * <p>
+     * Codex round 1, P2: writes to a temporary file in {@code file}'s OWN parent directory
+     * first, then atomically replaces {@code file} only once the full write has succeeded --
+     * a direct {@code Files.write(file.toPath(), bytes)} truncates the destination immediately
+     * on open, so a write failure partway through (disk full, etc.) could otherwise leave a
+     * truncated or partial file in place of the original bytes. The temp file is created in
+     * the same directory specifically so the final move can be a same-filesystem atomic
+     * rename, not a copy.
      */
     private boolean writeBytes(File file, byte[] bytes) {
+        File parentDir = file.getParentFile();
+        File tempFile = null;
         try {
-            Files.write(file.toPath(), bytes);
+            tempFile = File.createTempFile(file.getName(), ".tmp", parentDir);
+            Files.write(tempFile.toPath(), bytes);
+            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
             return true;
         } catch (IOException e) {
             getLogger().error("Failed to write language file " + file.getPath(), e);
             return false;
+        } finally {
+            if (tempFile != null) {
+                // A successful move already renamed the temp file away from tempFile's own
+                // path, so this is a no-op on the success path and only cleans up a leftover
+                // staging file on any failure branch above.
+                // noinspection ResultOfMethodCallIgnored
+                tempFile.delete();
+            }
         }
     }
 
