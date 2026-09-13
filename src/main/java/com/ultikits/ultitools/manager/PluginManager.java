@@ -324,49 +324,55 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        try {
-            // Cancel all @Scheduled tasks before unregistering
+        // Each registry-cleanup step below is isolated from every other step's failure
+        // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
+        // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
+        // catching a BukkitTask.cancel() Error) must not skip any other registry's own
+        // cleanup. A step's own failure is logged via runUnregisterStep, not rethrown, so it
+        // cannot mask a later step's failure either.
+        runUnregisterStep(plugin, "cancel @Scheduled tasks", () -> {
             if (taskManager != null) {
                 taskManager.cancelAll(plugin);
             }
-            // Unregister @PlayerCache beans before context closes
+        });
+        // Unregister @PlayerCache beans before context closes
+        runUnregisterStep(plugin, "unregister @PlayerCache beans", () -> {
             if (playerCacheManager != null && plugin.getContext() != null) {
                 for (Object bean : plugin.getContext().getSingletonValues()) {
                     playerCacheManager.unregisterBean(bean);
                 }
             }
-            // Bulk-unregister this module's tab-completion completers so the singleton does not
-            // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
-            // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
-            // return 0 and throw nothing).
-            TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
-            // Unregister @ModuleEventHandler handlers from EventBus
+        });
+        // Bulk-unregister this module's tab-completion completers so the singleton does not
+        // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
+        // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
+        // return 0 and throw nothing).
+        runUnregisterStep(plugin, "unregister tab-completion completers",
+                () -> TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName()));
+        // Unregister @ModuleEventHandler handlers from EventBus
+        runUnregisterStep(plugin, "unregister EventBus handlers", () -> {
             EventBus eventBus = UltiTools.getInstance().getEventBus();
             if (eventBus != null) {
                 eventBus.unregisterAll(plugin.getPluginName());
             }
-            // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
-            // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
-            // left behind by an unloaded module would go on answering panel requests with code
-            // whose classloader is gone.
+        });
+        // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
+        // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
+        // left behind by an unloaded module would go on answering panel requests with code
+        // whose classloader is gone.
+        runUnregisterStep(plugin, "unregister panel message responders", () -> {
             PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
             if (panelResponderRegistry != null) {
                 panelResponderRegistry.unregisterAll(plugin.getPluginName());
             }
-            // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
-            // D-01). The record holds Class<?> references and would otherwise pin the module's
-            // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
-            // PanelResponderRegistry releases immediately above.
-            ConditionalRegistrationEvaluator.clear(plugin);
-        } finally {
-            // Mandatory cleanup: this module's own commands/listeners (via unregisterSelf())
-            // and its container MUST run regardless of whether any step above threw (Codex
-            // review on #457: "Preserve mandatory cleanup before swallowing unregister
-            // failures") -- otherwise an Error from e.g. BukkitTask.cancel() (which
-            // TaskManager.cancelAll() does not catch) would skip unregisterSelf() and the
-            // context close entirely, while PluginManager.close()'s own try/catch (WR-01)
-            // still clears pluginList, losing track of the leaked module altogether.
-            //
+        });
+        // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
+        // D-01). The record holds Class<?> references and would otherwise pin the module's
+        // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
+        // PanelResponderRegistry releases immediately above.
+        runUnregisterStep(plugin, "clear @ConditionalOnConfig scan-time decisions",
+                () -> ConditionalRegistrationEvaluator.clear(plugin));
+        try {
             // Listener unregistration happens inside unregisterSelf() itself, AFTER
             // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
             // directly at this point ran onUnregister() with the module's own listeners
@@ -374,22 +380,43 @@ public class PluginManager {
             // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
             // (IN-01, harmless but redundant).
             //
-            // unregisterSelf() can still throw (a module's onUnregister() override) even with
-            // its own internal try/finally -- wrap the context close in its own nested finally
-            // too, so a throwing hook cannot leave this module's container, its destruction
-            // callbacks and its resources open for the rest of the server's lifetime (Codex
-            // review on #457: "Close the module context when its unload hook throws").
-            try {
-                plugin.unregisterSelf();
-            } finally {
-                // unregister() is reachable with an instance the caller constructed directly,
-                // which never went through PluginManager.register(...) and so never received a
-                // container (SILENT-19, #338). Guard the close the same way the @PlayerCache
-                // block above does.
-                if (plugin.getContext() != null) {
-                    plugin.getContext().close();
-                }
+            // Unlike the best-effort registry bookkeeping above, this step's own failure is
+            // NOT swallowed: a module's onUnregister() throwing is a real defect the caller
+            // needs to see (Codex review on #457, round 1: "a throwing hook is surfaced to
+            // the caller, not swallowed"). unregisterSelf() itself already isolates its own
+            // two framework calls from each other via a nested finally (see its javadoc).
+            plugin.unregisterSelf();
+        } finally {
+            // unregister() is reachable with an instance the caller constructed directly,
+            // which never went through PluginManager.register(...) and so never received a
+            // container (SILENT-19, #338). Guard the close the same way the steps above do,
+            // and run it even if unregisterSelf() itself throws (Codex review on #457, round
+            // 2: "Close the module context when its unload hook throws").
+            if (plugin.getContext() != null) {
+                plugin.getContext().close();
             }
+        }
+    }
+
+    /**
+     * Runs one {@link #unregister(UltiToolsPlugin)} best-effort registry-cleanup step in
+     * isolation: a throw from {@code step} is logged via {@link
+     * #logPluginUnregistrationFailure(String, Throwable)}, not rethrown, so it can neither
+     * skip nor mask any of {@code unregister}'s other steps (Codex review on #457, across
+     * four rounds on the same method: listener cleanup surviving command-cleanup failure,
+     * the context close surviving the unload hook throwing, mandatory cleanup surviving an
+     * early registry failure, and finally every registry step surviving every other one).
+     *
+     * @param plugin          the plugin being unregistered, for the log message and step context
+     * @param stepDescription a short, human-readable name for {@code step}, folded into the
+     *                        WARNING log line if it throws
+     * @param step            the cleanup action to attempt
+     */
+    private static void runUnregisterStep(UltiToolsPlugin plugin, String stepDescription, Runnable step) {
+        try {
+            step.run();
+        } catch (Exception | Error e) {
+            logPluginUnregistrationFailure(plugin.getPluginName() + " (" + stepDescription + ")", e);
         }
     }
 
