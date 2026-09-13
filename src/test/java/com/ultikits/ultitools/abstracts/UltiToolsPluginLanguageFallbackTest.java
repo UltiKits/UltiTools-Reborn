@@ -69,6 +69,10 @@ class UltiToolsPluginLanguageFallbackTest {
 
     private ConfigManager mockConfigManager;
 
+    // Backs the D-05/D-06/D-07 provenance fixtures further below; declared here (not next to
+    // ProvenanceChildFirstClassLoader) for the same FieldDeclarationsShouldBeAtStartOfClass reason.
+    private ProvenanceChildFirstClassLoader provenanceLoader;
+
     abstract static class FixturePlugin extends UltiToolsPlugin {
     }
 
@@ -289,8 +293,6 @@ class UltiToolsPluginLanguageFallbackTest {
         }
     }
 
-    private ProvenanceChildFirstClassLoader provenanceLoader;
-
     @org.junit.jupiter.api.AfterEach
     void closeProvenanceLoaderIfOpen() throws IOException {
         if (provenanceLoader != null) {
@@ -364,6 +366,10 @@ class UltiToolsPluginLanguageFallbackTest {
 
         provenanceLoader = new ProvenanceChildFirstClassLoader(new URL[]{explodedRoot.toURI().toURL()},
                 UltiToolsPluginLanguageFallbackTest.class.getClassLoader());
+        // The class name is a compile-time constant (ModuleFixturePlugin.class.getName()), never
+        // attacker-controllable; loading through provenanceLoader is required so the fixture's
+        // own CodeSource is the exploded "jar" directory this test just built.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         Class<?> fixtureClass = Class.forName(
                 UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName(), true, provenanceLoader);
         Objenesis objenesis = new ObjenesisStd();
@@ -373,7 +379,7 @@ class UltiToolsPluginLanguageFallbackTest {
         pluginNameField.setAccessible(true);
         pluginNameField.set(plugin, "TestModule");
 
-        Logger mockLogger = Mockito.mock(Logger.class);
+        Logger mockLogger = mock(Logger.class);
         YamlConfiguration config = new YamlConfiguration();
         config.set("language", code);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
