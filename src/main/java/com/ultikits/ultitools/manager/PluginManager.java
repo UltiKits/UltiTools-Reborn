@@ -338,7 +338,12 @@ public class PluginManager {
         // after unload, exactly like the TabCompletionManager / EventBus / PanelResponderRegistry
         // releases immediately above.
         ConditionalRegistrationEvaluator.clear(plugin);
-        UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
+        // Listener unregistration happens inside unregisterSelf() itself, AFTER
+        // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
+        // directly at this point ran onUnregister() with the module's own listeners
+        // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
+        // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
+        // (IN-01, harmless but redundant).
         plugin.unregisterSelf();
         // unregister() is reachable with an instance the caller constructed directly, which never
         // went through PluginManager.register(...) and so never received a container (SILENT-19,
