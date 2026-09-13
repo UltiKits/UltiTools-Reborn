@@ -76,6 +76,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     /** Named logger for the D-03 per-module reload line -- see {@link #RELOAD_LOG_MESSAGE_KEY}. */
     private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
 
+    /**
+     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
+     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
+     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
+     * shipped catalogues actually carry a translation for it, rather than duplicating the
+     * literal string between production and test code.
+     */
+    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
+
     private Language language;
     @Getter
     private final String version;
@@ -742,6 +751,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
      * call could.
      */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
     protected void onUnregister() {
     }
 
@@ -756,15 +769,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
-     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
-     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
-     * shipped catalogues actually carry a translation for it, rather than duplicating the
-     * literal string between production and test code.
-     */
-    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
-
-    /**
      * Extension point for a module's own reload work.
      * <p>
      * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
@@ -776,6 +780,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * default body does nothing; override this method, not {@link #reloadSelf()}, to add reload
      * work.
      */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no reload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
     protected void onReload() {
     }
 

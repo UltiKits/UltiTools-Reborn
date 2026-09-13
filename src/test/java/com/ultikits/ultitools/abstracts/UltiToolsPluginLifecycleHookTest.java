@@ -69,6 +69,13 @@ class UltiToolsPluginLifecycleHookTest {
     private ListenerManager mockListenerManager;
     private ConfigManager mockConfigManager;
 
+    // Log capture for the D-03 per-module reload line, mirroring
+    // ConditionalRegistrationEvaluatorDriftTest's proven Handler-capture idiom. Declared here,
+    // ahead of the fixture classes below, so all instance fields precede any nested type or
+    // method declaration (PMD.FieldDeclarationsShouldBeAtStartOfClass).
+    private final List<LogRecord> capturedLogs = new ArrayList<>();
+    private Handler captureHandler;
+
     /** Bare fixture: overrides neither hook. */
     abstract static class FixturePlugin extends UltiToolsPlugin {
     }
@@ -103,11 +110,6 @@ class UltiToolsPluginLifecycleHookTest {
             capturedLogCountWhenOnReloadRan = capturedLogs != null ? capturedLogs.size() : -1;
         }
     }
-
-    // Log capture for the D-03 per-module reload line, mirroring
-    // ConditionalRegistrationEvaluatorDriftTest's proven Handler-capture idiom.
-    private final List<LogRecord> capturedLogs = new ArrayList<>();
-    private Handler captureHandler;
 
     @BeforeEach
     void setUp() {
@@ -198,6 +200,10 @@ class UltiToolsPluginLifecycleHookTest {
 
     @Test
     @DisplayName("a plugin that does not override onUnregister() still has its commands unregistered exactly once")
+    // The assertion here IS verify(...) -- Mockito's invocation count check, which PMD does
+    // not recognise as an assert (documented pattern, see this repository's CLAUDE.md
+    // "Suppressing PMD in tests").
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void defaultOnUnregisterStillUnregistersCommandsOnce() {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
         doCallRealMethod().when(plugin).unregisterSelf();
@@ -222,6 +228,10 @@ class UltiToolsPluginLifecycleHookTest {
 
     @Test
     @DisplayName("onUnregister() completes before CommandManager.unregisterAll and ListenerManager.unregisterAll, in that order")
+    // The assertion here IS the InOrder.verify(...) chain below -- Mockito's ordering check,
+    // which PMD does not recognise as an assert (documented pattern, see this repository's
+    // CLAUDE.md "Suppressing PMD in tests").
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
     void onUnregisterRunsBeforeFrameworkUnregistersCommandsAndListeners() {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
         doCallRealMethod().when(plugin).unregisterSelf();
