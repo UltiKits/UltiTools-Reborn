@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.jetbrains.annotations.ApiStatus;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
@@ -40,9 +42,19 @@ import com.google.gson.reflect.TypeToken;
  * A missing or unparsable sidecar degrades to "no record" rather than throwing (T-16-04-03): an
  * operator who can edit the sidecar can already edit the files it describes, so treating a corrupt
  * sidecar as "unknown provenance" is the safe branch, not a defect to guard against harder.
+ * <p>
+ * {@code public} only so {@code UltiToolsPlugin} (a different package) can call it -- this is
+ * internal framework plumbing, not a documented capability (WR-02): it appears nowhere in {@code
+ * FEATURES.md} as its own row, and this milestone's own D-09 decision rejects shipping new public
+ * surface in 6.3.0 for exactly this reason. {@link ApiStatus.Internal} carries no binary-
+ * compatibility consequence here -- the class is new in this same pull request and has never
+ * shipped in a released jar, so no {@code COMPATIBILITY.md} entry or japicmp exclude is needed for
+ * this annotation; annotating it now, before the first release that carries it, is what keeps it
+ * from becoming one later.
  *
  * @since 6.3.0
  */
+@ApiStatus.Internal
 public final class ResourceHashSidecar {
 
     private static final Logger LOGGER = Logger.getLogger(ResourceHashSidecar.class.getName());
