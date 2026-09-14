@@ -177,17 +177,54 @@ final class CloudSession {
     }
 
     /**
-     * Marks this session invalid and tears down everything it owns: the poll and refresh
-     * schedulers, and (as of plan 16-08 Task 2) the WebSocket client. Safe to call on a session
-     * that never started any of those (a freshly constructed session with nothing scheduled and no
-     * client yet) and safe to call more than once -- both are exercised directly by this class's
-     * own tests, independently of the static {@link #current()} holder.
+     * Marks this session invalid and tears down everything it owns: the log stream manager (as of
+     * plan 16-10, WR-01), the poll and refresh schedulers, and (as of plan 16-08 Task 2) the
+     * WebSocket client. Safe to call on a session that never started any of those (a freshly
+     * constructed session with nothing scheduled and no client yet) and safe to call more than once
+     * -- both are exercised directly by this class's own tests, independently of the static
+     * {@link #current()} holder.
+     * <p>
+     * <b>WR-01 (16-REVIEW-cloud.md):</b> the log-stream-manager shutdown used to run in
+     * {@code PluginInitiationUtils.doDisableCloud()}, <i>before</i> this method and with no lock at
+     * all. A late {@code onWebSocketOpened} landing in that unlocked gap would observe this session
+     * as still current -- because it genuinely still was, at that exact instant -- and re-attach the
+     * log handler that step had just detached; {@link #invalidate()} would then run and close the
+     * WebSocket client, but never re-run the log-stream shutdown a second time. Moving the shutdown
+     * inside this method closes that gap: {@link #initializeManagers()} (which re-wires the log
+     * stream manager) and this method both synchronize on {@code this}, so one of them always runs
+     * to completion before the other can even enter -- there is no window in which "wiring" can see
+     * a stale "still current" read while "teardown" is genuinely underway. The original ordering
+     * concern this step's comment used to document -- log flush before the WebSocket client closes,
+     * so {@code sendBatch()} does not find the socket already down with a non-empty queue -- is
+     * preserved: this step still runs before {@link #closeWebSocketClient()} below, just now under
+     * the same lock as everything else.
      */
     synchronized void invalidate() {
         invalidated = true;
+        shutdownLogStreamManager();
         stopPolling();
         stopTokenRefreshScheduler();
         closeWebSocketClient();
+    }
+
+    /**
+     * Shuts down the framework's log stream manager, if one is configured. Extracted so
+     * {@link #invalidate()} reads as a flat list of teardown steps, and tolerant of a {@code null}
+     * manager (unmocked in the majority of this package's tests) exactly like
+     * {@link #closeWebSocketClient()} already tolerates a {@code null} client -- neither condition
+     * is an error, both are simply nothing to tear down.
+     */
+    private void shutdownLogStreamManager() {
+        try {
+            com.ultikits.ultitools.manager.LogStreamManager logStreamManager =
+                UltiTools.getInstance().getLogStreamManager();
+            if (logStreamManager != null) {
+                logStreamManager.shutdown();
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Error shutting down log stream manager during session invalidation: " + e.getMessage());
+        }
     }
 
     /**

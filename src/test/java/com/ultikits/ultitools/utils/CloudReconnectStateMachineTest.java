@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.ServerMonitorManager;
@@ -196,6 +197,64 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("WR-01：日志 handler 的摘除现在与会话失效共用同一把锁——持锁期间它不可能已经先跑完")
+        void logStreamShutdownIsCoveredByTheSameSessionLockAsInvalidation() throws Exception {
+            // 复现路径：disableCloud() 曾经先（不持锁）关掉 LogStreamManager，再（持锁）
+            // invalidate() 会话。一次迟到的 onOpen 落在两步之间会看到会话仍然 current，
+            // 把刚摘下来的日志 handler 原样装回去。16-10 把日志 handler 的摘除挪进了
+            // CloudSession#invalidate() 内部，与其它拆线步骤共用会话自己的监视器——
+            // 本用例要验的不是「disableCloud 最终会不会摘掉 handler」（disableCloudDetachesLogHandler
+            // 已经验过），而是「主线程持着会话监视器的整段时间里，handler 是不是还没被摘」。
+            CloudSession session = CloudSession.current();
+            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
+            try {
+                LogStreamManager.getInstance().initialize(client);
+            } catch (Exception ignored) {
+                // 本测试环境没有真实的 Bukkit server（sendInitializationLogs 会因此抛），
+                // 但 handler 的挂载已经在那之前发生——与 IdempotentLogStream 用例同样的容错。
+            }
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("前置条件：日志 handler 必须先真的挂上去")
+                    .isEqualTo(1);
+
+            java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                started.countDown();
+                try {
+                    PluginInitiationUtils.disableCloud();
+                } catch (Exception ignored) {
+                    // 本用例只关心锁的覆盖范围，不关心拆线其它步骤的结果
+                } finally {
+                    finished.countDown();
+                }
+            }, "wr-01-log-stream-lock-probe");
+            worker.setDaemon(true);
+
+            synchronized (session) {
+                worker.start();
+                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
+                        .isTrue();
+                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .as("持有会话监视器期间，disableCloud 整体必须进不去")
+                        .isFalse();
+                assertThat(countFrameworkHandlersOnRootLogger())
+                        .as("在修复之前，日志 handler 的摘除跑在锁外面，此刻已经没了——" +
+                            "修复之后它现在也在锁里面，此刻必须还在")
+                        .isEqualTo(1);
+            }
+
+            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("释放锁之后应当立刻放行")
+                    .isTrue();
+            worker.join(1000);
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("放开锁之后，拆线跑完，handler 必须被摘掉")
+                    .isZero();
+        }
+
+        @Test
         @DisplayName("disableCloud 会让在途的凭证操作作废")
         void disableCloudInvalidatesInFlightCredentialOperations() {
             // 只停调度器是不够的：stop* 用的都是 cancel(false)，拦不住一个已经进了 HTTP
@@ -350,6 +409,143 @@ class CloudReconnectStateMachineTest {
             assertThat(newSession.getBackoff().getAttemptCount())
                     .as("新会话的退避状态不应继承旧会话已经消耗掉的重连次数")
                     .isZero();
+        }
+
+        @Test
+        @DisplayName("WR-02：重连预算耗尽时，disableCloud 拆的是预算耗尽的那个具体会话，不是事后重新读到的 current()")
+        void budgetExhaustionInvalidatesTheSessionWhoseBudgetRanOutNotWhateverIsCurrent() throws Exception {
+            // 复现 CloudSession.startNew() 内部那道窄缝：current = next 与
+            // previous.invalidate() 之间，previous.isCurrent() 仍然读到 true，而
+            // current() 已经指向 next。reinitWebSocket(session) 的第一道闸门正是在这道
+            // 窄缝里通过的——用反射直接把这个瞬间的状态摆出来，而不用真的开线程去赌时机。
+            CloudSession oldSession = CloudSession.current();
+            buildValidTokenOn(oldSession);
+            for (int i = 0; i < CloudSession.MAX_REINIT_ATTEMPTS; i++) {
+                oldSession.getBackoff().getNextDelay();
+            }
+            assertThat(oldSession.getBackoff().shouldContinue())
+                    .as("前置条件：这个会话的重连预算必须真的耗尽")
+                    .isFalse();
+
+            CloudSession newSession = new CloudSession();
+            java.lang.reflect.Field currentField = CloudSession.class.getDeclaredField("current");
+            currentField.setAccessible(true);
+            currentField.set(null, newSession); // 直接摆出「新会话已装上，旧会话尚未被标记失效」这一刻
+            assertThat(oldSession.isCurrent())
+                    .as("窄缝内：旧会话此刻仍然读到 current（还没被 startNew() 的第二步标记失效）")
+                    .isTrue();
+            UltiPanelWebSocketClient newClient = mock(UltiPanelWebSocketClient.class);
+            newSession.setWebSocketClient(newClient);
+
+            PluginInitiationUtils.reinitWebSocket(oldSession);
+
+            Mockito.verify(newClient, Mockito.never()).disconnect();
+            assertThat(newSession.isCurrent())
+                    .as("一个旧会话的重连预算耗尽绝不能拖累一个与它无关、已经取代它的新会话")
+                    .isTrue();
+            assertThat(oldSession.isCurrent())
+                    .as("耗尽的是这个具体会话，就该由它自己被标记失效")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("WR-07：握手成功之后重置的是这次握手自己那个会话的退避额度，不是事后重新读到的 current()")
+        void handshakeSuccessResetsTheHandshakesOwnSessionBackoffNotWhateverIsCurrent() {
+            CloudSession session = CloudSession.current();
+            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
+            for (int i = 0; i < 3; i++) {
+                session.getBackoff().getNextDelay();
+            }
+            assertThat(session.getBackoff().getAttemptCount()).isEqualTo(3);
+
+            // 模拟：这次握手在途的时候，另一次登出+登录已经把 current() 换掉了。
+            CloudSession newSession = CloudSession.startNew();
+            for (int i = 0; i < 2; i++) {
+                newSession.getBackoff().getNextDelay();
+            }
+            assertThat(newSession.getBackoff().getAttemptCount()).isEqualTo(2);
+
+            try {
+                PluginInitiationUtils.onWebSocketOpened(session, client);
+            } catch (Exception ignored) {
+                // 本用例环境没有下游依赖（ConfigManager 等），走到 uploadConfig 会失败——
+                // 与本用例要钉住的东西无关。
+            }
+
+            assertThat(session.getBackoff().getAttemptCount())
+                    .as("这次握手成功的是 session，它自己的退避额度必须被清零")
+                    .isZero();
+            assertThat(newSession.getBackoff().getAttemptCount())
+                    .as("newSession 跟这次握手毫无关系，它的退避额度不该被这次握手动到")
+                    .isEqualTo(2);
+        }
+
+        /** Builds a valid, non-expiring token and installs it on {@code session} via reflection. */
+        private TokenEntity buildValidTokenOn(CloudSession session) throws Exception {
+            TokenEntity token = new TokenEntity();
+            token.setAccess_token("dummy.access.token");
+            token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
+            java.lang.reflect.Field tokenField = CloudSession.class.getDeclaredField("token");
+            tokenField.setAccessible(true);
+            tokenField.set(session, token);
+            return token;
+        }
+    }
+
+    /**
+     * CR-02 (16-REVIEW-cloud.md): {@code reinitWebSocket}'s second confirmation, through to the
+     * connection actually being established, must be covered by {@code session}'s own monitor --
+     * the same pattern {@code activateCloudIfCurrent} already used. Without it, an {@code invalidate()}
+     * landing in that window leaves an already-invalidated session holding a live, authenticated
+     * WebSocket connection nothing ever closes.
+     */
+    @Nested
+    @DisplayName("重连的「二次确认到建连」现在与会话失效共用同一把锁（CR-02）")
+    class ReinitSecondConfirmationIsLockProtected {
+
+        @Test
+        @DisplayName("持有会话监视器期间，reinitWebSocket 的第二次确认到建连整段必须进不去")
+        void secondConfirmationThroughConnectIsCoveredBySessionLock() throws Exception {
+            CloudSession session = CloudSession.current();
+            TokenEntity token = new TokenEntity();
+            token.setAccess_token("dummy.access.token");
+            token.setExp((System.currentTimeMillis() / 1000L) + 3600L); // valid, non-expiring --
+            // skips the (out-of-lock) refresh branch entirely, landing straight on the second
+            // confirmation this test cares about.
+            java.lang.reflect.Field tokenField = CloudSession.class.getDeclaredField("token");
+            tokenField.setAccessible(true);
+            tokenField.set(session, token);
+
+            java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                started.countDown();
+                try {
+                    PluginInitiationUtils.reinitWebSocket(session);
+                } catch (Exception ignored) {
+                    // env.yml/api-url is not configured in this test environment -- the exception
+                    // this can throw is irrelevant; what matters is whether entering the region at
+                    // all required the lock.
+                } finally {
+                    finished.countDown();
+                }
+            }, "cr-02-reinit-lock-probe");
+            worker.setDaemon(true);
+
+            synchronized (session) {
+                worker.start();
+                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
+                        .isTrue();
+                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .as("持有会话监视器期间，第二次确认到建连这段必须进不去")
+                        .isFalse();
+            }
+
+            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("释放锁之后应当立刻放行")
+                    .isTrue();
+            worker.join(1000);
         }
     }
 

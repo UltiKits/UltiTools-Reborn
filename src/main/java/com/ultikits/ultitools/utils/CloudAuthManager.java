@@ -74,19 +74,48 @@ public class CloudAuthManager {
      * most needs logout to take effect), and the credential is read only <b>after</b> teardown so an
      * in-flight login that commits mid-teardown is still caught and cleared -- see
      * {@code CloudLoginCommand.logout(CommandSender)}'s own comments for why that order matters.
+     * <p>
+     * <b>CR-01 (16-REVIEW-cloud.md):</b> the disk-clear decision below acts on the exact session
+     * {@link PluginInitiationUtils#disableCloud()} tore down -- the reference it returns -- rather
+     * than a second, independent read of {@link CloudSession#current()} taken after teardown
+     * returns. Reading {@code current()} a second time here used to be exactly the bug: a
+     * concurrent {@code login()} (unsynchronized, and reachable from a different thread via
+     * {@code @RunAsync}) can install a brand-new session with {@link CloudSession#startNew()}
+     * in the gap while teardown is running, and that second read would then see the NEW session's
+     * (always {@code null}) token instead of the one actually being logged out of -- concluding
+     * "nothing to clear" and leaving the real credential on disk. Acting on the one reference this
+     * method already holds makes that race structurally impossible: there is no second read left to
+     * disagree with the first. This method deliberately does <b>not</b> call
+     * {@link CloudSession#startNew()} itself any more either -- {@link CloudSession#clearPersisted()}
+     * does not gate on session identity (it always wipes disk unconditionally,
+     * {@link CloudSession#clearPersisted() its own javadoc}), so clearing the torn-down session in
+     * place is sufficient; the next real login installs a fresh session via its own
+     * {@code CloudSession.startNew()} call, exactly as it always has.
+     * <p>
+     * <b>Documented semantics for logout racing a concurrent login (CR-01's second half):</b> this
+     * method's teardown always acts on whichever session was current at the instant
+     * {@link PluginInitiationUtils#disableCloud()} began -- a single, fixed point in time, because
+     * that method reads {@link CloudSession#current()} exactly once, at its own top, before any
+     * teardown step runs (see its javadoc). A {@code login()} that installs its new session
+     * <b>before</b> that read wins outright: this {@code logout()} call never sees or touches it.
+     * A {@code login()} that installs its new session <b>after</b> that read has already lost the
+     * credential race regardless of what this method does -- {@link CloudSession#startNew()} itself
+     * unconditionally invalidates whatever session it replaces, so the fresh login is torn down by
+     * that call alone, independent of this command. There is no window in which this method
+     * invalidates a login it did not already lose to {@code startNew()}'s own contract.
      *
      * @return {@code true} if a credential existed and was cleared; {@code false} if there was
      *         nothing to clear (teardown still ran regardless)
      * @throws IOException if clearing the persisted credential fails
      */
     public static synchronized boolean logout() throws IOException {
-        PluginInitiationUtils.disableCloud();
+        CloudSession tornDown = PluginInitiationUtils.disableCloud();
 
-        if (CloudSession.current().getToken() == null) {
+        if (tornDown.getToken() == null) {
             return false;
         }
 
-        CloudSession.startNew().clearPersisted();
+        tornDown.clearPersisted();
         return true;
     }
 

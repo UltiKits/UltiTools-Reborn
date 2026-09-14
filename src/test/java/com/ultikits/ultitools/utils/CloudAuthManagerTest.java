@@ -787,15 +787,22 @@ class CloudAuthManagerTest {
     class LogoutTests {
 
         @Test
-        @DisplayName("有凭证（即便已过期）时返回 true，且拆线之后当前会话不再持有该凭证")
+        @DisplayName("有凭证（即便已过期）时返回 true，且拆线之后这个（同一个、现已失效的）会话不再持有该凭证")
         void expiredOrValidTokenStillReportsHadCredential() throws Exception {
             setSessionField("token", buildTokenWithExp(-3600L)); // expired -- logout does not gate on validity
+            CloudSession sessionBeforeLogout = CloudSession.current();
 
             boolean hadCredential = CloudAuthManager.logout();
 
             assertThat(hadCredential).isTrue();
+            // CR-01 fix: logout() no longer calls CloudSession.startNew() itself -- it clears the
+            // captured session in place. current() therefore stays this SAME (now-invalidated)
+            // session object; the next real login is what installs a fresh one.
+            assertThat(CloudSession.current())
+                    .as("logout 不再自行 startNew()——清掉的是拆线返回的那个会话本身")
+                    .isSameAs(sessionBeforeLogout);
             assertThat(CloudSession.current().getToken())
-                    .as("logout 之后当前会话（一个全新会话）不应持有旧凭证")
+                    .as("logout 之后这个会话不应再持有旧凭证")
                     .isNull();
         }
 
@@ -803,8 +810,13 @@ class CloudAuthManagerTest {
         @DisplayName("从未登录过时返回 false，但拆线仍然无条件发生")
         void neverLoggedInReturnsFalseButTeardownStillRuns() throws Exception {
             setSessionField("token", null);
+            CloudSession session = CloudSession.current();
 
             try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                // disableCloud() now returns the session it tore down (CR-01) -- the mock must
+                // honour that contract, or logout()'s null-token read below NPEs.
+                init.when(PluginInitiationUtils::disableCloud).thenReturn(session);
+
                 boolean hadCredential = CloudAuthManager.logout();
 
                 init.verify(PluginInitiationUtils::disableCloud, times(1));
@@ -818,14 +830,18 @@ class CloudAuthManagerTest {
         @DisplayName("凭证必须在拆线之后读：拆线期间落地的凭证仍会被看到并清除")
         void credentialCommittedDuringTeardownIsStillSeenAndCleared() throws Exception {
             setSessionField("token", null);
+            CloudSession session = CloudSession.current();
 
             try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
                 // Simulate an in-flight magic-link poll committing successfully WHILE
                 // disableCloud() is (nominally) running -- exactly the window logout() must
-                // still catch by reading the credential only after teardown returns.
+                // still catch by reading the credential only after teardown returns. Per the CR-01
+                // fix, disableCloud() returns the session it tore down -- here, the same session the
+                // poll committed onto -- so logout() reads the commit through that returned
+                // reference, never through a second, independent CloudSession.current() call.
                 init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
-                    CloudSession.current().commit(buildTokenWithExp(3600L));
-                    return null;
+                    session.commit(buildTokenWithExp(3600L));
+                    return session;
                 });
 
                 boolean hadCredential = CloudAuthManager.logout();
@@ -833,7 +849,61 @@ class CloudAuthManagerTest {
                 assertThat(hadCredential)
                         .as("若沿用拆线前的快照，这里会是 false——凭证必须在拆线之后才读")
                         .isTrue();
+                // WR-04 (16-REVIEW-cloud.md): the alpha test this class replaced asserted
+                // verify(clearToken, times(1)) -- an explicit check that the disk-clearing call
+                // actually ran. The rewritten version above only checked the boolean return value,
+                // which a future refactor could satisfy without ever calling clearPersisted(). Add
+                // back the independent disk-state assertion, matching the pattern
+                // CredentialGenerationTest already uses throughout.
+                CredentialStore.ReadResult result = CredentialStore.read();
+                assertThat(result.data())
+                        .as("拆线期间落地的凭证必须真的从磁盘上被清除，不能只是返回值凑巧对了")
+                        .doesNotContainKey("cloud_token");
             }
+        }
+
+        @Test
+        @DisplayName("CR-01：即便有并发登录在拆线期间安装了新会话，logout 清掉的仍是它实际拆掉的那个会话，磁盘凭证不会残留")
+        void logoutClearsTheCapturedSessionEvenWhenALoginInstallsANewSessionMidTeardown() throws Exception {
+            // sBefore is the session /ulticloud logout is actually acting on -- give it a real,
+            // committed credential on disk, the way a genuine prior login would have.
+            CloudSession sBefore = CloudSession.current();
+            sBefore.commit(buildTokenWithExp(3600L));
+            CredentialStore.ReadResult before = CredentialStore.read();
+            assertThat(before.data())
+                    .as("前置条件：磁盘上得先真的有这份凭证")
+                    .containsKey("cloud_token");
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                // Reproduces CR-01's exact race, as an injected hook rather than sleep-based luck:
+                // disableCloud() is stubbed to behave exactly like the FIXED production
+                // implementation (return the session it tore down -- sBefore), but ALSO simulates a
+                // concurrent /ulticloud login landing before it returns, installing a brand-new
+                // session as CloudSession.current(). Before the CR-01 fix, logout() would have read
+                // CloudAuthManager's disk-clear decision off a SECOND, independent
+                // CloudSession.current() call taken after this -- which would see sNew's (always
+                // null) token and wrongly conclude there was nothing to clear.
+                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
+                    CloudSession.startNew(); // the concurrent login racing in
+                    return sBefore;          // the FIXED contract: return what was actually torn down
+                });
+
+                boolean hadCredential = CloudAuthManager.logout();
+
+                assertThat(hadCredential)
+                        .as("即便并发登录已经把 current() 换掉，被真正拆线的会话（sBefore）原本持有凭证这件事必须被看到")
+                        .isTrue();
+            }
+
+            CloudSession sNew = CloudSession.current();
+            assertThat(sNew).isNotSameAs(sBefore);
+            assertThat(sNew.getToken())
+                    .as("并发登录安装的新会话不该被这次 logout 调用碰到")
+                    .isNull();
+            CredentialStore.ReadResult after = CredentialStore.read();
+            assertThat(after.data())
+                    .as("旧会话的磁盘凭证必须被清掉，不能因为 current() 已经指向别处而被跳过")
+                    .doesNotContainKey("cloud_token");
         }
     }
 

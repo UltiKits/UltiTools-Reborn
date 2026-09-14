@@ -258,8 +258,10 @@ public class PluginInitiationUtils {
         // Set the message handler
         client.setMessageHandler(PluginInitiationUtils::handleInboundMessage);
 
-        // Set the on-connect-success handler
-        client.setOnConnectHandler(() -> onWebSocketOpened(client));
+        // Set the on-connect-success handler -- captures `session` lexically (WR-07) so the
+        // backoff this callback resets is always the one that owns the client that actually
+        // connected, never whatever CloudSession.current() happens to be by the time onOpen fires.
+        client.setOnConnectHandler(() -> onWebSocketOpened(session, client));
 
         // Set the reconnect-exhausted handler — attempts to refresh the token and re-establish the
         // connection, on THIS session specifically (see this method's own javadoc).
@@ -290,15 +292,37 @@ public class PluginInitiationUtils {
      * Package-private rather than private — only so it can be tested. Triggering it otherwise would
      * require a real authenticated token and a real WebSocket handshake; same treatment as
      * {@link #handleInboundMessage}.
+     * <p>
+     * <b>Compatibility overload (WR-07, 16-REVIEW-cloud.md):</b> the real production registration
+     * ({@link #initWebsocket(CloudSession)}) calls {@link #onWebSocketOpened(CloudSession,
+     * UltiPanelWebSocketClient)} directly with the session it lexically captured at registration
+     * time. This single-argument overload exists only so
+     * {@code CloudReconnectStateMachineTest#lateHandshakeDoesNotDereferenceClearedClient} and
+     * {@code CapabilityGateIndependenceTest} keep reaching this exact reflected signature (16-08's
+     * own decision to preserve it) — it falls back to {@link CloudSession#current()}, which is
+     * exactly the re-read WR-07 flags as unsafe in production, but is harmless here since nothing
+     * calls this overload from a real handshake path any more.
      */
     static void onWebSocketOpened(UltiPanelWebSocketClient client) {
+        onWebSocketOpened(CloudSession.current(), client);
+    }
+
+    /**
+     * The real implementation behind {@link #onWebSocketOpened(UltiPanelWebSocketClient)}.
+     *
+     * @param session the session whose client actually connected -- captured lexically by the
+     *                caller, never re-read from {@link CloudSession#current()} (WR-07)
+     * @param client  this handshake's own client (see this method's parent javadoc for why the
+     *                client parameter itself must not be re-read from the session either)
+     */
+    static void onWebSocketOpened(CloudSession session, UltiPanelWebSocketClient client) {
         UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
 
         // The handshake has genuinely succeeded — this is the only place where the phrase
         // "reconnection succeeded" actually holds. The outer budget is also only reset here —
         // resetting it inside reinitWebSocket would treat "a client was built" as success, and the
         // budget would never run out. See issue #181 / #223.
-        onWebSocketConnected();
+        onWebSocketConnected(session);
         UltiTools.getInstance().getLogger().log(Level.INFO,
             "WebSocket connected to UltiPanel");
 
@@ -1709,11 +1733,18 @@ public class PluginInitiationUtils {
             // terminal state and logout are the same event and should go through the same teardown
             // path.
             //
-            // Reusing disableCloud() is safe: it invalidates CloudSession.current(), which -- as
-            // long as no other session has been installed in between -- is this same session, so
-            // even if its own stopWebsocket() triggers the onClose reconnect chain, it gets caught
-            // by gate one at the top of this method.
-            disableCloud();
+            // WR-02 (16-REVIEW-cloud.md): invalidate `session` directly rather than reusing the
+            // no-arg disableCloud(), which used to invalidate whatever CloudSession.current()
+            // happened to be BY THE TIME THIS LINE RUNS. `session` is only guaranteed to equal
+            // current() at gate one above -- a fresh /ulticloud login racing in after that read (via
+            // CloudSession.startNew()) can install a new session before this line runs; the old code
+            // would then tear down that brand-new, unrelated login instead of (or in addition to)
+            // the session whose budget actually ran out. Targeting `session` explicitly means this
+            // branch can only ever affect the session it was called about -- and startNew() itself
+            // already invalidated `session` if it was in fact superseded, so this call is then a
+            // harmless no-op on an already-invalid session rather than reaching for whatever the
+            // static holder currently points at.
+            disableCloud(session);
             return;
         }
 
@@ -1755,31 +1786,48 @@ public class PluginInitiationUtils {
             }
         }
 
-        // Second confirmation. Between the currency check at the top of this method and here, a
-        // token refresh has happened in between — a network call, and that window can be several
-        // seconds wide. If a logout happens inside this window, it must be seen here, otherwise a
-        // newly-authenticated client gets built that resurrects the state machine that was just
-        // turned off.
-        if (!session.isCurrent()) {
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                "Cloud features were disabled during re-initialization — aborting");
-            return;
-        }
+        // Second confirmation, through to the connection actually being established, all under
+        // `session`'s own monitor (CR-02, 16-REVIEW-cloud.md).
+        //
+        // Between the currency check at the top of this method and here, a token refresh has
+        // happened in between — a network call, and that window can be several seconds wide. If a
+        // logout happens inside this window, it must be seen here, otherwise a newly-authenticated
+        // client gets built that resurrects the state machine that was just turned off.
+        //
+        // Checking session.isCurrent() alone here is NOT enough, for exactly the reason
+        // CloudSession#initializeManagers()'s own javadoc gives for the identical shape: it is only
+        // a read taken outside a lock. Without the lock below, invalidate() (synchronized on this
+        // same session) could cut in between this check passing and initWebsocket(session) actually
+        // building + connecting the client -- installing a live, authenticated WebSocket connection
+        // for a session that is already invalidated, which nothing then ever closes (CR-02). Holding
+        // `session`'s monitor across the re-check and the connect call is the same pattern
+        // activateCloudIfCurrent(CloudSession) already uses, and for the same reason: teardown
+        // either has not started yet or has already run to completion by the time this returns from
+        // the check, never caught in the middle. The token refresh above deliberately stays OUTSIDE
+        // this lock -- it is a multi-second HTTP round trip, and holding the session monitor across
+        // it would block a concurrent /ulticloud logout on the main thread for that long.
+        synchronized (session) {
+            if (!session.isCurrent()) {
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                    "Cloud features were disabled during re-initialization — aborting");
+                return;
+            }
 
-        // Create new WebSocket connection
-        try {
-            initWebsocket(session);
-            // Deliberately does not log "re-initialized successfully" here.
-            // initWebsocket() returning only means the client was built and connect() was
-            // dispatched — connect() is asynchronous, and the handshake and authentication have not
-            // happened yet. Measurement showed a 401 immediately following this line. The success
-            // message is now logged by onOpen (see initWebsocket's onConnectHandler), which is the
-            // point where the connection is actually up. See issue #223.
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                "WebSocket re-initialization dispatched — awaiting handshake");
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "WebSocket re-initialization failed: " + e.getMessage());
+            // Create new WebSocket connection
+            try {
+                initWebsocket(session);
+                // Deliberately does not log "re-initialized successfully" here.
+                // initWebsocket() returning only means the client was built and connect() was
+                // dispatched — connect() is asynchronous, and the handshake and authentication have
+                // not happened yet. Measurement showed a 401 immediately following this line. The
+                // success message is now logged by onOpen (see initWebsocket's onConnectHandler),
+                // which is the point where the connection is actually up. See issue #223.
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "WebSocket re-initialization dispatched — awaiting handshake");
+            } catch (IOException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    "WebSocket re-initialization failed: " + e.getMessage());
+            }
         }
     }
 
@@ -1793,46 +1841,79 @@ public class PluginInitiationUtils {
      * {@link #reinitWebSocket(CloudSession)} returns immediately afterward and the state machine
      * does not resurrect itself.
      * <p>
-     * Also strips the log handler and the transport thread off the root logger, and stops the
-     * server monitor and the player-event listener — all part of what makes the statement "cloud
-     * features are disabled" true. As of 16-08 Task 2 this no longer needs its own
+     * Also strips the log handler and the transport thread off the root logger (as of plan 16-10,
+     * WR-01, this now happens INSIDE {@link CloudSession#invalidate()} rather than as a separate,
+     * unlocked step before it -- see that method's own javadoc), and stops the server monitor and
+     * the player-event listener — all part of what makes the statement "cloud features are
+     * disabled" true. As of 16-08 Task 2 this no longer needs its own
      * the former global lifecycle lock: {@link CloudSession#invalidate()} and
      * {@link CloudSession#initializeManagers()} both synchronize on the session instance itself, so
      * wiring and teardown are mutually exclusive on that lock without a separate global one. See
      * the two review rounds on PR #264 for the original race this replaces.
+     * <p>
+     * <b>CR-01 (16-REVIEW-cloud.md):</b> returns the exact session this call tore down, captured
+     * once, at the very top, before any teardown step runs. {@link CloudAuthManager#logout()} reads
+     * its disk-clear decision off this return value rather than a second, independent call to
+     * {@link CloudSession#current()} taken after this method returns -- eliminating the specific
+     * race where a concurrent {@code login()} installs a new session in the gap between those two
+     * reads (see {@code CloudAuthManager#logout()}'s own javadoc for the full account).
+     *
+     * @return the session this call invalidated
      */
-    public static void disableCloud() {
-        doDisableCloud();
+    public static CloudSession disableCloud() {
+        return doDisableCloud(CloudSession.current());
     }
 
-    /** The actual teardown performed by {@link #disableCloud()}. */
-    private static void doDisableCloud() {
-        // Order still matters here, but for a narrower reason than before Task 2: the log
-        // transporter's flush must run BEFORE the WebSocket client is closed, or sendBatch() finds
-        // the socket already down and sends nothing (BoundedFlush's own test class covers the
-        // disconnected-with-a-non-empty-queue case, which is exactly what would happen every time if
-        // this order were reversed). Everything else CloudSession#invalidate() folds into one call
-        // is no longer order-sensitive against the OTHER steps here (D-16/D-18) -- it is
-        // order-sensitive only against this one.
-        teardownStep("shutting down log stream manager",
-            () -> UltiTools.getInstance().getLogStreamManager().shutdown());
+    /**
+     * The {@code session}-targeted form of {@link #disableCloud()} (WR-02, 16-REVIEW-cloud.md).
+     * <p>
+     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch calls this directly, on the
+     * specific session whose backoff ran out, rather than the no-arg {@link #disableCloud()} (which
+     * always targets whatever {@link CloudSession#current()} happens to be at the moment it runs).
+     * A fresh login racing in between that branch's own currency check and this call would otherwise
+     * let a stale exhaustion event for an old session tear down an unrelated, brand-new one.
+     *
+     * @param session the session to invalidate and tear down
+     * @return {@code session}, unchanged -- returned for symmetry with {@link #disableCloud()}
+     */
+    static CloudSession disableCloud(CloudSession session) {
+        return doDisableCloud(session);
+    }
 
-        // Invalidating the session covers what used to be four separate steps: flip the enabled
-        // flag off, stop the refresh schedule, stop the magic-link polling, and invalidate anything
-        // already in flight -- plus, as of Task 2, closing and clearing the WebSocket client. One
-        // call, one lock (the session's own), so none of those pieces can be caught mid-transition
-        // by a concurrent activation. See CloudSession#invalidate()'s own javadoc for why this
-        // single call is sufficient where the old code needed a careful multi-step order.
-        teardownStep("invalidating the current cloud session (stops the refresh scheduler, the "
-                + "polling, closes the WebSocket client, and discards anything already in flight)",
-            () -> CloudSession.current().invalidate());
+    /**
+     * The actual teardown performed by {@link #disableCloud()} / {@link #disableCloud(CloudSession)}.
+     * <p>
+     * {@code session} is the caller's own choice of target, captured before this method does
+     * anything else -- {@link CloudSession#invalidate()} below acts on exactly this reference, never
+     * a fresh read of {@link CloudSession#current()} taken partway through teardown (CR-01). The
+     * two steps that remain here after plan 16-10 (WR-01 moved the log-stream shutdown inside
+     * {@link CloudSession#invalidate()} itself, see that method's javadoc) are global managers with
+     * exactly one instance each -- they are torn down regardless of which specific session
+     * triggered the call, since "cloud disabled" is a statement about the whole server, not about
+     * one session in isolation.
+     *
+     * @param session the session to invalidate
+     * @return {@code session}
+     */
+    private static CloudSession doDisableCloud(CloudSession session) {
+        // Invalidating the session covers what used to be five separate steps: shut down the log
+        // stream manager, stop the refresh schedule, stop the magic-link polling, close the
+        // WebSocket client, and invalidate anything already in flight. One call, one lock (the
+        // session's own), so none of those pieces can be caught mid-transition by a concurrent
+        // activation. See CloudSession#invalidate()'s own javadoc for why this single call is
+        // sufficient where the old code needed a careful multi-step order.
+        teardownStep("invalidating the cloud session (shuts down the log stream manager, stops the "
+                + "refresh scheduler, the polling, closes the WebSocket client, and discards "
+                + "anything already in flight)",
+            session::invalidate);
 
         // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update every 5
         // seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a world/player/plugin
         // snapshot every 5 seconds). Before this line existed at all, stopMonitoring() had no caller
         // anywhere in src/main — written, tested, just never wired up. Without stopping it, the main
         // thread would keep iterating every world and chunk every 5 seconds after "cloud features
-        // are disabled."
+        // are disabled." Session-independent: there is exactly one server monitor for the whole
+        // plugin, not one per session.
         teardownStep("stopping server monitor", () -> {
             if (UltiTools.getInstance().getServerMonitorManager() != null) {
                 UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
@@ -1841,12 +1922,15 @@ public class PluginInitiationUtils {
 
         // Strip the player event listener. Still receiving player events after cloud is disabled is
         // pure waste — the isConnected() check inside the event handler only suppresses sending a
-        // message; the listener itself keeps running. See issue #180.
+        // message; the listener itself keeps running. See issue #180. Session-independent, same
+        // reasoning as the server monitor above.
         teardownStep("shutting down player event manager", () -> {
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 UltiTools.getInstance().getPlayerEventManager().shutdown();
             }
         });
+
+        return session;
     }
 
     /**
@@ -1870,14 +1954,35 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Called when a reconnection succeeds: resets the current session's outer budget.
+     * Compatibility overload (WR-07, 16-REVIEW-cloud.md): falls back to
+     * {@link CloudSession#current()}, preserved only because {@code CloudReconnectStateMachineTest}
+     * calls this exact no-arg signature directly to exercise the budget-reset behaviour in
+     * isolation. No production handshake path calls this overload any more --
+     * {@link #onWebSocketOpened(CloudSession, UltiPanelWebSocketClient)} calls
+     * {@link #onWebSocketConnected(CloudSession)} with its own captured session instead.
+     */
+    static void onWebSocketConnected() {
+        onWebSocketConnected(CloudSession.current());
+    }
+
+    /**
+     * Called when a reconnection succeeds: resets {@code session}'s own outer budget.
      * <p>
      * Only a <b>genuinely successful handshake</b> is entitled to reset the budget. Resetting it
      * inside {@code reinitWebSocket} instead would treat "a client was built" as success, the budget
      * would never run out, and the gate would amount to nothing added.
+     * <p>
+     * <b>WR-07 (16-REVIEW-cloud.md):</b> takes the session explicitly rather than re-reading
+     * {@link CloudSession#current()} -- every other callback registered by
+     * {@link #initWebsocket(CloudSession)} captures its session lexically at registration time
+     * specifically so a late-firing callback acts upon the session that started it, not whichever
+     * session happens to be current by the time the callback fires. This method used to be the one
+     * place in this diff that broke that discipline.
+     *
+     * @param session the session whose handshake actually succeeded
      */
-    static void onWebSocketConnected() {
-        CloudSession.current().getBackoff().reset();
+    static void onWebSocketConnected(CloudSession session) {
+        session.getBackoff().reset();
     }
 
     /**
