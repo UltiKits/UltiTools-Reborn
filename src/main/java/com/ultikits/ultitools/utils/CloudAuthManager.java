@@ -75,10 +75,12 @@ public class CloudAuthManager {
      * in-flight login that commits mid-teardown is still caught and cleared -- see
      * {@code CloudLoginCommand.logout(CommandSender)}'s own comments for why that order matters.
      * <p>
-     * <b>CR-01 (16-REVIEW-cloud.md):</b> the disk-clear decision below acts on the exact session
-     * {@link PluginInitiationUtils#disableCloud()} tore down -- the reference it returns -- rather
-     * than a second, independent read of {@link CloudSession#current()} taken after teardown
-     * returns. Reading {@code current()} a second time here used to be exactly the bug: a
+     * <b>CR-01 (16-REVIEW-cloud.md):</b> this method captures {@link CloudSession#current()} exactly
+     * once -- in the statement below, immediately before teardown begins -- and passes that captured
+     * reference to {@link PluginInitiationUtils#disableCloud(CloudSession)}, which acts on and
+     * returns that exact instance. The disk-clear decision then acts on the returned reference,
+     * never on a second, independent call to {@link CloudSession#current()} taken after teardown
+     * returns. Reading {@code current()} a second time, afterward, used to be exactly the bug: a
      * concurrent {@code login()} (unsynchronized, and reachable from a different thread via
      * {@code @RunAsync}) can install a brand-new session with {@link CloudSession#startNew()}
      * in the gap while teardown is running, and that second read would then see the NEW session's
@@ -93,23 +95,23 @@ public class CloudAuthManager {
      * {@code CloudSession.startNew()} call, exactly as it always has.
      * <p>
      * <b>Documented semantics for logout racing a concurrent login (CR-01's second half):</b> this
-     * method's teardown always acts on whichever session was current at the instant
-     * {@link PluginInitiationUtils#disableCloud()} began -- a single, fixed point in time, because
-     * that method reads {@link CloudSession#current()} exactly once, at its own top, before any
-     * teardown step runs (see its javadoc). A {@code login()} that installs its new session
-     * <b>before</b> that read wins outright: this {@code logout()} call never sees or touches it.
-     * A {@code login()} that installs its new session <b>after</b> that read has already lost the
-     * credential race regardless of what this method does -- {@link CloudSession#startNew()} itself
-     * unconditionally invalidates whatever session it replaces, so the fresh login is torn down by
-     * that call alone, independent of this command. There is no window in which this method
-     * invalidates a login it did not already lose to {@code startNew()}'s own contract.
+     * method's teardown always acts on whichever session was current at the single instant this
+     * method's own {@link CloudSession#current()} call below reads it -- a single, fixed point in
+     * time this method controls directly, rather than one buried inside a callee. A {@code login()}
+     * that installs its new session <b>before</b> that read wins outright: this {@code logout()}
+     * call never sees or touches it. A {@code login()} that installs its new session <b>after</b>
+     * that read has already lost the credential race regardless of what this method does --
+     * {@link CloudSession#startNew()} itself unconditionally invalidates whatever session it
+     * replaces, so the fresh login is torn down by that call alone, independent of this command.
+     * There is no window in which this method invalidates a login it did not already lose to
+     * {@code startNew()}'s own contract.
      *
      * @return {@code true} if a credential existed and was cleared; {@code false} if there was
      *         nothing to clear (teardown still ran regardless)
      * @throws IOException if clearing the persisted credential fails
      */
     public static synchronized boolean logout() throws IOException {
-        CloudSession tornDown = PluginInitiationUtils.disableCloud();
+        CloudSession tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
 
         if (tornDown.getToken() == null) {
             return false;

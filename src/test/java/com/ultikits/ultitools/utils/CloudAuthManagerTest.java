@@ -813,13 +813,13 @@ class CloudAuthManagerTest {
             CloudSession session = CloudSession.current();
 
             try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
-                // disableCloud() now returns the session it tore down (CR-01) -- the mock must
-                // honour that contract, or logout()'s null-token read below NPEs.
-                init.when(PluginInitiationUtils::disableCloud).thenReturn(session);
+                // logout() now calls the CloudSession-returning overload (CR-01) -- the mock
+                // must honour that contract, or logout()'s null-token read below NPEs.
+                init.when(() -> PluginInitiationUtils.disableCloud(session)).thenReturn(session);
 
                 boolean hadCredential = CloudAuthManager.logout();
 
-                init.verify(PluginInitiationUtils::disableCloud, times(1));
+                init.verify(() -> PluginInitiationUtils.disableCloud(session), times(1));
                 assertThat(hadCredential)
                         .as("没有凭证就没什么可清的，但 disableCloud() 的每一步都必须照跑")
                         .isFalse();
@@ -839,7 +839,7 @@ class CloudAuthManagerTest {
                 // fix, disableCloud() returns the session it tore down -- here, the same session the
                 // poll committed onto -- so logout() reads the commit through that returned
                 // reference, never through a second, independent CloudSession.current() call.
-                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
+                init.when(() -> PluginInitiationUtils.disableCloud(session)).thenAnswer(invocation -> {
                     session.commit(buildTokenWithExp(3600L));
                     return session;
                 });
@@ -883,7 +883,7 @@ class CloudAuthManagerTest {
                 // CloudAuthManager's disk-clear decision off a SECOND, independent
                 // CloudSession.current() call taken after this -- which would see sNew's (always
                 // null) token and wrongly conclude there was nothing to clear.
-                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
+                init.when(() -> PluginInitiationUtils.disableCloud(sBefore)).thenAnswer(invocation -> {
                     CloudSession.startNew(); // the concurrent login racing in
                     return sBefore;          // the FIXED contract: return what was actually torn down
                 });

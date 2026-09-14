@@ -1851,30 +1851,40 @@ public class PluginInitiationUtils {
      * wiring and teardown are mutually exclusive on that lock without a separate global one. See
      * the two review rounds on PR #264 for the original race this replaces.
      * <p>
-     * <b>CR-01 (16-REVIEW-cloud.md):</b> returns the exact session this call tore down, captured
-     * once, at the very top, before any teardown step runs. {@link CloudAuthManager#logout()} reads
-     * its disk-clear decision off this return value rather than a second, independent call to
-     * {@link CloudSession#current()} taken after this method returns -- eliminating the specific
-     * race where a concurrent {@code login()} installs a new session in the gap between those two
-     * reads (see {@code CloudAuthManager#logout()}'s own javadoc for the full account).
-     *
-     * @return the session this call invalidated
+     * <b>CR-01 (16-REVIEW-cloud.md):</b> {@link #disableCloud(CloudSession)} -- the overload internal
+     * callers use -- returns the exact session that overload tore down, captured by the caller
+     * before any teardown step runs. {@link CloudAuthManager#logout()} reads its disk-clear decision
+     * off that return value rather than a second, independent call to {@link CloudSession#current()}
+     * taken after teardown returns -- eliminating the specific race where a concurrent
+     * {@code login()} installs a new session in the gap between those two reads (see
+     * {@code CloudAuthManager#logout()}'s own javadoc for the full account). This particular
+     * overload keeps its original {@code void} return -- {@code disableCloud()} was {@code public}
+     * in the 6.2.5 release, and changing a released public method's return type is a genuine binary
+     * incompatibility japicmp correctly rejects; there is no same-release exception available for a
+     * signature that already shipped.
      */
-    public static CloudSession disableCloud() {
-        return doDisableCloud(CloudSession.current());
+    public static void disableCloud() {
+        doDisableCloud(CloudSession.current());
     }
 
     /**
-     * The {@code session}-targeted form of {@link #disableCloud()} (WR-02, 16-REVIEW-cloud.md).
+     * The {@code session}-targeted, {@link CloudSession}-returning form of {@link #disableCloud()}
+     * (CR-01/WR-02, 16-REVIEW-cloud.md) -- package-private, since it is new-in-6.3.0 and reached
+     * only by other members of this package ({@code CloudAuthManager#logout()},
+     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch).
      * <p>
-     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch calls this directly, on the
-     * specific session whose backoff ran out, rather than the no-arg {@link #disableCloud()} (which
-     * always targets whatever {@link CloudSession#current()} happens to be at the moment it runs).
-     * A fresh login racing in between that branch's own currency check and this call would otherwise
-     * let a stale exhaustion event for an old session tear down an unrelated, brand-new one.
+     * {@link #reinitWebSocket(CloudSession)}'s budget-exhaustion branch calls this on the specific
+     * session whose backoff ran out, rather than the no-arg {@link #disableCloud()} (which always
+     * targets whatever {@link CloudSession#current()} happens to be at the moment it runs). A fresh
+     * login racing in between that branch's own currency check and this call would otherwise let a
+     * stale exhaustion event for an old session tear down an unrelated, brand-new one. Likewise,
+     * {@code CloudAuthManager#logout()} calls this with {@code CloudSession.current()} captured at
+     * its own call site -- immediately before teardown begins -- and acts on the returned reference
+     * afterward rather than re-reading {@link CloudSession#current()} a second, independent time.
      *
      * @param session the session to invalidate and tear down
-     * @return {@code session}, unchanged -- returned for symmetry with {@link #disableCloud()}
+     * @return {@code session}, unchanged -- returned so the caller can act on exactly what was torn
+     *         down without a second read of {@link CloudSession#current()}
      */
     static CloudSession disableCloud(CloudSession session) {
         return doDisableCloud(session);
