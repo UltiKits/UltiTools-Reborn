@@ -563,7 +563,8 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession#commit(TokenEntity) on CloudSession#current() is the real guard; the {@code generation} parameter is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.4.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#currentCredentialGeneration()",
@@ -574,7 +575,8 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession identity replaced this counter outright; nothing in this package reads or advances a generation to decide currency any more. Scheduled for removal by plan 16-09.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.4.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#invalidateCredentialOperations()",
@@ -585,7 +587,8 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to CloudSession#current()'s own CloudSession#invalidate() rather than advancing a counter that no longer exists. Scheduled for removal by plan 16-09.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.4.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String,java.util.function.Consumer,long)",
@@ -596,7 +599,8 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. The {@code generation} parameter is accepted and ignored; polling always runs on CloudSession#current(). Scheduled for removal by plan 16-09.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.4.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)",
@@ -607,7 +611,8 @@
     "forRemoval": true,
     "removeIn": "6.4.0",
     "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to activateCloudIfCurrent(CloudSession) against CloudSession#current(); {@code generation} is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
-    "status": "ANNOUNCED"
+    "status": "REMOVED",
+    "removedIn": "6.4.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.SecurityPolicy#addDangerousClass(java.lang.String)",
