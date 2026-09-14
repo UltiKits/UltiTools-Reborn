@@ -236,58 +236,62 @@ public class LogStreamManager implements Listener {
      * both {@code UltiPanelFrontend} and {@code ultipanel-api-worker} while planning this fix),
      * so there is no real product behaviour to match, and applying the request literally is the
      * one reading that never has to guess what the caller "really" meant.
+     * <p>
+     * Gate-2 finding: BOTH the {@code levels} section and the {@code batchConfig} section are
+     * parsed and validated FIRST, before either is applied. Before this fix, {@code levels} was
+     * applied immediately upon parsing; a request combining valid {@code levels} with an invalid
+     * {@code batchConfig} field left the levels change already in effect by the time the
+     * {@code batchConfig} validation failed and returned an error for the WHOLE request -- the
+     * same "declared rejection, partial effect" defect WR-02 already closed within
+     * {@code batchConfig} alone, reoccurring one level up, across the two top-level sections.
      */
     private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
-            List<String> changes = new ArrayList<>();
-
-            // Update the log-level configuration
+            // ---------- Parse and validate every present section; apply nothing yet ----------
+            boolean levelsPresent = false;
+            Set<String> requestedLevels = null;
             if (data.has("levels") && systemLogHandler != null) {
                 JsonElement levelsElement = data.get("levels");
                 if (levelsElement != null && levelsElement.isJsonArray()) {
+                    levelsPresent = true;
                     JsonArray levelsArray = levelsElement.getAsJsonArray();
-                    Set<String> requestedLevels = new LinkedHashSet<>();
+                    requestedLevels = new LinkedHashSet<>();
                     for (JsonElement levelElement : levelsArray) {
                         String rawLevel = (levelElement == null || levelElement.isJsonNull())
                                 ? null : levelElement.getAsString();
                         String normalizedLevel = rawLevel == null
                                 ? null : rawLevel.toLowerCase(Locale.ROOT);
                         if (normalizedLevel == null || !VALID_LOG_LEVELS.contains(normalizedLevel)) {
-                            // Reject the whole request -- previously-applied levels survive.
+                            // Reject the whole request -- nothing (from either section) is applied.
                             sendErrorResponse(clientId, "Unrecognized log level: " + rawLevel);
                             return;
                         }
                         requestedLevels.add(normalizedLevel);
                     }
-                    systemLogHandler.setEnabledLevels(requestedLevels);
-                    changes.add(requestedLevels.isEmpty()
-                            ? "levels updated to an empty set (no log records will be delivered "
-                                    + "until levels are set again)"
-                            : "levels updated to " + requestedLevels);
                 }
             }
 
-            // Update the batch-send configuration.
-            //
-            // WR-02: parse and validate every present field FIRST, before applying any of them.
-            // Before this fix, each field was applied via its own setter call inside this same
-            // try block; if `enabled`/`size` applied successfully and `interval` then failed
-            // validation, the IllegalArgumentException propagated to the outer catch and
-            // reported "Failed to update configuration" -- but `enabled`/`size` had, in fact,
-            // already been mutated with no rollback. Validating everything up front means a
-            // rejected batchConfig object leaves every field it names untouched, matching #433's
-            // own "reject the whole request" precedent for an unrecognised level.
+            boolean batchConfigPresent = false;
+            Boolean newEnabled = null;
+            Integer newSize = null;
+            Integer newInterval = null;
             if (data.has("batchConfig") && logTransmitter != null) {
+                batchConfigPresent = true;
                 JsonObject batchConfig = data.getAsJsonObject("batchConfig");
-                Boolean newEnabled = null;
-                Integer newSize = null;
-                Integer newInterval = null;
 
                 if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
                     newEnabled = batchConfig.get("enabled").getAsBoolean();
                 }
                 if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
                     newSize = batchConfig.get("size").getAsInt();
+                    if (newSize < 1) {
+                        // Gate-2 finding: a size below 1 makes sendBatch()'s own
+                        // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
+                        // negative/zero size silently stalls delivery rather than being rejected.
+                        sendErrorResponse(clientId, "Failed to update configuration: Batch size "
+                                + "must be at least 1, got: " + newSize);
+                        return;
+                    }
                 }
                 if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
                     newInterval = batchConfig.get("interval").getAsInt();
@@ -298,7 +302,20 @@ public class LogStreamManager implements Listener {
                         return;
                     }
                 }
+            }
 
+            // ---------- Both sections validated -- now apply ----------
+            List<String> changes = new ArrayList<>();
+
+            if (levelsPresent) {
+                systemLogHandler.setEnabledLevels(requestedLevels);
+                changes.add(requestedLevels.isEmpty()
+                        ? "levels updated to an empty set (no log records will be delivered "
+                                + "until levels are set again)"
+                        : "levels updated to " + requestedLevels);
+            }
+
+            if (batchConfigPresent) {
                 boolean batchChanged = false;
                 if (newEnabled != null) {
                     logTransmitter.setBatchEnabled(newEnabled);

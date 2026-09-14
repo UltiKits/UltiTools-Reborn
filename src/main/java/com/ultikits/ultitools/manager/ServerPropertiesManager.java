@@ -163,19 +163,28 @@ public class ServerPropertiesManager {
         private final List<String> failed;
         private final List<String> skipped;
         private final List<String> malformed;
+        private final List<String> notPresentOnServer;
 
         /**
          * Public so callers outside this package can build one. Each list is copied before
          * being wrapped — {@code unmodifiableList} is a view, so wrapping the caller's list
          * directly would leave this "immutable" object mutable through the original reference.
+         *
+         * @param notPresentOnServer keys allowlisted but absent from THIS server's own
+         *        {@code server.properties} (D-15) — Gate-2 finding: kept distinct from
+         *        {@code failed} so the response can say "this server version has no such key"
+         *        rather than making it indistinguishable from a genuine read/write I/O error,
+         *        matching what a single-key {@code action: "set"} already reports via
+         *        {@link #describeOutcome(WriteOutcome)}.
          */
         public SetAllResult(List<String> updated, List<String> rejected, List<String> failed,
-                            List<String> skipped, List<String> malformed) {
+                            List<String> skipped, List<String> malformed, List<String> notPresentOnServer) {
             this.updated = Collections.unmodifiableList(new ArrayList<>(updated));
             this.rejected = Collections.unmodifiableList(new ArrayList<>(rejected));
             this.failed = Collections.unmodifiableList(new ArrayList<>(failed));
             this.skipped = Collections.unmodifiableList(new ArrayList<>(skipped));
             this.malformed = Collections.unmodifiableList(new ArrayList<>(malformed));
+            this.notPresentOnServer = Collections.unmodifiableList(new ArrayList<>(notPresentOnServer));
         }
 
         /** Keys written to disk. */
@@ -193,20 +202,27 @@ public class ServerPropertiesManager {
         /** Keys whose value was not a JSON primitive. */
         public List<String> getMalformed() { return malformed; }
 
+        /**
+         * Keys on {@link #SAFE_KEYS} but absent from THIS server's own {@code server.properties}
+         * (D-15). Distinct from {@link #getFailed()} — writing one of these was never attempted;
+         * it is a version mismatch, not an I/O failure.
+         */
+        public List<String> getNotPresentOnServer() { return notPresentOnServer; }
+
         /** Every requested key was written. */
         public boolean isSuccess() {
-            return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty();
+            return rejected.isEmpty() && failed.isEmpty() && malformed.isEmpty() && notPresentOnServer.isEmpty();
         }
 
         /**
          * One line naming what went wrong, for a log record or an error response.
          * Returns {@code null} when nothing went wrong.
          * <p>
-         * The three categories stay separate because they need three different actions:
-         * a rejected key means stop asking for it, a failed key means look at the disk,
-         * and a malformed key means fix the payload. Collapsing them into one label would
-         * send the reader looking in the wrong place — which is the failure mode this
-         * whole change exists to remove.
+         * The categories stay separate because they need different actions: a rejected key means
+         * stop asking for it, a failed key means look at the disk, a malformed key means fix the
+         * payload, and a not-present-on-server key means this Paper version does not have it.
+         * Collapsing them into one label would send the reader looking in the wrong place —
+         * which is the failure mode this whole change exists to remove.
          */
         public String describeFailure() {
             if (isSuccess()) return null;
@@ -219,6 +235,9 @@ public class ServerPropertiesManager {
             }
             if (!malformed.isEmpty()) {
                 sb.append("；值不是字符串或数字因而无法写入的键: ").append(String.join(", ", malformed));
+            }
+            if (!notPresentOnServer.isEmpty()) {
+                sb.append("；本服务器版本没有的键: ").append(String.join(", ", notPresentOnServer));
             }
             return sb.toString();
         }
@@ -301,6 +320,7 @@ public class ServerPropertiesManager {
         List<String> failed = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
         List<String> malformed = new ArrayList<>();
+        List<String> notPresentOnServer = new ArrayList<>();
 
         for (String key : values.keySet()) {
             JsonElement value = values.get(key);
@@ -328,13 +348,21 @@ public class ServerPropertiesManager {
                 case REJECTED:
                     rejected.add(key);
                     break;
+                case NOT_PRESENT_ON_THIS_SERVER:
+                    // Gate-2 finding: kept distinct from `failed` -- this is a version mismatch
+                    // ("this server does not have this key"), not a read/write I/O error, and
+                    // collapsing the two made a set_all response indistinguishable from an actual
+                    // disk failure even though the single-key action: "set" path already reports
+                    // the two separately via describeOutcome(WriteOutcome).
+                    notPresentOnServer.add(key);
+                    break;
                 default:
                     failed.add(key);
                     break;
             }
         }
 
-        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed);
+        SetAllResult result = new SetAllResult(updated, rejected, failed, skipped, malformed, notPresentOnServer);
         warnIfIncomplete(result);
         sendResponse(buildSetAllResponse(result));
         return result;
@@ -352,6 +380,7 @@ public class ServerPropertiesManager {
         response.add("failed", toJsonArray(result.getFailed()));
         response.add("skipped", toJsonArray(result.getSkipped()));
         response.add("malformed", toJsonArray(result.getMalformed()));
+        response.add("notPresentOnServer", toJsonArray(result.getNotPresentOnServer()));
         return response;
     }
 

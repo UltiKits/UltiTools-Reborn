@@ -594,6 +594,18 @@
                                  compatibility/records/6.3.0.md. -->
                             <exclude>com.ultikits.ultitools.manager.LogStreamManager#pauseLogStream(java.lang.String)</exclude>
                             <exclude>com.ultikits.ultitools.manager.LogStreamManager#resumeLogStream(java.lang.String)</exclude>
+                            <!-- 16-13-PLAN.md (Gate-2 external review finding): SetAllResult's public
+                                 5-arg constructor widened to 6 args to carry the D-15
+                                 NOT_PRESENT_ON_THIS_SERVER outcome as its own distinct list
+                                 (notPresentOnServer), rather than folding it into the generic
+                                 `failed` list where a version mismatch was indistinguishable from a
+                                 genuine disk I/O error. SetAllResult is @ApiStatus.Internal -
+                                 not a compatibility event per COMPATIBILITY.md's removal-list
+                                 preamble - but japicmp reads bytecode, not @ApiStatus, so it
+                                 still reports the old constructor as CONSTRUCTOR_REMOVED. Recorded
+                                 in compatibility/records/6.3.0.md anyway, same precedent as the
+                                 CommandExecutionManager/FileOperationManager AccessDecision entry. -->
+                            <exclude>com.ultikits.ultitools.manager.ServerPropertiesManager$SetAllResult#ServerPropertiesManager$SetAllResult(java.util.List, java.util.List, java.util.List, java.util.List, java.util.List)</exclude>
                         </excludes>
                     </parameter>
                 </configuration>

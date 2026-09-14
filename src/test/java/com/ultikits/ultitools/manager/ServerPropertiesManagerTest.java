@@ -475,5 +475,30 @@ class ServerPropertiesManagerTest {
                     "allow-nether", "allow-flight", "spawn-animals", "spawn-monsters",
                     "spawn-npcs", "enable-command-block");
         }
+
+        @Test
+        @DisplayName("Gate-2 finding: set_all 里白名单里但本服务器没有的键，走 notPresentOnServer 而不是 failed")
+        void setAllRoutesAbsentAllowlistedKeysSeparatelyFromFailed() {
+            UltiPanelWebSocketClient socket = attachSocket();
+            Map<String, String> request = new LinkedHashMap<>();
+            request.put("motd", "New MOTD");              // present, allowlisted -- updated
+            request.put("simulation-distance", "8");      // allowlisted, absent from this server
+            request.put("rcon.password", "hacked");       // not allowlisted at all -- rejected
+
+            ServerPropertiesManager.SetAllResult result = manager.applySetAll(setAllRequest(request).getAsJsonObject("values"));
+
+            assertThat(result.getUpdated()).containsExactly("motd");
+            assertThat(result.getNotPresentOnServer()).containsExactly("simulation-distance");
+            assertThat(result.getFailed())
+                    .as("the absent-allowlisted key must NOT be indistinguishable from a real I/O failure")
+                    .doesNotContain("simulation-distance")
+                    .isEmpty();
+            assertThat(result.getRejected()).containsExactly("rcon.password");
+            assertThat(result.isSuccess()).isFalse();
+
+            JsonObject message = captureMessage(socket);
+            assertThat(stringsOf(message, "notPresentOnServer")).containsExactly("simulation-distance");
+            assertThat(stringsOf(message, "failed")).isEmpty();
+        }
     }
 }

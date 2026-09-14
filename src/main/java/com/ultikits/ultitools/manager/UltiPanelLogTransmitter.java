@@ -55,8 +55,8 @@ public class UltiPanelLogTransmitter {
     // Batch-send configuration
     @Getter
     private boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
-    @Getter @Setter
-    private int batchSize = 10;
+    @Getter
+    private int batchSize = 10; // setter below (Gate-2) -- rejects a value below 1
     @Getter
     private int intervalMs = 5000; // 5-second interval; setter below (#432) reschedules the sender
 
@@ -245,6 +245,29 @@ public class UltiPanelLogTransmitter {
         if (batchSenderTask != null) {
             startBatchSender();
         }
+    }
+
+    /**
+     * Sets the batch send-threshold size, rejecting anything below 1 (Gate-2 finding). A value of
+     * zero or negative would make {@link #sendBatch()}'s own {@code for (int i = 0; i < batchSize
+     * ...)} loop consume nothing on every scheduled run, while {@link #addToBatch(JsonObject)}'s
+     * {@code logQueue.size() >= batchSize} check is simultaneously always true (any non-negative
+     * queue size satisfies {@code >= 0} or {@code >= a negative number}) -- so every single
+     * enqueued record would trigger an immediate {@code sendBatch()} call that dequeues nothing,
+     * silently stalling delivery while burning CPU on every log line, rather than the panel
+     * request being rejected outright. {@code LogStreamManager#loadBatchConfiguration()}'s own
+     * boot-time path already clamped to {@code Math.max(1, batchSize)}; the live panel path had no
+     * lower bound at all before this fix, unlike {@link #setIntervalMs(int)}'s pre-existing floor.
+     *
+     * @param batchSize the new batch size; must be at least 1
+     * @throws IllegalArgumentException if {@code batchSize} is below 1 -- the previous value is
+     *         left in effect
+     */
+    public void setBatchSize(int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("Batch size must be at least 1, got: " + batchSize);
+        }
+        this.batchSize = batchSize;
     }
 
     /**

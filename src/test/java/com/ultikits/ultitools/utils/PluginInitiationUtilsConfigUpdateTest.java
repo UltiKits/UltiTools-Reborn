@@ -354,7 +354,7 @@ class PluginInitiationUtilsConfigUpdateTest {
         private void stubSetAllResult(List<String> updated, List<String> rejected, List<String> failed) {
             lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
                     .thenReturn(new ServerPropertiesManager.SetAllResult(
-                            updated, rejected, failed, emptyList(), emptyList()));
+                            updated, rejected, failed, emptyList(), emptyList(), emptyList()));
         }
 
         /**
@@ -368,7 +368,7 @@ class PluginInitiationUtilsConfigUpdateTest {
         void malformedValuesMakeTheResponseAnError() throws Exception {
             lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
                     .thenReturn(new ServerPropertiesManager.SetAllResult(
-                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd")));
+                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd"), emptyList()));
 
             PluginInitiationUtils.handleConfigUpdate(
                     panelMessage("server_properties", "{\"motd\":{}}", "req-13"));

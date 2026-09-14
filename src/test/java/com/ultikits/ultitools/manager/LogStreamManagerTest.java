@@ -844,6 +844,64 @@ class LogStreamManagerTest {
             assertThat(transmitter.getBatchSize()).isEqualTo(42);
             assertThat(transmitter.getIntervalMs()).isEqualTo(7000);
         }
+
+        @Test
+        @DisplayName("Gate-2: batchConfig.size 为 0 或负数时被拒绝，响应中说明下限，之前生效的值保留")
+        void panelBatchSizeBelowOneIsRejected() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            int sizeBefore = transmitter.getBatchSize();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("size", 0); // Gate-2's exact repro value
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-size", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("at least 1");
+
+            assertThat(transmitter.getBatchSize()).isEqualTo(sizeBefore);
+
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            JsonObject negativeBatchConfig = new JsonObject();
+            negativeBatchConfig.addProperty("size", -5);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-size-neg", negativeBatchConfig));
+            assertThat(transmitter.getBatchSize()).isEqualTo(sizeBefore);
+        }
+
+        @Test
+        @DisplayName("Gate-2: 一个请求同时带合法 levels 与非法 batchConfig 时，levels 也不能生效 -- 两段都必须先校验完再应用")
+        void invalidBatchConfigAlsoPreventsAnAccompanyingValidLevelsChangeFromApplying() throws Exception {
+            SystemLogHandler mockHandler = mock(SystemLogHandler.class);
+            setSystemLogHandler(mockHandler);
+            UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
+            setLogTransmitter(mockTransmitter);
+            setWebSocketClient(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-gate2-cross");
+            JsonArray levelsArray = new JsonArray();
+            levelsArray.add("error");
+            data.add("levels", levelsArray);
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("interval", 1); // invalid -- below the shared floor
+            data.add("batchConfig", batchConfig);
+
+            logStreamManager.handleLogStreamMessage(data);
+
+            // Gate-2 finding: before this fix, `levels` was applied before `batchConfig` was
+            // validated, so this exact request left the level filter changed while reporting a
+            // whole-request failure. Now: neither section is applied.
+            org.mockito.Mockito.verify(mockHandler, never())
+                    .setEnabledLevels(org.mockito.ArgumentMatchers.any());
+        }
     }
 
     // ==================== sendCustomLog 测试 ====================
