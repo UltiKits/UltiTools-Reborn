@@ -149,6 +149,33 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("Round 6 external review: a self-referential bounded type variable must not StackOverflowError and must report no violation")
+    void selfReferentialBoundedTypeVariableDoesNotStackOverflowAndReportsNoViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(SelfReferentialBoundNonOffender.class));
+
+        assertThat(violations)
+                .as("<T extends Comparable<T>> recurses into its own bound via Comparable<T>'s sole "
+                        + "type argument, T itself -- without cycle detection this call never "
+                        + "returns, and nothing here references TokenEntity anyway")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Round 6 external review: TokenEntity referenced only through a parameterized owner type must still be caught")
+    void ownerTypeLeakReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(OwnerTypeLeakOffender.class));
+
+        assertThat(violations)
+                .as("GenericOwner<TokenEntity>.Inner records TokenEntity only in "
+                        + "ParameterizedType#getOwnerType() -- Inner's own raw type and actual type "
+                        + "arguments, both already checked, say nothing about it")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
     @DisplayName("WR-03: the field scan mechanism is non-vacuous, pointed at the fixture's permanent offending field")
     void fieldScanMechanismCatchesAFixtureOffender() throws IOException, ClassNotFoundException {
         List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
@@ -260,6 +287,32 @@ class CredentialStaticSurfaceInvariantTest {
         // Round-1 review, fifth pass (16-10, PR #464): a bounded type variable is reified as a
         // TypeVariable, not a WildcardType -- the pre-fix code's WildcardType branch never fires.
         public static <T extends Iterable<TokenEntity>> T leaked() {
+            return null;
+        }
+    }
+
+    static class SelfReferentialBoundNonOffender {
+        // Round-6 external review finding (16-10, PR #464): <T extends Comparable<T>> recurses
+        // from the TypeVariable T into its bound Comparable<T> (a ParameterizedType), whose sole
+        // type argument is T itself -- the same TypeVariable -- so the pre-fix recursion never
+        // terminated. Nothing here references TokenEntity; this exists only to prove the scan
+        // survives a self-referential bound instead of exhausting the stack.
+        public static <T extends Comparable<T>> T maxOf(T left, T right) {
+            return null;
+        }
+    }
+
+    static class OwnerTypeLeakOffender {
+        static class GenericOwner<T> {
+            class Inner {
+            }
+        }
+
+        // Round-6 external review finding (16-10, PR #464): a member type used against a
+        // parameterized enclosing type -- GenericOwner<TokenEntity>.Inner -- records TokenEntity
+        // ONLY in the reflected ParameterizedType's getOwnerType(); Inner's own raw type and
+        // (empty) actual type arguments, both already checked, say nothing about it.
+        public static GenericOwner<TokenEntity>.Inner leaked() {
             return null;
         }
     }

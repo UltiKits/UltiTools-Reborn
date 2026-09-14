@@ -10,9 +10,11 @@ import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 
 import com.ultikits.ultitools.entities.TokenEntity;
@@ -249,6 +251,30 @@ public final class CredentialStaticSurfaceInvariant {
     // Optional<List<TokenEntity>>, two levels deep).
     @SuppressWarnings("PMD.NPathComplexity")
     private static boolean referencesTokenEntity(Type type) {
+        return referencesTokenEntity(type, new HashSet<>());
+    }
+
+    /**
+     * The actual recursive traversal, carrying a set of {@link TypeVariable}s already entered on
+     * this call's own path.
+     * <p>
+     * <b>Round-6 external review finding (16-10, PR #464):</b> a self-referential bound such as
+     * {@code <T extends Comparable<T>>} recurses into {@code Comparable<T>} (a
+     * {@link ParameterizedType}), whose sole type argument is {@code T} itself -- the exact same
+     * {@link TypeVariable} instance -- so the pre-fix recursion never terminated: it entered the
+     * {@code TypeVariable} branch, then the {@code ParameterizedType} branch, then the
+     * {@code TypeVariable} branch again, forever, until {@link StackOverflowError}. A type
+     * variable's bounds are fixed for that variable -- re-entering the same one a second time on
+     * any path can never discover new information -- so a variable already in {@code visited} is
+     * skipped rather than re-traversed, exactly the memoization the finding asked for.
+     *
+     * @param type    a {@link Type} obtained from {@link Method#getGenericReturnType()},
+     *                {@link Method#getGenericParameterTypes()}, or {@link Field#getGenericType()}
+     * @param visited every {@link TypeVariable} already entered earlier in this same top-level call
+     * @return {@code true} if {@code type} references {@link TokenEntity} anywhere in its structure
+     */
+    @SuppressWarnings("PMD.NPathComplexity")
+    private static boolean referencesTokenEntity(Type type, Set<TypeVariable<?>> visited) {
         if (type == null) {
             return false;
         }
@@ -257,21 +283,29 @@ public final class CredentialStaticSurfaceInvariant {
         }
         if (type instanceof ParameterizedType) {
             ParameterizedType parameterized = (ParameterizedType) type;
-            if (referencesTokenEntity(parameterized.getRawType())) {
+            if (referencesTokenEntity(parameterized.getRawType(), visited)) {
                 return true;
             }
             for (Type typeArgument : parameterized.getActualTypeArguments()) {
-                if (referencesTokenEntity(typeArgument)) {
+                if (referencesTokenEntity(typeArgument, visited)) {
                     return true;
                 }
+            }
+            // Round-6 external review finding (16-10, PR #464): a member type used with a
+            // parameterized enclosing type -- e.g. `Outer<TokenEntity>.Inner` -- records
+            // TokenEntity ONLY in getOwnerType() (the reflected `Outer<TokenEntity>`); Inner's own
+            // raw type and actual type arguments, both already checked above, mention nothing
+            // about it. Without this branch such a return type or parameter would pass unnoticed.
+            if (referencesTokenEntity(parameterized.getOwnerType(), visited)) {
+                return true;
             }
             return false;
         }
         if (type instanceof GenericArrayType) {
-            return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType());
+            return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType(), visited);
         }
         if (type instanceof Class<?> && ((Class<?>) type).isArray()) {
-            return referencesTokenEntity(((Class<?>) type).getComponentType());
+            return referencesTokenEntity(((Class<?>) type).getComponentType(), visited);
         }
         // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (e.g. `TokenEntity[]`) is
         // represented by reflection as a plain Class with isArray() == true, never as a
@@ -282,12 +316,12 @@ public final class CredentialStaticSurfaceInvariant {
         if (type instanceof WildcardType) {
             WildcardType wildcard = (WildcardType) type;
             for (Type upperBound : wildcard.getUpperBounds()) {
-                if (referencesTokenEntity(upperBound)) {
+                if (referencesTokenEntity(upperBound, visited)) {
                     return true;
                 }
             }
             for (Type lowerBound : wildcard.getLowerBounds()) {
-                if (referencesTokenEntity(lowerBound)) {
+                if (referencesTokenEntity(lowerBound, visited)) {
                     return true;
                 }
             }
@@ -300,8 +334,13 @@ public final class CredentialStaticSurfaceInvariant {
         // bounded generic method parameter or return type could still leak TokenEntity past the
         // structural guarantee.
         if (type instanceof TypeVariable<?>) {
-            for (Type bound : ((TypeVariable<?>) type).getBounds()) {
-                if (referencesTokenEntity(bound)) {
+            TypeVariable<?> typeVariable = (TypeVariable<?>) type;
+            if (!visited.add(typeVariable)) {
+                // Already on this call's own path -- see this method's javadoc (round-6 finding).
+                return false;
+            }
+            for (Type bound : typeVariable.getBounds()) {
+                if (referencesTokenEntity(bound, visited)) {
                     return true;
                 }
             }
