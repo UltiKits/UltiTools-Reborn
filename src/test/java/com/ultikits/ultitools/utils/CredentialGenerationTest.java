@@ -26,6 +26,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * 会话身份取代凭证代际：让在途的异步凭证操作在 logout 之后无法把凭证写回来。
@@ -400,6 +401,124 @@ class CredentialGenerationTest {
                 CredentialStore.ReadResult result = CredentialStore.read();
                 assertThat(result.isParsed()).isTrue();
                 assertThat(result.data()).doesNotContainKey("cloud_token");
+            }
+        }
+    }
+
+    /**
+     * Issue #298's fourth acceptance criterion, stated directly rather than implied by the five
+     * timing tests above: teardown order is not a correctness precondition. None of the five
+     * timings above states this by itself -- each fixes one specific interleaving, not the general
+     * claim that <i>no</i> interleaving of the teardown steps can break correctness.
+     *
+     * <p><b>Which of the six pairs among the four named steps interact, and why the rest cannot:</b>
+     * {@link CloudSession#stopPolling()} touches only its own poll executor/task pair;
+     * {@link CloudSession#stopTokenRefreshScheduler()} touches only its own refresh executor/task
+     * pair; {@link CloudSession#closeWebSocketClient()} touches only the WebSocket client field;
+     * {@link CloudSession#clearPersisted()} touches only the token field and the on-disk
+     * credential. Each of the four reads and writes a disjoint slice of the session's state --
+     * none of the {@code C(4,2) = 6} pairs (poller×refresher, poller×client, poller×token,
+     * refresher×client, refresher×token, client×token) has one step reading or writing state the
+     * other step also touches, so no pair can produce a different outcome depending on which of
+     * the two runs first. An exhaustive {@code 4! = 24}-permutation run would not prove anything
+     * this per-pair disjointness argument does not already establish, and would only be slower --
+     * a small, explicitly chosen set of orderings (including each step taking the first and the
+     * last position at least once) is enough to demonstrate the claim empirically without
+     * pretending the count itself is the proof.
+     * <p>
+     * What actually gates a late-arriving commit is a fifth thing, deliberately not one of the
+     * four permuted steps: {@link CloudSession#markInvalidatedForTesting()}, the flag-setting half
+     * of {@link CloudSession#invalidate()}. In production that flag is set together with the other
+     * three (poller/refresher/client) in one atomic, synchronized call -- there is no code path
+     * where "logout has been decided" is delayed relative to them. This test holds that as a fixed
+     * precondition and varies only the relative order of the four mechanical cleanup actions,
+     * which is the actual, meaningful degree of freedom issue #298's fourth criterion is about.
+     */
+    @Nested
+    @DisplayName("issue #298's fourth acceptance criterion: teardown order is not a correctness precondition")
+    class TeardownOrderIsNotACorrectnessPrecondition {
+
+        @Test
+        @DisplayName("running the four teardown steps in different orders always produces the same observable outcome, including for a commit landing at any point during teardown")
+        void teardownOrderDoesNotAffectTheOutcome() throws Exception {
+            java.util.List<java.util.List<String>> orderings = java.util.Arrays.asList(
+                    java.util.Arrays.asList("poller", "refresher", "client", "token"),
+                    java.util.Arrays.asList("token", "client", "refresher", "poller"),
+                    java.util.Arrays.asList("client", "poller", "token", "refresher"),
+                    java.util.Arrays.asList("refresher", "token", "poller", "client"));
+
+            for (java.util.List<String> ordering : orderings) {
+                try (WatchService watcher = newTempFileWatcher(dataFolder)) {
+                    CloudSession session = CloudSession.current();
+                    UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
+                    session.setWebSocketClient(client);
+
+                    // The decision to log out is made once, up front -- see this nested class's
+                    // own javadoc for why this is not itself one of the permuted steps.
+                    session.markInvalidatedForTesting();
+
+                    // A commit landing before any mechanical cleanup step has run must already be
+                    // rejected: the flag alone gates it.
+                    assertThat(session.commit(someToken()))
+                            .as("ordering %s: a commit before any cleanup step must be rejected", ordering)
+                            .isFalse();
+
+                    for (String step : ordering) {
+                        runTeardownStep(session, step);
+                        // A commit landing between any two steps must also be rejected, regardless
+                        // of which step just ran or which is next.
+                        assertThat(session.commit(someToken()))
+                                .as("ordering %s: a commit between %s and the next step must be rejected",
+                                        ordering, step)
+                                .isFalse();
+                    }
+
+                    int writes = countTempFileCreations(watcher, Duration.ofMillis(400));
+
+                    // Exactly one write is legitimate: the "token" step's own clearPersisted()
+                    // wipes the persisted credential regardless of where it falls in the ordering.
+                    // The assertion this test actually cares about is that none of the eight
+                    // rejected commit attempts above contributed a SECOND write -- if any had,
+                    // this count would be higher than 1, and it is the same 1 in every ordering
+                    // regardless of where "token" falls in the sequence.
+                    assertThat(writes)
+                            .as("ordering %s: only the token step's own write may have happened -- "
+                                    + "no rejected commit may have written anything", ordering)
+                            .isEqualTo(1);
+                    assertThat(session.getWebSocketClient())
+                            .as("ordering %s: the client must be closed and cleared regardless of order", ordering)
+                            .isNull();
+                    org.mockito.Mockito.verify(client).disconnect();
+                    assertThat(session.getToken())
+                            .as("ordering %s: the in-memory token must be cleared regardless of order", ordering)
+                            .isNull();
+                    CredentialStore.ReadResult result = CredentialStore.read();
+                    assertThat(result.isParsed()).isTrue();
+                    assertThat(result.data())
+                            .as("ordering %s: no cloud_token key may survive", ordering)
+                            .doesNotContainKey("cloud_token");
+
+                    CloudSession.resetForTesting();
+                }
+            }
+        }
+
+        private void runTeardownStep(CloudSession session, String step) throws Exception {
+            switch (step) {
+                case "poller":
+                    session.stopPolling();
+                    break;
+                case "refresher":
+                    session.stopTokenRefreshScheduler();
+                    break;
+                case "client":
+                    session.closeWebSocketClient();
+                    break;
+                case "token":
+                    session.clearPersisted();
+                    break;
+                default:
+                    throw new IllegalArgumentException("unknown teardown step: " + step);
             }
         }
     }

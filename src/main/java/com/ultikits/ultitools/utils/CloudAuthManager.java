@@ -12,22 +12,28 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * As of 6.3.0 this class owns no state of its own. Every method below is a thin delegator onto
  * {@link CloudSession#current()} -- the single object that actually owns the token, the poll and
  * refresh schedulers, and (as of plan 16-08's Task 2) the WebSocket client, the reconnect backoff
- * state, and the panel-manager wiring (D-16). The generation-counter coordination this class used
- * to implement directly (a static {@code currentToken}, a static poll/refresh scheduler pair, and
- * an {@code AtomicLong} generation compared by every asynchronous credential operation before it
- * committed a result) is gone outright, not merely deprecated: session identity replaces it, and
- * D-18's structural guard is what stops a parallel static bypass from being re-added unnoticed. See
- * {@link CloudSession}'s own javadoc for the invariant this replaces, quoted from this class's
- * pre-6.3.0 form.
+ * state, and the panel-manager wiring (D-16). The generation-counter <b>mechanism</b> this class
+ * used to implement directly -- a static {@code currentToken}, a static poll/refresh scheduler
+ * pair, and an {@code AtomicLong} generation that every asynchronous credential operation compared
+ * against before committing its result -- is gone: session identity replaces it, and no code path
+ * anywhere in this package re-reads or re-advances a generation counter to decide whether a commit
+ * is current. See {@link CloudSession}'s own javadoc for the invariant this replaces, quoted from
+ * this class's pre-6.3.0 form.
  * <p>
- * This public static surface stays as a delegating facade for this plan (16-08); plan 16-09 removes
- * the fine-grained methods this class no longer needs to expose (D-17), leaving only the three
- * command-facing entry points {@code login}/{@code logout}/{@code status} public.
+ * The four generation-shaped methods below ({@link #currentCredentialGeneration()},
+ * {@link #invalidateCredentialOperations()}, {@link #commitTokenIfCurrent(TokenEntity, long)}, and
+ * the three-argument {@link #startPolling(String, Consumer, long)}) are <b>compatibility shims
+ * only</b> -- kept present, still callable, but no longer backed by the mechanism their signature
+ * implies (each is measured, per D-17, to have zero external callers across every published module
+ * JAR and every local module/plugin source). Plan 16-09 removes them outright (D-17), with a
+ * japicmp exclude recorded per member at that point; this plan does not remove any public member of
+ * this class, so no exclude is needed yet.
+ * <p>
+ * This public static surface stays as a delegating facade for this plan (16-08); plan 16-09 narrows
+ * it (D-17), leaving only the three command-facing entry points {@code login}/{@code logout}/
+ * {@code status} public.
  */
 public class CloudAuthManager {
-
-    private CloudAuthManager() {
-    }
 
     /**
      * Try to load a saved token from data.json on startup.
@@ -103,6 +109,73 @@ public class CloudAuthManager {
      */
     public static void startPolling(String requestId, Consumer<TokenEntity> onComplete) {
         CloudSession.current().startPolling(requestId, onComplete);
+    }
+
+    /**
+     * The three-argument overload of {@link #startPolling(String, Consumer)} that used to take an
+     * explicit credential generation.
+     *
+     * @param requestId  the magic link request ID
+     * @param onComplete called when auth succeeds (with the token), or null if no callback needed
+     * @param generation ignored -- session identity, not a generation, now decides currency
+     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
+     * published module JAR and every local module/plugin source. The {@code generation} parameter
+     * is accepted and ignored; polling always runs on {@link CloudSession#current()}. Scheduled
+     * for removal by plan 16-09.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public static void startPolling(String requestId, Consumer<TokenEntity> onComplete, long generation) {
+        CloudSession.current().startPolling(requestId, onComplete);
+    }
+
+    /**
+     * The credential lifecycle generation this class used to expose directly.
+     *
+     * @return {@code 0L} unconditionally -- there is no generation counter to read any more
+     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
+     * published module JAR and every local module/plugin source. {@link CloudSession} identity
+     * replaced this counter outright; nothing in this package reads or advances a generation to
+     * decide currency any more. Scheduled for removal by plan 16-09.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public static long currentCredentialGeneration() {
+        return 0L;
+    }
+
+    /**
+     * Invalidates the current session, mirroring what this method used to do to a shared
+     * generation counter.
+     *
+     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
+     * published module JAR and every local module/plugin source. Delegates to
+     * {@link CloudSession#current()}'s own {@link CloudSession#invalidate()} rather than advancing
+     * a counter that no longer exists. Scheduled for removal by plan 16-09.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public static void invalidateCredentialOperations() {
+        CloudSession.current().invalidate();
+    }
+
+    /**
+     * Commits {@code token} through the current session, ignoring {@code generation}.
+     *
+     * @param token the credential to commit
+     * @param generation ignored -- session identity, not a generation, now decides currency
+     * @return {@code true} if committed; {@code false} if the current session has been invalidated
+     * @throws IOException if the write fails
+     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
+     * published module JAR and every local module/plugin source. {@link CloudSession#commit(TokenEntity)}
+     * on {@link CloudSession#current()} is the real guard; the {@code generation} parameter is
+     * accepted only so this signature still compiles against any (nonexistent) caller. Scheduled
+     * for removal by plan 16-09.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public static synchronized boolean commitTokenIfCurrent(TokenEntity token, long generation) throws IOException {
+        return CloudSession.current().commit(token);
     }
 
     /**

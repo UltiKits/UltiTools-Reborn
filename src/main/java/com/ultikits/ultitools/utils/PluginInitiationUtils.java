@@ -1870,6 +1870,25 @@ public class PluginInitiationUtils {
     }
 
     /**
+     * The single-{@code long} overload of {@link #activateCloudIfCurrent(CloudSession)} that used
+     * to take an explicit credential generation.
+     *
+     * @param generation ignored -- session identity, not a generation, now decides currency
+     * @return {@code true} if activated; {@code false} if the current session has been invalidated
+     * @throws IOException if establishing the connection fails
+     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
+     * published module JAR and every local module/plugin source. Delegates to
+     * {@link #activateCloudIfCurrent(CloudSession)} against {@link CloudSession#current()};
+     * {@code generation} is accepted only so this signature still compiles against any
+     * (nonexistent) caller. Scheduled for removal by plan 16-09.
+     * @removeIn 6.4.0
+     */
+    @Deprecated(since = "6.3.0", forRemoval = true)
+    public static boolean activateCloudIfCurrent(long generation) throws IOException {
+        return activateCloudIfCurrent(CloudSession.current());
+    }
+
+    /**
      * Ensures the current session is usable, replacing it with a fresh one if it has been
      * invalidated.
      * <p>

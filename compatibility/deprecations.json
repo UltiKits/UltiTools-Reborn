@@ -562,7 +562,7 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own asynchronous credential producers, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The generation-comparison-then-write guard is preserved unchanged, including its {@code synchronized} coordination with invalidateCredentialOperations() and clearToken(); the write itself now goes through CredentialStore for an atomic replace. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession#commit(TokenEntity) on CloudSession#current() is the real guard; the {@code generation} parameter is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
     "status": "ANNOUNCED"
   },
   {
@@ -573,7 +573,7 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own asynchronous credential producers, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The cancel-is-not-invalidate guard this method reads from is preserved unchanged; the credential file I/O this class used to imply now lives in CredentialStore. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession identity replaced this counter outright; nothing in this package reads or advances a generation to decide currency any more. Scheduled for removal by plan 16-09.",
     "status": "ANNOUNCED"
   },
   {
@@ -584,7 +584,29 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "This is an internal coordination primitive for {@code CloudAuthManager}'s own teardown path, not a supported external API -- measured 0 downstream references across every published module JAR and every local module/plugin source. The guard's behaviour is preserved unchanged, including its {@code synchronized} coordination with commitTokenIfCurrent(TokenEntity, long) and clearToken(); the credential file I/O this class used to imply now lives in CredentialStore. Scheduled for removal once issue #298's session-based credential lifecycle redesign replaces the whole generation-counter pattern.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to CloudSession#current()'s own CloudSession#invalidate() rather than advancing a counter that no longer exists. Scheduled for removal by plan 16-09.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String,java.util.function.Consumer,long)",
+    "className": "com.ultikits.ultitools.utils.CloudAuthManager",
+    "memberName": "startPolling",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. The {@code generation} parameter is accepted and ignored; polling always runs on CloudSession#current(). Scheduled for removal by plan 16-09.",
+    "status": "ANNOUNCED"
+  },
+  {
+    "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)",
+    "className": "com.ultikits.ultitools.utils.PluginInitiationUtils",
+    "memberName": "activateCloudIfCurrent",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": true,
+    "removeIn": "6.4.0",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to activateCloudIfCurrent(CloudSession) against CloudSession#current(); {@code generation} is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
     "status": "ANNOUNCED"
   },
   {

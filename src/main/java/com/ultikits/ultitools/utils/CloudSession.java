@@ -187,6 +187,18 @@ final class CloudSession {
         invalidated = true;
         stopPolling();
         stopTokenRefreshScheduler();
+        closeWebSocketClient();
+    }
+
+    /**
+     * Disconnects and clears this session's WebSocket client, if any. Extracted out of
+     * {@link #invalidate()} so the client-close step is a named, independently callable action --
+     * exactly the shape issue #298's fourth acceptance criterion (teardown order is not a
+     * correctness precondition) needs to test each of the four named steps in isolation, in
+     * whatever order a test chooses. Production code only ever reaches this through
+     * {@link #invalidate()}.
+     */
+    synchronized void closeWebSocketClient() {
         if (webSocketClient != null) {
             try {
                 webSocketClient.disconnect();
@@ -196,6 +208,20 @@ final class CloudSession {
             }
             webSocketClient = null;
         }
+    }
+
+    /**
+     * Test-only: marks this session invalidated without touching the poller, the refresher, or
+     * the WebSocket client -- the flag-setting half of {@link #invalidate()}, isolated so a test
+     * can establish "logout has been decided" as a precondition and then permute the four
+     * mechanical teardown actions ({@link #stopPolling()}, {@link #stopTokenRefreshScheduler()},
+     * {@link #closeWebSocketClient()}, {@link #clearPersisted()}) in any order afterward, proving
+     * their relative order does not change the outcome (D-16/D-18, issue #298's fourth acceptance
+     * criterion). Production code never calls this in isolation; {@link #invalidate()} always sets
+     * the same flag together with the poller/refresher/client cleanup, in one atomic call.
+     */
+    synchronized void markInvalidatedForTesting() {
+        invalidated = true;
     }
 
     /**
