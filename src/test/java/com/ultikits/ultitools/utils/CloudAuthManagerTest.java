@@ -796,6 +796,44 @@ class CloudAuthManagerTest {
                 init.verify(() -> PluginInitiationUtils.disableCloud(sessionBeforeLogin), times(1));
             }
         }
+
+        @Test
+        @DisplayName("Round 1 外部评审（第三轮）：两次判断之间若已有一次在途的魔法链接轮询悄悄把令牌落地，login 不能把它撤销掉再开一次新的登录流程")
+        void loginDoesNotTearDownASessionThatBecameValidBetweenItsOwnTwoChecks() throws Exception {
+            setSessionField("token", null);
+            CloudSession sessionAtCheck = CloudSession.current();
+
+            try (MockedStatic<ApiRateLimiter> rate = mockStatic(ApiRateLimiter.class)) {
+                rate.when(ApiRateLimiter::isLoginAllowed).thenAnswer(invocation -> {
+                    // 模拟：正是在「已登录」判断和这次限流判断之间，一个更早发起、仍在轮询的
+                    // 魔法链接完成了，把有效令牌提交到了同一个（此刻仍是 current 的）会话上——
+                    // 轮询能撑 5 分钟，远比这里 1 分钟的登录冷却长。
+                    sessionAtCheck.commit(buildTokenWithExp(3600L));
+                    return true;
+                });
+
+                AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
+                AtomicBoolean anythingElseCalled = new AtomicBoolean(false);
+
+                CloudAuthManager.login(
+                    () -> alreadyLoggedInCalled.set(true),
+                    remaining -> anythingElseCalled.set(true),
+                    () -> anythingElseCalled.set(true),
+                    url -> anythingElseCalled.set(true),
+                    error -> anythingElseCalled.set(true));
+
+                assertThat(alreadyLoggedInCalled)
+                        .as("两次判断之间已经变得有效的会话必须被当成「已登录」，不能被拆掉重新走一遍登录流程")
+                        .isTrue();
+                assertThat(anythingElseCalled)
+                        .as("走「已登录」分支就必须整体短路，不能再碰限流之后的任何步骤")
+                        .isFalse();
+            }
+
+            assertThat(sessionAtCheck.isCurrent())
+                    .as("刚刚才拿到有效令牌的会话不该被这次 login() 调用拆掉")
+                    .isTrue();
+        }
     }
 
     // =========================================================================

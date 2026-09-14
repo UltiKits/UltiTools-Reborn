@@ -52,7 +52,11 @@ public class CloudAuthManager {
      */
     public static void login(Runnable onAlreadyLoggedIn, Consumer<Long> onRateLimited,
             Runnable onRequesting, Consumer<String> onSuccess, Consumer<String> onError) {
-        if (CloudSession.current().hasValidToken()) {
+        // Captured once, at the very top, and used consistently below -- see the round-1 review's
+        // third finding on this method for why a second, independent read of CloudSession.current()
+        // further down is unsafe here.
+        CloudSession sessionAtCheck = CloudSession.current();
+        if (sessionAtCheck.hasValidToken()) {
             onAlreadyLoggedIn.run();
             return;
         }
@@ -60,18 +64,31 @@ public class CloudAuthManager {
             onRateLimited.accept(ApiRateLimiter.getRemainingCooldown("login", 60_000));
             return;
         }
+        // Round-1 external review finding, third pass (PR #464): a magic-link poll from an
+        // EARLIER login attempt can still be in flight here -- polling lasts up to 5 minutes, well
+        // past the 1-minute login cooldown ApiRateLimiter.isLoginAllowed() just cleared above -- and
+        // can commit a valid token onto sessionAtCheck in the gap between the hasValidToken() check
+        // above and this line. Re-checking sessionAtCheck itself (never a fresh
+        // CloudSession.current() read, which could by now point somewhere else entirely) catches
+        // that: a session that became validly authenticated while this method was mid-flight is
+        // reported as "already logged in," not torn down and replaced by a redundant second login.
+        if (sessionAtCheck.hasValidToken()) {
+            onAlreadyLoggedIn.run();
+            return;
+        }
         onRequesting.run();
-        // Round-1 external review finding (PR #464): CloudSession#startNew() alone only tears
-        // down the session's OWN resources (schedulers, WebSocket client) -- it does not stop the
-        // global server monitor or player-event manager, which live outside any session and are
-        // only ever stopped by PluginInitiationUtils#disableCloud(CloudSession)'s own two
-        // session-independent teardown steps. Reaching this line means the current session's
-        // token is missing or expired (the hasValidToken() gate above already failed), so its
-        // cloud lifecycle -- if one is still running -- is stale by definition. Tearing it down
-        // completely before replacing it means a magic-link request that then fails, or never
-        // resolves, never leaves those global managers wired to a socket that already closed with
-        // no successor connection to ever rewire them.
-        PluginInitiationUtils.disableCloud(CloudSession.current());
+        // Round-1 external review finding, first pass (PR #464): CloudSession#startNew() alone
+        // only tears down the session's OWN resources (schedulers, WebSocket client) -- it does not
+        // stop the global server monitor or player-event manager, which live outside any session
+        // and are only ever stopped by PluginInitiationUtils#disableCloud(CloudSession)'s own two
+        // session-independent teardown steps. Reaching this line means sessionAtCheck's token is
+        // missing or expired (both checks above already failed), so its cloud lifecycle -- if one
+        // is still running -- is stale by definition. Tearing it down completely before replacing
+        // it means a magic-link request that then fails, or never resolves, never leaves those
+        // global managers wired to a socket that already closed with no successor connection to
+        // ever rewire them. Acts on sessionAtCheck specifically, not a fresh current() read, for
+        // the same reason the re-check above does.
+        PluginInitiationUtils.disableCloud(sessionAtCheck);
         String url = CloudSession.startNew().requestMagicLink(onError);
         if (url != null) {
             onSuccess.accept(url);
