@@ -240,6 +240,11 @@ class SoftDependencySignatureInvariantTest {
                     continue;
                 }
                 try {
+                    // fqcn is derived exclusively from walking this module's own target/classes
+                    // build output, filtered to the com.ultikits.ultitools package -- there is no
+                    // user- or network-controlled input on this path; this is a build-time
+                    // structural guard test enumerating the framework's own compiled classes.
+                    // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                     classes.add(Class.forName(fqcn, false, loader));
                 } catch (Throwable t) {
                     // A class this scan cannot even load is reported as a failure rather than

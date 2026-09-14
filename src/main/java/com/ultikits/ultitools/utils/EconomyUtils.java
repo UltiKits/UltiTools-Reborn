@@ -438,7 +438,11 @@ public final class EconomyUtils {
         for (StackTraceElement frame : stack) {
             String className = frame.getClassName();
             for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
-                if (className.startsWith(entry.getKey())) {
+                String pkg = entry.getKey();
+                // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
+                // matches the unrelated sibling package "com.example.foobar" -- require an actual
+                // package boundary (either an exact match, or the prefix followed by '.').
+                if (className.equals(pkg) || className.startsWith(pkg + ".")) {
                     return entry.getValue();
                 }
             }
