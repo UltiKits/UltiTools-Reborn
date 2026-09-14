@@ -464,6 +464,9 @@ class CloudReconnectStateMachineTest {
             PluginInitiationUtils.disableCloud(oldSession);
 
             Mockito.verify(mockMonitor, Mockito.never()).stopMonitoring();
+            assertThat(newSession.isCurrent())
+                    .as("newSession 本身完全不该被这次针对 oldSession 的拆线调用影响")
+                    .isTrue();
         }
 
         @Test

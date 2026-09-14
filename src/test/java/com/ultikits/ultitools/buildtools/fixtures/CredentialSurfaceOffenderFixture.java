@@ -15,6 +15,14 @@ import com.ultikits.ultitools.entities.TokenEntity;
  */
 public final class CredentialSurfaceOffenderFixture {
 
+    /**
+     * WR-03: a {@code public static} FIELD typed as {@link TokenEntity} -- fields were entirely
+     * outside this invariant's original scope, only {@code java.lang.reflect.Method} objects were
+     * ever passed to {@code evaluate(Collection)}. Declared here, ahead of every method (PMD
+     * FieldDeclarationsShouldBeAtStartOfClass, plan 16-10 Gate 2).
+     */
+    public static TokenEntity offendingLeakedField = null;
+
     private CredentialSurfaceOffenderFixture() {
     }
 
@@ -49,11 +57,4 @@ public final class CredentialSurfaceOffenderFixture {
     public static void offendByAcceptingConsumerOfToken(Consumer<TokenEntity> onToken) {
         // no-op -- reflected over, never called
     }
-
-    /**
-     * WR-03: a {@code public static} FIELD typed as {@link TokenEntity} -- fields were entirely
-     * outside this invariant's original scope, only {@code java.lang.reflect.Method} objects were
-     * ever passed to {@code evaluate(Collection)}.
-     */
-    public static TokenEntity offendingLeakedField = null;
 }

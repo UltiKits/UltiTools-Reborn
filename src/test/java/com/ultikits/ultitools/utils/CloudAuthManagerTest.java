@@ -780,6 +780,9 @@ class CloudAuthManagerTest {
 
         @Test
         @DisplayName("Round 1 外部评审：登录会先完整拆掉当前（已过期）会话的全局管理器，再换上新会话")
+        // PMD.JUnitTestsShouldIncludeAssert: 本用例唯一的断言是下面的 Mockito verify()，PMD 不认得
+        // 这种断言形式（与本仓库 CLAUDE.md「Suppressing PMD in tests」一节记录的既有情形相同）。
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void loginFullyTearsDownTheStaleSessionsGlobalManagersBeforeReplacingIt() throws Exception {
             // 令牌已过期——不会走「已登录」短路分支，但这个会话此前可能仍有一整套云生命周期在跑。
             setSessionField("token", buildTokenWithExp(-3600L));
