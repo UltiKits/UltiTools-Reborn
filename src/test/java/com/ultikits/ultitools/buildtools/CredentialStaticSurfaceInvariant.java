@@ -136,8 +136,14 @@ public final class CredentialStaticSurfaceInvariant {
             }
 
             List<String> reasons = new ArrayList<>();
-            if (method.getReturnType() == TokenEntity.class) {
-                reasons.add("returns " + TokenEntity.class.getSimpleName());
+            if (TokenEntity.class.isAssignableFrom(method.getReturnType())) {
+                // round-15 review (16-10 gap-closure addendum, PR #464): assignability, not exact
+                // equality -- a hypothetical `public static SessionToken leaked()` where
+                // `SessionToken extends TokenEntity` reports SessionToken.class to getReturnType(),
+                // never TokenEntity.class itself, and TokenEntity is public and non-final, so a
+                // concrete subclass is a real, constructible signature this exact-equality check
+                // would have let straight through while still exposing a raw credential.
+                reasons.add("returns " + TokenEntity.class.getSimpleName() + " or a subclass of it");
             } else if (referencesTokenEntity(method.getGenericReturnType())) {
                 // WR-03: the erased check above missed this -- e.g. Optional<TokenEntity> reports
                 // Optional.class to getReturnType(), never TokenEntity.class. Checked as an "else"
@@ -149,7 +155,9 @@ public final class CredentialStaticSurfaceInvariant {
             boolean acceptsToken = false;
             boolean acceptsTokenGenerically = false;
             for (Class<?> paramType : method.getParameterTypes()) {
-                if (paramType == TokenEntity.class) {
+                // round-15 review: assignability, not exact equality -- see the return-type check
+                // above for the concrete-subclass scenario this closes.
+                if (TokenEntity.class.isAssignableFrom(paramType)) {
                     acceptsToken = true;
                 }
             }
@@ -161,7 +169,7 @@ public final class CredentialStaticSurfaceInvariant {
                 }
             }
             if (acceptsToken) {
-                reasons.add("accepts a " + TokenEntity.class.getSimpleName() + " parameter");
+                reasons.add("accepts a " + TokenEntity.class.getSimpleName() + " parameter or a subclass of it");
             } else if (acceptsTokenGenerically) {
                 reasons.add("accepts a parameter whose generic type references " + TokenEntity.class.getSimpleName());
             }
@@ -218,8 +226,11 @@ public final class CredentialStaticSurfaceInvariant {
             if (!Modifier.isPublic(modifiers) || !Modifier.isStatic(modifiers)) {
                 continue;
             }
-            if (field.getType() == TokenEntity.class) {
-                violations.add(describeField(field) + ": is typed as " + TokenEntity.class.getSimpleName());
+            // round-15 review: assignability, not exact equality -- see evaluate()'s own comment
+            // on the return-type check for the concrete-subclass scenario this closes.
+            if (TokenEntity.class.isAssignableFrom(field.getType())) {
+                violations.add(describeField(field)
+                        + ": is typed as " + TokenEntity.class.getSimpleName() + " or a subclass of it");
             } else if (referencesTokenEntity(field.getGenericType())) {
                 violations.add(describeField(field)
                         + ": has a generic type that references " + TokenEntity.class.getSimpleName());
@@ -278,7 +289,16 @@ public final class CredentialStaticSurfaceInvariant {
         if (type == null) {
             return false;
         }
-        if (type == TokenEntity.class) {
+        // round-15 review (16-10 gap-closure addendum, PR #464): assignability, not exact equality
+        // -- a raw Class here is only ever reached for a genuinely raw (non-generic) reference, and
+        // TokenEntity being public and non-final means a concrete subclass (e.g. a hypothetical
+        // `SessionToken extends TokenEntity`) is a real, constructible signature that would reify as
+        // SessionToken.class, never TokenEntity.class itself, and slip past an exact-equality check
+        // while still exposing a raw credential. Deliberately checked ONLY when `type` is itself a
+        // `Class<?>` -- the ParameterizedType/GenericArrayType/array/WildcardType/TypeVariable
+        // branches below each already recurse into their own constituent types, which eventually
+        // bottom out at a Class<?> and re-enter this same check.
+        if (type instanceof Class<?> && TokenEntity.class.isAssignableFrom((Class<?>) type)) {
             return true;
         }
         if (type instanceof ParameterizedType) {

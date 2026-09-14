@@ -51,6 +51,39 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("round-15 review: a public static method returning a concrete SUBCLASS of TokenEntity "
+            + "produces exactly one violation naming that method -- assignability, not exact equality")
+    void publicStaticMethodReturningTokenEntitySubclassReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(TokenSubclassReturningOffender.class));
+
+        assertThat(violations)
+                .as("TokenEntity is public and not final, so a concrete subclass is a real, "
+                        + "constructible signature that reifies as SessionToken.class, never "
+                        + "TokenEntity.class -- an exact-equality check would miss it entirely")
+                .hasSize(1)
+                .anySatisfy(v -> {
+                    assertThat(v).contains("offend");
+                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                });
+    }
+
+    @Test
+    @DisplayName("round-15 review: a public static method ACCEPTING a concrete SUBCLASS of "
+            + "TokenEntity produces exactly one violation naming that method")
+    void publicStaticMethodAcceptingTokenEntitySubclassReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(TokenSubclassAcceptingOffender.class));
+
+        assertThat(violations)
+                .hasSize(1)
+                .anySatisfy(v -> {
+                    assertThat(v).contains("offend");
+                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                });
+    }
+
+    @Test
     @DisplayName("a package-private static method returning TokenEntity produces no violation -- the rule is about the public surface")
     void packagePrivateStaticMethodReturningTokenEntityReportsNone() {
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
@@ -315,6 +348,26 @@ class CredentialStaticSurfaceInvariantTest {
         public static void advanceGeneration(long generation) {
             // Never actually called -- reflected over only, to exercise the name-based
             // generation-shaped check against a synthetic offender.
+        }
+    }
+
+    /**
+     * round-15 review (16-10 gap-closure addendum, PR #464): a concrete subclass of
+     * {@link TokenEntity} -- since {@link TokenEntity} is {@code public} and not {@code final}, this
+     * is a real, constructible type, not a hypothetical one.
+     */
+    static class SessionToken extends TokenEntity {
+    }
+
+    static class TokenSubclassReturningOffender {
+        public static SessionToken offend() {
+            return null;
+        }
+    }
+
+    static class TokenSubclassAcceptingOffender {
+        public static void offend(SessionToken token) {
+            // Never actually called -- reflected over only.
         }
     }
 
