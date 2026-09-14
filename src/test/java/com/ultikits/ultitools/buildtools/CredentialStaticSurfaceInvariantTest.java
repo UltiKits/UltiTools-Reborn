@@ -176,6 +176,49 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("Defect-class sweep: a GenericArrayType (List<TokenEntity>[]) must be caught, distinct from the reified-array Class case")
+    void genericArrayTypeReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(GenericArrayOffender.class));
+
+        assertThat(violations)
+                .as("List<TokenEntity>[] reifies as GenericArrayType, not as a plain Class with "
+                        + "isArray()==true -- ArrayReturningOffender's reified TokenEntity[] does not "
+                        + "exercise this branch at all")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
+    @DisplayName("Defect-class sweep: a WildcardType upper bound (List<? extends TokenEntity>) must be caught")
+    void wildcardUpperBoundReportsOneViolation() throws NoSuchMethodException {
+        Method method = WildcardUpperBoundOffender.class.getMethod("leaked", List.class);
+
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method));
+
+        assertThat(violations)
+                .as("List<? extends TokenEntity> reifies as a WildcardType whose getUpperBounds() "
+                        + "names TokenEntity -- no existing fixture drove this specific loop")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
+    @DisplayName("Defect-class sweep: a WildcardType lower bound (List<? super TokenEntity>) must be caught")
+    void wildcardLowerBoundReportsOneViolation() throws NoSuchMethodException {
+        Method method = WildcardLowerBoundOffender.class.getMethod("leaked", List.class);
+
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(java.util.Collections.singletonList(method));
+
+        assertThat(violations)
+                .as("List<? super TokenEntity> reifies as a WildcardType whose getLowerBounds() "
+                        + "names TokenEntity while getUpperBounds() names only Object -- only the "
+                        + "lower-bounds loop can catch this shape")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
     @DisplayName("WR-03: the field scan mechanism is non-vacuous, pointed at the fixture's permanent offending field")
     void fieldScanMechanismCatchesAFixtureOffender() throws IOException, ClassNotFoundException {
         List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
@@ -314,6 +357,45 @@ class CredentialStaticSurfaceInvariantTest {
         // (empty) actual type arguments, both already checked, say nothing about it.
         public static GenericOwner<TokenEntity>.Inner leaked() {
             return null;
+        }
+    }
+
+    static class GenericArrayOffender {
+        // Defect-class sweep (16-10, PR #464): ArrayReturningOffender above proves the REIFIED
+        // array branch (TokenEntity[], a plain Class with isArray()==true); this proves the
+        // separate GenericArrayType branch, which only fires when the array's component type is
+        // itself generic (a type variable or parameterized type) -- e.g. List<TokenEntity>[],
+        // confirmed via a standalone reflection probe to reify as GenericArrayType with
+        // getGenericComponentType() == the ParameterizedType List<TokenEntity>. Never both
+        // branches at once: a single array return type is either a plain reified Class or a
+        // GenericArrayType, never both, so this is a genuinely distinct shape from
+        // ArrayReturningOffender, not a duplicate of it.
+        public static List<TokenEntity>[] leaked() {
+            return null;
+        }
+    }
+
+    static class WildcardUpperBoundOffender {
+        // Defect-class sweep (16-10, PR #464): the WildcardType branch's getUpperBounds() loop had
+        // no dedicated offender proving it non-vacuous -- BoundedTypeVariableOffender above proves
+        // the sibling TypeVariable branch, not this one. List<? extends TokenEntity> reifies as a
+        // ParameterizedType whose sole type argument is a WildcardType with getUpperBounds() ==
+        // [TokenEntity.class] and empty getLowerBounds() (confirmed via a standalone reflection
+        // probe).
+        public static void leaked(List<? extends TokenEntity> tokens) {
+            // no-op -- reflected over, never called
+        }
+    }
+
+    static class WildcardLowerBoundOffender {
+        // Defect-class sweep (16-10, PR #464): the WildcardType branch's getLowerBounds() loop had
+        // no dedicated offender either -- List<? extends TokenEntity> above only exercises
+        // getUpperBounds(). List<? super TokenEntity> reifies as a ParameterizedType whose sole
+        // type argument is a WildcardType with getLowerBounds() == [TokenEntity.class] (and
+        // getUpperBounds() == [Object.class], confirmed via the same reflection probe) -- so this
+        // is the one shape that can ONLY be caught by the lower-bounds loop, not the upper one.
+        public static void leaked(List<? super TokenEntity> sink) {
+            // no-op -- reflected over, never called
         }
     }
 
