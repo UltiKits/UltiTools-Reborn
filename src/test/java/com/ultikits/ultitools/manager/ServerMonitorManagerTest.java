@@ -941,4 +941,105 @@ class ServerMonitorManagerTest {
             }
         }
     }
+
+    /**
+     * {@code diskUsage} and {@code enabledPlugins} in {@code getCurrentMetricsData}'s {@code
+     * serverPerformance}/{@code pluginUsage} objects -- issue #436/#437, D-14.
+     *
+     * <p>{@code diskUsage} was a hardcoded {@code 0.0} ({@code
+     * ServerMonitorManager.java:671} before this fix); {@code enabledPlugins} was {@code
+     * snapshot.pluginCount} -- every installed plugin, not filtered by whether it is actually
+     * enabled. Both gave a panel operator a confident, wrong answer.
+     */
+    @Nested
+    @DisplayName("diskUsage 与 enabledPlugins -- issue #436/#437, D-14")
+    class DiskUsageAndEnabledPluginsTests {
+
+        private JsonObject capturedMetricsData() {
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+
+        private JsonObject capturedServerPerformance() {
+            return capturedMetricsData().getAsJsonObject("serverPerformance");
+        }
+
+        private JsonObject pluginJson(String name, boolean enabled) {
+            JsonObject plugin = new JsonObject();
+            plugin.addProperty("name", name);
+            plugin.addProperty("enabled", enabled);
+            return plugin;
+        }
+
+        @Test
+        @DisplayName("真实文件系统上 diskUsage 严格大于 0 且不超过 100，按 memoryUsage 同款方式保留两位小数")
+        void diskUsageOnRealFilesystemIsInRangeAndRounded() {
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            double diskUsage = capturedServerPerformance().get("diskUsage").getAsDouble();
+
+            assertThat(diskUsage).isGreaterThan(0.0).isLessThanOrEqualTo(100.0);
+            // Same convention as memoryUsage: Math.round(value * 100.0) / 100.0 -- multiplying
+            // by 100 and rounding must land on (approximately) a whole number.
+            double scaled = diskUsage * 100.0;
+            assertThat(scaled).isCloseTo(Math.round(scaled), org.assertj.core.data.Offset.offset(1e-9));
+        }
+
+        @Test
+        @DisplayName("diskUsage 取自注入的 total/usable 读数，不是目录遍历")
+        void diskUsageIsComputedFromInjectedTotalAndUsableSpace() {
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 750L); // 25% used
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(25.0);
+        }
+
+        @Test
+        @DisplayName("文件系统报告总空间为零时返回 0.0，而不是除零错误")
+        void zeroTotalSpaceProducesZeroNotADivisionError() {
+            serverMonitorManager.setDiskSpaceReaders(root -> 0L, root -> 0L);
+            serverMonitorManager.refreshStateSnapshot();
+
+            assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("enabledPlugins 只数 enabled 标记为真的插件，不是全部已安装的插件")
+        void enabledPluginsCountsOnlyTheEnabledFlaggedOnes() {
+            JsonArray plugins = new JsonArray();
+            plugins.add(pluginJson("Alpha", true));
+            plugins.add(pluginJson("Beta", false));
+            plugins.add(pluginJson("Gamma", true));
+
+            assertThat(ServerMonitorManager.countEnabledPlugins(plugins)).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("没有任何插件时计数为零，不抛异常")
+        void noPluginsAtAllProducesZeroWithoutThrowing() {
+            assertThat(ServerMonitorManager.countEnabledPlugins(new JsonArray())).isZero();
+        }
+
+        @Test
+        @DisplayName("metrics 消息的字段名与类型不变，没有新增/改名/改类型的字段")
+        void metricsMessageFieldsAndWireTypesUnchanged() {
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            JsonObject data = capturedMetricsData();
+            assertThat(data.getAsJsonObject("serverPerformance").keySet())
+                    .containsExactlyInAnyOrder("averageTPS", "memoryUsage", "diskUsage");
+            assertThat(data.getAsJsonObject("pluginUsage").keySet())
+                    .containsExactlyInAnyOrder("enabledPlugins", "loadedWorlds");
+            assertThat(data.getAsJsonObject("serverPerformance").get("diskUsage").getAsJsonPrimitive().isNumber())
+                    .isTrue();
+            assertThat(data.getAsJsonObject("pluginUsage").get("enabledPlugins").getAsJsonPrimitive().isNumber())
+                    .isTrue();
+        }
+    }
 }
