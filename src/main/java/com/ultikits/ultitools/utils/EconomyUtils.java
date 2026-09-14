@@ -48,11 +48,6 @@ public final class EconomyUtils {
     /** Attribution key used when no registered module's package appears anywhere on the calling stack. */
     static final String UNKNOWN_MODULE = "an unknown caller";
 
-    // Legacy direct-Vault state, kept ONLY to back getEconomy()'s pre-existing, unchanged public
-    // contract of returning the actual underlying Vault Economy instance.
-    private static Economy economy;
-    private static boolean setupAttempted = false;
-
     // The internal seam every operation below delegates to (D-08/D-09). Framework bootstrap
     // (DependenceManagers) replaces this with the same instance it registers into the IoC
     // container via setProvider(); the field starts non-null so a module calling EconomyUtils
@@ -102,32 +97,18 @@ public final class EconomyUtils {
     }
 
     /**
-     * Sets up the economy provider from Vault.
+     * Checks whether the economy provider is currently set up.
+     * <p>
+     * [Rule 1 fix, CR-01, 16-07]: re-checks the live {@link #provider} on every call, exactly
+     * like every sibling operation, instead of latching a failed first attempt forever — Vault
+     * (or the economy plugin that registers a provider with it) can start after this framework's
+     * own bootstrap runs, since Bukkit gives no ordering guarantee beyond declared dependencies.
      *
      * @return true if economy was set up successfully
      */
     public static boolean setup() {
-        if (economy != null) {
-            return true;
-        }
-
-        if (setupAttempted) {
-            return false;
-        }
-
-        setupAttempted = true;
-
-        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            return false;
-        }
-
-        RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
-        if (rsp == null) {
-            return false;
-        }
-
-        economy = rsp.getProvider();
-        return economy != null;
+        reportIfUnavailable();
+        return provider.getState() == EconomyProvider.State.AVAILABLE;
     }
 
     /**
@@ -150,13 +131,23 @@ public final class EconomyUtils {
 
     /**
      * Gets the economy instance.
+     * <p>
+     * [Rule 1 fix, CR-01, 16-07]: re-checks the live {@link #provider} on every call and reports
+     * D-08's honest unavailability warning, exactly like every sibling operation, instead of
+     * caching a failed first attempt for the rest of the server's uptime (the same defect class
+     * this milestone exists to close, reproduced by this seam's own two frozen-signature methods —
+     * see {@code 16-REVIEW-economy.md} CR-01).
      *
      * @return the economy instance, or null if not available
      */
     @Nullable
     public static Economy getEconomy() {
-        setup();
-        return economy;
+        reportIfUnavailable();
+        if (provider.getState() != EconomyProvider.State.AVAILABLE) {
+            return null;
+        }
+        RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
+        return rsp == null ? null : rsp.getProvider();
     }
 
     /**
@@ -322,8 +313,6 @@ public final class EconomyUtils {
      * Resets the economy setup state. Used primarily for testing.
      */
     public static void reset() {
-        economy = null;
-        setupAttempted = false;
         warnedModules.clear();
         provider = new VaultEconomyProvider();
     }
