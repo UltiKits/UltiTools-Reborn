@@ -134,8 +134,11 @@ final class CloudSession {
      * @throws IOException if the underlying write fails
      */
     synchronized boolean commit(TokenEntity newToken) throws IOException {
-        // RED-PHASE STUB (plan 16-08 Task 1): deliberately omits the invalidated check so
-        // CredentialGenerationTest fails intentionally before the real guard is implemented.
+        if (invalidated) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "Discarding a credential result that arrived after this session was invalidated");
+            return false;
+        }
         tokenStore.save(newToken);
         this.token = newToken;
         return true;
