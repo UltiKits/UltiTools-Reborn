@@ -320,12 +320,27 @@ final class CloudSession {
      * {@link TokenStore#clearIfMatches(TokenEntity)} with this session's own {@link #token} turns
      * the disk clear into a compare-and-delete: it only ever removes the credential THIS session
      * itself last knows to be persisted, never a value some other session wrote afterward.
+     * <p>
+     * <b>Round-5 external review finding (16-10, PR #464):</b> if the disk-side clear fails --
+     * {@code credentials.json} is unwritable or the underlying file is corrupt -- the old
+     * shape returned before ever reaching the in-memory clear, so {@link #token} stayed set to
+     * the value this session (already invalidated by the caller's {@code logout()}) still
+     * believed was valid. {@link #hasValidToken()} does not consult {@link #invalidated} at all,
+     * so every subsequent {@code /ulticloud login} kept reporting "Already logged in" against a
+     * session nothing could ever make current again, until the server restarted. The disk write
+     * and the in-memory clear are two independent effects with no ordering relationship the
+     * caller can rely on to fix this the other way around, so the in-memory half is moved into a
+     * {@code finally} block: it now always runs, whether the disk write succeeds, fails with a
+     * propagated exception, or is never reached at all.
      *
      * @throws IOException if the underlying write fails
      */
     void clearPersisted() throws IOException {
-        tokenStore.clearIfMatches(token);
-        this.token = null;
+        try {
+            tokenStore.clearIfMatches(token);
+        } finally {
+            this.token = null;
+        }
     }
 
     /** @return {@code true} if this session holds a non-expired token with an access token */

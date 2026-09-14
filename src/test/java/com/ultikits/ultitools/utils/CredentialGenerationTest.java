@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -528,6 +529,48 @@ class CredentialGenerationTest {
                 default:
                     throw new IllegalArgumentException("unknown teardown step: " + step);
             }
+        }
+    }
+
+    /**
+     * Round-5 external review finding (16-10, PR #464): {@link CloudSession#clearPersisted()}
+     * used to null its in-memory {@code token} field only after the disk-side clear succeeded, so
+     * a disk failure (corrupt or unwritable {@code credentials.json}) left the field pointing at
+     * the pre-logout token even though the session had already been invalidated by the caller.
+     * {@link CloudSession#hasValidToken()} does not consult the {@code invalidated} flag, so every
+     * subsequent {@code /ulticloud login} kept reporting "Already logged in" against a session
+     * that could never become current again, until the server restarted.
+     */
+    @Nested
+    @DisplayName("clearPersisted still clears the in-memory token when the disk-side clear fails")
+    class ClearPersistedClearsInMemoryTokenEvenOnDiskFailure {
+
+        @Test
+        @DisplayName("a disk write failure during clearPersisted still leaves hasValidToken() false, not true")
+        void diskFailureDuringClearPersistedStillClearsTheInMemoryToken() throws Exception {
+            CloudSession session = CloudSession.current();
+            assertThat(session.commit(someToken())).isTrue();
+            assertThat(session.hasValidToken())
+                    .as("precondition: the session must actually hold a token before this test's "
+                            + "failure injection can prove anything about clearing it")
+                    .isTrue();
+
+            CredentialStore.setSimulateWriteFailureForTesting(true);
+            try {
+                assertThatThrownBy(session::clearPersisted)
+                        .as("the disk-side failure must still propagate -- this test is about the "
+                                + "in-memory field, not about swallowing the underlying error")
+                        .isInstanceOf(com.ultikits.ultitools.exceptions.DataAccessException.class);
+            } finally {
+                CredentialStore.setSimulateWriteFailureForTesting(false);
+            }
+
+            assertThat(session.hasValidToken())
+                    .as("hasValidToken() must be false once clearPersisted() has been called, even "
+                            + "though the disk-side half of that call failed -- otherwise every "
+                            + "subsequent login reports \"Already logged in\" against a session "
+                            + "nothing can ever make current again")
+                    .isFalse();
         }
     }
 }
