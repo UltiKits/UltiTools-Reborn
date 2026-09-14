@@ -1838,17 +1838,14 @@ public class PluginInitiationUtils {
         cloudEnabled.set(false);
         reinitBackoff.reset();
 
-        teardownStep("stopping token refresh scheduler",
-            CloudAuthManager::stopTokenRefreshScheduler);
-
-        // Stop any magic-link polling still in progress. Without this, a "logout right after login,
-        // second-guessing the decision" sequence could quietly log the server back in the next time
-        // polling picks up a completed result — that branch itself calls enableCloud() plus
-        // initWebsocket().
-        teardownStep("stopping magic-link polling", CloudAuthManager::stopPolling);
-
-        teardownStep("invalidating in-flight credential operations",
-            CloudAuthManager::invalidateCredentialOperations);
+        // Task 1 of plan 16-08 replaced the generation counter with CloudSession identity: a
+        // session's own invalidate() covers exactly the three steps this method used to perform as
+        // three separate calls (stop the refresh scheduler, stop polling, invalidate anything still
+        // in flight) -- one call on the session that is (still, until Task 2) reachable only
+        // through CloudAuthManager's delegating facade / CloudSession.current().
+        teardownStep("invalidating the current cloud session (stops the refresh scheduler and polling, "
+                + "and discards anything already in flight)",
+            () -> CloudSession.current().invalidate());
 
         // Order matters here: close the log transporter first, then disconnect the socket.
         // The other way around, the transporter's flush would find the socket already closed and
@@ -1919,35 +1916,38 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Atomically, inside the cloud lifecycle lock: "re-check the credential generation → turn the
-     * state machine on → connect → start the refresh schedule."
+     * Atomically, inside the cloud lifecycle lock: "re-check that {@code session} is still current →
+     * turn the state machine on → connect → start the refresh schedule."
      * <p>
      * Making only the credential-write step atomic against logout is not enough: after committing a
      * credential, magic-link polling still has to do {@code enableCloud()} +
-     * {@code initWebsocket()} + {@code startTokenRefreshScheduler()}, and that sequence is what
-     * actually connects the server back. If logout lands in the gap between "commit succeeded" and
-     * "activation started," teardown tears down a connection that has not been built yet, and the
-     * polling thread goes ahead and builds it anyway — undoing the logout.
+     * {@code initWebsocket()} + {@code session.startTokenRefreshScheduler()}, and that sequence is
+     * what actually connects the server back. If logout lands in the gap between "commit succeeded"
+     * and "activation started," teardown tears down a connection that has not been built yet, and
+     * the polling thread goes ahead and builds it anyway — undoing the logout.
      * <p>
      * This method contends for the same {@link #cloudLifecycleLock} as {@code disableCloud()}, so
      * the two can only ever happen as a whole, one after the other: either activation completes
      * first and is then torn down (clean), or teardown happens first and this method, re-checking
-     * the generation while holding the lock, sees it has changed and returns false directly (also
-     * clean).
+     * {@code session}'s own currency while holding the lock, sees it is no longer current and
+     * returns false directly (also clean). Checking {@code session.isCurrent()} rather than
+     * comparing against a shared counter is exactly what makes this re-check ordering-independent
+     * (D-16/D-18): the session this call was handed either still is what it was, or it is not,
+     * regardless of how many other sessions have come and gone in between.
      * <p>
      * Deliberately does <b>not</b> call {@code loginWithToken()} while holding the lock — that is an
      * HTTP round trip, and doing it under the lock would block {@code /ulticloud logout} on the main
      * thread for several seconds. It only registers the server with the panel and does not change
      * local state, so running it again outside the lock is harmless.
      *
-     * @param generation the credential generation the caller recorded when it started
-     * @return {@code true} if activated; {@code false} if the generation had already changed and
-     *         activation was abandoned
+     * @param session the session the caller recorded when this login/activation started
+     * @return {@code true} if activated; {@code false} if the session had already been invalidated
+     *         and activation was abandoned
      * @throws IOException if establishing the connection fails
      */
-    public static boolean activateCloudIfCurrent(long generation) throws IOException {
+    public static boolean activateCloudIfCurrent(CloudSession session) throws IOException {
         synchronized (cloudLifecycleLock) {
-            if (generation != CloudAuthManager.currentCredentialGeneration()) {
+            if (!session.isCurrent()) {
                 UltiTools.getInstance().getLogger().log(Level.INFO,
                     "Cloud activation aborted — a logout happened while this login was completing");
                 return false;
@@ -1956,7 +1956,7 @@ public class PluginInitiationUtils {
             // back up.
             enableCloud();
             initWebsocket();
-            CloudAuthManager.startTokenRefreshScheduler();
+            session.startTokenRefreshScheduler();
             return true;
         }
     }

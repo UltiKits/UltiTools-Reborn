@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -27,25 +28,19 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
- * 凭证代际：让在途的异步凭证操作在 logout 之后无法把凭证写回来。
+ * 会话身份取代凭证代际：让在途的异步凭证操作在 logout 之后无法把凭证写回来。
  *
- * <p>问题的根子是「取消 ≠ 失效」。{@code stopTokenRefreshScheduler()} 用的是
- * {@code cancel(false)} 加 {@code shutdown()}，两者都只承诺不再调度新的执行，对一个
- * 已经进入 HTTP 请求的刷新任务毫无约束；而 {@code refreshToken()} 在返回**之前**就
- * {@code saveToken()} 写盘。于是这样的时序完全成立：
- *
- * <pre>
- *   1. 刷新任务发出 HTTP 请求（网络往返，秒级）
- *   2. 管理员 /ulticloud logout → 停调度器 → clearToken() 清掉 data.json
- *   3. HTTP 返回 → saveToken() 把新凭证写回 data.json
- *   4. 重启服务器 → 读到有效凭证 → 自动登录
- * </pre>
- *
- * <p>结果是 logout 这条命令没有效果，而它恰恰是一条安全语义的命令。magic-link
- * 轮询有完全相同的形状，而且更彻底——它还会 {@code enableCloud()} 加
- * {@code initWebsocket()}，直接把服务器登回去。
+ * <p>issue #298 的根子是「取消 ≠ 失效」，这一点没有变；变的是拿什么来判定「失效」。6.3.0 之前
+ * 用一个 {@code AtomicLong} 代际计数器：{@code stopTokenRefreshScheduler()} 用的是
+ * {@code cancel(false)} 加 {@code shutdown()}，两者都只承诺不再调度新的执行，对一个已经进入
+ * HTTP 请求的刷新任务毫无约束；每个在途操作记下开始时的代际，提交前再比一次。计数器能告诉一个迟到
+ * 的结果「你迟到了」，但拦不住调度器、WebSocket 客户端本身继续活着——teardown 顺序仍然是正确性的
+ * 前提。D-16/D-18 用 {@link CloudSession} 的对象身份取代了这个计数器：一个会话拥有令牌、两个调度器
+ * 和（自 16-08 Task 2 起）WebSocket 客户端与重连退避状态；{@code logout} 换上一个新会话并
+ * {@link CloudSession#invalidate()} 旧的，旧会话上的一切在途操作从此单靠自己的
+ * {@code invalidated} 标记就会被拒绝——不需要再有任何 teardown 顺序保证。
  */
-@DisplayName("凭证代际（在途操作的失效判据）")
+@DisplayName("会话身份取代凭证代际（在途操作的失效判据）")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // 需反射复位 UltiTools 单例（#250）
 class CredentialGenerationTest {
@@ -76,12 +71,19 @@ class CredentialGenerationTest {
         // so migrate() is always a fast, inert no-op for every test below.
         CredentialStore.setTargetPathForTesting(dataFolder.toPath().resolve("credentials.json"));
         CredentialStore.setOldLocationForTesting(dataFolder.toPath().resolve("pre-migration-data.json"));
+        // Every test below constructs and tears down its own CloudSession instances, but
+        // CloudSession.current is a JVM-wide static (surefire runs this module with no forkCount,
+        // per issue #250) -- without resetting it here, whichever test ran last in this class
+        // (or in CloudAuthManagerTest / CloudReconnectStateMachineTest, sharing the same JVM)
+        // leaks its session into this one.
+        CloudSession.resetForTesting();
     }
 
     @AfterEach
     void tearDown() throws Exception {
         CredentialStore.clearTargetPathForTesting();
         CredentialStore.clearOldLocationForTesting();
+        CloudSession.resetForTesting();
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
@@ -153,59 +155,86 @@ class CredentialGenerationTest {
     class LateResultsAreDiscarded {
 
         @Test
-        @DisplayName("代际未变时，提交成功")
-        void commitSucceedsWhenGenerationUnchanged() throws Exception {
-            long generation = CloudAuthManager.currentCredentialGeneration();
+        @DisplayName("会话仍是当前会话时，提交成功")
+        void commitSucceedsOnACurrentSession() throws Exception {
+            CloudSession session = new CloudSession();
 
-            boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generation);
+            boolean committed = session.commit(someToken());
 
             assertThat(committed).isTrue();
-            assertThat(CloudAuthManager.getCurrentToken()).isNotNull();
+            assertThat(session.getToken()).isNotNull();
         }
 
         @Test
-        @DisplayName("代际已被 invalidate 递增时，提交必须被拒绝且不落盘")
+        @DisplayName("会话已被 invalidate 之后，提交必须被拒绝且不落盘")
         void commitIsRejectedAfterInvalidation() throws Exception {
-            // 在途操作出发时记下的代际
-            long generationAtStart = CloudAuthManager.currentCredentialGeneration();
+            try (WatchService watcher = newTempFileWatcher(dataFolder)) {
+                CloudSession session = new CloudSession();
 
-            // logout 期间：拆线路径让一切在途凭证操作作废
-            CloudAuthManager.invalidateCredentialOperations();
-            CloudAuthManager.clearToken();
+                // logout 期间：拆线路径让这个会话作废
+                session.invalidate();
 
-            // HTTP 请求这时才返回
-            boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generationAtStart);
+                // HTTP 请求这时才返回
+                boolean committed = session.commit(someToken());
 
-            assertThat(committed)
-                    .as("迟到的刷新结果不得把凭证写回来——否则 logout 等于没执行")
-                    .isFalse();
-            assertThat(CloudAuthManager.getCurrentToken())
-                    .as("内存中的凭证必须仍是空的")
-                    .isNull();
-            assertThat(new File(dataFolder, "credentials.json"))
-                    .as("磁盘上不该留下可用于重启后自动重连的凭证")
-                    .satisfiesAnyOf(
-                            f -> assertThat(f).doesNotExist(),
-                            f -> assertThat(f).content().doesNotContain("late-arriving-access-token"));
+                int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
+
+                assertThat(committed)
+                        .as("迟到的刷新结果不得把凭证写回来——否则 logout 等于没执行")
+                        .isFalse();
+                assertThat(session.getToken())
+                        .as("内存中的凭证必须仍是空的")
+                        .isNull();
+                assertThat(writes).as("失效之后的提交不应有任何落盘发生").isZero();
+            }
         }
 
         @Test
-        @DisplayName("每次 invalidate 都推进代际，多次 logout 不会让旧结果重新变得有效")
-        void generationIsMonotonic() {
-            long first = CloudAuthManager.currentCredentialGeneration();
-            CloudAuthManager.invalidateCredentialOperations();
-            long second = CloudAuthManager.currentCredentialGeneration();
-            CloudAuthManager.invalidateCredentialOperations();
-            long third = CloudAuthManager.currentCredentialGeneration();
+        @DisplayName("多次 invalidate 不会让一个已作废的会话重新变得有效")
+        void multipleInvalidationsNeverRevalidateASession() {
+            CloudSession session = new CloudSession();
 
-            assertThat(second).isGreaterThan(first);
-            assertThat(third).isGreaterThan(second);
+            session.invalidate();
+            assertThat(session.isCurrent()).isFalse();
+
+            session.invalidate();
+            assertThat(session.isCurrent())
+                    .as("反复 invalidate 不会把一个会话变回当前——不存在能让它复活的第二次调用")
+                    .isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("两个空态：一个还没排上任何调度的会话，和一个提交前就已失效的会话")
+    class EmptySessionBehaviours {
+
+        @Test
+        @DisplayName("一个刚构造、还没有任何调度器的会话可以直接 invalidate，不抛异常")
+        void freshSessionAcceptsInvalidateWithoutThrowing() {
+            CloudSession session = new CloudSession();
+
+            assertThatCode(session::invalidate).doesNotThrowAnyException();
+            assertThat(session.isCurrent()).isFalse();
+        }
+
+        @Test
+        @DisplayName("一个在提交任何东西之前就已失效的会话，仍然报告自己失效并拒绝提交")
+        void sessionInvalidatedBeforeAnyWorkStillReportsInvalidAndRefusesCommit() throws Exception {
+            CloudSession session = new CloudSession();
+
+            session.invalidate();
+
+            assertThat(session.isCurrent()).isFalse();
+            assertThat(session.commit(someToken()))
+                    .as("从未提交过任何东西的会话，失效之后第一次提交也必须被拒绝")
+                    .isFalse();
         }
     }
 
     /**
-     * D-14: one named, deterministic test per timing from issue #298's "already fixed" table
-     * (five rows). Each stages its interleaving with explicit, controllable call ordering --
+     * D-14/D-16/D-18: one named, deterministic test per timing from issue #298's "already fixed"
+     * table (five rows), now driven through {@link CloudSession} instances instead of a shared
+     * generation counter. Each stages its interleaving with explicit, controllable call ordering --
      * never a sleep -- and asserts both the final {@code credentials.json} content and the number of
      * writes {@link CredentialStore} actually performed, observed at the filesystem level via
      * {@link #newTempFileWatcher(File)}/{@link #countTempFileCreations(WatchService, Duration)}
@@ -222,17 +251,18 @@ class CredentialGenerationTest {
         @DisplayName("Timing 1 (#298 row 1): a refresh in flight when logout happens must not write its late result")
         void refreshInFlightWhenLogoutHappens_lateCommitRejectedNoExtraWrite() throws Exception {
             // #298 row 1: refreshToken() saves before returning, and stopTokenRefreshScheduler()'s
-            // cancel(false) does not interrupt an in-flight refresh -- the fix is the generation
-            // guard alone, since the scheduler cannot be relied on to stop the in-flight call.
+            // cancel(false) does not interrupt an in-flight refresh -- the fix is the session
+            // identity guard alone, since the scheduler cannot be relied on to stop the in-flight
+            // call. The refresh task holds a reference to the session it started on; that
+            // reference's own invalidated flag is the only thing that matters.
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                long generationAtRefreshStart = CloudAuthManager.currentCredentialGeneration();
+                CloudSession sessionAtRefreshStart = CloudSession.current();
 
                 // logout happens while the refresh HTTP call is "in flight"
-                CloudAuthManager.invalidateCredentialOperations();
                 CloudAuthManager.clearToken(); // the only write this scenario should perform
 
-                // the refresh call "returns" only now, carrying the generation captured before logout
-                boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generationAtRefreshStart);
+                // the refresh call "returns" only now, carrying the session captured before logout
+                boolean committed = sessionAtRefreshStart.commit(someToken());
 
                 int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
 
@@ -252,16 +282,15 @@ class CredentialGenerationTest {
         @DisplayName("Timing 2 (#298 row 2): a poll completion arriving after logout is rejected even without an explicit poll-stop call")
         void pollCompletionAfterLogoutWithoutExplicitStop_commitRejected() throws Exception {
             // #298 row 2: disableCloud() never called stopPolling(), and the poller's completed
-            // branch reconnects on its own. This proves the file-write guard is sufficient defense
-            // in depth for the credential-write half of that bug even when no stop call is made at
-            // all -- this scenario deliberately never calls stopPolling().
+            // branch reconnects on its own. This proves the session-identity guard is sufficient
+            // defense in depth for the credential-write half of that bug even when no stop call is
+            // made at all -- this scenario deliberately never calls stopPolling().
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                long generationAtRequestStart = CloudAuthManager.currentCredentialGeneration();
+                CloudSession sessionAtRequestStart = CloudSession.current();
 
-                CloudAuthManager.invalidateCredentialOperations();
                 CloudAuthManager.clearToken(); // the only write this scenario should perform
 
-                boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generationAtRequestStart);
+                boolean committed = sessionAtRequestStart.commit(someToken());
 
                 int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
 
@@ -280,15 +309,15 @@ class CredentialGenerationTest {
         void loginAfterTeardownCompletes_isNotClearedByLogout() throws Exception {
             // #298 row 3: the old code snapshotted the credential BEFORE teardown, so a credential
             // committed during teardown was not seen by the snapshot and survived clearing. The
-            // read-modify-write is now atomic under one lock (CredentialStore), so this proves the
-            // mirror-image positive case: a legitimate login that starts only after teardown has
-            // fully finished must not be collateral damage from the teardown's own write.
+            // read-modify-write is atomic under one lock (CredentialStore) regardless, so this
+            // proves the mirror-image positive case: a legitimate login that starts only after
+            // teardown has fully finished -- against the brand-new session teardown installed --
+            // must not be collateral damage from the teardown's own write.
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                CloudAuthManager.invalidateCredentialOperations();
-                CloudAuthManager.clearToken(); // write 1 -- teardown, nothing to clear yet
+                CloudAuthManager.clearToken(); // write 1 -- teardown, nothing to clear yet; installs a fresh session
 
-                long generationAfterTeardown = CloudAuthManager.currentCredentialGeneration();
-                boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generationAfterTeardown); // write 2
+                CloudSession sessionAfterTeardown = CloudSession.current();
+                boolean committed = sessionAfterTeardown.commit(someToken()); // write 2
 
                 int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
 
@@ -306,34 +335,34 @@ class CredentialGenerationTest {
         @Test
         @DisplayName("Timing 4 (#298 row 4): a generation captured before a blocking call is honored, not silently re-read mid-flight")
         void generationCapturedBeforeBlockingCall_isHonoredNotReReadMidFlight() throws Exception {
-            // #298 row 4: the generation used to be read in-place inside startPolling(), which
-            // itself runs after a blocking POST -- so a logout landing during that round trip made
-            // the login look "current" by the time the generation was actually read. The fix is
-            // that the caller (requestMagicLink()) captures the generation BEFORE its own blocking
-            // call and passes it through explicitly. This proves commitTokenIfCurrent() honors
-            // whatever value it is given rather than re-reading a fresher one, in both directions:
-            // a stale pre-blocking-call value is rejected, and a fresh post-logout value is not.
+            // #298 row 4: the credential-identity check used to be read in-place inside
+            // startPolling(), which itself runs after a blocking POST -- so a logout landing
+            // during that round trip made the login look "current" by the time the check was
+            // actually made. The fix is that the caller (requestMagicLink()) captures its own
+            // session BEFORE its own blocking call and keeps using that same reference throughout.
+            // This proves commit() honors whichever session instance it is called on rather than
+            // re-reading CloudSession.current() fresh, in both directions: a session captured
+            // before the blocking call and since superseded is rejected, and a freshly-current
+            // session is not.
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                long generationBeforeBlockingCall = CloudAuthManager.currentCredentialGeneration();
+                CloudSession sessionBeforeBlockingCall = CloudSession.current();
 
-                CloudAuthManager.invalidateCredentialOperations();
                 CloudAuthManager.clearToken(); // write 1
-                long generationAfterLogout = CloudAuthManager.currentCredentialGeneration();
-                assertThat(generationAfterLogout).isGreaterThan(generationBeforeBlockingCall);
+                CloudSession sessionAfterLogout = CloudSession.current();
+                assertThat(sessionAfterLogout).isNotSameAs(sessionBeforeBlockingCall);
+                assertThat(sessionBeforeBlockingCall.isCurrent()).isFalse();
 
-                boolean committedWithStaleGeneration =
-                        CloudAuthManager.commitTokenIfCurrent(someToken(), generationBeforeBlockingCall);
-                boolean committedWithCurrentGeneration =
-                        CloudAuthManager.commitTokenIfCurrent(someToken(), generationAfterLogout); // write 2
+                boolean committedWithStaleSession = sessionBeforeBlockingCall.commit(someToken());
+                boolean committedWithCurrentSession = sessionAfterLogout.commit(someToken()); // write 2
 
                 int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
 
-                assertThat(committedWithStaleGeneration)
-                        .as("a generation captured before the blocking call must be rejected once it is stale")
+                assertThat(committedWithStaleSession)
+                        .as("a session reference captured before the blocking call must be rejected once it is stale")
                         .isFalse();
-                assertThat(committedWithCurrentGeneration)
-                        .as("a generation captured after logout must still be accepted -- the guard compares "
-                                + "whatever value it is given, it is not a blanket denial after any logout")
+                assertThat(committedWithCurrentSession)
+                        .as("the session captured after logout must still be accepted -- the guard checks "
+                                + "whatever instance it is given, it is not a blanket denial after any logout")
                         .isTrue();
                 assertThat(writes).isEqualTo(2);
             }
@@ -343,22 +372,21 @@ class CredentialGenerationTest {
         @DisplayName("Timing 5 (#298 row 5): a logout squeezed between commit success and activation start aborts activation")
         void logoutBetweenCommitAndActivationStart_abortsActivation() throws Exception {
             // #298 row 5: the activation sequence (enableCloud + initWebsocket +
-            // startTokenRefreshScheduler) was not atomic with the generation check, so a logout
-            // squeezed in between "commit succeeded" and "activation starts" got reverted.
-            // activateCloudIfCurrent() re-checks the generation before touching any of those three
-            // steps -- this proves the re-check catches exactly this window and that no cloud
-            // state changes when it does.
+            // startTokenRefreshScheduler) was not atomic with the credential-identity check, so a
+            // logout squeezed in between "commit succeeded" and "activation starts" got reverted.
+            // activateCloudIfCurrent(session) re-checks session.isCurrent() before touching any of
+            // those three steps -- this proves the re-check catches exactly this window and that no
+            // cloud state changes when it does.
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                long generation = CloudAuthManager.currentCredentialGeneration();
-                boolean committed = CloudAuthManager.commitTokenIfCurrent(someToken(), generation); // write 1
+                CloudSession session = CloudSession.current();
+                boolean committed = session.commit(someToken()); // write 1
                 assertThat(committed).isTrue();
 
                 // logout is squeezed in between "commit succeeded" and "activation starts"
-                CloudAuthManager.invalidateCredentialOperations();
                 CloudAuthManager.clearToken(); // write 2
 
                 boolean cloudEnabledBeforeActivation = PluginInitiationUtils.isCloudEnabled();
-                boolean activated = PluginInitiationUtils.activateCloudIfCurrent(generation);
+                boolean activated = PluginInitiationUtils.activateCloudIfCurrent(session);
 
                 int writes = countTempFileCreations(watcher, Duration.ofMillis(800));
 

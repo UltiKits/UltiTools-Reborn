@@ -193,15 +193,16 @@ class CloudReconnectStateMachineTest {
         @DisplayName("disableCloud 会让在途的凭证操作作废")
         void disableCloudInvalidatesInFlightCredentialOperations() {
             // 只停调度器是不够的：stop* 用的都是 cancel(false)，拦不住一个已经进了 HTTP
-            // 请求的刷新或轮询，而两者都会在返回前写 currentToken 与 data.json。
-            // 没有这一步，logout 会被一个迟到几秒的刷新原地撤销。
-            long before = CloudAuthManager.currentCredentialGeneration();
+            // 请求的刷新或轮询，而两者都会在返回前写 token 与 data.json。没有这一步，
+            // logout 会被一个迟到几秒的刷新原地撤销。6.3.0 起判据不再是一个代际计数器，
+            // 而是这次拆线之前那个会话对象自身的 invalidated 标记。
+            CloudSession sessionBeforeDisable = CloudSession.current();
 
             PluginInitiationUtils.disableCloud();
 
-            assertThat(CloudAuthManager.currentCredentialGeneration())
-                    .as("拆线必须推进凭证代际，否则迟到的结果仍会被提交")
-                    .isGreaterThan(before);
+            assertThat(sessionBeforeDisable.isCurrent())
+                    .as("拆线必须让在途凭证操作所在的会话失效，否则迟到的结果仍会被提交")
+                    .isFalse();
         }
 
         @Test

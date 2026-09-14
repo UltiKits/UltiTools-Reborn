@@ -22,9 +22,15 @@ import com.ultikits.ultitools.entities.TokenEntity;
 
 /**
  * CloudAuthManager 测试类
- * Tests for the UltiCloud authentication token manager.
- * Tests focus on structure, static field behaviour, token state checks, and scheduler lifecycle.
- * Avoids calling any method that internally calls UltiTools.getInstance().
+ * Tests for the UltiCloud authentication facade and the {@link CloudSession} it delegates to.
+ * <p>
+ * As of 6.3.0 (plan 16-08, D-16/D-17/D-18) {@code CloudAuthManager} owns no state of its own --
+ * every field this class used to reflect into directly (the in-memory token, the poll/refresh
+ * executors and their scheduled tasks, the timing constants) now lives on {@link CloudSession}.
+ * {@link MethodSignatureTests} still targets {@code CloudAuthManager} directly, because its public
+ * static delegating facade is unchanged; every other nested class below was retargeted onto
+ * {@code CloudSession} (via {@link CloudSession#current()}), since that is where the state it
+ * exercises actually lives now.
  */
 @DisplayName("CloudAuthManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -35,22 +41,49 @@ class CloudAuthManagerTest {
     // -------------------------------------------------------------------------
 
     /**
-     * Read the value of a private static field from CloudAuthManager via reflection.
+     * Read the value of a private instance field on {@link CloudSession#current()} via reflection.
      */
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-    private static Object getStaticField(String name) throws Exception {
-        Field field = CloudAuthManager.class.getDeclaredField(name);
+    private static Object getSessionField(String name) throws Exception {
+        Field field = CloudSession.class.getDeclaredField(name);
         field.setAccessible(true);
-        return field.get(null);
+        return field.get(CloudSession.current());
     }
 
     /**
-     * Set the value of a private static field on CloudAuthManager via reflection.
+     * Set the value of a private instance field on {@link CloudSession#current()} via reflection.
      */
-    private static void setStaticField(String name, Object value) throws Exception {
-        Field field = CloudAuthManager.class.getDeclaredField(name);
+    private static void setSessionField(String name, Object value) throws Exception {
+        Field field = CloudSession.class.getDeclaredField(name);
         field.setAccessible(true);
-        field.set(null, value);
+        field.set(CloudSession.current(), value);
+    }
+
+    /**
+     * Read the value of a private static {@code long} field (a constant) on {@link CloudSession}.
+     */
+    private static long getSessionStaticLong(String name) throws Exception {
+        Field field = CloudSession.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.getLong(null);
+    }
+
+    /**
+     * Read the value of a private static {@code int} field (a constant) on {@link CloudSession}.
+     */
+    private static int getSessionStaticInt(String name) throws Exception {
+        Field field = CloudSession.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.getInt(null);
+    }
+
+    /**
+     * Read the value of a private static {@link String} field (a constant) on {@link CloudSession}.
+     */
+    private static String getSessionStaticString(String name) throws Exception {
+        Field field = CloudSession.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return (String) field.get(null);
     }
 
     /**
@@ -84,20 +117,16 @@ class CloudAuthManagerTest {
     // -------------------------------------------------------------------------
 
     @BeforeEach
-    void resetStaticState() throws Exception {
-        // Stop any running schedulers that previous tests may have started
-        CloudAuthManager.stopTokenRefreshScheduler();
-        CloudAuthManager.stopPolling();
-        // Null out the in-memory token
-        setStaticField("currentToken", null);
+    void resetStaticState() {
+        // CloudSession.current is a JVM-wide static (surefire runs this module with no forkCount,
+        // issue #250); a fresh, un-invalidated session with nothing scheduled replaces whatever a
+        // previous test class left behind, including any leaked poll/refresh executors.
+        CloudSession.resetForTesting();
     }
 
     @AfterEach
-    void cleanUpStaticState() throws Exception {
-        // Ensure schedulers are shut down so background threads don't outlive the test
-        CloudAuthManager.stopTokenRefreshScheduler();
-        CloudAuthManager.stopPolling();
-        setStaticField("currentToken", null);
+    void cleanUpStaticState() {
+        CloudSession.resetForTesting();
     }
 
     // =========================================================================
@@ -121,41 +150,43 @@ class CloudAuthManagerTest {
         }
 
         @Test
-        @DisplayName("currentToken 静态字段应该存在 / static field currentToken should exist")
-        void currentTokenFieldShouldExist() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("currentToken");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+        @DisplayName("CloudSession 应该拥有一个持有当前令牌的实例字段 / holds an instance field for the current token")
+        void sessionTokenFieldShouldExist() throws Exception {
+            Field field = CloudSession.class.getDeclaredField("token");
+            assertThat(Modifier.isStatic(field.getModifiers()))
+                    .as("the token is now instance state, owned by one session, not a class-wide static")
+                    .isFalse();
             assertThat(field.getType()).isEqualTo(TokenEntity.class);
         }
 
         @Test
-        @DisplayName("pollExecutor 静态字段应该存在 / static field pollExecutor should exist")
+        @DisplayName("CloudSession 应该拥有 pollExecutor 实例字段 / instance field pollExecutor should exist")
         void pollExecutorFieldShouldExist() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("pollExecutor");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("pollExecutor");
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(ScheduledExecutorService.class.isAssignableFrom(field.getType())).isTrue();
         }
 
         @Test
-        @DisplayName("refreshExecutor 静态字段应该存在 / static field refreshExecutor should exist")
+        @DisplayName("CloudSession 应该拥有 refreshExecutor 实例字段 / instance field refreshExecutor should exist")
         void refreshExecutorFieldShouldExist() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("refreshExecutor");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("refreshExecutor");
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(ScheduledExecutorService.class.isAssignableFrom(field.getType())).isTrue();
         }
 
         @Test
-        @DisplayName("pollTask 静态字段应该存在 / static field pollTask should exist")
+        @DisplayName("CloudSession 应该拥有 pollTask 实例字段 / instance field pollTask should exist")
         void pollTaskFieldShouldExist() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("pollTask");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("pollTask");
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
 
         @Test
-        @DisplayName("refreshTask 静态字段应该存在 / static field refreshTask should exist")
+        @DisplayName("CloudSession 应该拥有 refreshTask 实例字段 / instance field refreshTask should exist")
         void refreshTaskFieldShouldExist() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("refreshTask");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("refreshTask");
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
     }
 
@@ -170,45 +201,35 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("POLL_INTERVAL_MS 常量应该存在且值为 3000 / POLL_INTERVAL_MS should be 3000")
         void pollIntervalMsShouldBe3000() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("POLL_INTERVAL_MS");
-            field.setAccessible(true);
-            long value = field.getLong(null);
+            long value = getSessionStaticLong("POLL_INTERVAL_MS");
             assertThat(value).isEqualTo(3000L);
         }
 
         @Test
         @DisplayName("TOKEN_REFRESH_CHECK_INTERVAL_MS 应该为 3600000（1小时）/ should equal 1 hour in ms")
         void tokenRefreshCheckIntervalMsShouldBeOneHour() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("TOKEN_REFRESH_CHECK_INTERVAL_MS");
-            field.setAccessible(true);
-            long value = field.getLong(null);
+            long value = getSessionStaticLong("TOKEN_REFRESH_CHECK_INTERVAL_MS");
             assertThat(value).isEqualTo(60L * 60L * 1000L);
         }
 
         @Test
         @DisplayName("TOKEN_REFRESH_THRESHOLD_SECONDS 应该为 7200（2小时）/ should be 7200 seconds")
         void tokenRefreshThresholdSecondsShouldBe7200() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("TOKEN_REFRESH_THRESHOLD_SECONDS");
-            field.setAccessible(true);
-            long value = field.getLong(null);
+            long value = getSessionStaticLong("TOKEN_REFRESH_THRESHOLD_SECONDS");
             assertThat(value).isEqualTo(2L * 60L * 60L);
         }
 
         @Test
         @DisplayName("OAUTH2_BASIC_AUTH 应该以 'Basic ' 开头 / should start with 'Basic '")
         void oauth2BasicAuthShouldStartWithBasic() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("OAUTH2_BASIC_AUTH");
-            field.setAccessible(true);
-            String value = (String) field.get(null);
+            String value = getSessionStaticString("OAUTH2_BASIC_AUTH");
             assertThat(value).startsWith("Basic ");
         }
 
         @Test
         @DisplayName("OAUTH2_BASIC_AUTH 解码后应该等于 'client:112233' / should decode to 'client:112233'")
         void oauth2BasicAuthShouldDecodeToClientCredentials() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("OAUTH2_BASIC_AUTH");
-            field.setAccessible(true);
-            String value = (String) field.get(null);
+            String value = getSessionStaticString("OAUTH2_BASIC_AUTH");
 
             // Strip the "Basic " prefix and decode Base64
             String base64Part = value.substring("Basic ".length());
@@ -221,9 +242,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("MAX_POLL_ATTEMPTS 常量应该存在且大于 0 / MAX_POLL_ATTEMPTS should be positive")
         void maxPollAttemptsShouldBePositive() throws Exception {
-            Field field = CloudAuthManager.class.getDeclaredField("MAX_POLL_ATTEMPTS");
-            field.setAccessible(true);
-            int value = field.getInt(null);
+            int value = getSessionStaticInt("MAX_POLL_ATTEMPTS");
             assertThat(value).isGreaterThan(0);
         }
     }
@@ -361,7 +380,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("currentToken 为 null 时应返回 false / returns false when token is null")
         void shouldReturnFalseWhenCurrentTokenIsNull() throws Exception {
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
 
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
         }
@@ -372,7 +391,7 @@ class CloudAuthManagerTest {
             TokenEntity token = new TokenEntity();
             token.setAccess_token(null);
             token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
-            setStaticField("currentToken", token);
+            setSessionField("token", token);
 
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
         }
@@ -382,7 +401,7 @@ class CloudAuthManagerTest {
         void shouldReturnFalseWhenTokenIsExpired() throws Exception {
             // Set exp to 1 hour in the past
             TokenEntity expiredToken = buildTokenWithExp(-3600L);
-            setStaticField("currentToken", expiredToken);
+            setSessionField("token", expiredToken);
 
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
         }
@@ -392,7 +411,7 @@ class CloudAuthManagerTest {
         void shouldReturnTrueWhenTokenIsValid() throws Exception {
             // Set exp to 1 hour in the future
             TokenEntity validToken = buildTokenWithExp(3600L);
-            setStaticField("currentToken", validToken);
+            setSessionField("token", validToken);
 
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
         }
@@ -401,7 +420,7 @@ class CloudAuthManagerTest {
         @DisplayName("令牌刚好在未来1秒过期时应返回 true / returns true for a token expiring in 1 second")
         void shouldReturnTrueWhenTokenExpiresInOneSecond() throws Exception {
             TokenEntity almostExpiredToken = buildTokenWithExp(1L);
-            setStaticField("currentToken", almostExpiredToken);
+            setSessionField("token", almostExpiredToken);
 
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
         }
@@ -411,7 +430,7 @@ class CloudAuthManagerTest {
         void shouldReturnTrueWhenExpIsNull() throws Exception {
             // Per TokenEntity.isExpired(): if exp == null, returns false (not expired)
             TokenEntity tokenWithNullExp = buildTokenWithNullExp();
-            setStaticField("currentToken", tokenWithNullExp);
+            setSessionField("token", tokenWithNullExp);
 
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
         }
@@ -428,7 +447,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("初始状态（null）时应返回 null / returns null when currentToken is null")
         void shouldReturnNullWhenNoTokenSet() throws Exception {
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
 
             assertThat(CloudAuthManager.getCurrentToken()).isNull();
         }
@@ -437,7 +456,7 @@ class CloudAuthManagerTest {
         @DisplayName("设置 currentToken 后应返回相同对象 / returns the token that was set via reflection")
         void shouldReturnTokenAfterItIsSet() throws Exception {
             TokenEntity expectedToken = buildTokenWithExp(3600L);
-            setStaticField("currentToken", expectedToken);
+            setSessionField("token", expectedToken);
 
             TokenEntity result = CloudAuthManager.getCurrentToken();
 
@@ -447,9 +466,9 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("再次将 currentToken 置为 null 后应返回 null / returns null after being reset")
         void shouldReturnNullAfterReset() throws Exception {
-            setStaticField("currentToken", buildTokenWithExp(3600L));
+            setSessionField("token", buildTokenWithExp(3600L));
             // Reset to null
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
 
             assertThat(CloudAuthManager.getCurrentToken()).isNull();
         }
@@ -540,7 +559,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
-                (ScheduledExecutorService) getStaticField("refreshExecutor");
+                (ScheduledExecutorService) getSessionField("refreshExecutor");
             assertThat(executor).isNotNull();
         }
 
@@ -550,7 +569,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.startTokenRefreshScheduler();
             CloudAuthManager.stopTokenRefreshScheduler();
 
-            Object executor = getStaticField("refreshExecutor");
+            Object executor = getSessionField("refreshExecutor");
             assertThat(executor).isNull();
         }
 
@@ -560,7 +579,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.startTokenRefreshScheduler();
             CloudAuthManager.stopTokenRefreshScheduler();
 
-            Object task = getStaticField("refreshTask");
+            Object task = getSessionField("refreshTask");
             assertThat(task).isNull();
         }
 
@@ -568,14 +587,14 @@ class CloudAuthManagerTest {
         @DisplayName("stopTokenRefreshScheduler 在未启动时调用不应抛出异常 / idempotent when not started")
         void stopTokenRefreshSchedulerShouldBeIdempotentWhenNotRunning() throws Exception {
             // Ensure executor is null before calling stop
-            setStaticField("refreshExecutor", null);
-            setStaticField("refreshTask", null);
+            setSessionField("refreshExecutor", null);
+            setSessionField("refreshTask", null);
 
             // Should not throw any exception
             CloudAuthManager.stopTokenRefreshScheduler();
 
-            assertThat(getStaticField("refreshExecutor")).isNull();
-            assertThat(getStaticField("refreshTask")).isNull();
+            assertThat(getSessionField("refreshExecutor")).isNull();
+            assertThat(getSessionField("refreshTask")).isNull();
         }
 
         @Test
@@ -587,7 +606,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
-                (ScheduledExecutorService) getStaticField("refreshExecutor");
+                (ScheduledExecutorService) getSessionField("refreshExecutor");
             assertThat(executor).isNotNull();
             assertThat(executor.isShutdown()).isFalse();
         }
@@ -604,14 +623,14 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("stopPolling 在未启动时调用不应抛出异常 / idempotent when not started")
         void stopPollingShouldBeIdempotentWhenNotRunning() throws Exception {
-            setStaticField("pollExecutor", null);
-            setStaticField("pollTask", null);
+            setSessionField("pollExecutor", null);
+            setSessionField("pollTask", null);
 
             // Should not throw
             CloudAuthManager.stopPolling();
 
-            assertThat(getStaticField("pollExecutor")).isNull();
-            assertThat(getStaticField("pollTask")).isNull();
+            assertThat(getSessionField("pollExecutor")).isNull();
+            assertThat(getSessionField("pollTask")).isNull();
         }
 
         @Test
@@ -620,11 +639,11 @@ class CloudAuthManagerTest {
             // Manually plant an executor without calling startPolling (which needs UltiTools)
             ScheduledExecutorService fakeExecutor =
                 java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-            setStaticField("pollExecutor", fakeExecutor);
+            setSessionField("pollExecutor", fakeExecutor);
 
             CloudAuthManager.stopPolling();
 
-            assertThat(getStaticField("pollExecutor")).isNull();
+            assertThat(getSessionField("pollExecutor")).isNull();
             assertThat(fakeExecutor.isShutdown()).isTrue();
         }
 
@@ -637,12 +656,12 @@ class CloudAuthManagerTest {
             java.util.concurrent.ScheduledFuture<?> fakeTask =
                 fakeExecutor.schedule(() -> { }, 1, TimeUnit.HOURS);
 
-            setStaticField("pollExecutor", fakeExecutor);
-            setStaticField("pollTask", fakeTask);
+            setSessionField("pollExecutor", fakeExecutor);
+            setSessionField("pollTask", fakeTask);
 
             CloudAuthManager.stopPolling();
 
-            assertThat(getStaticField("pollTask")).isNull();
+            assertThat(getSessionField("pollTask")).isNull();
             assertThat(fakeTask.isCancelled()).isTrue();
         }
 
@@ -652,7 +671,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.stopPolling();
             CloudAuthManager.stopPolling(); // second call on already-null state
 
-            assertThat(getStaticField("pollExecutor")).isNull();
+            assertThat(getSessionField("pollExecutor")).isNull();
         }
     }
 
@@ -671,15 +690,15 @@ class CloudAuthManagerTest {
 
             // Capture the executor reference before stopping
             ScheduledExecutorService executorBeforeStop =
-                (ScheduledExecutorService) getStaticField("refreshExecutor");
+                (ScheduledExecutorService) getSessionField("refreshExecutor");
             assertThat(executorBeforeStop).isNotNull();
 
             CloudAuthManager.stopTokenRefreshScheduler();
 
             // The captured reference should now be shut down
             assertThat(executorBeforeStop.isShutdown()).isTrue();
-            // And the static field should be null
-            assertThat(getStaticField("refreshExecutor")).isNull();
+            // And the session field should be null
+            assertThat(getSessionField("refreshExecutor")).isNull();
         }
 
         @Test
@@ -688,7 +707,7 @@ class CloudAuthManagerTest {
             CloudAuthManager.startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
-                (ScheduledExecutorService) getStaticField("refreshExecutor");
+                (ScheduledExecutorService) getSessionField("refreshExecutor");
             assertThat(executor).isNotNull();
             // A single-thread scheduled executor is not a ThreadPoolExecutor subclass,
             // but we can verify it is usable (not shutdown) immediately after creation.
@@ -708,7 +727,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("初始时 getCurrentToken 返回 null / null before any token is set")
         void getCurrentTokenReturnsNullInitially() throws Exception {
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
 
             assertThat(CloudAuthManager.getCurrentToken()).isNull();
         }
@@ -717,7 +736,7 @@ class CloudAuthManagerTest {
         @DisplayName("设置有效令牌后 getCurrentToken 返回该令牌 / token accessible after injection")
         void getCurrentTokenReturnsInjectedToken() throws Exception {
             TokenEntity token = buildTokenWithExp(3600L);
-            setStaticField("currentToken", token);
+            setSessionField("token", token);
 
             assertThat(CloudAuthManager.getCurrentToken()).isEqualTo(token);
         }
@@ -725,20 +744,20 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("hasValidToken 在 null 令牌后设置有效令牌时状态应切换为 true")
         void hasValidTokenTransitionsFromFalseToTrue() throws Exception {
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
 
-            setStaticField("currentToken", buildTokenWithExp(3600L));
+            setSessionField("token", buildTokenWithExp(3600L));
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
         }
 
         @Test
         @DisplayName("令牌设置后清空 currentToken，hasValidToken 应再次返回 false")
         void hasValidTokenTransitionsFromTrueToFalse() throws Exception {
-            setStaticField("currentToken", buildTokenWithExp(3600L));
+            setSessionField("token", buildTokenWithExp(3600L));
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
 
-            setStaticField("currentToken", null);
+            setSessionField("token", null);
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
         }
 
@@ -746,7 +765,7 @@ class CloudAuthManagerTest {
         @DisplayName("过期令牌不应该被 hasValidToken 认为有效 / expired token is invalid")
         void expiredTokenIsNotValid() throws Exception {
             TokenEntity expiredToken = buildTokenWithExp(-7200L); // 2 hours ago
-            setStaticField("currentToken", expiredToken);
+            setSessionField("token", expiredToken);
 
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
         }
@@ -754,10 +773,10 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("将过期令牌替换为有效令牌后 hasValidToken 应返回 true")
         void replacingExpiredTokenWithValidTokenMakesItValid() throws Exception {
-            setStaticField("currentToken", buildTokenWithExp(-3600L));
+            setSessionField("token", buildTokenWithExp(-3600L));
             assertThat(CloudAuthManager.hasValidToken()).isFalse();
 
-            setStaticField("currentToken", buildTokenWithExp(3600L));
+            setSessionField("token", buildTokenWithExp(3600L));
             assertThat(CloudAuthManager.hasValidToken()).isTrue();
         }
     }
