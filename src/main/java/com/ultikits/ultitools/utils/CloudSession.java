@@ -514,11 +514,27 @@ final class CloudSession {
      * session's polling (via {@link #invalidate()}, or a direct {@link #stopPolling()}) is enough
      * to make every subsequent tick a no-op -- no separate credential-generation comparison is
      * needed, because {@link #pollLoginStatusOnce} below runs as a method on {@code this} instance.
+     * <p>
+     * <b>Round-1 review, fourth pass (16-10, PR #464):</b> this method is called from
+     * {@link #requestMagicLink(Consumer)}, which itself runs after a blocking HTTP POST -- a
+     * multi-second-to-longer round trip during which a {@code /ulticloud logout} can invalidate
+     * this session entirely. Before this fix, this method had no gate of its own: it unconditionally
+     * created a fresh poller even on an already-invalidated session, one nothing will ever stop
+     * again ({@code stopCredentialSchedulers()} only ever acts on {@link #current()}, which by then
+     * points elsewhere), leaking a status-polling task running every three seconds for up to five
+     * minutes. Checking {@link #invalidated} here, inside the same monitor {@link #invalidate()}
+     * itself synchronizes on, closes that: either this method runs to completion before
+     * {@link #invalidate()} can (and its poller is torn down normally, the ordinary case), or
+     * {@link #invalidate()} has already run and this call sees {@link #invalidated} and refuses to
+     * schedule anything at all.
      *
      * @param requestId  the magic link request ID
      * @param onComplete called when auth succeeds (with the token), or {@code null}
      */
     synchronized void startPolling(String requestId, Consumer<TokenEntity> onComplete) {
+        if (invalidated) {
+            return;
+        }
         stopPolling();
 
         pollExecutor = Executors.newSingleThreadScheduledExecutor();

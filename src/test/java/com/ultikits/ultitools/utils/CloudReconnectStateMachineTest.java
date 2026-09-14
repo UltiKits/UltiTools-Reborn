@@ -501,6 +501,24 @@ class CloudReconnectStateMachineTest {
                     .isEqualTo(2);
         }
 
+        @Test
+        @DisplayName("Round 1 外部评审（第四轮）：会话已经失效之后，一次迟到的 startPolling 调用必须什么都不做")
+        void startPollingOnAnAlreadyInvalidatedSessionSchedulesNothing() throws Exception {
+            // 复现：/ulticloud logout 在魔法链接的阻塞 POST 还在途时就已经跑完，把会话标记为失效；
+            // 随后那次 POST 才返回，requestMagicLink() 走到 startPolling()——如果这里不检查失效标记，
+            // 就会在一个已经没人能再碰到的会话上新建一个执行器，5 分钟内每 3 秒跑一次，永远没人能停。
+            CloudSession session = CloudSession.current();
+            session.invalidate();
+
+            session.startPolling("synthetic-request-id", token -> { });
+
+            Field pollExecutorField = CloudSession.class.getDeclaredField("pollExecutor");
+            pollExecutorField.setAccessible(true);
+            assertThat(pollExecutorField.get(session))
+                    .as("已失效的会话上调用 startPolling 不该创建任何执行器")
+                    .isNull();
+        }
+
         /** Builds a valid, non-expiring token and installs it on {@code session} via reflection. */
         private TokenEntity buildValidTokenOn(CloudSession session) throws Exception {
             TokenEntity token = new TokenEntity();
@@ -560,6 +578,40 @@ class CloudReconnectStateMachineTest {
                         .isTrue();
                 assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
                         .as("持有会话监视器期间，第二次确认到建连这段必须进不去")
+                        .isFalse();
+            }
+
+            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("释放锁之后应当立刻放行")
+                    .isTrue();
+            worker.join(1000);
+        }
+
+        @Test
+        @DisplayName("Round 1 外部评审（第四轮）：持有 CloudSession.class 的监视器期间，disableCloud 的「查有效性再拆全局管理器」整段必须进不去")
+        void currencyCheckThroughGlobalTeardownIsCoveredByTheClassLock() throws Exception {
+            // 复现的窄缝：一次性、锁外的「session 还是不是 current()」读取，和真正执行
+            // stopMonitoring()/shutdown() 之间，另一次登录的 startNew() 加上它自己紧跟着的握手接线
+            // 完全可以插进来。CloudSession.class 恰好是 startNew() 自己已经在用的那把锁——
+            // 用它把「查」和「拆」纳入同一段临界区，就能让这段代码与任何后续的 startNew() 调用互斥。
+            CloudSession session = CloudSession.current();
+
+            java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                started.countDown();
+                PluginInitiationUtils.disableCloud(session);
+                finished.countDown();
+            }, "round1-r4-teardown-lock-probe");
+            worker.setDaemon(true);
+
+            synchronized (CloudSession.class) {
+                worker.start();
+                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
+                        .isTrue();
+                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .as("持有 CloudSession.class 期间，查有效性到拆全局管理器这段必须进不去")
                         .isFalse();
             }
 

@@ -123,6 +123,19 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("Round 1 外部评审（第四轮）：TokenEntity[] 这种具体数组类型必须被抓到，不能因为它是 Class 而不是 GenericArrayType 就漏掉")
+    void publicStaticMethodReturningTokenEntityArrayReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(ArrayReturningOffender.class));
+
+        assertThat(violations)
+                .as("反射把具体数组 TokenEntity[] 表示成 isArray()==true 的 Class，从不是 " +
+                        "GenericArrayType——只处理 GenericArrayType 的旧版本会漏掉这一种")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
     @DisplayName("WR-03: the field scan mechanism is non-vacuous, pointed at the fixture's permanent offending field")
     void fieldScanMechanismCatchesAFixtureOffender() throws IOException, ClassNotFoundException {
         List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
@@ -219,6 +232,14 @@ class CredentialStaticSurfaceInvariantTest {
         public static void advanceGeneration(long generation) {
             // Never actually called -- reflected over only, to exercise the name-based
             // generation-shaped check against a synthetic offender.
+        }
+    }
+
+    static class ArrayReturningOffender {
+        // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (TokenEntity[]) is a plain
+        // Class with isArray() == true, never a GenericArrayType -- the pre-fix code missed this.
+        public static TokenEntity[] leaked() {
+            return null;
         }
     }
 

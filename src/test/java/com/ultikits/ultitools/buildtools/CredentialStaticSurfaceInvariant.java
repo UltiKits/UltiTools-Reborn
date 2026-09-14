@@ -269,6 +269,15 @@ public final class CredentialStaticSurfaceInvariant {
         if (type instanceof GenericArrayType) {
             return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType());
         }
+        if (type instanceof Class<?> && ((Class<?>) type).isArray()) {
+            return referencesTokenEntity(((Class<?>) type).getComponentType());
+        }
+        // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (e.g. `TokenEntity[]`) is
+        // represented by reflection as a plain Class with isArray() == true, never as a
+        // GenericArrayType -- GenericArrayType only covers a generic array whose component type is
+        // itself a type variable or parameterized type (e.g. T[] or List<String>[]). Without this
+        // branch, `public static TokenEntity[] leaked()` or a `public static TokenEntity[]` field
+        // would fall through to the final "plain Class" case below and be missed entirely.
         if (type instanceof WildcardType) {
             WildcardType wildcard = (WildcardType) type;
             for (Type upperBound : wildcard.getUpperBounds()) {

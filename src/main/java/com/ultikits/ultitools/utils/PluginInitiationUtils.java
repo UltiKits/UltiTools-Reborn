@@ -1941,32 +1941,54 @@ public class PluginInitiationUtils {
                 + "anything already in flight)",
             session::invalidate);
 
-        if (session != CloudSession.current()) {
-            // session has already been superseded -- see this method's own javadoc for why the two
-            // global-manager steps below must not run in that case.
-            return session;
+        // Round-1 review, fourth pass (16-10, PR #464): the currency check and the two
+        // global-manager teardown steps below must be ATOMIC with session replacement, not just
+        // consulted once before them. A one-time, unlocked read here (the prior fix's shape) still
+        // leaves a TOCTOU window: another login's startNew() -- and, immediately afterward, that
+        // fresh session's own onOpen wiring the same global managers -- can land in the gap between
+        // this check and the actual stopMonitoring()/shutdown() calls, so the stale teardown below
+        // still runs and undoes wiring that belongs to a session that, by the time it executes,
+        // already exists and is already current.
+        //
+        // synchronized (CloudSession.class) closes this window using the SAME monitor
+        // CloudSession#startNew() itself already synchronizes on -- no new lock object, no
+        // cross-package change. The reasoning: startNew() is the only thing that can make
+        // `session != CloudSession.current()` become true, and a newly-installed session's own
+        // wireManagers() call cannot begin before startNew() itself returns (the session object
+        // does not exist yet). Serializing this whole check-then-act block against startNew()
+        // therefore serializes it, transitively, against the new session's wiring too: either this
+        // block finishes entirely before any subsequent startNew() call can even start (so nothing
+        // new existed yet for the teardown to clobber), or a startNew() call already completed
+        // before this block started (in which case the very first read inside it already sees the
+        // new session as current and returns immediately, before touching either global manager).
+        synchronized (CloudSession.class) {
+            if (session != CloudSession.current()) {
+                // session has already been superseded -- see the reasoning above for why the two
+                // global-manager steps below must not run in that case.
+                return session;
+            }
+
+            // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update
+            // every 5 seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a
+            // world/player/plugin snapshot every 5 seconds). Before this line existed at all,
+            // stopMonitoring() had no caller anywhere in src/main — written, tested, just never
+            // wired up. Without stopping it, the main thread would keep iterating every world and
+            // chunk every 5 seconds after "cloud features are disabled."
+            teardownStep("stopping server monitor", () -> {
+                if (UltiTools.getInstance().getServerMonitorManager() != null) {
+                    UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
+                }
+            });
+
+            // Strip the player event listener. Still receiving player events after cloud is
+            // disabled is pure waste — the isConnected() check inside the event handler only
+            // suppresses sending a message; the listener itself keeps running. See issue #180.
+            teardownStep("shutting down player event manager", () -> {
+                if (UltiTools.getInstance().getPlayerEventManager() != null) {
+                    UltiTools.getInstance().getPlayerEventManager().shutdown();
+                }
+            });
         }
-
-        // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update every 5
-        // seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a world/player/plugin
-        // snapshot every 5 seconds). Before this line existed at all, stopMonitoring() had no caller
-        // anywhere in src/main — written, tested, just never wired up. Without stopping it, the main
-        // thread would keep iterating every world and chunk every 5 seconds after "cloud features
-        // are disabled."
-        teardownStep("stopping server monitor", () -> {
-            if (UltiTools.getInstance().getServerMonitorManager() != null) {
-                UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
-            }
-        });
-
-        // Strip the player event listener. Still receiving player events after cloud is disabled is
-        // pure waste — the isConnected() check inside the event handler only suppresses sending a
-        // message; the listener itself keeps running. See issue #180.
-        teardownStep("shutting down player event manager", () -> {
-            if (UltiTools.getInstance().getPlayerEventManager() != null) {
-                UltiTools.getInstance().getPlayerEventManager().shutdown();
-            }
-        });
 
         return session;
     }
