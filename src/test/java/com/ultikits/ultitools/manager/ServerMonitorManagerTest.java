@@ -7,6 +7,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -851,6 +852,12 @@ class ServerMonitorManagerTest {
             return config;
         }
 
+        private void invokeMaybeSendLogsOnly(ServerMonitorManager manager) throws Exception {
+            Method method = ServerMonitorManager.class.getDeclaredMethod("maybeSendLogsOnly");
+            method.setAccessible(true);
+            method.invoke(manager);
+        }
+
         private void invokeSendBatchUpdate(ServerMonitorManager manager) throws Exception {
             Method method = ServerMonitorManager.class.getDeclaredMethod("sendBatchUpdate");
             method.setAccessible(true);
@@ -1001,6 +1008,92 @@ class ServerMonitorManagerTest {
 
                 assertThat(data.has("logs")).as("16 seconds have passed, past the 15-second interval").isTrue();
                 assertThat(queueSizeOf(transmitter)).as("the queue was drained").isZero();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: maybeSendLogsOnly 在 interval 到期时独立于 5 秒的 sendBatchUpdate tick 发送仅含 logs 的 batch_update")
+        void maybeSendLogsOnlySendsALogsOnlyBatchUpdateWhenDue() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(7000); // not a multiple of the 5s sendBatchUpdate tick
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 7500);
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject message = sent.getValue();
+                assertThat(message.get("type").getAsString()).isEqualTo("batch_update");
+                JsonObject data = message.getAsJsonObject("data");
+                assertThat(data.has("logs")).isTrue();
+                assertThat(data.has("status"))
+                        .as("a logs-only tick must not also carry status/metrics -- that is sendBatchUpdate()'s own job")
+                        .isFalse();
+                assertThat(data.has("metrics")).isFalse();
+                assertThat(queueSizeOf(transmitter)).isZero();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: interval 未到期时 maybeSendLogsOnly 不发送任何消息")
+        void maybeSendLogsOnlySendsNothingWhenNotYetDue() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(7000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 2000); // well under 7s
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                assertThat(queueSizeOf(transmitter))
+                        .as("nothing drained -- the queued line must still be waiting")
+                        .isEqualTo(1);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: maybeSendLogsOnly 与 sendBatchUpdate 共享同一个 lastLogFlushMs 闸门 -- 谁先到都不会重复发送")
+        void maybeSendLogsOnlyAndSendBatchUpdateShareTheSameGateNoDoubleSend() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(1000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 5000);
+
+                // The 1-second task fires first and drains.
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+                reset(mockWebSocketClient);
+                when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+                // sendBatchUpdate()'s own 5-second tick fires immediately after -- must see the
+                // gate already satisfied by maybeSendLogsOnly and NOT re-include an (empty) logs
+                // array from an already-drained queue.
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.has("logs"))
+                        .as("the queue was already drained by maybeSendLogsOnly -- nothing left to include")
+                        .isFalse();
             } finally {
                 transmitter.shutdown();
             }

@@ -745,6 +745,32 @@ class LogStreamManagerTest {
             JsonObject respData = captor.getValue().getAsJsonObject("data");
             assertThat(respData.get("status").getAsString()).isEqualTo("config_unchanged");
         }
+
+        @Test
+        @DisplayName("Gate-2 round 3: levels 字段存在但不是 JSON 数组（字符串）时整个请求被拒绝，即使同时带了合法 batchConfig")
+        void nonArrayLevelsFieldIsRejectedEvenWithAnAccompanyingValidBatchConfig() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            int intervalBefore = logStreamManager.getLogTransmitter().getIntervalMs();
+
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-gate2-nonarray-levels");
+            data.addProperty("levels", "error"); // a bare string, not a JSON array
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("interval", 9000);
+            data.add("batchConfig", batchConfig);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(data);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject respData = captor.getValue().getAsJsonObject("data");
+            assertThat(respData.get("message").getAsString()).contains("levels").contains("array");
+
+            // The accompanying valid batchConfig must NOT have applied either.
+            assertThat(logStreamManager.getLogTransmitter().getIntervalMs()).isEqualTo(intervalBefore);
+        }
     }
 
     // ==================== batchConfig 校验集成测试 (WR-01, WR-02) ====================

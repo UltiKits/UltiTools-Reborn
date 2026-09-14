@@ -268,6 +268,17 @@ public class LogStreamManager implements Listener {
                         }
                         requestedLevels.add(normalizedLevel);
                     }
+                } else {
+                    // Gate-2 finding (round 3): a `levels` field present but NOT a JSON array
+                    // (a string, object, or null) used to silently leave levelsPresent false --
+                    // the malformed section was dropped rather than rejected, so an accompanying
+                    // valid batchConfig would still apply and report config_updated, silently
+                    // ignoring the requested (malformed) level change. Reject the whole request
+                    // instead, matching #433's own "reject the whole request" precedent for an
+                    // unrecognised level value.
+                    sendErrorResponse(clientId, "Failed to update configuration: 'levels' must be "
+                            + "a JSON array of level names");
+                    return;
                 }
             }
 

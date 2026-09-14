@@ -225,10 +225,21 @@ public class ServerMonitorManager {
         }
 
         // Send a batch_update every 5 seconds (includes status and metrics; includes plugins
-        // every 12th tick; includes logs every time).
+        // every 12th tick; includes logs every time it is due per lastLogFlushMs).
         // Note: this thread **only sends** -- every piece of Bukkit state comes from the
         // main-thread-sampled snapshot. See issue #179.
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
+
+        // Gate-2 finding (round 3): sendBatchUpdate()'s own logs inclusion is gated by
+        // lastLogFlushMs, but that gate was only ever CHECKED on sendBatchUpdate()'s own fixed
+        // 5-second tick, so a configured interval was still quantized up to a multiple of 5
+        // seconds (1000ms drained no faster than every 5s; 7000ms drained roughly every 10s,
+        // not 7). This second task checks the SAME lastLogFlushMs gate at a finer, 1-second
+        // granularity, independent of sendBatchUpdate()'s own tick -- see
+        // maybeSendLogsOnly()'s own javadoc for why sharing the one field is race-safe and
+        // does not double-send. Cancelled implicitly by stopMonitoring()'s scheduler.shutdown(),
+        // same as the task above -- neither is tracked in its own field.
+        scheduler.scheduleAtFixedRate(this::maybeSendLogsOnly, 1, 1, TimeUnit.SECONDS);
 
         // Start the TPS calculation + CPU sampling task (every second)
         tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
@@ -700,6 +711,68 @@ public class ServerMonitorManager {
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "Failed to send batch update: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Checks the log-drain interval gate at a 1-second granularity, independent of
+     * {@link #sendBatchUpdate()}'s own fixed 5-second tick (Gate-2 finding, round 3).
+     * <p>
+     * Both this method and {@link #sendBatchUpdate()} read and write the SAME
+     * {@link #lastLogFlushMs} field, so this is race-safe by construction: whichever of the two
+     * scheduled tasks reaches the {@code now - lastLogFlushMs >= intervalMs} check first drains
+     * the queue and advances {@code lastLogFlushMs}; the other sees the interval has not elapsed
+     * yet and no-ops. There is no lock because both run on the same single-threaded
+     * {@link #scheduler} pool -- {@code newScheduledThreadPool(2)} gives two worker threads, but
+     * {@code ScheduledExecutorService} still executes each individually-scheduled task's
+     * successive firings serially; the two DIFFERENT scheduled tasks (this one and
+     * {@code sendBatchUpdate}) sharing that pool can still interleave with each other, but the
+     * {@code volatile long} field makes each individual read-then-write atomic enough for a
+     * "don't drain twice" gate (a rare double-drain in the race window would merely double-count
+     * an empty queue, not lose or duplicate log entries -- {@link UltiPanelLogTransmitter#drainQueue}
+     * is itself safe to call with nothing queued).
+     * <p>
+     * Sends a {@code batch_update} message carrying ONLY {@code data.logs} when logs are both due
+     * and non-empty -- not a new message type: the Worker's own handler
+     * (`websocket-server.ts` `case 'batch_update'`) already guards every field with
+     * {@code if (batch.X)}, so a partial batch_update is an already-supported shape, not a
+     * protocol change.
+     */
+    private void maybeSendLogsOnly() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            long now = System.currentTimeMillis();
+            if (now - lastLogFlushMs < transmitter.getIntervalMs()) {
+                return;
+            }
+
+            JsonArray logs = transmitter.drainQueue(50);
+            lastLogFlushMs = now;
+            if (logs.size() == 0) {
+                return;
+            }
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
+            JsonObject data = new JsonObject();
+            data.add("logs", logs);
+            message.add("data", data);
+            webSocketClient.sendMessage(message);
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Failed to send log-only batch update: " + e.getMessage(), e);
         }
     }
 
