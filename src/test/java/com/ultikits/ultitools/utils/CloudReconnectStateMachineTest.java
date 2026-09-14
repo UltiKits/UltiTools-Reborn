@@ -449,6 +449,24 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("Round 1 外部评审（第二轮）：对一个已被取代的会话拆线，不能连带停掉全局管理器——它们可能已经属于新会话")
+        void teardownOfASupersededSessionDoesNotStopGlobalManagersTheCurrentSessionMayAlreadyOwn() {
+            // 全局管理器（server monitor、player-event manager）只有一份，不属于任何具体会话。
+            // 若一次针对已被取代的旧会话的拆线调用无条件停掉它们，就会把新会话已经接好的（或即将
+            // 接好的）全局管理器状态一并拆掉，而没有任何后续回调会把它们重新接上。
+            CloudSession oldSession = CloudSession.current();
+
+            CloudSession newSession = CloudSession.startNew(); // oldSession 从此不再是 current()
+            assertThat(oldSession.isCurrent())
+                    .as("前置条件：oldSession 此刻确实已经被取代")
+                    .isFalse();
+
+            PluginInitiationUtils.disableCloud(oldSession);
+
+            Mockito.verify(mockMonitor, Mockito.never()).stopMonitoring();
+        }
+
+        @Test
         @DisplayName("WR-07：握手成功之后重置的是这次握手自己那个会话的退避额度，不是事后重新读到的 current()")
         void handshakeSuccessResetsTheHandshakesOwnSessionBackoffNotWhateverIsCurrent() {
             CloudSession session = CloudSession.current();

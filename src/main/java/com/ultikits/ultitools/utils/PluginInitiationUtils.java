@@ -1911,12 +1911,18 @@ public class PluginInitiationUtils {
      * <p>
      * {@code session} is the caller's own choice of target, captured before this method does
      * anything else -- {@link CloudSession#invalidate()} below acts on exactly this reference, never
-     * a fresh read of {@link CloudSession#current()} taken partway through teardown (CR-01). The
-     * two steps that remain here after plan 16-10 (WR-01 moved the log-stream shutdown inside
-     * {@link CloudSession#invalidate()} itself, see that method's javadoc) are global managers with
-     * exactly one instance each -- they are torn down regardless of which specific session
-     * triggered the call, since "cloud disabled" is a statement about the whole server, not about
-     * one session in isolation.
+     * a fresh read of {@link CloudSession#current()} taken partway through teardown (CR-01).
+     * <p>
+     * <b>Round-1 external review finding, second pass (16-10, PR #464):</b> the two steps below act
+     * on GLOBAL, session-independent singletons (exactly one server monitor and one player-event
+     * manager for the whole plugin, not one per session) -- but "session-independent" does not mean
+     * "safe to run unconditionally". If {@code session} has already been superseded by a newer one
+     * by the time this runs (the same narrow window WR-02 already accounts for on the invalidation
+     * half), and that newer session's own handshake has already wired these same managers up, an
+     * unconditional stop here would tear down wiring that belongs to the session that is actually
+     * current now -- with nothing left to ever restart it, since no further handshake is coming.
+     * Gating both steps on {@code session} still being current closes that: a stale teardown call
+     * for an already-superseded session leaves whatever the current session has wired alone.
      *
      * @param session the session to invalidate
      * @return {@code session}
@@ -1927,19 +1933,26 @@ public class PluginInitiationUtils {
         // WebSocket client, and invalidate anything already in flight. One call, one lock (the
         // session's own), so none of those pieces can be caught mid-transition by a concurrent
         // activation. See CloudSession#invalidate()'s own javadoc for why this single call is
-        // sufficient where the old code needed a careful multi-step order.
+        // sufficient where the old code needed a careful multi-step order. This step always runs,
+        // regardless of currency -- a session invalidating itself again after already being
+        // superseded is a harmless no-op (see CloudSession#invalidate()'s own idempotency note).
         teardownStep("invalidating the cloud session (shuts down the log stream manager, stops the "
                 + "refresh scheduler, the polling, closes the WebSocket client, and discards "
                 + "anything already in flight)",
             session::invalidate);
+
+        if (session != CloudSession.current()) {
+            // session has already been superseded -- see this method's own javadoc for why the two
+            // global-manager steps below must not run in that case.
+            return session;
+        }
 
         // Stop server monitoring. It carries its own ScheduledExecutorService (batch_update every 5
         // seconds) plus two main-thread Bukkit scheduled tasks (1Hz TPS/CPU, a world/player/plugin
         // snapshot every 5 seconds). Before this line existed at all, stopMonitoring() had no caller
         // anywhere in src/main — written, tested, just never wired up. Without stopping it, the main
         // thread would keep iterating every world and chunk every 5 seconds after "cloud features
-        // are disabled." Session-independent: there is exactly one server monitor for the whole
-        // plugin, not one per session.
+        // are disabled."
         teardownStep("stopping server monitor", () -> {
             if (UltiTools.getInstance().getServerMonitorManager() != null) {
                 UltiTools.getInstance().getServerMonitorManager().stopMonitoring();
@@ -1948,8 +1961,7 @@ public class PluginInitiationUtils {
 
         // Strip the player event listener. Still receiving player events after cloud is disabled is
         // pure waste — the isConnected() check inside the event handler only suppresses sending a
-        // message; the listener itself keeps running. See issue #180. Session-independent, same
-        // reasoning as the server monitor above.
+        // message; the listener itself keeps running. See issue #180.
         teardownStep("shutting down player event manager", () -> {
             if (UltiTools.getInstance().getPlayerEventManager() != null) {
                 UltiTools.getInstance().getPlayerEventManager().shutdown();
