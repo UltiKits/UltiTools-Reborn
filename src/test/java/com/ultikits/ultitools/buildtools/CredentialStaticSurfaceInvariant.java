@@ -296,10 +296,7 @@ public final class CredentialStaticSurfaceInvariant {
             // TokenEntity ONLY in getOwnerType() (the reflected `Outer<TokenEntity>`); Inner's own
             // raw type and actual type arguments, both already checked above, mention nothing
             // about it. Without this branch such a return type or parameter would pass unnoticed.
-            if (referencesTokenEntity(parameterized.getOwnerType(), visited)) {
-                return true;
-            }
-            return false;
+            return referencesTokenEntity(parameterized.getOwnerType(), visited);
         }
         if (type instanceof GenericArrayType) {
             return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType(), visited);

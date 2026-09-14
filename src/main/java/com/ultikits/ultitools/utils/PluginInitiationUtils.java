@@ -39,6 +39,47 @@ public class PluginInitiationUtils {
     private static final String SERVER_PROPERTIES_FILE = "server_properties";
 
     /**
+     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
+     * that serves it.
+     * <p>
+     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
+     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
+     * finding). A switch multiplies independent path counts by the number of branches; a lookup
+     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
+     * rather than by how many message types exist. Built once, statically, and never mutated after
+     * construction — see {@link #buildInboundHandlers()}.
+     * <p>
+     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
+     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
+     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
+     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
+     * this repository already has twice, in its command-executor and GUI generations.
+     */
+    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
+            Collections.unmodifiableMap(buildInboundHandlers());
+
+    /**
+     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
+     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
+     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
+     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
+     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
+     * ever hitting this warning at runtime.
+     */
+    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
+
+    // Round-8 external review finding (16-10, PR #464): the prior comment here claimed "all field
+    // declarations precede all methods", but that was false at the time it was written --
+    // currentWebSocketClient() and setWebSocketClientForTesting() below were already two methods
+    // ahead of these three fields, an incomplete PMD FieldDeclarationsShouldBeAtStartOfClass fix
+    // from the Phase 06 Codacy remediation commit that a later addition (this class's cloud-session
+    // methods) silently reopened. All three fields now genuinely precede every method in this
+    // class. Both INBOUND_HANDLERS's and SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS's initializers
+    // remain static-method-call / literal expressions with no dependency on declaration order
+    // relative to other members (buildInboundHandlers() does not reference any other field in this
+    // class; see the Phase 06 Codacy remediation commit for the original verification).
+
+    /**
      * The WebSocket client belonging to {@link CloudSession#current()}, or {@code null} if none is
      * connected.
      * <p>
@@ -73,43 +114,6 @@ public class PluginInitiationUtils {
         session.setWebSocketClient(client);
         return previous;
     }
-
-    /**
-     * The inbound-message dispatch table: message {@code type} string to the {@link InboundHandlerEntry}
-     * that serves it.
-     * <p>
-     * Replaces what used to be a 24-case {@code switch} inside {@link #handleInboundMessage}
-     * (NPath complexity 1514 against a threshold of 200 — see issue #234's coupled complexity
-     * finding). A switch multiplies independent path counts by the number of branches; a lookup
-     * does not, so the paths through {@link #handleInboundMessage} are now bounded by its guards
-     * rather than by how many message types exist. Built once, statically, and never mutated after
-     * construction — see {@link #buildInboundHandlers()}.
-     * <p>
-     * Not module-visible and never will be: this is framework-internal routing for the fixed set of
-     * panel protocol messages. Module-facing panel messaging is a separate, deliberately narrower
-     * surface (EventBus broadcast plus a single-owner request/response responder) that a later phase
-     * owns. A second module-visible dispatch mechanism grown out of this table would repeat a mistake
-     * this repository already has twice, in its command-executor and GUI generations.
-     */
-    private static final Map<String, InboundHandlerEntry> INBOUND_HANDLERS =
-            Collections.unmodifiableMap(buildInboundHandlers());
-
-    /**
-     * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
-     * slow enough to warn about, in milliseconds. Set below one server tick (50ms at the nominal
-     * 20 TPS) so a subscriber costing a visible fraction of the tick budget is named before
-     * players feel it — this constant is the runtime half of D-24's mitigation; {@link
-     * PanelMessageEvent}'s javadoc is the other half, stating the contract a reader sees before
-     * ever hitting this warning at runtime.
-     */
-    private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
-
-    // Both fields above are declared here — rather than at their original, method-adjacent
-    // positions — so that all field declarations precede all methods (PMD
-    // FieldDeclarationsShouldBeAtStartOfClass). Both initializers are static-method-call /
-    // literal expressions with no dependency on declaration order relative to other members
-    // (buildInboundHandlers() does not reference the removed cloud state-machine fields; see the
-    // Phase 06 Codacy remediation commit for the verification).
 
     /**
      * Attempts to resume a previously-saved UltiCloud credential at startup: loads it from disk on
