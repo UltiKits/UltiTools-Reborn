@@ -73,10 +73,61 @@ public final class CredentialStaticSurfaceInvariant {
      */
     public static List<String> evaluate(Collection<Method> methods) {
         Objects.requireNonNull(methods, "methods");
-        // RED (16-09, Task 2): deliberately vacuous -- looks at nothing, reports nothing. Proves
-        // the test suite actually exercises this method rather than passing by construction; see
-        // 16-09-SUMMARY.md for the recorded failure this produced before the real rule below replaced it.
-        return new ArrayList<>();
+
+        // TreeMap keyed by Method#toString() -- deterministic order regardless of the caller's
+        // collection implementation or insertion order, mirroring RemovalConsistencyEvaluator's use
+        // of a TreeSet for the same reason.
+        TreeMap<String, Method> sorted = new TreeMap<>();
+        for (Method method : methods) {
+            Objects.requireNonNull(method, "methods must not contain a null element");
+            sorted.put(method.toString(), method);
+        }
+
+        List<String> violations = new ArrayList<>();
+        for (Method method : sorted.values()) {
+            int modifiers = method.getModifiers();
+            if (!Modifier.isPublic(modifiers) || !Modifier.isStatic(modifiers)) {
+                // The rule is about the PUBLIC surface, not about statics in general -- a
+                // package-private or private static method is not reachable from outside the
+                // package and is not the bypass D-18 names.
+                continue;
+            }
+
+            List<String> reasons = new ArrayList<>();
+            if (method.getReturnType() == TokenEntity.class) {
+                reasons.add("returns " + TokenEntity.class.getSimpleName());
+            }
+            boolean acceptsToken = false;
+            for (Class<?> paramType : method.getParameterTypes()) {
+                if (paramType == TokenEntity.class) {
+                    acceptsToken = true;
+                }
+            }
+            if (acceptsToken) {
+                reasons.add("accepts a " + TokenEntity.class.getSimpleName() + " parameter");
+            }
+
+            if (nameSuggestsGeneration(method)) {
+                boolean generationReturn = method.getReturnType() == long.class;
+                boolean generationParam = false;
+                for (Class<?> paramType : method.getParameterTypes()) {
+                    if (paramType == long.class) {
+                        generationParam = true;
+                    }
+                }
+                if (generationReturn) {
+                    reasons.add("returns a generation-shaped long");
+                }
+                if (generationParam) {
+                    reasons.add("accepts a generation-shaped long parameter");
+                }
+            }
+
+            if (!reasons.isEmpty()) {
+                violations.add(describe(method) + ": " + String.join("; ", reasons));
+            }
+        }
+        return violations;
     }
 
     private static String describe(Method method) {
