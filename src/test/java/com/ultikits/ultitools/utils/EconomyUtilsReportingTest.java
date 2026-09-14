@@ -268,5 +268,33 @@ class EconomyUtilsReportingTest {
 
             assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isNull();
         }
+
+        @Test
+        @DisplayName("a sibling package with a shared string prefix but no package boundary is NOT attributed (Codex P2, 16-07)")
+        void siblingPackageWithSharedPrefixButNoBoundary_doesNotMatch() {
+            // "com.example.foobar" shares the raw string "com.example.foo" as a prefix, but is a
+            // completely unrelated package -- a plain String#startsWith check would misattribute
+            // this request to "ModuleFoo", spending that module's once-per-session dedup slot on a
+            // caller that was never actually inside it.
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.foobar.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example.foo", "ModuleFoo");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isNull();
+        }
+
+        @Test
+        @DisplayName("a class that IS the mapped package's own top-level class (no trailing dot) still matches")
+        void exactPackagePrefixWithNoTrailingSegment_stillMatches() {
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.foo.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example.foo", "ModuleFoo");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleFoo");
+        }
     }
 }
