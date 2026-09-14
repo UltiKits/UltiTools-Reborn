@@ -171,6 +171,14 @@ above instead of waiting a full MINOR:
 - `listeners.EnhancedPlayerEventListener` — clause 1, proven non-functional: it carried
   `@EventListener`, nothing registered it, and all seven of its handlers were measured never to
   fire on a real 1.21.4 server (issue #387).
+- `manager.LogStreamManager.pauseLogStream(String)` / `resumeLogStream(String)` — clause 1, proven
+  non-functional: `LogStreamManager` auto-subscribes a permanent, never-paused `"auto"` client on
+  every WebSocket connect, so the delivery-suppression check these methods drove could never
+  observe "no active subscriber" for any real panel session on any released version — reproduced
+  by a test that pauses a distinctly-named client while `"auto"`'s entry survives untouched, which
+  still delivers (issue #434, maintainer decision D-19). Removed rather than fixed because a true
+  per-viewer pause needs Worker-side viewer identity this framework does not have and is not
+  authorized to add here; the framework now rejects `pause`/`resume` outright instead.
 
 Full reasoning and evidence for all seven live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).

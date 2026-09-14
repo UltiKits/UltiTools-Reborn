@@ -9,7 +9,6 @@ import lombok.Setter;
 
 import java.util.HashSet;
 import java.util.Set;
-import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -36,32 +35,6 @@ public class SystemLogHandler extends Handler {
     // Minimum log level
     @Getter @Setter
     private Level minimumLevel = Level.INFO;
-
-    /**
-     * Whether at least one subscribed panel client currently wants delivery (i.e. is not
-     * paused). Defaults to "always active" so a handler constructed without a
-     * {@link com.ultikits.ultitools.manager.LogStreamManager LogStreamManager} behind it (every
-     * existing direct-construction test, and any future caller that does not wire one up) keeps
-     * delivering exactly as before this check was added (#434).
-     * <p>
-     * Deliberately a {@link BooleanSupplier}, not a cached field: {@code publish(LogRecord)}
-     * runs on every record the server emits, so the check must stay allocation-light, and it
-     * must never itself call a logger -- doing so would re-enter this very handler (the
-     * feedback-loop hazard {@link ErrorReportCollector}'s own class javadoc already documents
-     * for the sibling error-reporting path).
-     */
-    private volatile BooleanSupplier activeSubscriberCheck = () -> true;
-
-    /**
-     * Sets the check consulted on every {@link #publish(LogRecord)} call to decide whether any
-     * subscribed panel client currently wants delivery. Passing {@code null} restores the
-     * always-active default.
-     *
-     * @param check a no-argument, allocation-light, non-logging boolean check
-     */
-    public void setActiveSubscriberCheck(BooleanSupplier check) {
-        this.activeSubscriberCheck = check != null ? check : () -> true;
-    }
 
     /**
      * Constructor.
@@ -129,13 +102,6 @@ public class SystemLogHandler extends Handler {
     
     @Override
     public void publish(LogRecord record) {
-        // #434: nothing to deliver to if no subscribed panel client currently wants it (every
-        // client paused, or none subscribed at all). Checked first -- cheapest test, and it
-        // means a fully-paused stream never even reaches the exclusion/formatting work below.
-        if (!activeSubscriberCheck.getAsBoolean()) {
-            return;
-        }
-
         // Check whether this log record should be processed
         if (!shouldProcessRecord(record)) {
             return;
@@ -145,21 +111,25 @@ public class SystemLogHandler extends Handler {
             // Map the log level
             String level = mapLogLevel(record.getLevel());
 
-            // Check whether the level is enabled
-            if (!enabledLevels.contains(level)) {
-                return;
-            }
-
-            // Format the message
-            String message = formatLogMessage(record);
-
-            // Determine the log source
+            // Determine the log source -- computed unconditionally: it feeds BOTH the panel
+            // delivery below (gated by enabledLevels) AND the ErrorReportCollector report
+            // (deliberately NOT gated by enabledLevels -- see the comment there, CR-02).
             String source = determineLogSource(record);
 
-            // Send the log
-            logTransmitter.sendLog(level, message, source, record.getThrown());
+            // Check whether the level is enabled for panel delivery
+            if (enabledLevels.contains(level)) {
+                // Format the message and send the log
+                String message = formatLogMessage(record);
+                logTransmitter.sendLog(level, message, source, record.getThrown());
+            }
 
-            // Report error-level logs with exceptions to ErrorReportCollector
+            // Report error-level logs with exceptions to ErrorReportCollector, regardless of
+            // whether the panel's own live log-view level filter currently excludes "error"
+            // (CR-02): the log stream (what the panel view shows) and the error-reporting
+            // pipeline (UltiPanel's automatic exception collection) are two independent
+            // declared surfaces. Before #433 made the levels filter genuinely effective, this
+            // coupling existed in code but was unreachable over the network; making one control
+            // real must not silently disable the other.
             if ("error".equals(level) && record.getThrown() != null) {
                 try {
                     UltiTools instance = UltiTools.getInstance();

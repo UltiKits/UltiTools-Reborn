@@ -272,9 +272,12 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("处理 pause action - 应该暂停日志流")
-        void shouldHandlePauseAction() throws Exception {
+        @DisplayName("处理 pause action -- D-19: 拒绝，而不是暂停 -- 订阅状态不受影响")
+        void shouldRejectPauseAction() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
             logStreamManager.startLogStream("client-123", "info");
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             JsonObject data = new JsonObject();
             data.addProperty("action", "pause");
@@ -282,15 +285,25 @@ class LogStreamManagerTest {
 
             logStreamManager.handleLogStreamMessage(data);
 
+            // Subscription state is untouched -- pause is rejected, not applied.
             ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-123")).isFalse(); // 暂停状态
+            assertThat(clients.get("client-123")).isTrue();
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("message").getAsString())
+                    .contains("not supported")
+                    .contains("panel view's own action");
         }
 
         @Test
-        @DisplayName("处理 resume action - 应该恢复日志流")
-        void shouldHandleResumeAction() throws Exception {
+        @DisplayName("处理 resume action -- D-19: 拒绝，而不是恢复")
+        void shouldRejectResumeAction() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
             logStreamManager.startLogStream("client-123", "info");
-            logStreamManager.pauseLogStream("client-123");
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             JsonObject data = new JsonObject();
             data.addProperty("action", "resume");
@@ -299,7 +312,14 @@ class LogStreamManagerTest {
             logStreamManager.handleLogStreamMessage(data);
 
             ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-123")).isTrue(); // 恢复状态
+            assertThat(clients.get("client-123")).isTrue();
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("message").getAsString())
+                    .contains("not supported")
+                    .contains("panel view's own action");
         }
 
         @Test
@@ -519,56 +539,16 @@ class LogStreamManagerTest {
         }
     }
 
-    // ==================== pauseLogStream / resumeLogStream 测试 ====================
+    // ==================== D-19: pause/resume rejection, via the real inbound dispatch ====================
     @Nested
-    @DisplayName("pauseLogStream 和 resumeLogStream 测试")
-    class PauseResumeTests {
-
-        @Test
-        @DisplayName("暂停应该将客户端状态设置为 false")
-        void pauseShouldSetClientStateToFalse() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.pauseLogStream("client-1");
-
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-1")).isFalse();
-        }
-
-        @Test
-        @DisplayName("恢复应该将客户端状态设置为 true")
-        void resumeShouldSetClientStateToTrue() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.pauseLogStream("client-1");
-            logStreamManager.resumeLogStream("client-1");
-
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-1")).isTrue();
-        }
-
-        @Test
-        @DisplayName("恢复应该确保 streaming 为 true")
-        void resumeShouldEnsureStreamingIsTrue() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            getStreamingState().set(false); // 手动设置为 false
-
-            logStreamManager.resumeLogStream("client-1");
-
-            assertThat(logStreamManager.isStreaming()).isTrue();
-        }
-    }
-
-    // ==================== 暂停投递集成测试 (T-16-11-01, issue #434) ====================
-    @Nested
-    @DisplayName("暂停投递集成测试 -- 暂停必须实际停止交付，而不仅仅是写一个没人读的标志位")
-    class PauseDeliveryIntegrationTests {
+    @DisplayName("D-19: pause/resume 通过真实的 handleLogStreamMessage 入站分发被拒绝，投递不受影响")
+    class PauseResumeRejectionTests {
 
         @BeforeEach
         void forceImmediateSendMode() {
             // Immediate-send mode: a forwarded record reaches webSocketClient.sendMessage()
             // synchronously, on the same thread as publish(), instead of waiting on the
-            // transmitter's fixed-delay batch scheduler -- same technique as
-            // LogStreamManagerCommandCaptureTest, reused here so this class does not depend on
-            // the scheduler's real-world 5s cadence.
+            // transmitter's fixed-delay batch scheduler.
             when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
             when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
         }
@@ -577,74 +557,67 @@ class LogStreamManagerTest {
             Logger.getLogger("").log(new LogRecord(Level.INFO, message));
         }
 
+        private JsonObject pauseOrResume(String action, String clientId) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", action);
+            data.addProperty("clientId", clientId);
+            return data;
+        }
+
         @Test
-        @DisplayName("一个已订阅且未暂停的客户端：发布的记录到达一次")
-        void oneActiveSubscribedClientReceivesRecordOnce() {
+        @DisplayName("发送 pause action（真实入站分发）：收到拒绝响应，命名 panel view 自己的动作")
+        void sendingPauseViaRealInboundDispatchReturnsRejection() {
             logStreamManager.initialize(mockWebSocketClient);
-            // initialize() auto-subscribes "auto" as active -- no pause/resume touches it here.
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-            publishRecord("pause-it-active");
+            logStreamManager.handleLogStreamMessage(pauseOrResume("pause", "auto"));
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
             JsonObject data = captor.getValue().getAsJsonObject("data");
-            assertThat(data.get("message").getAsString()).isEqualTo("pause-it-active");
+            assertThat(data.get("message").getAsString())
+                    .contains("pause")
+                    .contains("not supported")
+                    .contains("panel view's own action");
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
         }
 
         @Test
-        @DisplayName("该客户端被暂停后：发布的记录不再到达")
-        void pausedClientReceivesNothing() {
+        @DisplayName("发送 resume action（真实入站分发）：收到拒绝响应")
+        void sendingResumeViaRealInboundDispatchReturnsRejection() {
             logStreamManager.initialize(mockWebSocketClient);
-            logStreamManager.pauseLogStream("auto");
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-            publishRecord("pause-it-paused");
+            logStreamManager.handleLogStreamMessage(pauseOrResume("resume", "auto"));
 
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString())
+                    .contains("resume")
+                    .contains("not supported")
+                    .contains("panel view's own action");
         }
 
         @Test
-        @DisplayName("恢复后：发布的记录再次到达")
-        void resumedClientReceivesRecordAgain() {
+        @DisplayName("发送 pause 之后：投递完全不受影响 -- 拒绝是唯一效果，没有任何交付路径被触碰")
+        void sendingPauseDoesNotAffectDelivery() {
             logStreamManager.initialize(mockWebSocketClient);
-            logStreamManager.pauseLogStream("auto");
-            logStreamManager.resumeLogStream("auto");
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-            publishRecord("pause-it-resumed");
-
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("两个客户端，一个暂停一个未暂停：记录仍会送达 -- 暂停一个不会让另一个静音")
-        void oneOfTwoSubscribedClientsPausedStillDelivers() {
-            logStreamManager.initialize(mockWebSocketClient);
-            logStreamManager.startLogStream("viewer-2", "info");
-            logStreamManager.pauseLogStream("auto");
-            reset(mockWebSocketClient);
+            logStreamManager.handleLogStreamMessage(pauseOrResume("pause", "auto"));
+            reset(mockWebSocketClient); // clear the rejection response captured above
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-            publishRecord("pause-it-mixed");
+            publishRecord("still-delivered-after-pause-request");
 
-            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("零个订阅客户端：发布既不抛异常也不会投递")
-        void zeroSubscribersNeitherThrowsNorDelivers() {
-            logStreamManager.initialize(mockWebSocketClient);
-            logStreamManager.stopLogStream("auto"); // the only subscriber initialize() creates
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-
-            assertDoesNotThrow(() -> publishRecord("pause-it-zero-subscribers"));
-
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).isEqualTo("still-delivered-after-pause-request");
         }
     }
 
@@ -771,6 +744,105 @@ class LogStreamManagerTest {
             verify(mockWebSocketClient).sendMessage(captor.capture());
             JsonObject respData = captor.getValue().getAsJsonObject("data");
             assertThat(respData.get("status").getAsString()).isEqualTo("config_unchanged");
+        }
+    }
+
+    // ==================== batchConfig 校验集成测试 (WR-01, WR-02) ====================
+    @Nested
+    @DisplayName("batchConfig 校验集成测试 -- 面板的 config action 必须共享启动路径同样的下限，并且拒绝时不留下部分生效的字段")
+    class BatchConfigValidationTests {
+
+        private JsonObject configActionWithBatch(String clientId, JsonObject batchConfig) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", clientId);
+            data.add("batchConfig", batchConfig);
+            return data;
+        }
+
+        @Test
+        @DisplayName("WR-01: 面板发来的 interval 低于启动路径的 1000ms 下限时被拒绝，响应中说明下限")
+        void panelIntervalBelowTheSharedFloorIsRejected() {
+            logStreamManager.initialize(mockWebSocketClient);
+            int before = logStreamManager.getLogTransmitter().getIntervalMs();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("interval", 1); // #-16-REVIEW-panel.md WR-01's exact repro value
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-wr01", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("1000");
+
+            // The previous interval survives -- unchanged, not driven to a ~1000-sends/second cadence.
+            assertThat(logStreamManager.getLogTransmitter().getIntervalMs()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("WR-01: 恰好等于 1000ms 的下限值被接受")
+        void panelIntervalAtExactlyTheFloorIsAccepted() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("interval", 1000);
+
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-wr01b", batchConfig));
+
+            assertThat(logStreamManager.getLogTransmitter().getIntervalMs()).isEqualTo(1000);
+        }
+
+        @Test
+        @DisplayName("WR-02: 一个请求里 enabled/size 和一个非法 interval 一起发来时，enabled/size 也不生效 -- 全部拒绝，而不是部分生效")
+        void batchConfigWithAnInvalidIntervalAppliesNoFieldAtAll() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            boolean enabledBefore = transmitter.isBatchEnabled();
+            int sizeBefore = transmitter.getBatchSize();
+            int intervalBefore = transmitter.getIntervalMs();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("enabled", !enabledBefore); // a real, observable change if applied
+            batchConfig.addProperty("size", sizeBefore + 37);   // ditto
+            batchConfig.addProperty("interval", 1);              // invalid -- below the shared floor
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-wr02", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("1000");
+
+            // WR-02: none of the three fields in this one batchConfig object took effect --
+            // not even enabled/size, which by themselves would have been valid.
+            assertThat(transmitter.isBatchEnabled()).isEqualTo(enabledBefore);
+            assertThat(transmitter.getBatchSize()).isEqualTo(sizeBefore);
+            assertThat(transmitter.getIntervalMs()).isEqualTo(intervalBefore);
+        }
+
+        @Test
+        @DisplayName("WR-02 对照组: 全部字段都合法时，全部生效")
+        void batchConfigWithAllValidFieldsAppliesAllOfThem() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("enabled", true);
+            batchConfig.addProperty("size", 42);
+            batchConfig.addProperty("interval", 7000);
+
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-wr02b", batchConfig));
+
+            assertThat(transmitter.isBatchEnabled()).isTrue();
+            assertThat(transmitter.getBatchSize()).isEqualTo(42);
+            assertThat(transmitter.getIntervalMs()).isEqualTo(7000);
         }
     }
 
@@ -1369,15 +1441,24 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("连续暂停恢复应该正确处理")
-        void shouldHandleMultiplePauseResume() throws Exception {
+        @DisplayName("D-19: 连续多次发送 pause/resume action 都应该被拒绝，且不改变订阅状态")
+        void shouldRejectRepeatedPauseResumeActions() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
             logStreamManager.startLogStream("client-1", "info");
-            
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
             for (int i = 0; i < 5; i++) {
-                logStreamManager.pauseLogStream("client-1");
-                assertThat(getSubscribedClients().get("client-1")).isFalse();
-                
-                logStreamManager.resumeLogStream("client-1");
+                JsonObject pause = new JsonObject();
+                pause.addProperty("action", "pause");
+                pause.addProperty("clientId", "client-1");
+                logStreamManager.handleLogStreamMessage(pause);
+                assertThat(getSubscribedClients().get("client-1")).isTrue();
+
+                JsonObject resume = new JsonObject();
+                resume.addProperty("action", "resume");
+                resume.addProperty("clientId", "client-1");
+                logStreamManager.handleLogStreamMessage(resume);
                 assertThat(getSubscribedClients().get("client-1")).isTrue();
             }
         }
@@ -1471,42 +1552,51 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("暂停响应 status 应该是 paused")
-        void pauseResponseStatusShouldBePaused() throws Exception {
+        @DisplayName("D-19: pause 的响应是 error 响应形状（type: log_stream_response 但 data 没有 status 字段），不是 paused")
+        void pauseResponseIsARejectionNotAStatusResponse() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             logStreamManager.startLogStream("client-1", "info");
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.pauseLogStream("client-1");
+
+            JsonObject pause = new JsonObject();
+            pause.addProperty("action", "pause");
+            pause.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(pause);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
             JsonObject data = message.getAsJsonObject("data");
-            assertThat(data.get("status").getAsString()).isEqualTo("paused");
+            assertThat(data.has("status")).isFalse(); // sendErrorResponse's shape, not sendStreamResponse's
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
         }
 
         @Test
-        @DisplayName("恢复响应 status 应该是 resumed")
-        void resumeResponseStatusShouldBeResumed() throws Exception {
+        @DisplayName("D-19: resume 的响应同样是 error 响应形状，不是 resumed")
+        void resumeResponseIsARejectionNotAStatusResponse() throws Exception {
             setWebSocketClient(mockWebSocketClient);
             logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.pauseLogStream("client-1");
             reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.resumeLogStream("client-1");
+
+            JsonObject resume = new JsonObject();
+            resume.addProperty("action", "resume");
+            resume.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(resume);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
             JsonObject data = message.getAsJsonObject("data");
-            assertThat(data.get("status").getAsString()).isEqualTo("resumed");
+            assertThat(data.has("status")).isFalse();
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
         }
     }
 

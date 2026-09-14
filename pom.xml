@@ -580,6 +580,20 @@
                             <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                            <!-- 16-13-PLAN.md (D-19, maintainer decision 2026-09-14): pause/resume
+                                 on the log stream is removed from the remote surface, not
+                                 implemented - the framework has no per-viewer identity to honour a
+                                 per-viewer pause with (see LogStreamManager's own javadoc on
+                                 sendPauseResumeRejection). Both public methods present in the
+                                 released 6.2.5 jar (confirmed via javap against
+                                 ~/.m2/repository/com/ultikits/UltiTools-API/6.2.5/
+                                 UltiTools-API-6.2.5.jar); measured zero external callers under
+                                 Modules/ and Tooling/UltiTools-External-Example (control:
+                                 UltiToolsPlugin references 182 files in the same search, re-measured
+                                 2026-09-14). Recorded in COMPATIBILITY.md and
+                                 compatibility/records/6.3.0.md. -->
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#pauseLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#resumeLogStream(java.lang.String)</exclude>
                         </excludes>
                     </parameter>
                 </configuration>

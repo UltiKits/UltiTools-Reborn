@@ -106,9 +106,6 @@ public class LogStreamManager implements Listener {
 
         // Create and configure the system log handler
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
-        // #434: wire the delivery path to the subscriber map's pause state -- see
-        // hasActiveSubscriber()'s javadoc for why this is a global, not per-client, check.
-        this.systemLogHandler.setActiveSubscriberCheck(this::hasActiveSubscriber);
         this.systemLogHandler.loadConfiguration();
 
         // Add the system log handler to the root Logger
@@ -146,7 +143,7 @@ public class LogStreamManager implements Listener {
             
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.interval")) {
                 int interval = UltiTools.getInstance().getConfig().getInt("ultipanel.logging.batch.interval", 5000);
-                logTransmitter.setIntervalMs(Math.max(1000, interval));
+                logTransmitter.setIntervalMs(Math.max(UltiPanelLogTransmitter.MIN_INTERVAL_MS, interval));
             }
             
             UltiTools.getInstance().getLogger().info(String.format(
@@ -208,10 +205,10 @@ public class LogStreamManager implements Listener {
                 stopLogStream(clientId);
                 break;
             case "pause":
-                pauseLogStream(clientId);
-                break;
             case "resume":
-                resumeLogStream(clientId);
+                // D-19 (maintainer decision, 2026-09-14): pause/resume are rejected, not
+                // implemented. See sendPauseResumeRejection()'s javadoc for the full reasoning.
+                sendPauseResumeRejection(clientId, action);
                 break;
             case "status":
                 sendStreamStatus(clientId);
@@ -270,20 +267,49 @@ public class LogStreamManager implements Listener {
                 }
             }
 
-            // Update the batch-send configuration
+            // Update the batch-send configuration.
+            //
+            // WR-02: parse and validate every present field FIRST, before applying any of them.
+            // Before this fix, each field was applied via its own setter call inside this same
+            // try block; if `enabled`/`size` applied successfully and `interval` then failed
+            // validation, the IllegalArgumentException propagated to the outer catch and
+            // reported "Failed to update configuration" -- but `enabled`/`size` had, in fact,
+            // already been mutated with no rollback. Validating everything up front means a
+            // rejected batchConfig object leaves every field it names untouched, matching #433's
+            // own "reject the whole request" precedent for an unrecognised level.
             if (data.has("batchConfig") && logTransmitter != null) {
                 JsonObject batchConfig = data.getAsJsonObject("batchConfig");
-                boolean batchChanged = false;
+                Boolean newEnabled = null;
+                Integer newSize = null;
+                Integer newInterval = null;
+
                 if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
-                    logTransmitter.setBatchEnabled(batchConfig.get("enabled").getAsBoolean());
-                    batchChanged = true;
+                    newEnabled = batchConfig.get("enabled").getAsBoolean();
                 }
                 if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
-                    logTransmitter.setBatchSize(batchConfig.get("size").getAsInt());
-                    batchChanged = true;
+                    newSize = batchConfig.get("size").getAsInt();
                 }
                 if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
-                    logTransmitter.setIntervalMs(batchConfig.get("interval").getAsInt());
+                    newInterval = batchConfig.get("interval").getAsInt();
+                    if (newInterval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
+                        sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
+                                + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
+                                + "ms, got: " + newInterval);
+                        return;
+                    }
+                }
+
+                boolean batchChanged = false;
+                if (newEnabled != null) {
+                    logTransmitter.setBatchEnabled(newEnabled);
+                    batchChanged = true;
+                }
+                if (newSize != null) {
+                    logTransmitter.setBatchSize(newSize);
+                    batchChanged = true;
+                }
+                if (newInterval != null) {
+                    logTransmitter.setIntervalMs(newInterval);
                     batchChanged = true;
                 }
                 if (batchChanged) {
@@ -345,30 +371,33 @@ public class LogStreamManager implements Listener {
     }
 
     /**
-     * Pauses the log stream.
+     * Rejects a {@code pause}/{@code resume} request (D-19, maintainer decision 2026-09-14).
+     * <p>
+     * This framework has no per-viewer identity to honour a per-viewer pause with: the delivery
+     * messages ({@code log_stream}/{@code log_batch}) carry no per-client address at all --
+     * {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the single WebSocket
+     * connection this server holds to the panel relay, which fans a delivered record out to
+     * however many browser viewers are subscribed on that connection, invisibly to this
+     * framework. #434's original fix (a global "does any subscriber want delivery" check) could
+     * never actually suppress anything in production, because {@link #initialize} permanently
+     * subscribes a synthetic {@code "auto"} client that is never paused -- see
+     * {@code 16-REVIEW-panel.md} CR-01. Rather than build real per-viewer session identity
+     * (cross-repository, not authorised here), the framework declares the action unsupported and
+     * says so: pausing the live view is the panel view's own action (stop rendering new lines,
+     * optionally buffer them client-side), and the server keeps streaming to every subscribed
+     * client regardless. {@code stop}/{@code start} remain the way to unsubscribe/resubscribe.
+     * The removed {@code pauseLogStream(String)}/{@code resumeLogStream(String)} public methods
+     * are recorded in {@code COMPATIBILITY.md} under the same-release exception.
      */
-    public void pauseLogStream(String clientId) {
-        subscribedClients.put(clientId, false); // Mark as paused
-
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 暂停日志流", clientId));
-
-        sendStreamResponse(clientId, "paused", "Log stream paused");
+    private void sendPauseResumeRejection(String clientId, String action) {
+        sendErrorResponse(clientId, "The '" + action + "' action is not supported: pausing the "
+                + "live log view is the panel view's own action (stop rendering, optionally "
+                + "buffer client-side) -- the server has no per-viewer visibility into the panel "
+                + "relay's fan-out and keeps streaming to every subscribed client regardless. "
+                + "Use 'stop'/'start' to unsubscribe/resubscribe instead.");
     }
 
-    /**
-     * Resumes the log stream.
-     */
-    public void resumeLogStream(String clientId) {
-        subscribedClients.put(clientId, true);
-        streaming.set(true);
-        
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 恢复日志流", clientId));
-        
-        sendStreamResponse(clientId, "resumed", "Log stream resumed");
-    }
-    
+
     /**
      * Sends a stream response message.
      */
@@ -462,23 +491,6 @@ public class LogStreamManager implements Listener {
      */
     public int getSubscriberCount() {
         return subscribedClients.size();
-    }
-
-    /**
-     * Whether at least one subscribed client currently wants log delivery, i.e. holds a
-     * {@code true} (not-paused) entry in {@link #subscribedClients}.
-     * <p>
-     * The panel-facing delivery messages ({@code log_stream}/{@code log_batch}) carry no
-     * per-client address -- {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the
-     * single WebSocket connection this server holds to the panel relay, which then fans a
-     * delivered record out to every viewer subscribed on that connection. The framework has no
-     * visibility into that fan-out, so a per-client pause cannot selectively withhold a record
-     * from just one paused viewer: delivery can only be suppressed once every subscribed client
-     * has paused, or none are subscribed at all (#434). See this plan's summary for the full
-     * reasoning behind choosing this global check over a per-client one.
-     */
-    boolean hasActiveSubscriber() {
-        return subscribedClients.containsValue(Boolean.TRUE);
     }
 
     /**

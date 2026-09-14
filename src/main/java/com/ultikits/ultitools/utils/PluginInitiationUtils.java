@@ -1445,6 +1445,19 @@ public class PluginInitiationUtils {
         }
 
         // Worker acknowledgement of the server's own uploadConfig() push -- see issue #359.
+        //
+        // WR-04: this is a PRESENCE-ONLY heuristic, not a structural discriminator -- any
+        // upload_config payload carrying a "message" field is treated as the Worker's
+        // acknowledgement, unconditionally, before the configType-based write logic below ever
+        // runs. Correct against the one real sender that exists today (the Worker's generic
+        // response.type = message.type echo never includes configContent, and the plugin's own
+        // uploadConfig() push never includes "message"), but if a FUTURE legitimate write
+        // request-shaped payload ever also carried a "message" field (e.g. a client-supplied
+        // comment, or an error description alongside configType), it would be silently absorbed
+        // here as an "acknowledgement" -- no write happens, and no response is sent at all, so
+        // the sender gets no feedback. If upload_config ever gains a second real producer,
+        // prefer a structural marker (a role/direction field, or the absence of configContent)
+        // over field presence alone.
         if (data.has("message")) {
             String message = data.get("message").getAsString();
             UltiTools.getInstance().getLogger().log(Level.FINE,

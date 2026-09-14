@@ -180,52 +180,62 @@ class SystemLogHandlerTest {
         verify(mockTransmitter).sendLog(eq("info"), eq("Hello %d [参数: World]"), anyString(), isNull());
     }
 
-    // ==================== activeSubscriberCheck tests (#434) ====================
+    // ==================== CR-02: ErrorReportCollector decoupled from the levels filter ====================
 
     @Test
-    void testActiveSubscriberCheckDefaultsToActiveDelivery() {
-        // No setActiveSubscriberCheck call at all -- matches every pre-existing test above,
-        // and any future caller that never wires one up.
-        LogRecord record = new LogRecord(Level.INFO, "Default active");
+    void testErrorReportingReachesCollectorEvenWhenErrorLevelExcludedFromDelivery() {
+        // #433 made the levels filter genuinely effective; CR-02: excluding "error" from the
+        // panel's live log view must NOT also silently disable ErrorReportCollector's automatic
+        // SEVERE-exception reporting -- the two are independent declared surfaces.
+        handler.removeEnabledLevel("error");
+
+        Throwable thrown = new RuntimeException("boom");
+        LogRecord record = new LogRecord(Level.SEVERE, "Severe with throwable");
         record.setLoggerName("plugin.MyPlugin");
+        record.setThrown(thrown);
 
-        handler.publish(record);
+        com.ultikits.ultitools.manager.ErrorReportCollector mockErc =
+                mock(com.ultikits.ultitools.manager.ErrorReportCollector.class);
+        com.ultikits.ultitools.UltiTools mockInstance = mock(com.ultikits.ultitools.UltiTools.class);
+        org.mockito.Mockito.when(mockInstance.getErrorReportCollector()).thenReturn(mockErc);
 
-        verify(mockTransmitter).sendLog(eq("info"), eq("Default active"), eq("plugin:MyPlugin"), isNull());
-    }
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> staticMock =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class)) {
+            staticMock.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(mockInstance);
 
-    @Test
-    void testActiveSubscriberCheckFalseSuppressesDelivery() {
-        handler.setActiveSubscriberCheck(() -> false);
-        LogRecord record = new LogRecord(Level.INFO, "Paused");
-        record.setLoggerName("plugin.MyPlugin");
+            handler.publish(record);
+        }
 
-        handler.publish(record);
-
+        // Panel delivery IS suppressed (levels filter excludes "error")...
         verifyNoInteractions(mockTransmitter);
+        // ...but the ErrorReportCollector report is NOT suppressed.
+        verify(mockErc).reportError(eq(thrown), eq("MyPlugin"), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
-    void testActiveSubscriberCheckTrueAllowsDelivery() {
-        handler.setActiveSubscriberCheck(() -> true);
-        LogRecord record = new LogRecord(Level.INFO, "Active");
+    void testErrorReportingStillWorksWhenErrorLevelIsEnabled() {
+        // Control: the "error" level stays enabled by default, so both the panel delivery AND
+        // the ErrorReportCollector report fire -- proves the decoupling didn't accidentally
+        // break the ordinary case.
+        Throwable thrown = new RuntimeException("boom");
+        LogRecord record = new LogRecord(Level.SEVERE, "Severe with throwable, error enabled");
         record.setLoggerName("plugin.MyPlugin");
+        record.setThrown(thrown);
 
-        handler.publish(record);
+        com.ultikits.ultitools.manager.ErrorReportCollector mockErc =
+                mock(com.ultikits.ultitools.manager.ErrorReportCollector.class);
+        com.ultikits.ultitools.UltiTools mockInstance = mock(com.ultikits.ultitools.UltiTools.class);
+        org.mockito.Mockito.when(mockInstance.getErrorReportCollector()).thenReturn(mockErc);
 
-        verify(mockTransmitter).sendLog(eq("info"), eq("Active"), eq("plugin:MyPlugin"), isNull());
-    }
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> staticMock =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class)) {
+            staticMock.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(mockInstance);
 
-    @Test
-    void testNullActiveSubscriberCheckFallsBackToActiveDelivery() {
-        handler.setActiveSubscriberCheck(() -> false); // first pause it
-        handler.setActiveSubscriberCheck(null); // then clear -- must restore active, not stay paused
+            handler.publish(record);
+        }
 
-        LogRecord record = new LogRecord(Level.INFO, "Restored to active");
-        record.setLoggerName("plugin.MyPlugin");
-
-        handler.publish(record);
-
-        verify(mockTransmitter).sendLog(eq("info"), eq("Restored to active"), eq("plugin:MyPlugin"), isNull());
+        verify(mockTransmitter).sendLog(eq("error"), eq("Severe with throwable, error enabled"),
+                eq("plugin:MyPlugin"), eq(thrown));
+        verify(mockErc).reportError(eq(thrown), eq("MyPlugin"), org.mockito.ArgumentMatchers.any());
     }
 }

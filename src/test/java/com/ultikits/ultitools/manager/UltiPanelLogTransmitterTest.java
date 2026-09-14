@@ -425,6 +425,31 @@ class UltiPanelLogTransmitterTest {
         }
 
         @Test
+        @DisplayName("WR-01: 低于共享下限（1000ms）但仍为正数的 interval 同样被拒绝，并保留之前生效的值")
+        void positiveIntervalBelowTheSharedFloorIsRejectedAndThePreviousValueSurvives() {
+            int before = logTransmitter.getIntervalMs();
+
+            // 1ms is positive -- the OLD `intervalMs <= 0` check alone would have accepted this,
+            // driving the scheduler to a roughly 1000-sends/second cadence (16-REVIEW-panel.md
+            // WR-01's exact repro value).
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("1000");
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(999))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("WR-01: 恰好等于共享下限（1000ms）的 interval 被接受")
+        void intervalExactlyAtTheSharedFloorIsAccepted() {
+            logTransmitter.setIntervalMs(1000);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(1000);
+        }
+
+        @Test
         @DisplayName("禁用批量发送会停止调度任务；重新以当前 interval 启用会重新启动它")
         void disablingBatchingStopsTheSenderReEnablingStartsItAgain() throws Exception {
             assertThat(currentTask()).isNotNull();

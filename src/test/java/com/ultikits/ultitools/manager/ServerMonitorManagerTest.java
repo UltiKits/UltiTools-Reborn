@@ -988,9 +988,12 @@ class ServerMonitorManagerTest {
         }
 
         @Test
-        @DisplayName("diskUsage 取自注入的 total/usable 读数，不是目录遍历")
+        @DisplayName("diskUsage 取自注入的 total/usable 读数，不是目录遍历 -- free == usable 时（无 root 保留块），等价于旧公式")
         void diskUsageIsComputedFromInjectedTotalAndUsableSpace() {
-            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 750L); // 25% used
+            // free == usable == 750: no root-reserved allocation, so WR-03's df-style formula
+            // ((total - free) / ((total - free) + usable)) coincides with the simpler
+            // (total - usable) / total this scenario used to assert -- both give 25%.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 750L, root -> 750L);
             serverMonitorManager.refreshStateSnapshot();
             serverMonitorManager.sendMetricsData();
 
@@ -998,9 +1001,38 @@ class ServerMonitorManagerTest {
         }
 
         @Test
+        @DisplayName("WR-03: free < usable（有 root 保留块）时按 df 的 Use% 惯例计算，而不是 (total-usable)/total")
+        void diskUsageFollowsDfConventionWhenReservedBlocksExist() {
+            // total=1000, free=550 (includes the 200 reserved for root), usable=350 (excludes
+            // it) -- a stand-in for a real ext4 volume's ~5-15% reserved-block allocation.
+            // df-style: used = total - free = 450; Use% = used / (used + usable) = 450/800 = 56.25%.
+            // The OLD (total - usable) / total formula would have given (1000-350)/1000 = 65.0%
+            // -- a ~9-point divergence, confirming the two formulas are NOT interchangeable here.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 550L, root -> 350L);
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(56.25);
+        }
+
+        @Test
         @DisplayName("文件系统报告总空间为零时返回 0.0，而不是除零错误")
         void zeroTotalSpaceProducesZeroNotADivisionError() {
-            serverMonitorManager.setDiskSpaceReaders(root -> 0L, root -> 0L);
+            serverMonitorManager.setDiskSpaceReaders(root -> 0L, root -> 0L, root -> 0L);
+            serverMonitorManager.refreshStateSnapshot();
+
+            assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("used+avail 分母为零（free 等于 total 且 usable 为零）时返回 0.0，而不是除零错误")
+        void zeroDenominatorProducesZeroNotADivisionError() {
+            // total == free (nothing used at all) and usable == 0 -- used = 0, denominator =
+            // used + usable = 0. This is a distinct edge case from the zero-total-space one
+            // above: total is nonzero here, so the first guard does not catch it.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 1000L, root -> 0L);
             serverMonitorManager.refreshStateSnapshot();
 
             assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());

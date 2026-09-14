@@ -32,6 +32,18 @@ public class UltiPanelLogTransmitter {
 
     private static final int MAX_QUEUE_SIZE = 1000;
 
+    /**
+     * Shared lower bound for the batch-send interval (#432/WR-01). Before this fix, the
+     * boot-time path ({@link LogStreamManager#loadBatchConfiguration()}) clamped to 1000ms via
+     * its own inline {@code Math.max(1000, interval)}, while this class's own
+     * {@link #setIntervalMs(int)} -- reachable live, over the panel's WebSocket {@code config}
+     * action -- only rejected a non-positive value, leaving every value from 1ms up accepted. A
+     * panel operator (or a compromised/buggy panel session) could drive the batch scheduler to a
+     * roughly 1000-sends/second cadence indefinitely. Both entry points now share this one
+     * constant instead of the live path being silently more permissive than the boot path.
+     */
+    static final int MIN_INTERVAL_MS = 1000;
+
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
@@ -217,13 +229,14 @@ public class UltiPanelLogTransmitter {
      * running task to reschedule); the new value still takes effect the next time batching is
      * enabled.
      *
-     * @param intervalMs the new interval; must be positive
-     * @throws IllegalArgumentException if {@code intervalMs} is zero or negative -- the previous
-     *         interval is left in effect
+     * @param intervalMs the new interval; must be at least {@link #MIN_INTERVAL_MS}
+     * @throws IllegalArgumentException if {@code intervalMs} is below {@link #MIN_INTERVAL_MS}
+     *         (including zero or negative) -- the previous interval is left in effect
      */
     public void setIntervalMs(int intervalMs) {
-        if (intervalMs <= 0) {
-            throw new IllegalArgumentException("Batch interval must be positive, got: " + intervalMs);
+        if (intervalMs < MIN_INTERVAL_MS) {
+            throw new IllegalArgumentException(
+                    "Batch interval must be at least " + MIN_INTERVAL_MS + "ms, got: " + intervalMs);
         }
         if (intervalMs == this.intervalMs) {
             return;

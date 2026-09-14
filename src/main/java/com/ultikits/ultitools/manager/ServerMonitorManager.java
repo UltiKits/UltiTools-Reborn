@@ -96,6 +96,15 @@ public class ServerMonitorManager {
      */
     private ToLongFunction<File> totalSpaceReader = File::getTotalSpace;
 
+    /**
+     * Seam over {@link File#getFreeSpace()} (WR-03) -- includes space reserved for the
+     * filesystem's own root/superuser allocation, matching what {@code df}'s own {@code Use%}
+     * column treats as "used" (total minus this value). Distinct from {@link #usableSpaceReader}
+     * ({@link File#getUsableSpace()}), which EXCLUDES that reservation -- the two diverge on a
+     * real ext4 volume with a nonzero reserved-block percentage.
+     */
+    private ToLongFunction<File> freeSpaceReader = File::getFreeSpace;
+
     /** Seam over {@link File#getUsableSpace()}, same rationale as {@link #totalSpaceReader}. */
     private ToLongFunction<File> usableSpaceReader = File::getUsableSpace;
 
@@ -112,12 +121,14 @@ public class ServerMonitorManager {
     }
 
     /**
-     * Test seam: inject fake total/usable-space readers (e.g. to force the zero-total-space
-     * outcome deterministically, or to pin a known used-percentage without depending on the real
-     * filesystem's actual free space). Production code never calls this.
+     * Test seam: inject fake total/free/usable-space readers (e.g. to force the
+     * zero-total-space outcome deterministically, or to pin a known used-percentage without
+     * depending on the real filesystem's actual free space). Production code never calls this.
      */
-    void setDiskSpaceReaders(ToLongFunction<File> totalSpaceReader, ToLongFunction<File> usableSpaceReader) {
+    void setDiskSpaceReaders(ToLongFunction<File> totalSpaceReader, ToLongFunction<File> freeSpaceReader,
+            ToLongFunction<File> usableSpaceReader) {
         this.totalSpaceReader = totalSpaceReader;
+        this.freeSpaceReader = freeSpaceReader;
         this.usableSpaceReader = usableSpaceReader;
     }
 
@@ -721,22 +732,33 @@ public class ServerMonitorManager {
     }
 
     /**
-     * The used percentage of the filesystem holding {@link #diskUsageRoot} -- total space minus
-     * usable space, over total space -- rounded to two decimals exactly like {@code memoryUsage}
-     * above (D-14, #436). Reads {@link #totalSpaceReader}/{@link #usableSpaceReader} rather than
-     * calling {@link File#getTotalSpace()}/{@link File#getUsableSpace()} directly, so tests can
-     * pin a deterministic value instead of depending on the real filesystem's actual free space.
-     * A filesystem reporting zero total space is a stated outcome -- {@code 0.0} -- not a division
-     * error.
+     * The used percentage of the filesystem holding {@link #diskUsageRoot}, matching {@code df}'s
+     * own {@code Use%} convention (WR-03) rather than a straight {@code (total - usable) / total}:
+     * {@code used = total - free} (via {@link #freeSpaceReader}, {@link File#getFreeSpace()} --
+     * INCLUDES space reserved for the filesystem's own root/superuser allocation), and the
+     * percentage is {@code used / (used + avail)} with {@code avail} from
+     * {@link #usableSpaceReader} ({@link File#getUsableSpace()} -- EXCLUDES that reservation).
+     * The earlier {@code (total - usable) / total} formula measured roughly one percentage point
+     * higher than {@code df} on a real ext4 volume with its default ~5% reserved-block
+     * allocation, at or past this metric's own documented one-point UAT tolerance -- see this
+     * plan's gate record for the real-machine measurement. Rounded to two decimals exactly like
+     * {@code memoryUsage} above (D-14, #436). A filesystem reporting zero total space, or a
+     * used+avail denominator of zero, is a stated outcome -- {@code 0.0} -- not a division error.
      */
     private double computeDiskUsage() {
         long total = totalSpaceReader.applyAsLong(diskUsageRoot);
         if (total <= 0) {
             return 0.0;
         }
+        long free = freeSpaceReader.applyAsLong(diskUsageRoot);
         long usable = usableSpaceReader.applyAsLong(diskUsageRoot);
-        double used = ((double) (total - usable) / total) * 100;
-        return Math.round(used * 100.0) / 100.0;
+        long used = total - free;
+        long denominator = used + usable;
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        double usedPercent = ((double) used / denominator) * 100;
+        return Math.round(usedPercent * 100.0) / 100.0;
     }
 
     /**
