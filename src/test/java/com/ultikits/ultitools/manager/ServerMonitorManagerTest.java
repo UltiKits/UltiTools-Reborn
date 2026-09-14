@@ -1263,7 +1263,10 @@ class ServerMonitorManagerTest {
                 try {
                     invokeSendBatchUpdate(serverMonitorManager);
                 } catch (Exception e) {
-                    throw new RuntimeException(e);
+                    // Fail the test rather than throw a raw exception type out of a Runnable
+                    // (PMD.AvoidThrowingRawExceptionTypes) -- fail() records the cause without
+                    // this call site itself constructing one.
+                    org.junit.jupiter.api.Assertions.fail(e);
                 }
                 workerDone.countDown();
             });
