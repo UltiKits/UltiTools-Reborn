@@ -1426,55 +1426,69 @@ public class PluginInitiationUtils {
     // ========== Config management message handlers ==========
 
     /**
-     * Handles a config upload
+     * Handles a config upload.
+     *
+     * <p>{@code upload_config} carries traffic in <b>both</b> directions on the same message type:
+     * {@link #uploadConfig(UltiPanelWebSocketClient)} sends the server's own aggregated config up on
+     * every reconnect, and the Worker's own message handler echoes that request's {@code type}
+     * straight back as its acknowledgement ({@code websocket-server.ts:454},
+     * {@code response.type = message.type}) — so the acknowledgement lands right back in this same
+     * inbound handler. Its payload is always {@code {message, serverId, configType}}, distinguishable
+     * only by the {@code message} field; recognize it there and stop (issue #359). The former
+     * {@code data.has("requestId")} gate is deleted rather than fixed — nothing anywhere in the
+     * system (panel, frontend, or Worker route) ever populates that field on an {@code upload_config}
+     * payload, so no code path here reads it any more.
      */
     private static void handleConfigUpload(JsonObject data) {
-        if (data != null) {
-            // Only handle explicit config upload requests (carrying a requestId); ignore server acknowledgement messages
-            if (data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                String configType = data.get("configType").getAsString();
-                String configName = data.get("configName").getAsString();
-                
-                if (configType == null || configType.trim().isEmpty()) {
-                    sendErrorResponse("Valid configuration type is required");
-                    return;
-                }
-                
-                UltiTools.getInstance().getLogger().log(Level.FINE, 
-                    String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
-                
-                try {
-                    // Handle the config upload logic
-                    handleConfigUploadLogic(data);
+        if (data == null) {
+            return;
+        }
 
-                    // Send success response
-                    JsonObject response = new JsonObject();
-                    response.addProperty("type", "upload_config_response");
-                    response.addProperty("status", "success");
-                    response.addProperty("serverId", panelWS.getServerId());
-                    response.addProperty("requestId", requestId);
-                    panelWS.sendMessage(response);
+        // Worker acknowledgement of the server's own uploadConfig() push -- see issue #359.
+        if (data.has("message")) {
+            String message = data.get("message").getAsString();
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("收到服务器配置上传确认: %s", message));
+            return;
+        }
 
-                } catch (Exception e) {
-                    sendErrorResponse("Failed to upload config: " + e.getMessage());
-                }
-            } else {
-                // Recognize and ignore server acknowledgement messages
-                if (data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器配置上传确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器配置上传消息，但不包含requestId，忽略处理");
-                }
-            }
+        String configType = data.has("configType") ? data.get("configType").getAsString() : null;
+
+        if (configType == null || configType.trim().isEmpty()) {
+            sendErrorResponse("Valid configuration type is required");
+            return;
+        }
+
+        String configName = data.has("configName") ? data.get("configName").getAsString() : null;
+
+        UltiTools.getInstance().getLogger().log(Level.FINE,
+            String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
+
+        try {
+            // Handle the config upload logic
+            handleConfigUploadLogic(data);
+
+            // Send success response
+            JsonObject response = new JsonObject();
+            response.addProperty("type", "upload_config_response");
+            response.addProperty("status", "success");
+            response.addProperty("serverId", panelWS.getServerId());
+            panelWS.sendMessage(response);
+
+        } catch (Exception e) {
+            sendErrorResponse("Failed to upload config: " + e.getMessage());
         }
     }
-    
+
     /**
-     * Handles the config upload logic
+     * Handles the config upload logic.
+     *
+     * <p>{@code upload_config} accepts {@code plugin_config} only (#435, D-13). {@code
+     * server_properties} is rejected naming the message that actually handles it — the dedicated
+     * {@code server_properties} message routed to {@link com.ultikits.ultitools.manager.
+     * ServerPropertiesManager#handleServerProperties}. {@code permissions} is defined nowhere in the
+     * system, so it is not given a meaning here — it falls to the pre-existing fail-closed
+     * {@code default}, whose wording already says exactly what a dedicated branch would.
      */
     private static void handleConfigUploadLogic(JsonObject data) throws Exception {
         String configType = data.get("configType").getAsString();
@@ -1483,27 +1497,27 @@ public class PluginInitiationUtils {
         String format = data.get("format").getAsString();
         boolean backup = data.get("backup").getAsBoolean();
 
-        UltiTools.getInstance().getLogger().log(Level.FINE, 
-            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s", 
+        UltiTools.getInstance().getLogger().log(Level.FINE,
+            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
                 configType, configName, format, backup));
 
         // Handle different config files based on config type
         switch (configType) {
             case "plugin_config":
-                // Handle plugin config
-                if (configContent instanceof JsonObject) {
-                    ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
+                if (!(configContent instanceof JsonObject)) {
+                    throw new IllegalArgumentException(
+                        "Configuration content is required for plugin_config uploads");
                 }
+                ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
                 break;
             case "server_properties":
-                // Handle server.properties config
-                UltiTools.getInstance().getLogger().log(Level.FINE, "Processing server.properties config");
-                break;
-            case "permissions":
-                // Handle permissions config
-                UltiTools.getInstance().getLogger().log(Level.FINE, "Processing permissions config");
-                break;
+                throw new IllegalArgumentException(
+                    "server_properties config is not accepted via upload_config; "
+                        + "send it as a server_properties message instead");
             default:
+                // Also covers "permissions": nothing in the system defines that type's semantics
+                // (#435, D-13), so it is left to this same fail-closed rejection rather than
+                // inventing one here.
                 throw new IllegalArgumentException("Unsupported config type: " + configType);
         }
     }
