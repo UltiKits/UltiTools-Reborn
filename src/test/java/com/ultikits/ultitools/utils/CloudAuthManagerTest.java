@@ -11,6 +11,7 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -836,6 +837,85 @@ class CloudAuthManagerTest {
             assertThat(sessionAtCheck.isCurrent())
                     .as("刚刚才拿到有效令牌的会话不该被这次 login() 调用拆掉")
                     .isTrue();
+        }
+
+        @Test
+        @DisplayName("#466（16-10 补丁）：login 已经判定「未登录」并开始拆线之后，一个仍在追赶的并发提交"
+                + "必须要么在拆线开始前就已经完整落地，要么被拆线之后彻底拒绝——不允许出现"
+                + "「提交报告成功，但这份凭证已经没有会话再认得」的幽灵状态")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void concurrentPollCommitCannotSlipBetweenLoginsRecheckAndItsTeardown() throws Exception {
+            setSessionField("token", null);
+            CloudSession sessionAtCheck = CloudSession.current();
+
+            // Mockito 的静态 mock 是线程限定的（只拦截创建它的那个线程发起的调用），所以桩必须挂
+            // 在真正调用 login() 的这个（主测试）线程上——模拟并发提交的那个线程反而是从桩自己的
+            // Answer 内部现造出来的。login() 只在这一个点调用 PluginInitiationUtils 的静态方法：
+            // 桩先把真正调用真实实现之前的这段窗口，撑成一个受控的、可确定性观察的宽度——起一个
+            // 独立线程尝试并发提交，给它一个公平的调度机会，再调用 callRealMethod() 落实真正的
+            // 拆线。全程不靠 sleep，只靠 CountDownLatch 与有界 join。
+            AtomicBoolean commitSucceeded = new AtomicBoolean(false);
+            AtomicReference<Thread> pollThreadRef = new AtomicReference<>();
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                init.when(() -> PluginInitiationUtils.disableCloud(sessionAtCheck)).thenAnswer(invocation -> {
+                    // 此刻：调用方（login()）自己的复检已经跑完并返回 false，正准备真正拆线。
+                    // 一次并发的轮询在这个窗口尝试提交，模拟一次更早发起、仍在轮询、此刻恰好收到
+                    // 「已完成」响应的魔法链接。
+                    CountDownLatch commitAttempted = new CountDownLatch(1);
+                    Thread pollThread = new Thread(() -> {
+                        commitAttempted.countDown();
+                        try {
+                            commitSucceeded.set(sessionAtCheck.commit(buildTokenWithExp(3600L)));
+                        } catch (Exception ignored) {
+                            // 本用例只关心提交成功与否，不关心磁盘写入本身的异常路径
+                        }
+                    }, "poll-466-worker");
+                    pollThread.setDaemon(true);
+                    pollThreadRef.set(pollThread);
+                    pollThread.start();
+                    assertThat(commitAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+
+                    // 给轮询线程一个公平的机会真正跑到 commit() 内部——修复之后调用方这个线程
+                    // 此刻仍持有会话锁（Mockito 拦截是纯方法级替换，不释放调用线程已经持有的任何
+                    // 内在锁），轮询线程会被同一把锁挡住；300ms 足够任何调度延迟证明这一点。
+                    // 修复之前调用方此刻不持有任何锁，轮询线程早就已经跑完了。这不是一个计时
+                    // 假设，只是给调度器一个公平的机会——真正的判定来自下面调用返回之后对
+                    // pollThread 的完整 join 与最终状态断言。
+                    pollThread.join(300);
+
+                    return invocation.callRealMethod();
+                });
+
+                AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
+                CloudAuthManager.login(
+                        () -> alreadyLoggedInCalled.set(true),
+                        remaining -> { },
+                        () -> { },
+                        url -> { },
+                        error -> { });
+
+                assertThat(alreadyLoggedInCalled)
+                        .as("这次 login 调用自己的复检发生在轮询提交之前，正确地判定为「未登录」并"
+                                + "继续了原本的换会话流程——这与轮询自己的提交是否安全，是两件独立的事")
+                        .isFalse();
+            }
+
+            Thread pollThread = pollThreadRef.get();
+            assertThat(pollThread).as("前置条件：桩内部确实起了那个并发提交线程").isNotNull();
+            pollThread.join(5000);
+            assertThat(pollThread.isAlive()).as("轮询线程必须已经跑完").isFalse();
+
+            assertThat(commitSucceeded)
+                    .as("#466：一次在 login 已经判定「未登录」并开始拆线之后才追上来的提交，"
+                            + "绝不能成功写盘——否则这份凭证就成了没有会话再认得的幽灵凭证。"
+                            + "锁修复之前，login 在调用 disableCloud 的这段窗口不持有任何锁，"
+                            + "这次提交会立刻成功，随后又被 login 自己的拆线甩在一边。")
+                    .isFalse();
+
+            assertThat(sessionAtCheck.isCurrent())
+                    .as("前置条件：本用例这次 login 调用的拆线确实跑完了，不是被跳过")
+                    .isFalse();
         }
     }
 
