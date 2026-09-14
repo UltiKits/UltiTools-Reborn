@@ -101,9 +101,9 @@ public abstract class AbstractConfigEntity {
         try {
             config.load(file);
         } catch (FileNotFoundException ignored) {
-            // Mirrors YamlConfiguration.loadConfiguration(File)'s own behaviour: a missing file
-            // is the normal "first run" case, not an error - config stays empty and every field
-            // below takes the missing-key branch.
+            // Mirrors the bare static factory's own behaviour for a missing file: a missing
+            // file is the normal "first run" case, not an error - config stays empty and every
+            // field below takes the missing-key branch.
         } catch (InvalidConfigurationException e) {
             LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
         }
@@ -511,10 +511,25 @@ public abstract class AbstractConfigEntity {
         if (ultiToolsPlugin == null) {
             throw new IllegalStateException("Config not initialized. Call init() first.");
         }
-        
-        // Reload from file
-        config = YamlConfiguration.loadConfiguration(ultiToolsPlugin.getConfigFile(configFilePath));
-        
+
+        // #357: build the parser and enable comment parsing before load() runs, in the same
+        // construct -> parseComments(true) -> load order init() uses above. The bare static
+        // factory this used to call parses the file inside itself before returning, so
+        // parseComments(true) could never reach that read - a save() or updateProperties() call
+        // right after this reload() would then write back a comment-stripped view over the
+        // operator's file (D-01).
+        File file = ultiToolsPlugin.getConfigFile(configFilePath);
+        config = new YamlConfiguration();
+        config.options().parseComments(true);
+        try {
+            config.load(file);
+        } catch (FileNotFoundException ignored) {
+            // Mirrors init()'s own handling above: a missing file is the normal case, not an
+            // error - config stays empty and every field below simply keeps its current value.
+        } catch (InvalidConfigurationException e) {
+            LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+        }
+
         // Update field values
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (field.isAnnotationPresent(ConfigEntry.class)) {

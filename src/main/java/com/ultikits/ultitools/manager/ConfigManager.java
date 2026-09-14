@@ -48,12 +48,23 @@ public class ConfigManager {
                     throw new IOException("Failed to create directory: " + file.getPath());
                 }
             }
+            // #358 Part 1: a directory config expands to one entity per matching file in the
+            // loop below - a later file's refusal must not leave an earlier file's entity
+            // stranded in pluginConfigMap. Snapshot what this plugin already held before this
+            // call and roll back to exactly that snapshot on any refusal, so this directory's
+            // registration is all-or-nothing rather than a half-populated map.
+            Set<String> registeredBeforeThisCall = snapshotRegisteredPaths(ultiToolsPlugin);
             for (File listFile : file.listFiles()) {
                 if (!listFile.isFile() || !listFile.getName().endsWith(".yml")) {
                     continue;
                 }
                 AbstractConfigEntity abstractConfigEntity = ReflectionUtil.newInstance(configEntity.getClass(), listFile.getPath().replace(ultiToolsPlugin.getResourceFolderPath() + File.separator, "").replaceAll("\\\\", "/"));
-                addConfigEntity(ultiToolsPlugin, abstractConfigEntity);
+                try {
+                    addConfigEntity(ultiToolsPlugin, abstractConfigEntity);
+                } catch (RuntimeException e) {
+                    rollBackRegisteredPaths(ultiToolsPlugin, registeredBeforeThisCall);
+                    throw e;
+                }
             }
         } else {
             addConfigEntity(ultiToolsPlugin, configEntity);
@@ -71,6 +82,42 @@ public class ConfigManager {
     }
 
     /**
+     * Snapshots the config-file-path keys {@code ultiToolsPlugin} already holds in {@link
+     * #pluginConfigMap}, before a caller is about to register a batch of entities in one call.
+     * Used by {@link #register(UltiToolsPlugin, AbstractConfigEntity)}'s directory branch and
+     * {@link #registerAll(UltiToolsPlugin, String, ClassLoader)} to roll back precisely what
+     * this call added, on a refusal, without touching anything a prior call already committed
+     * (#358 Part 1).
+     *
+     * @param ultiToolsPlugin the plugin whose current registrations to snapshot
+     * @return an immutable copy of the currently-registered path set, or an empty set if none
+     */
+    private Set<String> snapshotRegisteredPaths(UltiToolsPlugin ultiToolsPlugin) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
+        return configMap == null ? Collections.emptySet() : new HashSet<>(configMap.keySet());
+    }
+
+    /**
+     * Restores {@code ultiToolsPlugin}'s entry in {@link #pluginConfigMap} to exactly {@code
+     * pathsToKeep}, discarding every path this call added since the matching {@link
+     * #snapshotRegisteredPaths(UltiToolsPlugin)} - the cleanup half of #358 Part 1's
+     * all-or-nothing registration.
+     *
+     * @param ultiToolsPlugin the plugin to roll back
+     * @param pathsToKeep     the path set to restore, as captured before this call started
+     */
+    private void rollBackRegisteredPaths(UltiToolsPlugin ultiToolsPlugin, Set<String> pathsToKeep) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
+        if (configMap == null) {
+            return;
+        }
+        configMap.keySet().retainAll(pathsToKeep);
+        if (configMap.isEmpty()) {
+            pluginConfigMap.remove(ultiToolsPlugin);
+        }
+    }
+
+    /**
      * Register all config entities in the specified package.
      *
      * @param plugin      UltiTools module
@@ -83,6 +130,13 @@ public class ConfigManager {
                 packageName,
                 classLoader
         );
+        // #358 Part 1: a package can carry more than one @ConfigEntity class, and
+        // PackageScanUtils.scanAnnotatedClasses returns them in an unspecified (HashSet) order.
+        // A validation refusal on any one of them must not leave a sibling that already
+        // registered successfully stranded in pluginConfigMap for a module that is about to be
+        // refused as a whole - snapshot what this plugin held before this scan and roll back to
+        // exactly that on any refusal, regardless of which class failed or when.
+        Set<String> registeredBeforeThisCall = snapshotRegisteredPaths(plugin);
         for (Class<?> clazz : classes) {
             String path = clazz.getAnnotation(ConfigEntity.class).value();
             try {
@@ -103,6 +157,7 @@ public class ConfigManager {
                 // Neither the (String) nor the no-arg idiom resolved - refuse by name instead of
                 // vanishing silently (D-03). The no-arg-only idiom itself is untouched: it still
                 // succeeds on the first catch-free path above and never reaches this branch.
+                rollBackRegisteredPaths(plugin, registeredBeforeThisCall);
                 throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
                 // GATE-05 group two (08-21): routed to the typed configuration hierarchy. The
@@ -113,7 +168,16 @@ public class ConfigManager {
                 // via this call chain today. Typed anyway for defense in depth against that
                 // guard being fixed later, and because register()'s own declared "throws
                 // IOException" makes no promise about which branch produced it.
+                rollBackRegisteredPaths(plugin, registeredBeforeThisCall);
                 throw ConfigurationException.loadFailed(path, e);
+            } catch (RuntimeException e) {
+                // #358 Part 1's actual reproduction: a ConfigurationException from
+                // validateFields()/ensureConstructable(), raised inside init() deep beneath
+                // register() -> addConfigEntity(), is unchecked and was never caught here - it
+                // propagated straight out of this loop, leaving every entity this call had
+                // already registered stranded for a module that is refused as a whole.
+                rollBackRegisteredPaths(plugin, registeredBeforeThisCall);
+                throw e;
             }
         }
     }
