@@ -277,34 +277,8 @@ public class LogStreamManager implements Listener {
 
             // ---------- Both sections validated -- now apply ----------
             List<String> changes = new ArrayList<>();
-
-            if (levels.present) {
-                systemLogHandler.setEnabledLevels(levels.levels);
-                changes.add(levels.levels.isEmpty()
-                        ? "levels updated to an empty set (no log records will be delivered "
-                                + "until levels are set again)"
-                        : "levels updated to " + levels.levels);
-            }
-
-            if (batchConfig.present) {
-                boolean batchChanged = false;
-                if (batchConfig.enabled != null) {
-                    logTransmitter.setBatchEnabled(batchConfig.enabled);
-                    batchChanged = true;
-                }
-                if (batchConfig.size != null) {
-                    logTransmitter.setBatchSize(batchConfig.size);
-                    batchChanged = true;
-                }
-                if (batchConfig.interval != null) {
-                    logTransmitter.setIntervalMs(batchConfig.interval);
-                    batchChanged = true;
-                }
-                if (batchChanged) {
-                    changes.add("batch settings updated");
-                    UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
-                }
-            }
+            applyLevels(levels, changes);
+            applyBatchConfig(batchConfig, changes);
 
             if (changes.isEmpty()) {
                 // #433: a config action naming neither levels nor batchConfig changed nothing --
@@ -318,6 +292,52 @@ public class LogStreamManager implements Listener {
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Applies an already-validated {@code levels} section (if present) and appends a description
+     * to {@code changes} -- extracted from {@link #handleConfigUpdate(JsonObject, String)}
+     * alongside {@link #applyBatchConfig(BatchConfigSection, List)} (Codacy Gate-2 NPath
+     * complexity finding).
+     */
+    private void applyLevels(LevelsSection levels, List<String> changes) {
+        if (!levels.present) {
+            return;
+        }
+        systemLogHandler.setEnabledLevels(levels.levels);
+        changes.add(levels.levels.isEmpty()
+                ? "levels updated to an empty set (no log records will be delivered "
+                        + "until levels are set again)"
+                : "levels updated to " + levels.levels);
+    }
+
+    /**
+     * Applies an already-validated {@code batchConfig} section (if present) and appends a
+     * description to {@code changes} -- extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)} alongside {@link #applyLevels(LevelsSection, List)} (Codacy Gate-2 NPath
+     * complexity finding).
+     */
+    private void applyBatchConfig(BatchConfigSection batchConfig, List<String> changes) {
+        if (!batchConfig.present) {
+            return;
+        }
+        boolean batchChanged = false;
+        if (batchConfig.enabled != null) {
+            logTransmitter.setBatchEnabled(batchConfig.enabled);
+            batchChanged = true;
+        }
+        if (batchConfig.size != null) {
+            logTransmitter.setBatchSize(batchConfig.size);
+            batchChanged = true;
+        }
+        if (batchConfig.interval != null) {
+            logTransmitter.setIntervalMs(batchConfig.interval);
+            batchChanged = true;
+        }
+        if (batchChanged) {
+            changes.add("batch settings updated");
+            UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
         }
     }
 

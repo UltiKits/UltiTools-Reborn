@@ -111,25 +111,6 @@ public class ServerMonitorManager {
     private final AtomicLong lastLogFlushMs = new AtomicLong(0L);
 
     /**
-     * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
-     * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
-     * as part of the same compare-and-set. Returns {@code false} without side effects if the
-     * interval has not elapsed, OR if a concurrently-running competing task already claimed this
-     * exact window first (Gate-2 finding, round 4 -- see {@link #lastLogFlushMs}'s own javadoc).
-     *
-     * @param now the caller's own {@link System#currentTimeMillis()} snapshot
-     * @param intervalMs the currently configured batch-send interval
-     * @return {@code true} only for the caller that should proceed to drain and send
-     */
-    private boolean claimLogFlushWindow(long now, int intervalMs) {
-        long previous = lastLogFlushMs.get();
-        if (now - previous < intervalMs) {
-            return false;
-        }
-        return lastLogFlushMs.compareAndSet(previous, now);
-    }
-
-    /**
      * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
      * directory the Paper process was started in), matching {@link FileOperationManager}'s own
      * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
@@ -158,6 +139,25 @@ public class ServerMonitorManager {
 
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
+    }
+
+    /**
+     * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
+     * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
+     * as part of the same compare-and-set. Returns {@code false} without side effects if the
+     * interval has not elapsed, OR if a concurrently-running competing task already claimed this
+     * exact window first (Gate-2 finding, round 4 -- see {@link #lastLogFlushMs}'s own javadoc).
+     *
+     * @param now the caller's own {@link System#currentTimeMillis()} snapshot
+     * @param intervalMs the currently configured batch-send interval
+     * @return {@code true} only for the caller that should proceed to drain and send
+     */
+    private boolean claimLogFlushWindow(long now, int intervalMs) {
+        long previous = lastLogFlushMs.get();
+        if (now - previous < intervalMs) {
+            return false;
+        }
+        return lastLogFlushMs.compareAndSet(previous, now);
     }
 
     /**
