@@ -185,6 +185,44 @@ class EconomyUtilsReportingTest {
         }
     }
 
+    @Test
+    @DisplayName("8: getEconomy() sees a provider that registers after an earlier failed call, instead of caching that failure forever (CR-01, 16-REVIEW-economy.md)")
+    void getEconomy_seesLateProviderRegistration_insteadOfCachingEarlierFailureForever() {
+        // First call happens before Vault is installed at all -- the ordinary case during a
+        // normal boot sequence, since DependenceManagers.initCoreServices() runs early.
+        assertThat(EconomyUtils.getEconomy()).isNull();
+
+        // Vault, and its economy provider, register AFTER that first failed call.
+        Plugin vaultPlugin = MockBukkit.createMockPlugin("Vault");
+        Economy mockEconomy = mock(Economy.class);
+        server.getServicesManager().register(Economy.class, mockEconomy, vaultPlugin, ServicePriority.Normal);
+
+        assertThat(EconomyUtils.isAvailable()).isTrue();
+        assertThat(EconomyUtils.getEconomy())
+                .as("getEconomy() must re-check the live provider, not return a cached-forever null")
+                .isSameAs(mockEconomy);
+    }
+
+    @Test
+    @DisplayName("9: getEconomy() reports the same honest WARNING every sibling operation does, not silently returning null (CR-01, 16-REVIEW-economy.md)")
+    void getEconomy_reportsUnavailability_likeEverySiblingOperation() {
+        assertThat(EconomyUtils.getEconomy()).isNull();
+
+        verify(mockLogger, times(1)).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("10: setup() also re-checks the live provider rather than latching its first failed attempt forever (CR-01, 16-REVIEW-economy.md)")
+    void setup_seesLateProviderRegistration_insteadOfCachingEarlierFailureForever() {
+        assertThat(EconomyUtils.setup()).isFalse();
+
+        Plugin vaultPlugin = MockBukkit.createMockPlugin("Vault");
+        Economy mockEconomy = mock(Economy.class);
+        server.getServicesManager().register(Economy.class, mockEconomy, vaultPlugin, ServicePriority.Normal);
+
+        assertThat(EconomyUtils.setup()).isTrue();
+    }
+
     @Nested
     @DisplayName("attributeModule — pure module-attribution logic")
     class AttributeModuleTests {
