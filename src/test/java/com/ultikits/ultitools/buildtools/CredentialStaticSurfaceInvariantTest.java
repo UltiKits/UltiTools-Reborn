@@ -3,6 +3,7 @@ package com.ultikits.ultitools.buildtools;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,6 +11,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -104,6 +106,72 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("WR-03: the scan mechanism also catches the fixture's erased-generic offenders (Optional<TokenEntity> return, Consumer<TokenEntity> parameter)")
+    void scanMechanismCatchesTheFixturesGenericOffenders() throws IOException, ClassNotFoundException {
+        List<Method> fixtureMethods = scanPublicStaticMethodsOfPackage(
+                testClassesRoot(), CredentialSurfaceOffenderFixture.class.getPackage().getName());
+
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(fixtureMethods);
+
+        assertThat(violations)
+                .as("Optional<TokenEntity> erases to Optional.class -- the pre-WR-03 rule would have "
+                        + "missed this entirely")
+                .anySatisfy(v -> assertThat(v).contains("offendByReturningOptionalOfToken"));
+        assertThat(violations)
+                .as("Consumer<TokenEntity> erases to Consumer.class -- same gap, on a parameter")
+                .anySatisfy(v -> assertThat(v).contains("offendByAcceptingConsumerOfToken"));
+    }
+
+    @Test
+    @DisplayName("WR-03: the field scan mechanism is non-vacuous, pointed at the fixture's permanent offending field")
+    void fieldScanMechanismCatchesAFixtureOffender() throws IOException, ClassNotFoundException {
+        List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
+                testClassesRoot(), CredentialSurfaceOffenderFixture.class.getPackage().getName());
+
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(fixtureFields);
+
+        assertThat(violations)
+                .as("CredentialSurfaceOffenderFixture#offendingLeakedField must be found -- fields "
+                        + "were entirely outside the pre-WR-03 scope of this rule")
+                .isNotEmpty()
+                .anySatisfy(v -> assertThat(v).contains("offendingLeakedField"));
+    }
+
+    @Test
+    @DisplayName("a public static field returning TokenEntity via a synthetic fixture produces exactly one violation naming it")
+    void publicStaticFieldTypedAsTokenEntityReportsOneViolationNamingIt() throws NoSuchFieldException {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
+                fieldsOf(TokenFieldOffender.class));
+
+        assertThat(violations)
+                .hasSize(1)
+                .anySatisfy(v -> {
+                    assertThat(v).contains("offendingField");
+                    assertThat(v).contains(TokenEntity.class.getSimpleName());
+                });
+    }
+
+    @Test
+    @DisplayName("a public static Optional<TokenEntity> field produces one violation via the generic-type check")
+    void publicStaticFieldWithGenericTokenEntityTypeReportsOneViolation() throws NoSuchFieldException {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
+                fieldsOf(GenericTokenFieldOffender.class));
+
+        assertThat(violations)
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("offendingGenericField"));
+    }
+
+    @Test
+    @DisplayName("a package-private static field typed as TokenEntity produces no violation -- the rule is about the public surface")
+    void packagePrivateStaticFieldTypedAsTokenEntityReportsNone() throws NoSuchFieldException {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(
+                fieldsOf(PackagePrivateFieldOffender.class));
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
     @DisplayName("run against the real utils package (scanned, not hand-listed), the rule reports zero violations")
     void realUtilsPackageReportsZeroViolations() throws IOException, ClassNotFoundException {
         // Files.list + Class.forName below -- the input set is DERIVED by scanning the compiled
@@ -117,6 +185,16 @@ class CredentialStaticSurfaceInvariantTest {
                 .isNotEmpty();
 
         List<String> violations = CredentialStaticSurfaceInvariant.evaluate(realMethods);
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
+    @DisplayName("WR-03: run the field check against the real utils package (scanned, not hand-listed), it reports zero violations")
+    void realUtilsPackageReportsZeroFieldViolations() throws IOException, ClassNotFoundException {
+        List<Field> realFields = scanPublicStaticFieldsOfPackage(mainClassesRoot(), "com.ultikits.ultitools.utils");
+
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluateFields(realFields);
 
         assertThat(violations).isEmpty();
     }
@@ -158,12 +236,28 @@ class CredentialStaticSurfaceInvariantTest {
         }
     }
 
+    static class TokenFieldOffender {
+        public static TokenEntity offendingField = null;
+    }
+
+    static class GenericTokenFieldOffender {
+        public static Optional<TokenEntity> offendingGenericField = Optional.empty();
+    }
+
+    static class PackagePrivateFieldOffender {
+        static TokenEntity notPublicField = null;
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
     private static List<Method> methodsOf(Class<?> clazz) {
         return Arrays.asList(clazz.getDeclaredMethods());
+    }
+
+    private static List<Field> fieldsOf(Class<?> clazz) {
+        return Arrays.asList(clazz.getDeclaredFields());
     }
 
     private static Path mainClassesRoot() {
@@ -205,5 +299,34 @@ class CredentialStaticSurfaceInvariantTest {
             methods.addAll(Arrays.asList(clazz.getDeclaredMethods()));
         }
         return methods;
+    }
+
+    /**
+     * The field-shaped twin of {@link #scanPublicStaticMethodsOfPackage(Path, String)} (WR-03,
+     * 16-REVIEW-cloud.md) -- same scan-by-compiled-class-file derivation, collecting every declared
+     * field instead of every declared method.
+     */
+    private static List<Field> scanPublicStaticFieldsOfPackage(Path classesRoot, String packageName)
+            throws IOException, ClassNotFoundException {
+        String packagePath = packageName.replace('.', '/');
+        Path packageDir = classesRoot.resolve(packagePath);
+        List<Field> fields = new ArrayList<>();
+        if (!Files.isDirectory(packageDir)) {
+            return fields;
+        }
+        List<Path> classFiles;
+        try (Stream<Path> paths = Files.list(packageDir)) {
+            classFiles = paths.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".class"))
+                    .collect(Collectors.toList());
+        }
+        for (Path classFile : classFiles) {
+            String simpleName = classFile.getFileName().toString();
+            String withoutSuffix = simpleName.substring(0, simpleName.length() - ".class".length());
+            String fqcn = packageName + "." + withoutSuffix;
+            Class<?> clazz = Class.forName(fqcn);
+            fields.addAll(Arrays.asList(clazz.getDeclaredFields()));
+        }
+        return fields;
     }
 }

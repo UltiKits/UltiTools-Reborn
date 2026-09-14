@@ -1,7 +1,12 @@
 package com.ultikits.ultitools.buildtools;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -46,6 +51,33 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * rule below carries no such gap and applies to every {@code public static} method in the package
  * unconditionally, which is the shape a reintroduction is far more likely to need in the first place
  * (there has to be a token to actually persist one).
+ *
+ * <p><b>WR-03 (16-REVIEW-cloud.md) -- three gaps in the original scope, two closed, one documented
+ * rather than closed:</b>
+ * <ol>
+ *   <li><b>Closed.</b> {@link #evaluate(Collection)} originally checked only the <em>erased</em>
+ *   return/parameter types ({@link Method#getReturnType()}/{@link Method#getParameterTypes()}), so a
+ *   hypothetical {@code public static void login(Consumer<TokenEntity> onSuccess)} or
+ *   {@code public static Optional<TokenEntity> peek()} would have reported {@code Consumer.class}/
+ *   {@code Optional.class} and passed silently while still handing the raw token to any caller. This
+ *   method now also walks {@link Method#getGenericReturnType()}/{@link Method#getGenericParameterTypes()}
+ *   via {@link #referencesTokenEntity(Type)}, recursing into every type argument of a
+ *   {@link ParameterizedType} (so {@code Optional<List<TokenEntity>>} is caught, not just one level
+ *   deep) and into a {@link WildcardType}'s bounds.</li>
+ *   <li><b>Closed.</b> Fields were never scanned -- only {@link Method} objects reached this class.
+ *   {@link #evaluateFields(Collection)} is the field-shaped twin of {@link #evaluate(Collection)},
+ *   catching a hypothetical {@code public static TokenEntity leaked;}.</li>
+ *   <li><b>Documented, not closed.</b> Both checks above are scoped to the {@code public static}
+ *   surface, matching D-18's own literal wording ("no {@code public static} method... may accept or
+ *   return a {@code TokenEntity}"). A {@code public} <em>instance</em> method returning
+ *   {@code TokenEntity} on some future public, instantiable class in this package would pass either
+ *   check. This is a real, accepted gap, not an oversight: today it is unreachable in practice --
+ *   {@code CloudAuthManager}'s constructor is {@code private} and {@code CloudSession}/
+ *   {@code TokenStore} are package-private, so no public, instantiable class in {@code utils} exposes
+ *   any instance method to a caller outside the package at all. If that ever changes, this rule
+ *   provides no protection and would need to be extended to instance methods on public classes too.
+ *   </li>
+ * </ol>
  */
 public final class CredentialStaticSurfaceInvariant {
 
@@ -96,15 +128,32 @@ public final class CredentialStaticSurfaceInvariant {
             List<String> reasons = new ArrayList<>();
             if (method.getReturnType() == TokenEntity.class) {
                 reasons.add("returns " + TokenEntity.class.getSimpleName());
+            } else if (referencesTokenEntity(method.getGenericReturnType())) {
+                // WR-03: the erased check above missed this -- e.g. Optional<TokenEntity> reports
+                // Optional.class to getReturnType(), never TokenEntity.class. Checked as an "else"
+                // only so a directly-erased TokenEntity return does not additionally recurse through
+                // its own (non-generic) type and produce a duplicate, differently-worded reason.
+                reasons.add("returns a generic type that references " + TokenEntity.class.getSimpleName());
             }
+
             boolean acceptsToken = false;
+            boolean acceptsTokenGenerically = false;
             for (Class<?> paramType : method.getParameterTypes()) {
                 if (paramType == TokenEntity.class) {
                     acceptsToken = true;
                 }
             }
+            if (!acceptsToken) {
+                for (Type paramType : method.getGenericParameterTypes()) {
+                    if (referencesTokenEntity(paramType)) {
+                        acceptsTokenGenerically = true;
+                    }
+                }
+            }
             if (acceptsToken) {
                 reasons.add("accepts a " + TokenEntity.class.getSimpleName() + " parameter");
+            } else if (acceptsTokenGenerically) {
+                reasons.add("accepts a parameter whose generic type references " + TokenEntity.class.getSimpleName());
             }
 
             if (nameSuggestsGeneration(method)) {
@@ -132,5 +181,97 @@ public final class CredentialStaticSurfaceInvariant {
 
     private static String describe(Method method) {
         return method.getDeclaringClass().getName() + "#" + method.getName();
+    }
+
+    /**
+     * The field-shaped twin of {@link #evaluate(Collection)} (WR-03, 16-REVIEW-cloud.md): no
+     * {@code public static} field in the {@code utils} package may be typed (erased or generically)
+     * as a {@link TokenEntity}. Fields were entirely outside the original scope of this class --
+     * only {@link Method} objects were ever passed in.
+     *
+     * @param fields the fields to check -- typically every declared field of one or more classes
+     * @return one violation message per offending {@code public static} field; empty when the
+     *         invariant holds. Deterministically ordered by the field's own {@link Field#toString()}.
+     */
+    public static List<String> evaluateFields(Collection<Field> fields) {
+        Objects.requireNonNull(fields, "fields");
+
+        TreeMap<String, Field> sorted = new TreeMap<>();
+        for (Field field : fields) {
+            Objects.requireNonNull(field, "fields must not contain a null element");
+            sorted.put(field.toString(), field);
+        }
+
+        List<String> violations = new ArrayList<>();
+        for (Field field : sorted.values()) {
+            int modifiers = field.getModifiers();
+            if (!Modifier.isPublic(modifiers) || !Modifier.isStatic(modifiers)) {
+                continue;
+            }
+            if (field.getType() == TokenEntity.class) {
+                violations.add(describeField(field) + ": is typed as " + TokenEntity.class.getSimpleName());
+            } else if (referencesTokenEntity(field.getGenericType())) {
+                violations.add(describeField(field)
+                        + ": has a generic type that references " + TokenEntity.class.getSimpleName());
+            }
+        }
+        return violations;
+    }
+
+    private static String describeField(Field field) {
+        return field.getDeclaringClass().getName() + "#" + field.getName();
+    }
+
+    /**
+     * Recursively determines whether {@code type} mentions {@link TokenEntity} anywhere in its
+     * generic structure -- the raw type itself, any type argument of a {@link ParameterizedType}
+     * (recursing into each, so a doubly-nested {@code Optional<List<TokenEntity>>} is caught, not
+     * just a single level of wrapping), an array component type, or a {@link WildcardType}'s upper
+     * or lower bounds (WR-03, 16-REVIEW-cloud.md). {@code null}-safe: a bound array being empty (an
+     * unbounded wildcard) is not an error, just nothing further to check.
+     *
+     * @param type a {@link Type} obtained from {@link Method#getGenericReturnType()},
+     *             {@link Method#getGenericParameterTypes()}, or {@link Field#getGenericType()}
+     * @return {@code true} if {@code type} references {@link TokenEntity} anywhere in its structure
+     */
+    private static boolean referencesTokenEntity(Type type) {
+        if (type == null) {
+            return false;
+        }
+        if (type == TokenEntity.class) {
+            return true;
+        }
+        if (type instanceof ParameterizedType) {
+            ParameterizedType parameterized = (ParameterizedType) type;
+            if (referencesTokenEntity(parameterized.getRawType())) {
+                return true;
+            }
+            for (Type typeArgument : parameterized.getActualTypeArguments()) {
+                if (referencesTokenEntity(typeArgument)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (type instanceof GenericArrayType) {
+            return referencesTokenEntity(((GenericArrayType) type).getGenericComponentType());
+        }
+        if (type instanceof WildcardType) {
+            WildcardType wildcard = (WildcardType) type;
+            for (Type upperBound : wildcard.getUpperBounds()) {
+                if (referencesTokenEntity(upperBound)) {
+                    return true;
+                }
+            }
+            for (Type lowerBound : wildcard.getLowerBounds()) {
+                if (referencesTokenEntity(lowerBound)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        // A plain (non-generic, non-array, non-wildcard) Class other than TokenEntity itself --
+        // already handled by the `type == TokenEntity.class` check above.
+        return false;
     }
 }
