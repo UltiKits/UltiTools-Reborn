@@ -49,16 +49,62 @@ public final class RegistryLedger {
 
     /**
      * Merges {@code prior} with a fresh source scan and the set of keys japicmp's report marks
-     * {@code changeStatus="REMOVED"} (D-22). An entry may transition to {@code REMOVED} only when
-     * BOTH the source scan no longer finds it AND japicmp independently confirms the removal;
-     * either source disagreeing alone with the other is fatal (D-22) - see
-     * {@link LedgerMergeConflictException}.
+     * {@code changeStatus="REMOVED"} (D-22), recording the removal as having happened in
+     * {@code currentVersion} regardless of what the entry's own {@code removeIn} previously said
+     * (WR-03/WR-05, 16-REVIEW-cloud.md -- see {@link #merge(RegistryLedger, List, Set, String)}'s
+     * javadoc for why). An entry may transition to {@code REMOVED} only when BOTH the source scan no
+     * longer finds it AND japicmp independently confirms the removal; either source disagreeing
+     * alone with the other is fatal (D-22) - see {@link LedgerMergeConflictException}.
+     *
+     * @deprecated WR-05 (16-REVIEW-cloud.md): this overload records {@code removedIn} as the
+     *             entry's own, possibly-stale {@code removeIn} rather than the version the removal
+     *             actually happened in. Kept only so pre-existing callers that do not yet pass a
+     *             {@code currentVersion} keep compiling; {@link DeprecationRegistryGenerator} calls
+     *             the 4-argument overload below. New callers should use that one directly.
+     */
+    @Deprecated
+    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan, Set<RegistryKey> japicmpRemovedKeys) {
+        return merge(prior, freshScan, japicmpRemovedKeys, null);
+    }
+
+    /**
+     * The {@code currentVersion}-aware form of {@link #merge(RegistryLedger, List, Set)} (WR-05,
+     * 16-REVIEW-cloud.md).
+     * <p>
+     * <b>The bug this fixes:</b> the 3-argument overload recorded a newly-{@code REMOVED} entry's
+     * {@code removedIn} as {@code entry.getRemoveIn()} -- the version the member's own
+     * {@code @Deprecated}/{@code @removeIn} javadoc had ORIGINALLY scheduled it for, back when it was
+     * first deprecated. For the ordinary cross-release case (deprecated in one released version,
+     * removed while building the very next one) {@code removeIn} and the actual removal version
+     * happen to coincide, so this was invisible. It stopped coinciding the moment a member was
+     * deprecated AND removed within the SAME unreleased development cycle: plan 16-08 added five
+     * {@code CloudAuthManager}/{@code PluginInitiationUtils} compatibility shims as
+     * {@code @Deprecated(since = "6.3.0", forRemoval = true)} with {@code removeIn 6.4.0} (a full
+     * release out, the normal deprecation-window convention), and plan 16-09 deleted them again
+     * before 6.3.0 ever shipped. The merge recorded {@code removedIn: "6.4.0"} with prose saying
+     * "Scheduled for removal by plan 16-09" in future tense -- describing a member that was already
+     * gone as if it were still part of the (not-yet-released) 6.3.0 surface, scheduled to disappear
+     * a full release later. It never was; it never shipped at all.
+     * <p>
+     * <b>The fix:</b> {@code removedIn} is always {@code currentVersion} -- the version actually
+     * being built when this merge runs, i.e. when japicmp and the source scan agree the member is
+     * gone -- never the entry's own (possibly stale, possibly scheduled a release further out)
+     * {@code removeIn}. This is correct for the ordinary case too: a member deprecated in 6.2.0 and
+     * removed while building 6.3.0 gets {@code removedIn: "6.3.0"} either way, because that member's
+     * {@code removeIn} always happened to equal the version doing the removing. The same-release
+     * add-then-remove case is where the two values diverge, and {@code currentVersion} is the one
+     * that is actually true.
+     *
+     * @param currentVersion the version being built right now (typically {@code ${project.version}}
+     *                       with any {@code -SNAPSHOT} suffix stripped) -- the value every
+     *                       newly-{@code REMOVED} entry's {@code removedIn} is set to
      */
     // PMD.NPathComplexity: 216 against a 200 threshold. The method is one pass over each of
     // three inputs with a flat guard per entry -- no guard nests inside another, and the count
     // is the product of independent per-entry checks rather than a measure of reachable state.
     @SuppressWarnings("PMD.NPathComplexity")
-    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan, Set<RegistryKey> japicmpRemovedKeys) {
+    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan,
+            Set<RegistryKey> japicmpRemovedKeys, String currentVersion) {
         Map<String, DeprecationEntry> merged = new LinkedHashMap<>();
         Set<String> freshKeyStrings = new HashSet<>();
         for (DeprecationEntry entry : freshScan) {
@@ -94,7 +140,14 @@ public final class RegistryLedger {
                 continue;
             }
             if (japicmpRemovedKeyStrings.contains(keyString)) {
-                merged.put(keyString, entry.withRemoved(entry.getRemoveIn()));
+                // WR-05: the version this removal is recorded under is the version being built
+                // NOW (currentVersion), not the entry's own, possibly-stale removeIn -- see this
+                // method's javadoc. currentVersion is null only via the deprecated 3-argument
+                // overload's compatibility shim; falling back to the old (buggy) behavior there
+                // keeps that overload's pre-existing callers byte-identical rather than silently
+                // changing behavior underneath a call site nobody has migrated yet.
+                String removedInVersion = currentVersion != null ? currentVersion : entry.getRemoveIn();
+                merged.put(keyString, entry.withRemoved(removedInVersion));
             } else {
                 conflicts.add("source scan no longer finds " + entry.getKey()
                         + " but japicmp does not report it as REMOVED");

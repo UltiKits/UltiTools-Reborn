@@ -46,7 +46,7 @@ class RegistryLedgerTest {
             List<DeprecationEntry> freshScan = Collections.singletonList(
                     deprecatedEntry("com.ultikits.ultitools.Foo", "bar", "6.3.0"));
 
-            RegistryLedger merged = RegistryLedger.merge(prior, freshScan, Collections.emptySet());
+            RegistryLedger merged = RegistryLedger.merge(prior, freshScan, Collections.emptySet(), "6.3.0");
 
             assertThat(merged.entries()).hasSize(1);
             assertThat(merged.entries().get(0).getKey().toString())
@@ -66,12 +66,64 @@ class RegistryLedgerTest {
             List<DeprecationEntry> freshScan = Collections.emptyList();
             Set<RegistryKey> japicmpRemoved = new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
 
-            RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved);
+            RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved, "6.3.0");
 
             assertThat(merged.entries()).hasSize(1);
             DeprecationEntry retained = merged.entries().get(0);
             assertThat(retained.getStatus()).isEqualTo(DeprecationEntry.Status.REMOVED);
             assertThat(retained.getRemovedIn()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("WR-05 (16-REVIEW-cloud.md): a same-release add-then-remove records removedIn as the version being built NOW, not the shim's own stale removeIn")
+        void sameReleaseAddThenRemoveRecordsCurrentVersionNotTheEntrysOwnStaleRemoveIn() {
+            // Mirrors plan 16-08's five CloudAuthManager/PluginInitiationUtils compatibility shims
+            // exactly: added as @Deprecated(since = "6.3.0", forRemoval = true) with removeIn 6.4.0
+            // (a full release out, the ordinary deprecation-window convention) by plan 16-08, then
+            // deleted again by plan 16-09 -- before 6.3.0 itself ever shipped. The member never
+            // existed in any released jar; recording removedIn as its own stale "6.4.0" describes a
+            // member that was part of 6.3.0's shipped surface and only scheduled to disappear a
+            // release later, which is false on both counts.
+            DeprecationEntry priorEntry = DeprecationEntry.builder()
+                    .key(RegistryKey.forMember(
+                            "com.ultikits.ultitools.utils.CloudAuthManager", "commitTokenIfCurrent",
+                            Collections.singletonList("com.ultikits.ultitools.entities.TokenEntity")))
+                    .kind(DeprecationEntry.Kind.METHOD)
+                    .since("6.3.0")
+                    .forRemoval(true)
+                    .removeIn("6.4.0")
+                    .replacement("Compatibility shim only.")
+                    .status(DeprecationEntry.Status.ANNOUNCED)
+                    .build();
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            List<DeprecationEntry> freshScan = Collections.emptyList(); // the shim is gone from source
+            Set<RegistryKey> japicmpRemoved = new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved, "6.3.0");
+
+            DeprecationEntry retained = merged.entries().get(0);
+            assertThat(retained.getStatus()).isEqualTo(DeprecationEntry.Status.REMOVED);
+            assertThat(retained.getRemovedIn())
+                    .as("the shim never survived to 6.4.0 -- it must be recorded as removed in THIS "
+                            + "build (6.3.0), not the removeIn value it was originally scheduled for")
+                    .isEqualTo("6.3.0")
+                    .isNotEqualTo(priorEntry.getRemoveIn());
+        }
+
+        @Test
+        @DisplayName("WR-05: the ordinary cross-release case is unaffected -- removedIn is still the version being built, which happens to equal the old removeIn")
+        void ordinaryCrossReleaseRemovalStillRecordsTheBuildVersion() {
+            // The common case this bug hid inside: deprecated in an earlier RELEASED version,
+            // removed while building the very next one. removeIn and currentVersion coincide here
+            // by construction (that member's whole point was to be removed in exactly this build),
+            // so this must keep passing exactly as before the fix.
+            DeprecationEntry priorEntry = deprecatedEntry("com.ultikits.ultitools.SomeClass", "oldMethod", "6.3.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            Set<RegistryKey> japicmpRemoved = new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(prior, Collections.emptyList(), japicmpRemoved, "6.3.0");
+
+            assertThat(merged.entries().get(0).getRemovedIn()).isEqualTo("6.3.0");
         }
     }
 
@@ -86,7 +138,7 @@ class RegistryLedgerTest {
             RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
             List<DeprecationEntry> freshScan = Collections.emptyList();
 
-            assertThatThrownBy(() -> RegistryLedger.merge(prior, freshScan, Collections.emptySet()))
+            assertThatThrownBy(() -> RegistryLedger.merge(prior, freshScan, Collections.emptySet(), "6.3.0"))
                     .isInstanceOf(LedgerMergeConflictException.class)
                     .hasMessageContaining("com.ultikits.ultitools.Foo#bar()");
         }
@@ -99,7 +151,7 @@ class RegistryLedgerTest {
             List<DeprecationEntry> freshScan = Collections.singletonList(deprecatedEntry("com.ultikits.ultitools.Foo", "bar", "6.3.0"));
             Set<RegistryKey> japicmpRemoved = new LinkedHashSet<>(Collections.singletonList(key));
 
-            assertThatThrownBy(() -> RegistryLedger.merge(prior, freshScan, japicmpRemoved))
+            assertThatThrownBy(() -> RegistryLedger.merge(prior, freshScan, japicmpRemoved, "6.3.0"))
                     .isInstanceOf(LedgerMergeConflictException.class)
                     .hasMessageContaining("com.ultikits.ultitools.Foo#bar()");
         }

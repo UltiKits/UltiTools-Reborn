@@ -74,6 +74,11 @@ public final class DeprecationRegistryGenerator {
     }
 
     private static void run() throws IOException, ReflectiveOperationException {
+        // Read the pom FIRST (WR-05, 16-REVIEW-cloud.md): the current project version is now an
+        // input to the merge itself, not just to the checks that run after it.
+        Document pomDocument = readPomDocument();
+        String currentVersion = stripSnapshotSuffix(readProjectVersion(pomDocument));
+
         RegistryLedger prior = loadPriorLedger();
 
         JavadocDeprecationScanner scanner = new JavadocDeprecationScanner(
@@ -84,7 +89,7 @@ public final class DeprecationRegistryGenerator {
         Set<RegistryKey> japicmpRemoved = removedKeys(report);
         japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
 
-        RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved);
+        RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved, currentVersion);
 
         Files.createDirectories(LEDGER_JSON.getParent());
         Files.write(LEDGER_JSON, merged.toJson().getBytes(StandardCharsets.UTF_8));
@@ -93,12 +98,27 @@ public final class DeprecationRegistryGenerator {
         System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
                 + LEDGER_JSON + " and " + LEDGER_MARKDOWN);
 
-        Document pomDocument = readPomDocument();
         List<String> violations = new ArrayList<>();
         violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
         violations.addAll(collectReleaseBoundaryViolations(pomDocument));
         violations.addAll(collectRemovalDeadlineViolations(pomDocument, merged, freshScan));
         failOnViolations(violations);
+    }
+
+    /**
+     * Strips a trailing {@code -SNAPSHOT} (case-insensitive), if present, so a newly-{@code REMOVED}
+     * entry's {@code removedIn} reads {@code "6.3.0"} rather than {@code "6.3.0-SNAPSHOT"} --
+     * matching the convention every pre-existing removed entry's hand-written {@code @removeIn}
+     * javadoc tag already used (WR-05, 16-REVIEW-cloud.md).
+     *
+     * @param version {@code ${project.version}} as read from {@code pom.xml}, or {@code null}
+     * @return {@code version} with any trailing {@code -SNAPSHOT} removed, or {@code null} unchanged
+     */
+    private static String stripSnapshotSuffix(String version) {
+        if (version == null) {
+            return null;
+        }
+        return version.replaceFirst("(?i)-SNAPSHOT$", "");
     }
 
     /**
