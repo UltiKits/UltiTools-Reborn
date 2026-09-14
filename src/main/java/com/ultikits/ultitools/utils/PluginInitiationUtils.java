@@ -1485,10 +1485,11 @@ public class PluginInitiationUtils {
      *
      * <p>{@code upload_config} accepts {@code plugin_config} only (#435, D-13). {@code
      * server_properties} is rejected naming the message that actually handles it — the dedicated
-     * {@code server_properties} message routed to {@link com.ultikits.ultitools.manager.
-     * ServerPropertiesManager#handleServerProperties}. {@code permissions} is defined nowhere in the
-     * system, so it is not given a meaning here — it falls to the pre-existing fail-closed
-     * {@code default}, whose wording already says exactly what a dedicated branch would.
+     * {@code server_properties} message routed to
+     * {@link com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties}.
+     * {@code permissions} is defined nowhere in the system, so it is not given a meaning here — it
+     * falls to the pre-existing fail-closed {@code default}, whose wording already says exactly
+     * what a dedicated branch would.
      */
     private static void handleConfigUploadLogic(JsonObject data) throws Exception {
         String configType = data.get("configType").getAsString();
