@@ -129,6 +129,13 @@ public class SystemLogHandler extends Handler {
     
     @Override
     public void publish(LogRecord record) {
+        // #434: nothing to deliver to if no subscribed panel client currently wants it (every
+        // client paused, or none subscribed at all). Checked first -- cheapest test, and it
+        // means a fully-paused stream never even reaches the exclusion/formatting work below.
+        if (!activeSubscriberCheck.getAsBoolean()) {
+            return;
+        }
+
         // Check whether this log record should be processed
         if (!shouldProcessRecord(record)) {
             return;

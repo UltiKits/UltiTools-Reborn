@@ -89,6 +89,9 @@ public class LogStreamManager implements Listener {
 
         // Create and configure the system log handler
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
+        // #434: wire the delivery path to the subscriber map's pause state -- see
+        // hasActiveSubscriber()'s javadoc for why this is a global, not per-client, check.
+        this.systemLogHandler.setActiveSubscriberCheck(this::hasActiveSubscriber);
         this.systemLogHandler.loadConfiguration();
 
         // Add the system log handler to the root Logger
