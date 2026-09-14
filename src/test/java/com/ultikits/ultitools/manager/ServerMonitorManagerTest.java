@@ -1020,6 +1020,65 @@ class ServerMonitorManagerTest {
         }
 
         @Test
+        @DisplayName("Gate-2 round 5: sendBatchUpdate 排空时使用 transmitter 自己配置的 batchSize，而不是硬编码的 50")
+        void sendBatchUpdateDrainsUpToTheConfiguredBatchSizeNotAHardcodedFifty() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                // External drain mode is what monitoring actually enables (round 4's fix) --
+                // without it, addToBatch's own size-threshold send would drain the queue itself
+                // before sendBatchUpdate ever runs.
+                transmitter.setExternalDrainMode(true);
+                transmitter.setBatchSize(3);
+                for (int i = 0; i < 5; i++) {
+                    transmitter.info("line-" + i, "test");
+                }
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.getAsJsonArray("logs").size())
+                        .as("must drain exactly the configured batchSize (3), not a hardcoded 50")
+                        .isEqualTo(3);
+                assertThat(queueSizeOf(transmitter))
+                        .as("2 of the 5 queued lines must still be waiting -- proves the cap actually applied")
+                        .isEqualTo(2);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 5: maybeSendLogsOnly 排空时同样使用 transmitter 自己配置的 batchSize")
+        void maybeSendLogsOnlyDrainsUpToTheConfiguredBatchSizeNotAHardcodedFifty() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setExternalDrainMode(true);
+                transmitter.setBatchSize(3);
+                for (int i = 0; i < 5; i++) {
+                    transmitter.info("line-" + i, "test");
+                }
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.getAsJsonArray("logs").size()).isEqualTo(3);
+                assertThat(queueSizeOf(transmitter)).isEqualTo(2);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
         @DisplayName("Gate-2 round 3: maybeSendLogsOnly 在 interval 到期时独立于 5 秒的 sendBatchUpdate tick 发送仅含 logs 的 batch_update")
         void maybeSendLogsOnlySendsALogsOnlyBatchUpdateWhenDue() throws Exception {
             UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);

@@ -723,7 +723,12 @@ public class ServerMonitorManager {
                     // claimLogFlushWindow() atomically decides the winner against
                     // maybeSendLogsOnly()'s own competing 1-second task -- only the winner drains.
                     if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
-                        JsonArray logs = transmitter.drainQueue(50);
+                        // Gate-2 finding (round 5): drainQueue's own cap must follow the
+                        // transmitter's configured batchSize, not a hardcoded constant -- now
+                        // that externalDrainMode is reliably enabled (round 4's init-order fix),
+                        // this WAS the path a live batchConfig.size change actually went through,
+                        // and a hardcoded value here silently overrode it.
+                        JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
                         if (logs.size() > 0) {
                             data.add("logs", logs);
                         }
@@ -789,7 +794,9 @@ public class ServerMonitorManager {
                 return;
             }
 
-            JsonArray logs = transmitter.drainQueue(50);
+            // Gate-2 finding (round 5): follow the transmitter's own configured batchSize
+            // rather than a hardcoded constant -- see the identical comment in sendBatchUpdate().
+            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
             if (logs.size() == 0) {
                 return;
             }
