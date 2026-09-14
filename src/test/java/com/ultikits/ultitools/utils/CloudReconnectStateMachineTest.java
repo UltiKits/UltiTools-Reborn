@@ -716,6 +716,35 @@ class CloudReconnectStateMachineTest {
         }
 
         @Test
+        @DisplayName("Round 1 外部评审：迟到握手的接线必须查这次握手自己那个会话是否仍然有效，不能查事后重新读到的 current()")
+        void lateHandshakeInitializesManagersOnItsOwnSessionNotWhateverIsCurrent() {
+            // 复现评审给出的确切场景：oldSession 的握手迟到了，而在它到达之前，一次登出+重新
+            // 登录已经把 current() 换成了 newSession——一个尚未真正握手成功、自己的客户端引用还是
+            // null 的「待定」会话。若接线动作查的是 current()（newSession）而不是 oldSession 自己，
+            // newSession.isCurrent() 为 true 会放行，用 newSession 自己（null）的客户端引用把全局
+            // 管理器的接线原样覆盖掉——哪怕 newSession 自己那次握手还没有真正完成。
+            CloudSession oldSession = CloudSession.current();
+            UltiPanelWebSocketClient oldClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(oldClient.getServerId()).thenReturn("srv-old");
+
+            CloudSession newSession = CloudSession.startNew(); // 使 oldSession 失效，装上待定的新会话
+            assertThat(newSession.getWebSocketClient())
+                    .as("前置条件：新会话此刻确实还没有自己的客户端")
+                    .isNull();
+
+            try {
+                PluginInitiationUtils.onWebSocketOpened(oldSession, oldClient);
+            } catch (Exception ignored) {
+                // 本测试环境没有 ConfigManager 之类的下游依赖，走到 uploadConfig 会失败，
+                // 与本用例要钉住的东西无关。
+            }
+
+            // 关键断言：oldSession 已经失效，接线动作必须整体不发生——全局管理器的客户端引用
+            // 不该被这次迟到的握手动到，无论是被设成 oldClient 还是被 newSession 自己的 null 覆盖。
+            Mockito.verify(mockMonitor, Mockito.never()).setWebSocketClient(Mockito.any());
+        }
+
+        @Test
         @DisplayName("接线与拆线落在同一个会话的监视器上")
         void wiringAndTeardownShareTheSameLock() throws Exception {
             // 光检查 isCloudEnabled() 是不够的：那只是一次锁外的读。读到 true 之后、真正接线

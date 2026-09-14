@@ -303,15 +303,28 @@ final class CloudSession {
     }
 
     /**
-     * Removes the persisted credential from disk and clears this session's in-memory token.
-     * Called by {@code CloudAuthManager.logout()} (plan 16-09) on the freshly-installed session
-     * {@link #startNew()} returns, so the wipe lands on the session that is actually current going
-     * forward.
+     * Removes the persisted credential from disk, but ONLY the copy this specific session itself
+     * is responsible for, and clears this session's in-memory token unconditionally (a purely
+     * local field on an instance nothing else can observe).
+     * <p>
+     * Called by {@code CloudAuthManager.logout()} (plan 16-10) on the session
+     * {@link PluginInitiationUtils#disableCloud(CloudSession)} actually tore down.
+     * <p>
+     * <b>Round-1 external review finding (16-10, PR #464):</b> {@code credentials.json} is one
+     * shared document across every session that has ever existed. A blind, unconditional disk
+     * clear here -- the original 16-09 shape -- could remove a credential a NEWER session
+     * committed while this (older, being-logged-out) session's teardown was still in flight: the
+     * new session passes its own currency check, its commit succeeds and writes to the shared
+     * document, and this method's own unconditional clear would then wipe that fresh write, even
+     * though the operator's re-login had already genuinely succeeded. Delegating to
+     * {@link TokenStore#clearIfMatches(TokenEntity)} with this session's own {@link #token} turns
+     * the disk clear into a compare-and-delete: it only ever removes the credential THIS session
+     * itself last knows to be persisted, never a value some other session wrote afterward.
      *
      * @throws IOException if the underlying write fails
      */
     void clearPersisted() throws IOException {
-        tokenStore.clear();
+        tokenStore.clearIfMatches(token);
         this.token = null;
     }
 

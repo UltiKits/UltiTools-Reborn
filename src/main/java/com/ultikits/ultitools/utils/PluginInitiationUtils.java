@@ -329,8 +329,18 @@ public class PluginInitiationUtils {
         // Subscribe to the current server
         client.subscribeToServer(client.getServerId());
 
-        // Initialize all managers
-        initializeManagers();
+        // Initialize all managers -- on the captured `session` directly, NOT via the static
+        // initializeManagers() delegator (which re-reads CloudSession.current()). Round-1 Codex
+        // review finding, plan 16-10: if a logout invalidates `session` and a fresh login installs
+        // a brand-new (not-yet-connected) session before this late handshake reaches this line, the
+        // static delegator's re-read would see the NEW session -- which passes isCurrent() despite
+        // having no token or client yet -- and wire managers against it using THIS handshake's
+        // client, undoing the logout's teardown with an unrelated client reference. Calling
+        // session.initializeManagers() directly means the currency gate this method already relies
+        // on (see CloudSession#initializeManagers()'s own javadoc) is evaluated against the
+        // session that actually owns this handshake, matching the discipline this whole method's
+        // own javadoc states for the client parameter.
+        session.initializeManagers();
 
         // Upload config
         uploadConfig(client);

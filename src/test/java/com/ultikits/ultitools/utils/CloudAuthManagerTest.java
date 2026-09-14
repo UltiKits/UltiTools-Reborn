@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -776,6 +777,25 @@ class CloudAuthManagerTest {
             assertThat(errorMessage.get()).isEqualTo("API URL not configured");
             assertThat(successCalled).isFalse();
         }
+
+        @Test
+        @DisplayName("Round 1 外部评审：登录会先完整拆掉当前（已过期）会话的全局管理器，再换上新会话")
+        void loginFullyTearsDownTheStaleSessionsGlobalManagersBeforeReplacingIt() throws Exception {
+            // 令牌已过期——不会走「已登录」短路分支，但这个会话此前可能仍有一整套云生命周期在跑。
+            setSessionField("token", buildTokenWithExp(-3600L));
+            CloudSession sessionBeforeLogin = CloudSession.current();
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                init.when(() -> PluginInitiationUtils.disableCloud(any(CloudSession.class)))
+                        .thenReturn(sessionBeforeLogin);
+
+                CloudAuthManager.login(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
+
+                // 必须拆的是登录发生时那个（已过期）会话本身，而不是随便一个会话；且必须发生在
+                // startNew() 换上新会话之前——sessionBeforeLogin 在这一刻还是 current()。
+                init.verify(() -> PluginInitiationUtils.disableCloud(sessionBeforeLogin), times(1));
+            }
+        }
     }
 
     // =========================================================================
@@ -904,6 +924,52 @@ class CloudAuthManagerTest {
             assertThat(after.data())
                     .as("旧会话的磁盘凭证必须被清掉，不能因为 current() 已经指向别处而被跳过")
                     .doesNotContainKey("cloud_token");
+        }
+
+        @Test
+        @DisplayName("Round 1 外部评审：拆线期间若新会话已经落地了自己的凭证，logout 的清除动作绝不能把它冲掉")
+        void logoutDoesNotClearACredentialAFreshLoginAlreadyCommittedDuringTeardown() throws Exception {
+            // sBefore -- the session /ulticloud logout is actually acting on -- has its own,
+            // now-stale credential on disk.
+            CloudSession sBefore = CloudSession.current();
+            sBefore.commit(buildTokenWithExp(3600L));
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                // Simulates the exact race the round-1 review named: while sBefore's teardown is
+                // (nominally) still in flight, a concurrent /ulticloud login installs a brand-new
+                // session AND that session's own magic-link poll completes, committing a genuinely
+                // fresh credential to the SAME shared credentials.json document. A blind,
+                // unconditional clear (the pre-fix shape) would then wipe this fresh write purely
+                // because it runs after it, with no way to tell the two apart.
+                // Deliberately a DIFFERENT access token from sBefore's -- buildTokenWithExp always
+                // uses the same literal string, which would make the disk-content assertion below
+                // vacuous (unable to tell whose credential actually survived).
+                TokenEntity freshTokenFromConcurrentLogin = new TokenEntity();
+                freshTokenFromConcurrentLogin.setAccess_token("fresh-login-access-token");
+                freshTokenFromConcurrentLogin.setExp((System.currentTimeMillis() / 1000L) + 7200L);
+                init.when(() -> PluginInitiationUtils.disableCloud(sBefore)).thenAnswer(invocation -> {
+                    CloudSession concurrentLogin = CloudSession.startNew();
+                    concurrentLogin.commit(freshTokenFromConcurrentLogin);
+                    return sBefore;
+                });
+
+                boolean hadCredential = CloudAuthManager.logout();
+
+                assertThat(hadCredential)
+                        .as("sBefore 自己原本确实持有凭证，这一半判断不受这条 fix 影响")
+                        .isTrue();
+            }
+
+            CredentialStore.ReadResult afterLogout = CredentialStore.read();
+            assertThat(afterLogout.data())
+                    .as("并发登录已经落地的凭证必须原样保留，不能被这次 logout 的清除动作冲掉")
+                    .containsKey("cloud_token");
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> savedToken =
+                    (java.util.Map<String, Object>) afterLogout.data().get("cloud_token");
+            assertThat(savedToken.get("access_token"))
+                    .as("留在磁盘上的必须是并发登录自己的 access_token，不是 sBefore 的")
+                    .isEqualTo("fresh-login-access-token");
         }
     }
 

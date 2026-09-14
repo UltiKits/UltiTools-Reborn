@@ -383,8 +383,16 @@ class CredentialGenerationTest {
                 boolean committed = session.commit(someToken()); // write 1
                 assertThat(committed).isTrue();
 
-                // logout is squeezed in between "commit succeeded" and "activation starts"
-                CloudSession.startNew().clearPersisted(); // write 2
+                // logout is squeezed in between "commit succeeded" and "activation starts" --
+                // mirrors CloudAuthManager.logout()'s real sequence (16-10, CR-01/round-1 review):
+                // invalidate `session` in place, then clear ON THAT SAME session, never on a
+                // freshly-installed successor. clearPersisted() is now a compare-and-delete keyed
+                // on the calling session's own last-known token (round-1 review finding) -- calling
+                // it via CloudSession.startNew() (a session that never committed anything) would be
+                // a no-op and leave this session's own credential on disk, which is not what a
+                // real logout does and not what this test means to simulate.
+                session.invalidate();
+                session.clearPersisted(); // write 2
 
                 boolean cloudEnabledBeforeActivation = PluginInitiationUtils.isCloudEnabled();
                 boolean activated = PluginInitiationUtils.activateCloudIfCurrent(session);

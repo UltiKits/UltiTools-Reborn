@@ -61,6 +61,17 @@ public class CloudAuthManager {
             return;
         }
         onRequesting.run();
+        // Round-1 external review finding (PR #464): CloudSession#startNew() alone only tears
+        // down the session's OWN resources (schedulers, WebSocket client) -- it does not stop the
+        // global server monitor or player-event manager, which live outside any session and are
+        // only ever stopped by PluginInitiationUtils#disableCloud(CloudSession)'s own two
+        // session-independent teardown steps. Reaching this line means the current session's
+        // token is missing or expired (the hasValidToken() gate above already failed), so its
+        // cloud lifecycle -- if one is still running -- is stale by definition. Tearing it down
+        // completely before replacing it means a magic-link request that then fails, or never
+        // resolves, never leaves those global managers wired to a socket that already closed with
+        // no successor connection to ever rewire them.
+        PluginInitiationUtils.disableCloud(CloudSession.current());
         String url = CloudSession.startNew().requestMagicLink(onError);
         if (url != null) {
             onSuccess.accept(url);
@@ -88,11 +99,19 @@ public class CloudAuthManager {
      * "nothing to clear" and leaving the real credential on disk. Acting on the one reference this
      * method already holds makes that race structurally impossible: there is no second read left to
      * disagree with the first. This method deliberately does <b>not</b> call
-     * {@link CloudSession#startNew()} itself any more either -- {@link CloudSession#clearPersisted()}
-     * does not gate on session identity (it always wipes disk unconditionally,
-     * {@link CloudSession#clearPersisted() its own javadoc}), so clearing the torn-down session in
-     * place is sufficient; the next real login installs a fresh session via its own
+     * {@link CloudSession#startNew()} itself any more either; clearing the torn-down session in
+     * place is sufficient, and the next real login installs a fresh session via its own
      * {@code CloudSession.startNew()} call, exactly as it always has.
+     * <p>
+     * <b>Round-1 external review finding, corrected in the same plan:</b> the paragraph above
+     * establishes WHICH session's disk-clear decision this method acts on, but not what that
+     * clear is safe to remove. {@link CloudSession#clearPersisted()} does NOT wipe disk
+     * unconditionally -- it delegates to {@link TokenStore#clearIfMatches(TokenEntity)}, a
+     * compare-and-delete keyed on the torn-down session's own last-known token. This matters
+     * because a concurrent {@code login()} can still WRITE a fresh credential to the same shared
+     * document while this session's teardown is in flight, even though its own session-invalidation
+     * race is already closed by the paragraph above -- see {@link CloudSession#clearPersisted()}'s
+     * own javadoc for the full account of why an unconditional clear would remove that fresh write.
      * <p>
      * <b>Documented semantics for logout racing a concurrent login (CR-01's second half):</b> this
      * method's teardown always acts on whichever session was current at the single instant this
@@ -100,11 +119,13 @@ public class CloudAuthManager {
      * time this method controls directly, rather than one buried inside a callee. A {@code login()}
      * that installs its new session <b>before</b> that read wins outright: this {@code logout()}
      * call never sees or touches it. A {@code login()} that installs its new session <b>after</b>
-     * that read has already lost the credential race regardless of what this method does --
-     * {@link CloudSession#startNew()} itself unconditionally invalidates whatever session it
-     * replaces, so the fresh login is torn down by that call alone, independent of this command.
-     * There is no window in which this method invalidates a login it did not already lose to
-     * {@code startNew()}'s own contract.
+     * that read has already lost the SESSION-invalidation race regardless of what this method does
+     * -- {@link CloudSession#startNew()} itself unconditionally invalidates whatever session it
+     * replaces, so the fresh login's session object is torn down by that call alone, independent of
+     * this command. What {@link CloudSession#clearPersisted()}'s compare-and-delete adds on top is
+     * the disk-level half of that same guarantee: even if the fresh login's own commit reaches the
+     * shared document before this method's clear does, the clear cannot remove a value the
+     * torn-down session never itself wrote.
      *
      * @return {@code true} if a credential existed and was cleared; {@code false} if there was
      *         nothing to clear (teardown still ran regardless)

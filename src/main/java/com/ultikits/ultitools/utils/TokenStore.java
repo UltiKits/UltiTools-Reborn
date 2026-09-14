@@ -55,12 +55,49 @@ final class TokenStore {
         });
     }
 
-    /** Removes the persisted {@code cloud_token} entry, if any. */
-    void clear() throws IOException {
+    /**
+     * Removes the persisted {@code cloud_token} entry, but ONLY if it still matches
+     * {@code expected} -- i.e. nothing else has overwritten it since {@code expected} was this
+     * session's own last-known token.
+     * <p>
+     * <b>Round-1 external review finding (16-10, PR #464):</b> a plain, unconditional clear here
+     * is a compare-and-delete's absence, not its presence. {@code credentials.json} is one shared
+     * document across every session that has ever existed (D-16 gives each session its own
+     * lifecycle, not its own file). If a stale session's logout races a fresh login whose commit
+     * lands on the shared document first, an unconditional clear removes the FRESH credential --
+     * the exact defect this method exists to prevent. Comparing against {@code expected} (the
+     * calling session's own token, captured before teardown) means a clear only ever removes what
+     * that specific session itself is the one that wrote — anything written afterward, by anyone
+     * else, survives.
+     *
+     * @param expected the token this session itself believes is (or was) persisted; if the disk's
+     *                 current {@code cloud_token} does not match it (by access token value),
+     *                 nothing is removed
+     * @throws IOException if the underlying write fails
+     */
+    void clearIfMatches(TokenEntity expected) throws IOException {
         CredentialStore.update(existing -> {
-            existing.remove("cloud_token");
+            if (matchesAccessToken(existing.get("cloud_token"), expected)) {
+                existing.remove("cloud_token");
+            }
             return existing;
         });
+    }
+
+    /**
+     * @param savedRaw the raw {@code cloud_token} value read from the credential document (a
+     *                  {@code Map} once Gson has deserialized it, or {@code null}/anything else if
+     *                  absent or malformed)
+     * @param expected  the token to compare against
+     * @return {@code true} if {@code savedRaw} is a map whose {@code access_token} entry equals
+     *         {@code expected}'s access token
+     */
+    private static boolean matchesAccessToken(Object savedRaw, TokenEntity expected) {
+        if (expected == null || !(savedRaw instanceof Map)) {
+            return false;
+        }
+        Object savedAccessToken = ((Map<?, ?>) savedRaw).get("access_token");
+        return savedAccessToken != null && savedAccessToken.equals(expected.getAccess_token());
     }
 
     /**
