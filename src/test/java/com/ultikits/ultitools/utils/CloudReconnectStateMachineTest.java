@@ -176,6 +176,43 @@ class CloudReconnectStateMachineTest {
                     .as("清零之后应当还有额度，不该因为之前用掉的 5 次就提前进入终态")
                     .isTrue();
         }
+
+        @Test
+        @DisplayName("round-12 外部评审：同一 classloader 内先禁用再启用（例如 /reload）时，"
+                + "enableCloud 必须清零退避计数，不能沿用禁用前已经消耗掉的重连次数")
+        void enableCloudResetsBackoffEvenWhenTheSessionSurvivesADisableEnableCycle() {
+            // 复现评审给出的确切场景：onDisable() 只停调度器与 WebSocket（UltiTools.onDisable()
+            // 自己的注释就说明了这是刻意的——JVM/插件即将卸载，没必要做一次完整拆线），
+            // 从不使当前会话失效；本用例直接用 stopCredentialSchedulers() + 手动清空客户端引用
+            // 模拟这一整套动作，而不调用 disableCloud()——调用 disableCloud() 会使会话失效，
+            // 恰恰是这个 bug 之所以存在的原因：会话在禁用前后是同一个对象。
+            CloudSession session = CloudSession.current();
+            UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
+            session.setWebSocketClient(client);
+
+            for (int i = 0; i < 4; i++) {
+                session.getBackoff().getNextDelay();
+            }
+            assertThat(session.getBackoff().getAttemptCount())
+                    .as("前置条件：禁用之前，这个会话的退避额度必须真的被消耗掉一部分")
+                    .isEqualTo(4);
+
+            PluginInitiationUtils.stopCredentialSchedulers();
+            assertThat(session.isCurrent())
+                    .as("前置条件：onDisable() 的既有步骤不会让会话失效——这正是这个 bug 的成因")
+                    .isTrue();
+
+            // 重新 onEnable()：round-12 评审要补的正是这一步。
+            PluginInitiationUtils.enableCloud();
+
+            assertThat(CloudSession.current())
+                    .as("会话本身不该被替换——它此刻仍然有效，替换会白白丢掉 token 和 WebSocket 客户端")
+                    .isSameAs(session);
+            assertThat(session.getBackoff().getAttemptCount())
+                    .as("round-12：一次 enableCloud() 必须清零退避计数，即便会话本身没被替换——"
+                            + "否则重新启用后的重连预算会被禁用前已经消耗的次数提前耗尽")
+                    .isZero();
+        }
     }
 
     @Nested

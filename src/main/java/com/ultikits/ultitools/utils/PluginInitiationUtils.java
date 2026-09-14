@@ -2105,16 +2105,30 @@ public class PluginInitiationUtils {
      * <p>
      * As of 16-08 Task 2 there is no separate enabled flag to flip: "enabled" simply
      * means {@link CloudSession#current()} is not invalidated. If it already is not (the common
-     * case -- most callers reach this with a perfectly good session already installed), this
-     * method does nothing; replacing a working session here for no reason would gratuitously drop
-     * its token, its WebSocket client and its backoff progress. Only a session that
-     * {@link CloudSession#invalidate()} already ran on (typically {@code disableCloud()}, without a
-     * following {@code /ulticloud login}) gets replaced.
+     * case -- most callers reach this with a perfectly good session already installed), the session
+     * itself is not replaced; doing so for no reason would gratuitously drop its token and its
+     * WebSocket client. Only a session that {@link CloudSession#invalidate()} already ran on
+     * (typically {@code disableCloud()}, without a following {@code /ulticloud login}) gets
+     * replaced.
+     * <p>
+     * <b>16-10 gap-closure addendum (round-12 review, PR #464):</b> {@link CloudSession#getBackoff()}
+     * is reset unconditionally below, regardless of whether the session itself needed replacing --
+     * unlike the token and the WebSocket client, reconnect-attempt history is NOT worth preserving
+     * across a call to this method. Both of this method's own documented call sites -- cloud login
+     * at server startup, and after a successful {@code /ulticloud login} -- are, by definition, a
+     * fresh start of the connection-attempt cycle, matching the pre-6.3.0 global backoff's own
+     * behaviour (every {@code enableCloud()} call reset it). Without this, {@code UltiTools#onDisable()}
+     * stops the current session's schedulers and WebSocket client but never invalidates the session
+     * itself (a deliberate choice -- a full teardown at JVM shutdown is pointless work), so a plugin
+     * disabled and re-enabled in the same classloader (e.g. {@code /reload}) resumes with whatever
+     * backoff attempt count it had accumulated before the disable, exhausting its retry budget
+     * prematurely instead of getting the fresh budget a restart implies.
      */
     public static void enableCloud() {
         if (!CloudSession.current().isCurrent()) {
             CloudSession.startNew();
         }
+        CloudSession.current().getBackoff().reset();
     }
 
     /** Lets a test assert whether the state machine is currently enabled -- i.e. whether the current session is still current. */
