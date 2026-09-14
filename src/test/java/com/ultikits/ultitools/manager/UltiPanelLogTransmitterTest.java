@@ -15,8 +15,10 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -484,6 +486,70 @@ class UltiPanelLogTransmitterTest {
                     .as("Gate-2 P2: the queue must be empty after disabling -- nothing left stranded")
                     .isEmpty();
             verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: 在 external drain mode 下，队列达到 batchSize 时会触发 externalSizeThresholdCallback")
+        void reachingBatchSizeUnderExternalDrainModeInvokesTheSizeThresholdCallback() {
+            logTransmitter.setExternalDrainMode(true);
+            logTransmitter.setBatchSize(2);
+            AtomicInteger callbackCount = new AtomicInteger(0);
+            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
+
+            logTransmitter.sendLog("info", "line-1", "test", null);
+            assertThat(callbackCount.get()).as("threshold (2) not yet reached").isZero();
+
+            logTransmitter.sendLog("info", "line-2", "test", null);
+            assertThat(callbackCount.get()).as("threshold reached on the 2nd enqueue").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6 对照: external drain mode 关闭时，达到 batchSize 不会调用 externalSizeThresholdCallback（走的是真实 sendBatch）")
+        void reachingBatchSizeWithoutExternalDrainModeDoesNotInvokeTheCallback() {
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            logTransmitter.setBatchSize(2);
+            AtomicInteger callbackCount = new AtomicInteger(0);
+            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
+
+            logTransmitter.sendLog("info", "line-1", "test", null);
+            logTransmitter.sendLog("info", "line-2", "test", null);
+
+            assertThat(callbackCount.get()).isZero();
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: setBatchEnabled(false) 持有 batchModeLock 期间，并发的 sendLog 必须等待 -- 证明锁真的挡住了")
+        void disablingBatchingHoldsTheLockAcrossFlushBlockingConcurrentSendLog() throws Exception {
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.sendLog("info", "concurrent", "test", null);
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // The worker's sendLog() call must NOT be able to proceed past its own
+                    // synchronized(batchModeLock) block while this thread holds the same lock.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendLog() must block on batchModeLock while it is held elsewhere")
+                            .isFalse();
+                }
+                // Released -- the worker should now complete promptly.
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendLog() must proceed once the lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
         }
     }
 

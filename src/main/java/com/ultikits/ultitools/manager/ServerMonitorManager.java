@@ -794,25 +794,80 @@ public class ServerMonitorManager {
                 return;
             }
 
-            // Gate-2 finding (round 5): follow the transmitter's own configured batchSize
-            // rather than a hardcoded constant -- see the identical comment in sendBatchUpdate().
-            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
-            if (logs.size() == 0) {
-                return;
-            }
-
-            JsonObject message = new JsonObject();
-            message.addProperty("type", "batch_update");
-            message.addProperty("serverId", webSocketClient.getServerId());
-            message.addProperty("timestamp", System.currentTimeMillis());
-            JsonObject data = new JsonObject();
-            data.add("logs", logs);
-            message.add("data", data);
-            webSocketClient.sendMessage(message);
+            drainAndSendLogsOnly(transmitter);
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "Failed to send log-only batch update: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Immediately drains and sends whatever is currently queued, without waiting for either
+     * {@link #sendBatchUpdate()}'s 5-second tick or {@link #maybeSendLogsOnly()}'s 1-second tick
+     * (Gate-2 finding, round 6). Registered as {@link UltiPanelLogTransmitter}'s
+     * {@code externalSizeThresholdCallback} from {@link LogStreamManager#initialize}: under
+     * external drain mode, {@code addToBatch()}'s own size-threshold trigger is otherwise
+     * silently swallowed by {@code sendBatch()}'s own early return, so a configured
+     * {@code batchSize} never shortened delivery latency while monitoring was active, and a
+     * sustained burst could fill the transmitter's queue cap and start discarding old entries
+     * despite repeatedly crossing the threshold.
+     * <p>
+     * Deliberately does NOT go through {@link #claimLogFlushWindow(long, int)}'s interval gate:
+     * that gate rate-limits the two TIME-based tasks against the configured interval, but this
+     * trigger is queue-DEPTH-based, a different reason to drain, and the whole point is to bypass
+     * waiting for the interval when the queue is already at capacity risk. {@code drainQueue} is
+     * safe to call concurrently with the other two tasks ({@code ConcurrentLinkedQueue#poll} is
+     * atomic per call) -- a near-simultaneous interval-triggered drain and this size-triggered one
+     * would, at worst, split one burst across two frames rather than lose or duplicate any entry.
+     * {@link #lastLogFlushMs} is still advanced afterwards so the interval-based tasks do not
+     * immediately re-fire for the records this call already sent.
+     */
+    void drainLogsNow() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            drainAndSendLogsOnly(transmitter);
+            lastLogFlushMs.set(System.currentTimeMillis());
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Failed to send size-triggered log batch: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Drains up to {@code transmitter}'s configured {@code batchSize} and, if non-empty, sends a
+     * {@code batch_update} message carrying ONLY {@code data.logs} -- shared by
+     * {@link #maybeSendLogsOnly()} and {@link #drainLogsNow()} (Gate-2 finding, round 6
+     * extraction). Not a new message type: the Worker's own handler (`websocket-server.ts`
+     * `case 'batch_update'`) already guards every field with {@code if (batch.X)}, so a partial
+     * batch_update is an already-supported shape, not a protocol change. Callers are responsible
+     * for their own connectivity/capability checks and for advancing {@link #lastLogFlushMs}.
+     */
+    private void drainAndSendLogsOnly(UltiPanelLogTransmitter transmitter) {
+        // Gate-2 finding (round 5): follow the transmitter's own configured batchSize rather
+        // than a hardcoded constant.
+        JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+        if (logs.size() == 0) {
+            return;
+        }
+
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "batch_update");
+        message.addProperty("serverId", webSocketClient.getServerId());
+        message.addProperty("timestamp", System.currentTimeMillis());
+        JsonObject data = new JsonObject();
+        data.add("logs", logs);
+        message.add("data", data);
+        webSocketClient.sendMessage(message);
     }
 
     /**

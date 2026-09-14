@@ -872,6 +872,87 @@ class LogStreamManagerTest {
         }
 
         @Test
+        @DisplayName("Gate-2 round 6: batchConfig.enabled 是字符串（如 \"disabled\"）时被拒绝，而不是被 Boolean.parseBoolean 静默转成 false")
+        void nonBooleanEnabledValueIsRejected() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            boolean enabledBefore = transmitter.isBatchEnabled();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("enabled", "disabled"); // a string, not a JSON boolean
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-nonbool", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("enabled").contains("boolean");
+
+            assertThat(transmitter.isBatchEnabled())
+                    .as("Boolean.parseBoolean(\"disabled\") == false would have silently disabled batching")
+                    .isEqualTo(enabledBefore);
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: batchConfig.size 是非整数（如 1.9）时被拒绝，而不是被 getAsInt() 静默截断")
+        void nonIntegralSizeValueIsRejected() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            int sizeBefore = transmitter.getBatchSize();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("size", 1.9);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-nonint-size", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("size").contains("integer");
+
+            assertThat(transmitter.getBatchSize()).isEqualTo(sizeBefore);
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: batchConfig.interval 是非整数（如 5000.5）时被拒绝，而不是被 getAsInt() 静默截断")
+        void nonIntegralIntervalValueIsRejected() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            int intervalBefore = transmitter.getIntervalMs();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("interval", 5000.5);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-nonint-interval", batchConfig));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("interval").contains("integer");
+
+            assertThat(transmitter.getIntervalMs()).isEqualTo(intervalBefore);
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6 对照: size/interval 恰好是整数值的 double（如 3.0）应被接受，因为它数值上就是整数")
+        void integralDoubleValueForSizeIsAccepted() {
+            logStreamManager.initialize(mockWebSocketClient);
+            UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("size", 3.0);
+
+            logStreamManager.handleLogStreamMessage(configActionWithBatch("client-gate2-int-double", batchConfig));
+
+            assertThat(transmitter.getBatchSize()).isEqualTo(3);
+        }
+
+        @Test
         @DisplayName("Gate-2: batchConfig.size 为 0 或负数时被拒绝，响应中说明下限，之前生效的值保留")
         void panelBatchSizeBelowOneIsRejected() {
             logStreamManager.initialize(mockWebSocketClient);
@@ -931,6 +1012,49 @@ class LogStreamManagerTest {
             // whole-request failure. Now: neither section is applied.
             verify(mockHandler, never())
                     .setEnabledLevels(any());
+        }
+    }
+
+    // ==================== Gate-2 round 6: debug + size:1  递归回归测试 ====================
+    @Nested
+    @DisplayName("debug 级别与 batchSize:1 组合的递归回归测试 -- CR-02/sendBatch 自诊断日志的自触发链路")
+    class DebugRecursionRegressionTests {
+
+        private JsonObject configActionWithLevelsAndBatch(String... levels) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-debug-recursion");
+            JsonArray levelsArray = new JsonArray();
+            for (String level : levels) {
+                levelsArray.add(level);
+            }
+            data.add("levels", levelsArray);
+            JsonObject batchConfig = new JsonObject();
+            batchConfig.addProperty("size", 1);
+            data.add("batchConfig", batchConfig);
+            return data;
+        }
+
+        @Test
+        @DisplayName("启用 debug 且 batchConfig.size:1 时，发布真实 JUL 记录不会导致 sendBatch 自我递归 / StackOverflowError")
+        void enablingDebugWithBatchSizeOneDoesNotRecurse() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            // Real config-action dispatch: enables "debug" (which now genuinely lowers
+            // SystemLogHandler's own JUL level floor to FINEST, per CR-02/round-4's fix) AND sets
+            // batchConfig.size to 1 (every enqueued record immediately crosses the threshold).
+            logStreamManager.handleLogStreamMessage(
+                    configActionWithLevelsAndBatch("info", "warning", "error", "debug"));
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            // Before the fix, this line -- a real JUL record with no special exemption -- would
+            // trigger sendBatch(), whose own diagnostic FINE log re-entered this same handler and
+            // recursed until StackOverflowError.
+            assertDoesNotThrow(() ->
+                    Logger.getLogger("").log(new LogRecord(Level.INFO, "debug-recursion-canary")));
         }
     }
 

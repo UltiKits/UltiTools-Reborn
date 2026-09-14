@@ -8,7 +8,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -48,9 +47,37 @@ public class UltiPanelLogTransmitter {
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
 
+    /**
+     * Guards the batch-vs-immediate DISPATCH DECISION in {@link #sendLog} against the
+     * enabled-to-disabled TRANSITION in {@link #setBatchEnabled(boolean)} (Gate-2 finding,
+     * round 6). Before this lock, {@code setBatchEnabled(false)} wrote {@code this.batchEnabled
+     * = false} before {@link #flushLogs()} drained the existing queue, so a concurrent
+     * {@code sendLog()} call could read the new {@code false} value and send a NEWER record
+     * immediately while {@code flushLogs()} was still draining OLDER queued records -- the
+     * newer record then arrived at the panel before the older ones, breaking FIFO order.
+     * Holding this lock across both {@code sendLog}'s dispatch decision and the WHOLE disable
+     * transition means every {@code sendLog} call observes the transition as atomic: either
+     * entirely before it (queued, and included in the flush that is about to run) or entirely
+     * after it (flag already false, sent immediately) -- never during.
+     */
+    private final Object batchModeLock = new Object();
+
     // External drain mode: when true, sendBatch() no longer sends automatically, and logs are
     // obtained externally by calling drainQueue()
     private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
+
+    /**
+     * Invoked from {@link #addToBatch(JsonObject)} whenever the queue reaches {@link #batchSize}
+     * WHILE {@link #externalDrainMode} is active (Gate-2 finding, round 6). Without this,
+     * reaching the size threshold under external drain mode had no effect at all --
+     * {@link #sendBatch()}'s own early-return for external drain mode silently swallowed the
+     * threshold crossing that would otherwise have triggered an immediate send, so a documented
+     * size threshold never actually shortened delivery latency while monitoring was active, and a
+     * sustained burst could fill {@link #MAX_QUEUE_SIZE} and start discarding old entries despite
+     * repeatedly crossing the threshold. {@code null} by default (no external owner wired up);
+     * {@link LogStreamManager#initialize} sets it alongside {@link #setExternalDrainMode(boolean)}.
+     */
+    private volatile Runnable externalSizeThresholdCallback;
 
     // Batch-send configuration
     @Getter
@@ -134,12 +161,16 @@ public class UltiPanelLogTransmitter {
                 logData.add("stackTrace", null);
             }
 
-            if (batchEnabled) {
-                // Batch-send mode
-                addToBatch(logData);
-            } else {
-                // Immediate-send mode
-                sendLogImmediately(logData);
+            // Gate-2 finding (round 6): held across the read of batchEnabled AND the resulting
+            // call, matching setBatchEnabled(false)'s own lock -- see batchModeLock's javadoc.
+            synchronized (batchModeLock) {
+                if (batchEnabled) {
+                    // Batch-send mode
+                    addToBatch(logData);
+                } else {
+                    // Immediate-send mode
+                    sendLogImmediately(logData);
+                }
             }
 
         } catch (Exception e) {
@@ -194,6 +225,14 @@ public class UltiPanelLogTransmitter {
         // If the queue is full, send immediately
         if (logQueue.size() >= batchSize) {
             sendBatch();
+            // Gate-2 finding (round 6): sendBatch() itself is a no-op under external drain mode
+            // (see its own early return), so the threshold crossing above would otherwise have
+            // no effect at all while monitoring is active. Notify the external owner instead, so
+            // it can perform its own immediate drain rather than waiting for its next scheduled
+            // tick -- see externalSizeThresholdCallback's own javadoc.
+            if (externalDrainMode.get() && externalSizeThresholdCallback != null) {
+                externalSizeThresholdCallback.run();
+            }
         }
     }
 
@@ -283,10 +322,23 @@ public class UltiPanelLogTransmitter {
         if (batchEnabled == this.batchEnabled) {
             return;
         }
-        this.batchEnabled = batchEnabled;
         if (batchEnabled) {
+            this.batchEnabled = true;
             startBatchSender();
-        } else {
+            return;
+        }
+
+        // Gate-2 finding, round 6: flush and the flag flip must be atomic against sendLog's own
+        // dispatch decision, via the SAME batchModeLock sendLog holds -- see its own javadoc.
+        // Before this lock, this.batchEnabled was written BEFORE flushLogs() drained the existing
+        // queue, so a concurrent sendLog() call could read the new false value and send a NEWER
+        // record immediately while flushLogs() was still draining OLDER queued records, arriving
+        // at the panel out of order. Flushing while batchEnabled is STILL true is safe -- flushLogs
+        // (via sendBatch) never reads batchEnabled at all, only externalDrainMode -- so any record
+        // enqueued by a concurrent sendLog() during the flush (which the lock forces to happen
+        // entirely before or entirely after this block, never during) is picked up by the SAME
+        // ConcurrentLinkedQueue-backed flush that is already running, still in FIFO order.
+        synchronized (batchModeLock) {
             // Gate-2 finding: cancelling the scheduled sender with entries still queued (fewer
             // than batchSize, so addToBatch's own size-threshold send never fired) used to strand
             // them -- new records after this point go out immediately (batching is now off), while
@@ -295,8 +347,9 @@ public class UltiPanelLogTransmitter {
             // its only consumer, so disabling batching means "deliver what's pending now, then send
             // immediately from here on" rather than "silently defer some records indefinitely."
             flushLogs();
-            stopBatchSender();
+            this.batchEnabled = false;
         }
+        stopBatchSender();
     }
 
     /**
@@ -339,9 +392,20 @@ public class UltiPanelLogTransmitter {
 
                 webSocketClient.sendMessage(batchMessage);
 
-                // Log the batch-send information
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    String.format("[UltiPanel] 批量发送 %d 条日志", logs.size()));
+                // Gate-2 finding (round 6): this diagnostic USED to log via
+                // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
+                // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
+                // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
+                // loop-prevention check (which matches on loggerName.contains("...")) could never
+                // catch it. Before this plan, that was harmless because the handler's own JUL
+                // level floor stayed at Level.INFO, silently dropping this FINE record before it
+                // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
+                // genuinely lower that floor to Level.FINEST -- so this record became reachable
+                // for the first time, and with batchConfig.size:1 it recursively re-triggered
+                // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
+                // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
+                // Removed rather than routed around the loop guard -- this line's information
+                // value (a batch-size count) does not justify carrying a self-recursion hazard.
             }
 
         } catch (Exception e) {
@@ -383,6 +447,17 @@ public class UltiPanelLogTransmitter {
      */
     public boolean isExternalDrainMode() {
         return externalDrainMode.get();
+    }
+
+    /**
+     * Sets the callback invoked when the queue reaches {@link #batchSize} while external drain
+     * mode is active (Gate-2 finding, round 6). Pass {@code null} to clear it.
+     *
+     * @param callback a no-argument, non-blocking callback; called on whichever thread
+     *        {@link #sendLog(String, String, String, Throwable)} happened to run on
+     */
+    public void setExternalSizeThresholdCallback(Runnable callback) {
+        this.externalSizeThresholdCallback = callback;
     }
 
     /**

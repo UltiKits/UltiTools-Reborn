@@ -114,6 +114,11 @@ public class LogStreamManager implements Listener {
         ServerMonitorManager serverMonitorManager = UltiTools.getInstance().getServerMonitorManager();
         if (serverMonitorManager != null && serverMonitorManager.isMonitoring()) {
             this.logTransmitter.setExternalDrainMode(true);
+            // Gate-2 finding (round 6): under external drain mode, addToBatch()'s own
+            // size-threshold trigger is otherwise silently swallowed by sendBatch()'s own
+            // early return, so a configured batchSize never shortens delivery latency while
+            // monitoring is active. Wire an immediate-drain request back to the monitor.
+            this.logTransmitter.setExternalSizeThresholdCallback(serverMonitorManager::drainLogsNow);
         }
 
         // Load the batch-send settings from the config file
@@ -427,10 +432,24 @@ public class LogStreamManager implements Listener {
         JsonObject batchConfig = data.getAsJsonObject("batchConfig");
 
         if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
-            out.enabled = batchConfig.get("enabled").getAsBoolean();
+            // Gate-2 finding (round 6): Gson's getAsBoolean() on a JSON STRING silently applies
+            // Boolean.parseBoolean, which returns false for any non-"true" string (e.g.
+            // "disabled" -> false) instead of rejecting a malformed value -- a typo would
+            // silently disable batching rather than being refused.
+            JsonElement enabledElement = batchConfig.get("enabled");
+            if (!enabledElement.isJsonPrimitive() || !enabledElement.getAsJsonPrimitive().isBoolean()) {
+                sendErrorResponse(clientId, "Failed to update configuration: "
+                        + "'batchConfig.enabled' must be a boolean");
+                return false;
+            }
+            out.enabled = enabledElement.getAsBoolean();
         }
         if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
-            out.size = batchConfig.get("size").getAsInt();
+            Integer parsedSize = parseStrictInt(batchConfig.get("size"), "batchConfig.size", clientId);
+            if (parsedSize == null) {
+                return false;
+            }
+            out.size = parsedSize;
             if (out.size < 1) {
                 // Gate-2 finding: a size below 1 makes sendBatch()'s own
                 // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
@@ -441,7 +460,11 @@ public class LogStreamManager implements Listener {
             }
         }
         if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
-            out.interval = batchConfig.get("interval").getAsInt();
+            Integer parsedInterval = parseStrictInt(batchConfig.get("interval"), "batchConfig.interval", clientId);
+            if (parsedInterval == null) {
+                return false;
+            }
+            out.interval = parsedInterval;
             if (out.interval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
                 sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
                         + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
@@ -450,6 +473,32 @@ public class LogStreamManager implements Listener {
             }
         }
         return true;
+    }
+
+    /**
+     * Parses {@code element} as a strict Java {@code int} -- rejects a non-numeric value, a
+     * non-integral number (e.g. {@code 1.9}), and a value outside {@code int} range (Gate-2
+     * finding, round 6: Gson's {@code getAsInt()} silently truncates a fractional value and can
+     * wrap an out-of-range one, rather than validating that the payload is genuinely an integer).
+     * Sends the rejection response itself, matching this class's other validators.
+     *
+     * @return the parsed value, or {@code null} if invalid (rejection response already sent)
+     */
+    private Integer parseStrictInt(JsonElement element, String fieldName, String clientId) {
+        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
+            sendErrorResponse(clientId, "Failed to update configuration: '" + fieldName
+                    + "' must be an integer");
+            return null;
+        }
+        java.math.BigDecimal value = element.getAsBigDecimal();
+        if (value.stripTrailingZeros().scale() > 0
+                || value.compareTo(java.math.BigDecimal.valueOf(Integer.MIN_VALUE)) < 0
+                || value.compareTo(java.math.BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
+            sendErrorResponse(clientId, "Failed to update configuration: '" + fieldName
+                    + "' must be an integer");
+            return null;
+        }
+        return value.intValueExact();
     }
     
     /**
