@@ -5,7 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -917,6 +922,101 @@ class CloudReconnectStateMachineTest {
                         .as("释放锁之后应当立刻放行")
                         .isTrue();
                 worker.join(1000);
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("#465/#466 死锁自由性压测——CloudSession.class / 会话监视器 / LOG_WIRING_LOCK 这条锁序"
+            + "在四类并发路径下不得出现反序")
+    class LockOrderDeadlockFreedom {
+
+        @Test
+        @DisplayName("startNew / login / initializeManagers / disableCloud 四类操作并发混跑 200 轮，"
+                + "ThreadMXBean 必须报告零死锁且全部任务在超时内完成")
+        void concurrentSessionLifecycleOperationsNeverDeadlock() throws Exception {
+            // login() 会走到 requestMagicLink() 的网络调用——固定成空字符串，让它在本地失败得
+            // 又快又确定，不去碰真实网络，也不会因为网络延迟拖慢本压测。
+            HttpRequestUtils.setBaseUrlForTesting("");
+            try {
+                runOneStressRound();
+            } finally {
+                HttpRequestUtils.resetBaseUrl();
+            }
+        }
+
+        /**
+         * 四类操作各提交 200 次到一个 4 线程池，混跑到全部完成，然后用
+         * {@link ThreadMXBean#findDeadlockedThreads()} 核实没有任何线程互相卡死。之所以是
+         * "至少 200 轮或 2 秒"这个量级，是因为 CloudSession.class -> 会话监视器 -> LOG_WIRING_LOCK
+         * 这条锁序里的任何一次反序，在四线程池、数百次提交的规模下几乎必然在合理时间内触发一次
+         * AB-BA 死锁；单次串行调用测不出这类问题，因为死锁本身就是排队顺序的产物。
+         */
+        private void runOneStressRound() throws Exception {
+            int iterationsPerOperation = 200;
+            ExecutorService pool = Executors.newFixedThreadPool(4);
+            try {
+                for (int i = 0; i < iterationsPerOperation; i++) {
+                    // 并发路径一：startNew() 本身——CloudSession.class 外层，被替换会话的
+                    // 监视器内层，是本类文档化锁序的"锚"。
+                    pool.submit(() -> {
+                        try {
+                            CloudSession.startNew();
+                        } catch (Throwable ignored) {
+                            // 本用例只关心死锁自由性，不关心业务结果本身
+                        }
+                    });
+                    // 并发路径二：initializeManagers()——会话监视器外层，LOG_WIRING_LOCK 内层。
+                    pool.submit(() -> {
+                        try {
+                            PluginInitiationUtils.initializeManagers();
+                        } catch (Throwable ignored) {
+                            // 同上
+                        }
+                    });
+                    // 并发路径三：disableCloud()——先（不持锁）invalidate 自己的会话监视器 +
+                    // LOG_WIRING_LOCK，再（分开）CloudSession.class，两段不嵌套。
+                    pool.submit(() -> {
+                        try {
+                            PluginInitiationUtils.disableCloud();
+                        } catch (Throwable ignored) {
+                            // 同上
+                        }
+                    });
+                    // 并发路径四：login()——16-10 补丁新增的那段
+                    // synchronized(CloudSession.class){synchronized(session){...}}，是本压测
+                    // 真正要验的那条修复过的锁序本身。
+                    pool.submit(() -> {
+                        try {
+                            CloudAuthManager.login(
+                                    () -> { },
+                                    remaining -> { },
+                                    () -> { },
+                                    url -> { },
+                                    error -> { });
+                        } catch (Throwable ignored) {
+                            // 同上
+                        }
+                    });
+                }
+
+                pool.shutdown();
+                boolean completed = pool.awaitTermination(30, TimeUnit.SECONDS);
+
+                ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
+                long[] deadlockedThreadIds = threadBean.findDeadlockedThreads();
+
+                assertThat(deadlockedThreadIds)
+                        .as("#465/#466：CloudSession.class -> 会话监视器 -> LOG_WIRING_LOCK 这条"
+                                + "文档化锁序，必须在 startNew/login/initializeManagers/disableCloud"
+                                + "四类并发路径下保持一致，不能出现 AB-BA 死锁")
+                        .isNull();
+                assertThat(completed)
+                        .as("全部 " + (iterationsPerOperation * 4) + " 个任务必须在 30 秒超时内跑完，"
+                                + "而不是卡在等一把永远等不到的锁")
+                        .isTrue();
+            } finally {
+                pool.shutdownNow();
             }
         }
     }
