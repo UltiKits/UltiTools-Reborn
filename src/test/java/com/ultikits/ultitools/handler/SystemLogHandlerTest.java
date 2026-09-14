@@ -296,4 +296,51 @@ class SystemLogHandlerTest {
         // let alone the (now again debug-less) enabledLevels check.
         verifyNoInteractions(mockTransmitter);
     }
+
+    // ==================== Gate-2 P1 (round 9): PUBLISHING reentrancy guard ====================
+
+    @Test
+    void testReentrantPublishIsDroppedNotRecursed() {
+        // Gate-2 finding, round 9: a diagnostic logged from WITHIN sendLog() (through the shared
+        // plugin logger) can re-enter publish() on the SAME thread before the outer call returns
+        // -- exactly the shape that produced three separate StackOverflowError instances in
+        // earlier rounds. The PUBLISHING ThreadLocal guard must drop the re-entrant call outright
+        // rather than let it recurse.
+        LogRecord inner = new LogRecord(Level.INFO, "Inner, re-entrant");
+        inner.setLoggerName("plugin.MyPlugin");
+
+        LogRecord outer = new LogRecord(Level.INFO, "Outer");
+        outer.setLoggerName("plugin.MyPlugin");
+
+        org.mockito.Mockito.doAnswer(invocation -> {
+            // Simulate a call back into this same handler, synchronously, on the same thread --
+            // the shape a diagnostic logged from inside sendLog() would take.
+            handler.publish(inner);
+            return null;
+        }).when(mockTransmitter).sendLog(eq("info"), eq("Outer"), anyString(), isNull());
+
+        handler.publish(outer);
+
+        // Only the OUTER call's own sendLog fired; the re-entrant INNER call was dropped before
+        // it ever reached sendLog.
+        verify(mockTransmitter).sendLog(eq("info"), eq("Outer"), anyString(), isNull());
+        verify(mockTransmitter, org.mockito.Mockito.never())
+                .sendLog(eq("info"), eq("Inner, re-entrant"), anyString(), isNull());
+    }
+
+    @Test
+    void testPublishingGuardIsResetAfterEachTopLevelCallSoSubsequentCallsStillWork() {
+        // The ThreadLocal must be cleared in a finally block, so a later, genuinely NEW top-level
+        // call on the same thread is still processed normally -- the guard must not leak "true"
+        // across unrelated calls.
+        LogRecord first = new LogRecord(Level.INFO, "First");
+        first.setLoggerName("plugin.MyPlugin");
+        handler.publish(first);
+        verify(mockTransmitter).sendLog(eq("info"), eq("First"), anyString(), isNull());
+
+        LogRecord second = new LogRecord(Level.INFO, "Second");
+        second.setLoggerName("plugin.MyPlugin");
+        handler.publish(second);
+        verify(mockTransmitter).sendLog(eq("info"), eq("Second"), anyString(), isNull());
+    }
 }

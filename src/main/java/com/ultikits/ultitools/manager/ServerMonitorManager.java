@@ -157,6 +157,16 @@ public class ServerMonitorManager {
     }
 
     /**
+     * Exposes {@link #logDrainLock} so {@link LogStreamManager#initialize} can wire
+     * {@link UltiPanelLogTransmitter#setExternalDrainCoordinationLock} to the SAME lock object
+     * this class's own drain paths already synchronize on (Gate-2 finding, round 9).
+     * Package-private -- this is internal cross-class coordination, not a public API.
+     */
+    Object getLogDrainLock() {
+        return logDrainLock;
+    }
+
+    /**
      * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
      * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
      * as part of the same compare-and-set. Returns {@code false} without side effects if the
@@ -720,37 +730,39 @@ public class ServerMonitorManager {
                 data.add("plugins", getCurrentPluginArray());
             }
 
-            // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
-            // capability switch (D-12). The gate must sit before drainQueue(...), not after the
-            // result is obtained only to be thrown away: drain-then-discard is still the shape of
-            // "already collected into memory, just not sent out", which D-12 explicitly rejects
-            // as a half-measure disable.
-            if (Capability.LOGS.isEnabled()) {
-                LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
-                if (lsm != null && lsm.getLogTransmitter() != null) {
-                    UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
-                    long now = System.currentTimeMillis();
-                    // Gate-2 P1: honour the transmitter's own configured interval even though
-                    // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
-                    // javadoc. Entries keep accumulating in the queue between flushes (bounded by
-                    // UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection); nothing
-                    // is lost, delivery is just batched at the configured cadence. Gate-2 round 4:
-                    // claimLogFlushWindow() atomically decides the winner against
-                    // maybeSendLogsOnly()'s own competing 1-second task -- only the winner drains.
-                    if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
-                        // Gate-2 finding (round 7): the drainQueue call itself must be mutually
-                        // exclusive against drainLogsNow()'s size-triggered, non-interval-gated
-                        // drain (and against maybeSendLogsOnly()'s own drain, via the same lock in
-                        // drainAndSendLogsOnly) -- see logDrainLock's own javadoc. This is a
-                        // SEPARATE inline drain (not routed through drainAndSendLogsOnly) because
-                        // its result is folded into this method's own combined status/metrics/
-                        // logs message rather than sent as its own logs-only frame.
-                        synchronized (logDrainLock) {
+            // Gate-2 finding (round 9): logDrainLock is now held from the logs-drain all the way
+            // through this method's own final sendMessage() call, not just the drainQueue() call
+            // -- fresh evidence showed a size-triggered caller could otherwise acquire the lock
+            // AFTER this method released it (right after draining) but BEFORE this method's own
+            // combined frame -- which carries those same just-drained, OLDER records -- actually
+            // reached webSocketClient.sendMessage(), so a newer logs-only frame could be sent
+            // first. Widening the lock to cover the send closes that window; the errors-drain in
+            // between is harmless to include (it does not itself race against anything).
+            synchronized (logDrainLock) {
+                // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
+                // capability switch (D-12). The gate must sit before drainQueue(...), not after
+                // the result is obtained only to be thrown away: drain-then-discard is still the
+                // shape of "already collected into memory, just not sent out", which D-12
+                // explicitly rejects as a half-measure disable.
+                if (Capability.LOGS.isEnabled()) {
+                    LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+                    if (lsm != null && lsm.getLogTransmitter() != null) {
+                        UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+                        long now = System.currentTimeMillis();
+                        // Gate-2 P1: honour the transmitter's own configured interval even though
+                        // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
+                        // javadoc. Entries keep accumulating in the queue between flushes (bounded
+                        // by UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection);
+                        // nothing is lost, delivery is just batched at the configured cadence.
+                        // Gate-2 round 4: claimLogFlushWindow() atomically decides the winner
+                        // against maybeSendLogsOnly()'s own competing 1-second task -- only the
+                        // winner drains.
+                        if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
                             // Gate-2 finding (round 5): drainQueue's own cap must follow the
                             // transmitter's configured batchSize, not a hardcoded constant -- now
-                            // that externalDrainMode is reliably enabled (round 4's init-order fix),
-                            // this WAS the path a live batchConfig.size change actually went through,
-                            // and a hardcoded value here silently overrode it.
+                            // that externalDrainMode is reliably enabled (round 4's init-order
+                            // fix), this WAS the path a live batchConfig.size change actually went
+                            // through, and a hardcoded value here silently overrode it.
                             JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
                             if (logs.size() > 0) {
                                 data.add("logs", logs);
@@ -758,24 +770,25 @@ public class ServerMonitorManager {
                         }
                     }
                 }
-            }
 
-            // Drain errors from the error report collector -- deliberately unaffected by any
-            // Capability (D-07): error-reporting keeps its own pre-existing
-            // ultipanel.logging.error-reporting.enabled key and its pre-existing default; moving
-            // it under the capability switch would silently change a key an operator may already
-            // have set by hand. ErrorReportCollector already gates on that key itself at the
-            // collection layer, so draining an empty queue just yields an empty array.
-            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-            if (erc != null) {
-                JsonArray errors = erc.drainErrors(10);
-                if (errors.size() > 0) {
-                    data.add("errors", errors);
+                // Drain errors from the error report collector -- deliberately unaffected by any
+                // Capability (D-07): error-reporting keeps its own pre-existing
+                // ultipanel.logging.error-reporting.enabled key and its pre-existing default;
+                // moving it under the capability switch would silently change a key an operator
+                // may already have set by hand. ErrorReportCollector already gates on that key
+                // itself at the collection layer, so draining an empty queue just yields an
+                // empty array.
+                ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                if (erc != null) {
+                    JsonArray errors = erc.drainErrors(10);
+                    if (errors.size() > 0) {
+                        data.add("errors", errors);
+                    }
                 }
-            }
 
-            message.add("data", data);
-            webSocketClient.sendMessage(message);
+                message.add("data", data);
+                webSocketClient.sendMessage(message);
+            }
 
             tickCount++;
         } catch (Exception e) {

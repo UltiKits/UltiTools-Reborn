@@ -90,7 +90,10 @@ ultipanel:
       # 是否启用批量发送；关闭后每条日志都会作为独立消息立即发送。
       enabled: true
       # Number of queued log entries that triggers an early send, ahead of the interval below.
+      # A value below 1 is rejected at boot and the compiled-in default is kept, matching the
+      # panel's own live config action's behaviour.
       # 触发提前发送的已排队日志条数，会早于下面的时间间隔触发发送。
+      # 小于 1 的值会在启动时被拒绝，保留内置默认值，与面板自身实时 config 动作的行为一致。
       size: 10
       # Milliseconds between scheduled batch sends. This key itself is read once, at server start
       # (there is no config-reload path for it -- a new value here needs a restart to take

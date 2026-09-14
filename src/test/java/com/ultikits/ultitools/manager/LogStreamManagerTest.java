@@ -1502,6 +1502,72 @@ class LogStreamManagerTest {
 
             verify(mockLogger).warning(contains("加载批量发送配置失败"));
         }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): 无效的 batch.size 在启动时被拒绝，不再被 Math.max 钳制 -- 保留 transmitter 的默认值")
+        void invalidBootTimeBatchSizeIsRejectedNotClampedAndKeepsTheDefault() throws Exception {
+            UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
+            setLogTransmitter(mockTransmitter);
+
+            when(mockConfig.contains("ultipanel.logging.batch.size")).thenReturn(true);
+            when(mockConfig.getInt("ultipanel.logging.batch.size", 10)).thenReturn(0);
+            doThrow(new IllegalArgumentException("Batch size must be at least 1, got: 0"))
+                    .when(mockTransmitter).setBatchSize(0);
+            when(mockTransmitter.getBatchSize()).thenReturn(10); // compiled-in default kept
+
+            Method method = LogStreamManager.class.getDeclaredMethod("loadBatchConfiguration");
+            method.setAccessible(true);
+
+            // Must not propagate the IllegalArgumentException out of loadBatchConfiguration --
+            // the whole point of the fix is a warning-and-keep-default outcome, not a crash.
+            assertDoesNotThrow(() -> method.invoke(logStreamManager));
+
+            verify(mockTransmitter).setBatchSize(0);
+            verify(mockLogger).warning(contains("ultipanel.logging.batch.size 配置值无效"));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): 无效的 batch.interval 在启动时被拒绝，不再被 Math.max 钳制 -- 保留 transmitter 的默认值")
+        void invalidBootTimeBatchIntervalIsRejectedNotClampedAndKeepsTheDefault() throws Exception {
+            UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
+            setLogTransmitter(mockTransmitter);
+
+            when(mockConfig.contains("ultipanel.logging.batch.interval")).thenReturn(true);
+            when(mockConfig.getInt("ultipanel.logging.batch.interval", 5000)).thenReturn(500);
+            doThrow(new IllegalArgumentException("Batch interval must be at least 1000ms, got: 500"))
+                    .when(mockTransmitter).setIntervalMs(500);
+            when(mockTransmitter.getIntervalMs()).thenReturn(5000); // compiled-in default kept
+
+            Method method = LogStreamManager.class.getDeclaredMethod("loadBatchConfiguration");
+            method.setAccessible(true);
+
+            assertDoesNotThrow(() -> method.invoke(logStreamManager));
+
+            verify(mockTransmitter).setIntervalMs(500);
+            verify(mockLogger).warning(contains("ultipanel.logging.batch.interval 配置值无效"));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9) 对照: 合法的 batch.size/interval 仍照常直接应用，不触发任何警告")
+        void validBootTimeBatchSizeAndIntervalStillApplyDirectlyWithNoWarning() throws Exception {
+            UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
+            setLogTransmitter(mockTransmitter);
+
+            when(mockConfig.contains("ultipanel.logging.batch.size")).thenReturn(true);
+            when(mockConfig.getInt("ultipanel.logging.batch.size", 10)).thenReturn(20);
+            when(mockConfig.contains("ultipanel.logging.batch.interval")).thenReturn(true);
+            when(mockConfig.getInt("ultipanel.logging.batch.interval", 5000)).thenReturn(2000);
+            when(mockTransmitter.getBatchSize()).thenReturn(20);
+            when(mockTransmitter.getIntervalMs()).thenReturn(2000);
+
+            Method method = LogStreamManager.class.getDeclaredMethod("loadBatchConfiguration");
+            method.setAccessible(true);
+            method.invoke(logStreamManager);
+
+            verify(mockTransmitter).setBatchSize(20);
+            verify(mockTransmitter).setIntervalMs(2000);
+            verify(mockLogger, never()).warning(contains("配置值无效"));
+        }
     }
 
     // ==================== handleConfigUpdate 测试 ====================

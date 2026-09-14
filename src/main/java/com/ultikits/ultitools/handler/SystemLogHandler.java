@@ -22,6 +22,26 @@ import java.util.logging.LogRecord;
  */
 public class SystemLogHandler extends Handler {
 
+    /**
+     * Reentrancy guard for {@link #publish(LogRecord)} (Gate-2 finding, round 9). Loop-prevention
+     * in this class was, until now, done entirely by matching the RECORD's own {@code loggerName}
+     * against a small set of known class-name substrings ({@link #shouldProcessRecord} below) --
+     * but every diagnostic this framework logs through the SHARED plugin logger
+     * ({@code UltiTools.getInstance().getLogger()}) carries that shared logger's own name, not the
+     * calling class's, so the substring check can never catch any of them. Round 6/7 found and
+     * removed two individual instances of this (a transmitter diagnostic, then a WebSocket-send
+     * diagnostic); round 9 found a THIRD, in an exception handler that cannot simply be deleted
+     * (reporting a genuine send failure has real value). Rather than keep chasing individual call
+     * sites the review keeps finding new instances of, this ThreadLocal closes the whole class at
+     * its root: if {@code publish} is entered while ALREADY running on the SAME thread (which is
+     * exactly what happens when delivering/draining record N synchronously produces record N+1 on
+     * the same call stack -- every reachable recursion in this subsystem is same-thread, since
+     * none of the delivery/drain paths hand off to a different thread before logging), the
+     * re-entrant call is dropped instead of recursing. A single dropped self-referential diagnostic
+     * is an acceptable cost for eliminating an entire StackOverflowError defect class.
+     */
+    private static final ThreadLocal<Boolean> PUBLISHING = ThreadLocal.withInitial(() -> false);
+
     private final UltiPanelLogTransmitter logTransmitter;
 
     // Log-level filter configuration
@@ -135,11 +155,18 @@ public class SystemLogHandler extends Handler {
     
     @Override
     public void publish(LogRecord record) {
+        // Gate-2 finding (round 9): reentrancy guard -- see PUBLISHING's own javadoc. Checked
+        // before shouldProcessRecord() so a re-entrant call is dropped as cheaply as possible.
+        if (Boolean.TRUE.equals(PUBLISHING.get())) {
+            return;
+        }
+
         // Check whether this log record should be processed
         if (!shouldProcessRecord(record)) {
             return;
         }
 
+        PUBLISHING.set(true);
         try {
             // Map the log level
             String level = mapLogLevel(record.getLevel());
@@ -182,9 +209,11 @@ public class SystemLogHandler extends Handler {
         } catch (Exception e) {
             // Avoid a logging loop by writing to System.err directly
             System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
+        } finally {
+            PUBLISHING.set(false);
         }
     }
-    
+
     /**
      * Checks whether this log record should be processed.
      */

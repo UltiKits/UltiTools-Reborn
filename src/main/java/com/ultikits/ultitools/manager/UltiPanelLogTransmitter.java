@@ -79,6 +79,19 @@ public class UltiPanelLogTransmitter {
      */
     private volatile Runnable externalSizeThresholdCallback;
 
+    /**
+     * External coordination lock for {@link #flushLogs()} (Gate-2 finding, round 9). {@code null}
+     * by default (no external owner wired up -- {@code flushLogs()} runs unsynchronized, its
+     * original behaviour). {@link LogStreamManager#initialize} wires this to
+     * {@code ServerMonitorManager}'s OWN {@code logDrainLock} (the same object
+     * {@link ServerMonitorManager#drainAndSendLogsOnly} and its inline {@code sendBatchUpdate}
+     * drain already synchronize on) alongside {@link #setExternalSizeThresholdCallback}. Without
+     * this, a live {@code batchConfig.enabled: false} update's flush ran entirely outside that
+     * lock, so it could still send NEWER records ahead of OLDER ones the monitor had already
+     * polled but not yet sent, even after round 7's monitor-side-only serialization.
+     */
+    private volatile Object externalDrainCoordinationLock;
+
     // Batch-send configuration
     @Getter
     private boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
@@ -461,6 +474,17 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
+     * Sets the lock {@link #flushLogs()} coordinates disable-time flushes against (Gate-2
+     * finding, round 9). Pass {@code null} to clear it (flushLogs runs unsynchronized again).
+     *
+     * @param lock any object usable as a monitor; the SAME instance must be used by whatever
+     *        external code also drains this transmitter's queue (see this field's own javadoc)
+     */
+    public void setExternalDrainCoordinationLock(Object lock) {
+        this.externalDrainCoordinationLock = lock;
+    }
+
+    /**
      * Gets the exception stack trace as a string.
      */
     private String getStackTrace(Throwable throwable) {
@@ -538,6 +562,21 @@ public class UltiPanelLogTransmitter {
      * Temporarily disables external drain mode to make sure the logs actually get sent.
      */
     public void flushLogs() {
+        // Gate-2 finding (round 9): coordinate with ServerMonitorManager's own drain paths, when
+        // wired up, so a disable-time flush (setBatchEnabled(false)) cannot interleave with
+        // either of the monitor's own drains and reorder the backlog -- see
+        // externalDrainCoordinationLock's own javadoc.
+        Object coordinationLock = externalDrainCoordinationLock;
+        if (coordinationLock != null) {
+            synchronized (coordinationLock) {
+                doFlushLogs();
+            }
+        } else {
+            doFlushLogs();
+        }
+    }
+
+    private void doFlushLogs() {
         boolean wasExternalDrain = externalDrainMode.getAndSet(false);
         try {
             // The continuation condition must be "the queue actually got shorter", not just

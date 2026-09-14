@@ -727,7 +727,7 @@ class UltiPanelLogTransmitterTest {
         void shouldNotSendWhenNotConnected() throws Exception {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(false);
-            
+
             // 添加日志
             logTransmitter.sendLog("info", "test", "server", null);
 
@@ -736,6 +736,70 @@ class UltiPanelLogTransmitterTest {
 
             // Assert
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): 设置了 externalDrainCoordinationLock 后，flushLogs() 会持有该锁 -- 与 monitor 自己的排空路径共享同一把互斥锁")
+        void flushLogsHoldsTheExternalCoordinationLockWhenOneIsWired() throws Exception {
+            // Arrange -- a standalone lock object standing in for
+            // ServerMonitorManager's own logDrainLock, wired exactly the way
+            // LogStreamManager#initialize() wires the real one.
+            Object coordinationLock = new Object();
+            logTransmitter.setExternalDrainCoordinationLock(coordinationLock);
+
+            for (int i = 0; i < 5; i++) {
+                logTransmitter.sendLog("info", "message " + i, "server", null);
+            }
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.flushLogs();
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (coordinationLock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // flushLogs() must not be able to proceed past its own
+                    // synchronized(externalDrainCoordinationLock) while this thread holds the
+                    // SAME lock object -- proves flushLogs() actually participates in the
+                    // external coordination lock rather than running unsynchronized.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("flushLogs() must block on the wired coordination lock while it is held elsewhere")
+                            .isFalse();
+                }
+                // Released -- the worker should now complete promptly and the queue drained.
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("flushLogs() must proceed once the coordination lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
+            assertThat(queue.isEmpty()).as("the queue must still have been drained once released").isTrue();
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9) 对照: 未设置 externalDrainCoordinationLock（默认 null）时 flushLogs() 照常不加锁运行")
+        void flushLogsRunsUnsynchronizedWhenNoCoordinationLockIsWired() throws Exception {
+            // Control: no setExternalDrainCoordinationLock call -- must behave exactly as before
+            // this fix, i.e. no external lock participation at all.
+            for (int i = 0; i < 3; i++) {
+                logTransmitter.sendLog("info", "message " + i, "server", null);
+            }
+
+            logTransmitter.flushLogs();
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
+            assertThat(queue.isEmpty()).isTrue();
         }
     }
 

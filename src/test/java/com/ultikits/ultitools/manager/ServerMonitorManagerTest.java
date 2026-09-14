@@ -1248,6 +1248,49 @@ class ServerMonitorManagerTest {
                 transmitter.shutdown();
             }
         }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): logDrainLock 现在覆盖 sendBatchUpdate 自己最终的 sendMessage 调用，而不仅仅是 drainQueue")
+        void logDrainLockNowCoversSendBatchUpdatesOwnFinalSendNotJustTheDrain() throws Exception {
+            Field lockField = ServerMonitorManager.class.getDeclaredField("logDrainLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(serverMonitorManager);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                try {
+                    invokeSendBatchUpdate(serverMonitorManager);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // sendBatchUpdate() must not be able to reach its own final sendMessage()
+                    // call while this thread holds the SAME logDrainLock -- before round 9, the
+                    // synchronized block only wrapped drainQueue(), so a size-triggered drain
+                    // elsewhere could squeeze its own send in between this method's drain and its
+                    // own send, letting a NEWER frame overtake an OLDER one already drained here.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendBatchUpdate() must block on logDrainLock for its whole tail, "
+                                    + "including its own final sendMessage() call")
+                            .isFalse();
+                    verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendBatchUpdate() must proceed once the lock is released")
+                        .isTrue();
+                verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            } finally {
+                worker.join(5000);
+            }
+        }
     }
 
     /**

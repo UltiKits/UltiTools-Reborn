@@ -119,6 +119,9 @@ public class LogStreamManager implements Listener {
             // early return, so a configured batchSize never shortens delivery latency while
             // monitoring is active. Wire an immediate-drain request back to the monitor.
             this.logTransmitter.setExternalSizeThresholdCallback(serverMonitorManager::drainLogsNow);
+            // Gate-2 finding (round 9): coordinate disable-time flushes (setBatchEnabled(false))
+            // against the monitor's own drain paths, via the SAME lock object.
+            this.logTransmitter.setExternalDrainCoordinationLock(serverMonitorManager.getLogDrainLock());
         }
 
         // Load the batch-send settings from the config file
@@ -158,12 +161,34 @@ public class LogStreamManager implements Listener {
             
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.size")) {
                 int batchSize = UltiTools.getInstance().getConfig().getInt("ultipanel.logging.batch.size", 10);
-                logTransmitter.setBatchSize(Math.max(1, batchSize));
+                // Gate-2 finding (round 9): the boot-time path used to CLAMP an invalid value
+                // (Math.max(1, batchSize)) while the live setter REJECTS one, keeping the
+                // previous value in effect -- two different behaviours for the same invariant.
+                // Reject here too, keeping the transmitter's compiled-in default rather than
+                // silently substituting a clamped value the operator never asked for.
+                try {
+                    logTransmitter.setBatchSize(batchSize);
+                } catch (IllegalArgumentException e) {
+                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
+                            + "ultipanel.logging.batch.size 配置值无效 (" + batchSize + "): " + e.getMessage()
+                            + "，保留默认值 " + logTransmitter.getBatchSize());
+                }
             }
-            
+
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.batch.interval")) {
                 int interval = UltiTools.getInstance().getConfig().getInt("ultipanel.logging.batch.interval", 5000);
-                logTransmitter.setIntervalMs(Math.max(UltiPanelLogTransmitter.MIN_INTERVAL_MS, interval));
+                // Gate-2 finding (round 9): same reject-not-clamp fix as batch.size above -- this
+                // used to clamp via Math.max(MIN_INTERVAL_MS, interval), silently applying
+                // 1000ms for a configured 500ms instead of rejecting it and keeping the default
+                // 5000ms, contradicting config.yml's own comment (corrected in an earlier round)
+                // that says both paths share one floor-enforcement behaviour.
+                try {
+                    logTransmitter.setIntervalMs(interval);
+                } catch (IllegalArgumentException e) {
+                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
+                            + "ultipanel.logging.batch.interval 配置值无效 (" + interval + "): " + e.getMessage()
+                            + "，保留默认值 " + logTransmitter.getIntervalMs() + "ms");
+                }
             }
             
             UltiTools.getInstance().getLogger().info(String.format(
