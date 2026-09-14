@@ -25,6 +25,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.FileConfiguration;
@@ -546,10 +548,101 @@ class LogStreamManagerTest {
         void resumeShouldEnsureStreamingIsTrue() throws Exception {
             logStreamManager.startLogStream("client-1", "info");
             getStreamingState().set(false); // 手动设置为 false
-            
+
             logStreamManager.resumeLogStream("client-1");
 
             assertThat(logStreamManager.isStreaming()).isTrue();
+        }
+    }
+
+    // ==================== 暂停投递集成测试 (T-16-11-01, issue #434) ====================
+    @Nested
+    @DisplayName("暂停投递集成测试 -- 暂停必须实际停止交付，而不仅仅是写一个没人读的标志位")
+    class PauseDeliveryIntegrationTests {
+
+        @BeforeEach
+        void forceImmediateSendMode() {
+            // Immediate-send mode: a forwarded record reaches webSocketClient.sendMessage()
+            // synchronously, on the same thread as publish(), instead of waiting on the
+            // transmitter's fixed-delay batch scheduler -- same technique as
+            // LogStreamManagerCommandCaptureTest, reused here so this class does not depend on
+            // the scheduler's real-world 5s cadence.
+            when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
+            when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
+        }
+
+        private void publishRecord(String message) {
+            Logger.getLogger("").log(new LogRecord(Level.INFO, message));
+        }
+
+        @Test
+        @DisplayName("一个已订阅且未暂停的客户端：发布的记录到达一次")
+        void oneActiveSubscribedClientReceivesRecordOnce() {
+            logStreamManager.initialize(mockWebSocketClient);
+            // initialize() auto-subscribes "auto" as active -- no pause/resume touches it here.
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("pause-it-active");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).isEqualTo("pause-it-active");
+        }
+
+        @Test
+        @DisplayName("该客户端被暂停后：发布的记录不再到达")
+        void pausedClientReceivesNothing() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.pauseLogStream("auto");
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("pause-it-paused");
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("恢复后：发布的记录再次到达")
+        void resumedClientReceivesRecordAgain() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.pauseLogStream("auto");
+            logStreamManager.resumeLogStream("auto");
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("pause-it-resumed");
+
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("两个客户端，一个暂停一个未暂停：记录仍会送达 -- 暂停一个不会让另一个静音")
+        void oneOfTwoSubscribedClientsPausedStillDelivers() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.startLogStream("viewer-2", "info");
+            logStreamManager.pauseLogStream("auto");
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("pause-it-mixed");
+
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("零个订阅客户端：发布既不抛异常也不会投递")
+        void zeroSubscribersNeitherThrowsNorDelivers() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.stopLogStream("auto"); // the only subscriber initialize() creates
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            assertDoesNotThrow(() -> publishRecord("pause-it-zero-subscribers"));
+
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
         }
     }
 

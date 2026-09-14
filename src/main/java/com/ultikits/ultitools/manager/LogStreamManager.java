@@ -399,6 +399,23 @@ public class LogStreamManager implements Listener {
     }
 
     /**
+     * Whether at least one subscribed client currently wants log delivery, i.e. holds a
+     * {@code true} (not-paused) entry in {@link #subscribedClients}.
+     * <p>
+     * The panel-facing delivery messages ({@code log_stream}/{@code log_batch}) carry no
+     * per-client address -- {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the
+     * single WebSocket connection this server holds to the panel relay, which then fans a
+     * delivered record out to every viewer subscribed on that connection. The framework has no
+     * visibility into that fan-out, so a per-client pause cannot selectively withhold a record
+     * from just one paused viewer: delivery can only be suppressed once every subscribed client
+     * has paused, or none are subscribed at all (#434). See this plan's summary for the full
+     * reasoning behind choosing this global check over a per-client one.
+     */
+    boolean hasActiveSubscriber() {
+        return subscribedClients.containsValue(Boolean.TRUE);
+    }
+
+    /**
      * Sends a custom log message directly.
      * Used for logging plugin-specific events.
      */

@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -21,9 +22,9 @@ import java.util.logging.LogRecord;
  * @version 1.0.0
  */
 public class SystemLogHandler extends Handler {
-    
+
     private final UltiPanelLogTransmitter logTransmitter;
-    
+
     // Log-level filter configuration
     @Getter @Setter
     private Set<String> enabledLevels;
@@ -35,6 +36,32 @@ public class SystemLogHandler extends Handler {
     // Minimum log level
     @Getter @Setter
     private Level minimumLevel = Level.INFO;
+
+    /**
+     * Whether at least one subscribed panel client currently wants delivery (i.e. is not
+     * paused). Defaults to "always active" so a handler constructed without a
+     * {@link com.ultikits.ultitools.manager.LogStreamManager LogStreamManager} behind it (every
+     * existing direct-construction test, and any future caller that does not wire one up) keeps
+     * delivering exactly as before this check was added (#434).
+     * <p>
+     * Deliberately a {@link BooleanSupplier}, not a cached field: {@code publish(LogRecord)}
+     * runs on every record the server emits, so the check must stay allocation-light, and it
+     * must never itself call a logger -- doing so would re-enter this very handler (the
+     * feedback-loop hazard {@link ErrorReportCollector}'s own class javadoc already documents
+     * for the sibling error-reporting path).
+     */
+    private volatile BooleanSupplier activeSubscriberCheck = () -> true;
+
+    /**
+     * Sets the check consulted on every {@link #publish(LogRecord)} call to decide whether any
+     * subscribed panel client currently wants delivery. Passing {@code null} restores the
+     * always-active default.
+     *
+     * @param check a no-argument, allocation-light, non-logging boolean check
+     */
+    public void setActiveSubscriberCheck(BooleanSupplier check) {
+        this.activeSubscriberCheck = check != null ? check : () -> true;
+    }
 
     /**
      * Constructor.

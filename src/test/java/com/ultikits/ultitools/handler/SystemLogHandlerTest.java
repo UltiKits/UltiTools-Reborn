@@ -173,10 +173,59 @@ class SystemLogHandlerTest {
         LogRecord record = new LogRecord(Level.INFO, "Hello %d"); // Expects integer
         record.setParameters(new Object[]{"World"}); // String provided
         record.setLoggerName("test");
-        
+
         handler.publish(record);
-        
+
         // Expect fallback: "Hello %d [参数: World]"
         verify(mockTransmitter).sendLog(eq("info"), eq("Hello %d [参数: World]"), anyString(), isNull());
+    }
+
+    // ==================== activeSubscriberCheck tests (#434) ====================
+
+    @Test
+    void testActiveSubscriberCheckDefaultsToActiveDelivery() {
+        // No setActiveSubscriberCheck call at all -- matches every pre-existing test above,
+        // and any future caller that never wires one up.
+        LogRecord record = new LogRecord(Level.INFO, "Default active");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("info"), eq("Default active"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testActiveSubscriberCheckFalseSuppressesDelivery() {
+        handler.setActiveSubscriberCheck(() -> false);
+        LogRecord record = new LogRecord(Level.INFO, "Paused");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verifyNoInteractions(mockTransmitter);
+    }
+
+    @Test
+    void testActiveSubscriberCheckTrueAllowsDelivery() {
+        handler.setActiveSubscriberCheck(() -> true);
+        LogRecord record = new LogRecord(Level.INFO, "Active");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("info"), eq("Active"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testNullActiveSubscriberCheckFallsBackToActiveDelivery() {
+        handler.setActiveSubscriberCheck(() -> false); // first pause it
+        handler.setActiveSubscriberCheck(null); // then clear -- must restore active, not stay paused
+
+        LogRecord record = new LogRecord(Level.INFO, "Restored to active");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("info"), eq("Restored to active"), eq("plugin:MyPlugin"), isNull());
     }
 }
